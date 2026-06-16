@@ -130,9 +130,24 @@ class PDFParser(DocumentParser):
             page_text = re.sub(r'^\d{1,3}\s*$', '', page_text, count=1, flags=re.MULTILINE)
             cleaned.append(page_text)
 
+        # Build content with position_map tracking page boundaries
+        position_map: list[dict] = []
+        parts: list[str] = []
+        offset = 0
+        for i, page_text in enumerate(cleaned):
+            position_map.append({
+                "char_offset": offset,
+                "label": f"Page {i + 1}",
+                "type": "page",
+                "page_number": i + 1,
+            })
+            parts.append(page_text)
+            offset += len(page_text) + 2  # +2 for "\n\n" separator
+
         return ParsedDocument(
-            content="\n\n".join(cleaned),
+            content="\n\n".join(parts),
             metadata={"pages": len(cleaned), "tables_found": tables_found},
             source_path=str(path),
             file_type="pdf",
+            position_map=position_map,
         )

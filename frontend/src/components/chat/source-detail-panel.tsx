@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect, useCallback } from "react"
+import { useState, useMemo, useEffect, useCallback, useRef } from "react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Loader2, X, ChevronRight, ChevronDown, RefreshCw } from "lucide-react"
+import { Loader2, X, ChevronRight, ChevronDown, RefreshCw, Locate } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { getFileChunks, getFilePreviewUrl, isPreviewable, getDocSummary, generateDocSummary, setDocSummaryInclude, type ChunkDetail, type DocSummary } from "@/api/client"
@@ -32,37 +32,90 @@ function _unmarkGenerating(key: string) {
   try { localStorage.removeItem(`wk:sgen:${key}`) } catch { /* ignore */ }
 }
 
-function HighlightedText({ text, highlight }: { text: string; highlight: string }) {
-  if (!highlight || highlight.length < 10) return <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">{text}</pre>
+function _isPdf(name: string) {
+  return name.toLowerCase().endsWith(".pdf")
+}
 
-  // Try to find the highlight text in the content
-  const idx = text.indexOf(highlight)
-  if (idx === -1) {
-    // Try with trimmed/partial matching — find longest common substring
-    const trimmed = highlight.trim().substring(0, 100)
-    const tIdx = text.indexOf(trimmed)
-    if (tIdx === -1) return <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">{text}</pre>
+function _getHighlightOffset(source: Source): number | undefined {
+  const v = source.metadata?.char_offset
+  return typeof v === "number" ? v : undefined
+}
 
-    const before = text.substring(0, tIdx)
-    const match = text.substring(tIdx, tIdx + trimmed.length)
-    const after = text.substring(tIdx + trimmed.length)
-    return (
-      <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">
-        {before}
-        <mark className="bg-yellow-300 dark:bg-yellow-700 rounded px-0.5">{match}</mark>
-        {after}
-      </pre>
-    )
+function HighlightedText({ text, highlight, offset, chunkLength }: {
+  text: string; highlight: string; offset?: number; chunkLength?: number
+}) {
+  // If we have a char_offset, validate it and use precise offset-based highlighting
+  if (offset !== undefined && offset >= 0 && offset < text.length) {
+    const len = chunkLength && chunkLength > 0 ? chunkLength : highlight.length
+    const end = Math.min(offset + len, text.length)
+    const matchText = text.substring(offset, end)
+    // Verify offset is plausible: first 20 chars of chunk should appear near offset
+    const probe = highlight.substring(0, Math.min(20, highlight.length))
+    if (probe && matchText.includes(probe)) {
+      const before = text.substring(0, offset)
+      const after = text.substring(end)
+      return (
+        <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">
+          {before}
+          <mark className="bg-yellow-300 dark:bg-yellow-700 rounded px-0.5">{matchText}</mark>
+          {after}
+        </pre>
+      )
+    }
+    // Offset doesn't match — fall through to substring matching
   }
 
-  const before = text.substring(0, idx)
-  const match = text.substring(idx, idx + highlight.length)
-  const after = text.substring(idx + highlight.length)
+  // Fallback: substring matching
+  if (!highlight || highlight.length < 10) return <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">{text}</pre>
+
+  const tryFind = (): [number, number] => {
+    // 1. Full chunk text — no overlap, perfect match
+    let idx = text.indexOf(highlight)
+    if (idx !== -1) return [idx, highlight.length]
+
+    // 2. Split into paragraphs and find the real chunk boundaries
+    const paragraphs = highlight.split("\n\n").filter(p => p.trim().length > 5)
+    if (paragraphs.length < 2) {
+      const trimmed = highlight.trim().substring(0, 100)
+      idx = text.indexOf(trimmed)
+      if (idx !== -1) return [idx, trimmed.length]
+      return [-1, 0]
+    }
+
+    // Find last paragraph's position (definitely unique to this chunk)
+    const lastPara = paragraphs[paragraphs.length - 1].trim()
+    const lastIdx = text.indexOf(lastPara)
+    if (lastIdx === -1) return [-1, 0]
+    const lastEnd = lastIdx + lastPara.length
+
+    // Walk backwards to find contiguous preceding paragraphs,
+    // but stop if we enter a region that belongs to a PREVIOUS chunk
+    // (i.e., the found position + paragraph length <= char_offset hint)
+    let chunkStart = lastIdx
+    for (let i = paragraphs.length - 2; i >= 0; i--) {
+      const para = paragraphs[i].trim()
+      if (para.length < 5) continue
+      // Only search in the region BEFORE current chunkStart
+      const found = text.lastIndexOf(para, chunkStart - 1)
+      if (found === -1) break
+      // Contiguity: paragraph should end right before chunkStart
+      const gap = text.substring(found + para.length, chunkStart)
+      if (gap.length > 4) break
+      chunkStart = found
+    }
+
+    return [chunkStart, lastEnd - chunkStart]
+  }
+
+  const [idx, matchLen] = tryFind()
+  if (idx === -1) return <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">{text}</pre>
+
+  const matchEnd = Math.min(idx + matchLen, text.length)
   return (
     <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">
-      {before}
-      <mark className="bg-yellow-300 dark:bg-yellow-700 rounded px-0.5">{match}</mark>
-      {after}
+      {text.substring(0, idx)}
+      <mark className="bg-yellow-300 dark:bg-yellow-700 rounded px-0.5">{text.substring(idx, matchEnd)}</mark>
+      {text.substring(matchEnd)}
     </pre>
   )
 }
@@ -75,11 +128,15 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
   const [docSummary, setDocSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const [renderTick, setRenderTick] = useState(0)
+  const [activeTab, setActiveTab] = useState("preview")
+  const [highlightOffset, setHighlightOffset] = useState<number | undefined>(undefined)
+  const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined)
+  const textContentRef = useRef<HTMLDivElement>(null)
 
   const sourceName = source?.metadata?.source as string | undefined
   const collection = source?.metadata?.collection as string | undefined
   const chunkId = source?.metadata?.id as string | undefined
+  const isPdfFile = sourceName ? _isPdf(sourceName) : false
 
   const genKey = collection && sourceName ? _genKey(collection, sourceName) : null
   const isGenerating = !!(genKey && _generating.has(genKey))
@@ -90,8 +147,10 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     setChunks([])
     setDocSummary(null)
     setExpandedParents(new Set())
-    setRenderTick(k => k + 1)
-  }, [chunkId])
+    setHighlightOffset(source ? _getHighlightOffset(source) : undefined)
+    setHighlightPage(source?.metadata?.page_number as number | undefined)
+    setActiveTab("preview")
+  }, [chunkId, source])
 
   // Load chunks
   useEffect(() => {
@@ -100,14 +159,31 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     setChunksLoading(true)
     getFileChunks(collection, sourceName, 10000)
       .then((res) => { if (!cancelled) setChunks(res.chunks) })
-      .catch(() => { if (!cancelled) setChunks([]) })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn("[SourceDetailPanel] Failed to load chunks:", collection, sourceName, err)
+          setChunks([])
+        }
+      })
       .finally(() => { if (!cancelled) setChunksLoading(false) })
     return () => { cancelled = true }
-  }, [collection, sourceName])
+  }, [collection, sourceName, chunkId])
 
-  // Load preview
+  // Load preview text for non-PDF previewable files (for offset-based highlighting)
   useEffect(() => {
     if (!sourceName) { setPreviewContent(null); return }
+    // Only fetch text for non-PDF previewable files (PDF uses iframe)
+    if (isPreviewable(sourceName) && !_isPdf(sourceName)) {
+      let cancelled = false
+      setPreviewLoading(true)
+      fetch(getFilePreviewUrl(sourceName))
+        .then(res => res.ok ? res.text() : Promise.reject(new Error(`HTTP ${res.status}`)))
+        .then(text => { if (!cancelled) setPreviewContent(text) })
+        .catch(() => { if (!cancelled) setPreviewContent(null) })
+        .finally(() => { if (!cancelled) setPreviewLoading(false) })
+      return () => { cancelled = true }
+    }
+    // For PDFs and non-previewable files, use existing logic
     if (isPreviewable(sourceName)) { setPreviewContent(null); return }
     let cancelled = false
     setPreviewLoading(true)
@@ -147,6 +223,33 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     return () => clearInterval(poll)
   }, [isGenerating, collection, sourceName, genKey])
 
+  // Scroll to highlighted chunk offset when text content loads
+  useEffect(() => {
+    if (highlightOffset === undefined || isPdfFile) return
+    // For markdown, highlight isn't rendered in preview — switch to chunks tab
+    if (sourceName?.toLowerCase().endsWith(".md")) {
+      setActiveTab("chunks")
+      return
+    }
+    if (!previewContent) return
+    const attemptScroll = () => {
+      const el = textContentRef.current?.querySelector("mark")
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
+      // Fallback: search the ScrollArea viewport
+      const viewport = textContentRef.current?.closest("[data-radix-scroll-area-viewport]") as HTMLElement | null
+      if (viewport) {
+        const mark = viewport.querySelector("mark")
+        if (mark) { mark.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
+      }
+      return false
+    }
+    if (!attemptScroll()) {
+      // Retry in case DOM is still settling
+      const timer = setTimeout(attemptScroll, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [previewContent, highlightOffset, isPdfFile, sourceName, chunkId])
+
   const isParentChild = chunks.some(c => c.chunk_type === "parent")
 
   const groupedChunks = useMemo(() => {
@@ -179,6 +282,12 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     })
   }, [])
 
+  const handleLocate = useCallback((offset?: number, pageNumber?: number) => {
+    setHighlightOffset(offset)
+    if (pageNumber !== undefined) setHighlightPage(pageNumber)
+    setActiveTab("preview")
+  }, [])
+
   const highlightText = source?.text || ""
 
   if (!source || !sourceName) return null
@@ -202,15 +311,15 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
       </div>
 
       {/* Chunk preview (compact, always visible) */}
-      <div className="px-4 py-2 border-b border-border/50 shrink-0 bg-muted/20">
-        <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed">
+      <div className="px-4 py-2 border-b border-border/50 shrink-0 bg-muted/20 max-h-40 overflow-y-auto">
+        <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
           {source.text}
         </p>
       </div>
 
       {/* Tabs */}
       <div className="flex-1 flex flex-col min-h-0 px-2">
-        <Tabs defaultValue="preview" className="flex flex-col h-full min-h-0" key={renderTick}>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full min-h-0">
           <TabsList variant="line" className="mb-1 shrink-0">
             <TabsTrigger value="preview" className="text-xs">Preview</TabsTrigger>
             <TabsTrigger value="chunks" className="text-xs">Chunks{chunks.length > 0 ? ` (${chunks.length})` : ""}</TabsTrigger>
@@ -225,21 +334,33 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                   <Loader2 className="h-5 w-5 animate-spin mr-2" />
                   Loading...
                 </div>
-              ) : sourceName && isPreviewable(sourceName) ? (
+              ) : isPdfFile && sourceName ? (
+                /* PDF: iframe with optional page jump */
                 <iframe
-                  src={getFilePreviewUrl(sourceName)}
+                  key={highlightPage ?? "default"}
+                  src={highlightPage
+                    ? `${getFilePreviewUrl(sourceName)}#page=${highlightPage}`
+                    : getFilePreviewUrl(sourceName)}
                   className="w-full h-full border-0"
                   title={`Preview: ${sourceName}`}
                 />
               ) : previewContent !== null ? (
+                /* Text-based: rendered with offset-based highlight */
                 <ScrollArea className="h-full">
                   <CardContent className="p-4">
-                    {sourceName.toLowerCase().endsWith(".md") ? (
+                    {sourceName?.toLowerCase().endsWith(".md") ? (
                       <div className="prose prose-sm max-w-none dark:prose-invert">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewContent}</ReactMarkdown>
                       </div>
                     ) : (
-                      <HighlightedText text={previewContent} highlight={highlightText} />
+                      <div ref={textContentRef}>
+                        <HighlightedText
+                          text={previewContent}
+                          highlight={highlightText}
+                          offset={highlightOffset}
+                          chunkLength={source?.text?.length}
+                        />
+                      </div>
                     )}
                   </CardContent>
                 </ScrollArea>
@@ -273,19 +394,32 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                       const isTargetParent = group.parent.id === chunkId
                       return (
                         <div key={group.parent.id} className={`border rounded-lg overflow-hidden ${isTargetParent ? "border-primary ring-1 ring-primary/30" : "border-border"}`}>
-                          <button
-                            className="w-full text-left p-2.5 hover:bg-accent/50 transition-colors flex items-start gap-2"
+                          <div
+                            className="w-full text-left p-2.5 hover:bg-accent/50 transition-colors flex items-start gap-2 cursor-pointer"
                             onClick={() => toggleParent(group.parent.id)}
+                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleParent(group.parent.id) }}
+                            role="button"
+                            tabIndex={0}
                           >
                             {isExpanded ? <ChevronDown className="h-3.5 w-3.5 mt-0.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 mt-0.5 shrink-0" />}
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-1.5 mb-1">
                                 <Badge variant={isTargetParent ? "default" : "outline"} className="text-[10px]">Parent #{group.parent.chunk_index}</Badge>
                                 <Badge variant="outline" className="text-[10px]">{group.children.length} children</Badge>
+                                {group.parent.section_label && (
+                                  <Badge variant="secondary" className="text-[10px]">{group.parent.section_label}</Badge>
+                                )}
+                                <button
+                                  className="ml-auto p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                                  title="Locate in preview"
+                                  onClick={(e) => { e.stopPropagation(); handleLocate(group.parent.char_offset, group.parent.page_number) }}
+                                >
+                                  <Locate className="h-3 w-3" />
+                                </button>
                               </div>
                               <p className="text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground line-clamp-2">{group.parent.text}</p>
                             </div>
-                          </button>
+                          </div>
                           {isExpanded && (
                             <div className="border-t border-border bg-muted/30 p-2.5 space-y-2 pl-7">
                               <div>
@@ -300,8 +434,18 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                               {group.children.map(child => {
                                 const isTargetChild = child.id === chunkId
                                 return (
-                                  <div key={child.id} className={`border rounded-lg p-2.5 bg-background ${isTargetChild ? "border-primary ring-1 ring-primary/30" : "border-border"}`}>
-                                    <Badge variant={isTargetChild ? "default" : "secondary"} className="text-[10px] mb-1.5">Child #{child.chunk_index}</Badge>
+                                  <div
+                                    key={child.id}
+                                    className={`border rounded-lg p-2.5 bg-background cursor-pointer hover:bg-accent/50 transition-colors ${isTargetChild ? "border-primary ring-1 ring-primary/30" : "border-border"}`}
+                                    onClick={(e) => { e.stopPropagation(); handleLocate(child.char_offset, child.page_number) }}
+                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); handleLocate(child.char_offset, child.page_number) } }}
+                                    role="button"
+                                    tabIndex={0}
+                                  >
+                                    <div className="flex items-center gap-1.5 mb-1.5">
+                                      <Badge variant={isTargetChild ? "default" : "secondary"} className="text-[10px]">Child #{child.chunk_index}</Badge>
+                                      <Locate className="ml-auto h-3 w-3 text-muted-foreground shrink-0" />
+                                    </div>
                                     {child.context && (
                                       <div className="mb-1.5 pl-2.5 border-l-2 border-primary/30">
                                         <p className="text-[11px] text-muted-foreground italic">{child.context}</p>
@@ -320,11 +464,22 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                     chunks.map(chunk => {
                       const isTarget = chunk.id === chunkId
                       return (
-                        <div key={chunk.id} className={`border rounded-lg p-2.5 ${isTarget ? "border-primary ring-1 ring-primary/30 bg-primary/5" : "border-border"}`}>
+                        <div
+                          key={chunk.id}
+                          className={`border rounded-lg p-2.5 cursor-pointer hover:bg-accent/50 transition-colors ${isTarget ? "border-primary ring-1 ring-primary/30 bg-primary/5" : "border-border"}`}
+                          onClick={() => handleLocate(chunk.char_offset, chunk.page_number)}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleLocate(chunk.char_offset, chunk.page_number) }}
+                          role="button"
+                          tabIndex={0}
+                        >
                           <div className="flex items-center gap-1.5 mb-1.5">
                             <Badge variant={isTarget ? "default" : "outline"} className="text-[10px]">Chunk #{chunk.chunk_index}</Badge>
+                            {chunk.section_label && (
+                              <Badge variant="secondary" className="text-[10px]">{chunk.section_label}</Badge>
+                            )}
                             {chunk.context && <span className="text-[10px] text-muted-foreground italic">with context</span>}
                             {isTarget && <span className="text-[10px] text-primary font-medium">← retrieved</span>}
+                            <Locate className="ml-auto h-3 w-3 text-muted-foreground shrink-0" />
                           </div>
                           {chunk.context && (
                             <div className="mb-1.5 pl-2.5 border-l-2 border-primary/30">
@@ -394,7 +549,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                           onClick={async () => {
                             if (!sourceName || !collection) return
                             _markGenerating(genKey!)
-                            setRenderTick(k => k + 1)
                             setDocSummary(null)
                             try { await generateDocSummary(collection, sourceName) }
                             catch (err) {
@@ -436,7 +590,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                           if (!sourceName || !collection) return
                           _markGenerating(genKey!)
                           setDocSummary(null)
-                          setRenderTick(k => k + 1)
                           try { await generateDocSummary(collection, sourceName) }
                           catch (err) {
                             _unmarkGenerating(genKey!)

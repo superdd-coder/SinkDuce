@@ -230,6 +230,16 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
         logger.info("[CONSOLIDATE] No documents to consolidate, aborting")
         return {"message": "No documents to consolidate"}
 
+    # 1b. Check if any doc summary has usable content
+    has_content = any(
+        s.get("data") or s.get("facts") or s.get("insights")
+        for s in doc_summaries
+    )
+    if not has_content:
+        logger.info("[CONSOLIDATE] No doc summaries have usable content (data/facts/insights), skipping LLM")
+        services.db.update_collection_config(collection, {"summary_change_counter": 0})
+        return {"message": "No usable doc summaries to consolidate", "conflicts_count": 0}
+
     # 2. Format and call LLM (generate first, delete old only on success)
     summaries_text = format_doc_summaries_for_prompt(doc_summaries)
     logger.info("[CONSOLIDATE] Formatted summaries (%d chars), calling LLM...", len(summaries_text))
@@ -316,6 +326,13 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                     "The file may be empty or the images could not be read by OCR."
                 )
 
+            # Save parsed text for preview (same text the chunker uses)
+            try:
+                parsed_path = path.with_suffix(path.suffix + ".parsed.txt")
+                parsed_path.write_text(doc.content, encoding="utf-8")
+            except Exception as e:
+                logger.warning("[%s] Failed to save parsed text: %s", filename_param, e)
+
             update(40, "Chunking...")
             config = services.db.get_collection_config(collection)
             if config.get("chunk_mode") == "parent_child":
@@ -337,6 +354,8 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
             t_chunk = time.time()
             extra_meta: dict = {"file_type": doc.file_type}
+            if doc.position_map:
+                extra_meta["position_map"] = doc.position_map
             if meeting_id:
                 extra_meta["meeting_id"] = meeting_id
             chunks = chunker.chunk_with_metadata(
@@ -507,7 +526,7 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
 
     counter = config.get("summary_change_counter", 0) + 1
     services.db.update_collection_config(collection, {"summary_change_counter": counter})
-    if counter >= config.get("summary_consolidate_threshold", 5):
+    if counter >= config.get("summary_consolidate_threshold", 10):
         from src.tasks import task_manager as _tm
         _tm.create_task(filename=f"consolidate:{collection}", task_type="consolidate", collection=collection)
 

@@ -58,11 +58,27 @@ class ExcelParser(DocumentParser):
                         lines.append("| " + " | ".join(row) + " |")
                     sheets_text.append(f"## {sheet}\n" + "\n".join(lines))
                     parsed_names.append(sheet)
+
+            # Build content with position_map tracking sheet boundaries
+            position_map: list[dict] = []
+            content_parts: list[str] = []
+            offset = 0
+            for i, sheet_text in enumerate(sheets_text):
+                position_map.append({
+                    "char_offset": offset,
+                    "label": f"Sheet: {parsed_names[i]}",
+                    "type": "section",
+                    "sheet_name": parsed_names[i],
+                })
+                content_parts.append(sheet_text)
+                offset += len(sheet_text) + 2  # +2 for "\n\n" separator
+
             return ParsedDocument(
-                content="\n\n".join(sheets_text),
+                content="\n\n".join(content_parts),
                 metadata={"sheets": len(parsed_names), "sheet_names": parsed_names},
                 source_path=str(path),
                 file_type="excel",
+                position_map=position_map,
             )
         finally:
             wb.close()

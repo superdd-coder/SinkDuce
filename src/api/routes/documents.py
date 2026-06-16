@@ -232,7 +232,7 @@ async def delete_document(collection: str, doc_source: str):
     try:
         col_config = services.db.get_collection_config(collection)
         counter = col_config.get("summary_change_counter", 0) + 1
-        threshold = col_config.get("summary_consolidate_threshold", 5)
+        threshold = col_config.get("summary_consolidate_threshold", 10)
         services.db.update_collection_config(collection, {"summary_change_counter": counter})
         logger.info("[DELETE] summary_change_counter updated to %d (threshold=%d)", counter, threshold)
 
@@ -288,7 +288,21 @@ def preview_file(filename: str):
             },
         )
 
-    # All other supported formats: parse and return extracted text wrapped in HTML
+    # All other supported formats: serve stored parsed text (matches chunker offsets)
+    parsed_path = file_path.with_suffix(file_path.suffix + ".parsed.txt")
+    if parsed_path.is_file():
+        content = parsed_path.read_bytes()
+        return Response(
+            content=content,
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'inline; filename="{file_path.stem}.txt"',
+                "Content-Length": str(len(content)),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    # Fallback: re-parse (for files uploaded before parsed-text storage was added)
     from src.parsers import PARSERS
 
     parser = PARSERS.get(suffix)
@@ -301,15 +315,18 @@ def preview_file(filename: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse file: {e}")
 
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; padding: 16px; max-width: 900px; margin: 0 auto; color: #333; white-space: pre-wrap; }}
-</style></head><body>{text}</body></html>"""
+    # Cache for future requests
+    try:
+        parsed_path.write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+
     return Response(
-        content=html.encode("utf-8"),
-        media_type="text/html; charset=utf-8",
+        content=text.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
         headers={
-            "Content-Disposition": f'inline; filename="{file_path.name}"',
+            "Content-Disposition": f'inline; filename="{file_path.stem}.txt"',
+            "Content-Length": str(len(text.encode("utf-8"))),
             "X-Content-Type-Options": "nosniff",
         },
     )
@@ -402,6 +419,11 @@ def get_file_chunks(collection: str, source: str, limit: int = 100, offset: int 
             "chunk_type": p["payload"].get("chunk_type", "normal"),
             "parent_id": p["payload"].get("parent_id"),
             "summary": p["payload"].get("summary", ""),
+            # Position fields for source navigation
+            "char_offset": p["payload"].get("char_offset"),
+            "page_number": p["payload"].get("page_number"),
+            "slide_number": p["payload"].get("slide_number"),
+            "section_label": p["payload"].get("section_label"),
         }
         for p in all_points
     ]

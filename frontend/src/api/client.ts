@@ -114,7 +114,7 @@ export const retryTask = (taskId: string) =>
 
 export const deleteDocument = (collection: string, source: string) =>
   request<{ message?: string; error?: string }>(
-    `/documents/${collection}/${source}`,
+    `/documents/${collection}/${encodeURIComponent(source)}`,
     { method: "DELETE" }
   )
 
@@ -138,11 +138,16 @@ export interface ChunkDetail {
   parent_id?: string
   collection?: string
   summary?: string
+  // Position fields for source navigation
+  char_offset?: number
+  page_number?: number
+  slide_number?: number
+  section_label?: string
 }
 
 export const getFileChunks = (collection: string, source: string, limit = 100) =>
   request<{ collection: string; source: string; chunks: ChunkDetail[]; total: number }>(
-    `/documents/${collection}/files/${source}/chunks?limit=${limit}`
+    `/documents/${collection}/files/${encodeURIComponent(source)}/chunks?limit=${limit}`
   )
 
 export const getFilePreviewUrl = (source: string) =>

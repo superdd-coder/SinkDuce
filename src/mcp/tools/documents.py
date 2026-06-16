@@ -164,7 +164,7 @@ async def delete_document(collection: str, source: str) -> str:
         try:
             col_config = services.db.get_collection_config(collection)
             counter = col_config.get("summary_change_counter", 0) + 1
-            threshold = col_config.get("summary_consolidate_threshold", 5)
+            threshold = col_config.get("summary_consolidate_threshold", 10)
             services.db.update_collection_config(collection, {"summary_change_counter": counter})
             if counter >= threshold:
                 task_manager.create_task(

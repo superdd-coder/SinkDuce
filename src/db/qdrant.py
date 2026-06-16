@@ -47,7 +47,7 @@ _DEFAULT_COLLECTION_CONFIG = {
     "agent_max_iterations": 3,
     "search_mode": "dense",
     "summary_change_counter": 0,
-    "summary_consolidate_threshold": 5,
+    "summary_consolidate_threshold": 10,
 }
 
 # Fields that cannot be changed after collection creation

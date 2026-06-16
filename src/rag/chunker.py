@@ -22,6 +22,34 @@ class Chunk:
     chunk_type: str = "normal"  # "normal" | "parent" | "child"
 
 
+def _annotate_position(metadata: dict, char_offset: int, position_map: list[dict]) -> None:
+    """Annotate chunk metadata with position info from position_map (in-place).
+
+    Uses binary search to find the last position_map entry whose char_offset
+    is <= the chunk's char_offset, then copies its fields into metadata.
+    """
+    if not position_map:
+        return
+    # Binary search: find last entry where entry.char_offset <= char_offset
+    lo, hi = 0, len(position_map) - 1
+    best = 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if position_map[mid]["char_offset"] <= char_offset:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    entry = position_map[best]
+    # Copy position fields (exclude char_offset itself — that's per-chunk)
+    for key in ("label", "type", "page_number", "slide_number", "paragraph_index", "sheet_name"):
+        if key in entry:
+            metadata[key] = entry[key]
+    # Also set section_label for display
+    if "label" in entry:
+        metadata["section_label"] = entry["label"]
+
+
 
 def _estimate_tokens(text: str) -> int:
     """Conservative token estimate. CJK ≈ 1 tok/char, non-CJK ≈ 1 tok/2 chars."""
@@ -85,45 +113,45 @@ class TextChunker:
         self.chunk_size = max(chunk_size, 1)
         self.chunk_overlap = min(chunk_overlap, self.chunk_size - 1)
 
-    def chunk(self, text: str) -> list[str]:
+    def _chunk_boundaries(self, text: str) -> list[tuple[int, int]]:
+        """Return (start, end) pairs indexing into the original text."""
         if not text.strip():
             return []
-
-        chunks = []
+        boundaries: list[tuple[int, int]] = []
         start = 0
         while start < len(text):
             end = start + self.chunk_size
-            chunk = text[start:end]
-
             if end < len(text):
+                chunk = text[start:end]
                 last_period = chunk.rfind("。")
                 if last_period == -1:
                     last_period = chunk.rfind(".")
                 if last_period > len(chunk) // 2:
                     end = start + last_period + 1
-                    chunk = text[start:end]
+            boundaries.append((start, end))
+            stride = end - start - self.chunk_overlap
+            start = max(start + 1, start + stride)
+        return boundaries
 
-            chunks.append(chunk.strip())
-            start = max(start + 1, end - self.chunk_overlap)
-
-        return [c for c in chunks if c]
+    def chunk(self, text: str) -> list[str]:
+        return [text[s:e].strip() for s, e in self._chunk_boundaries(text) if text[s:e].strip()]
 
     def chunk_with_metadata(
         self, text: str, source: str = "", extra_metadata: dict | None = None
     ) -> list[Chunk]:
-        raw_chunks = self.chunk(text)
-        meta = {"source": source, **(extra_metadata or {})}
-        total = len(raw_chunks)
-        offset = 0
+        boundaries = self._chunk_boundaries(text)
+        extra = {**(extra_metadata or {})}
+        position_map = extra.pop("position_map", [])  # don't store in Qdrant
+        meta = {"source": source, **extra}
+        total = len(boundaries)
         chunks = []
-        for i, c in enumerate(raw_chunks):
-            chunks.append(
-                Chunk(
-                    text=c,
-                    metadata={**meta, "chunk_index": i, "total_chunks": total, "char_offset": offset},
-                )
-            )
-            offset += len(c)
+        for i, (start, end) in enumerate(boundaries):
+            chunk_text = text[start:end].strip()
+            if not chunk_text:
+                continue
+            chunk_meta = {**meta, "chunk_index": i, "total_chunks": total, "char_offset": start}
+            _annotate_position(chunk_meta, start, position_map)
+            chunks.append(Chunk(text=chunk_text, metadata=chunk_meta))
         return chunks
 
 
@@ -363,19 +391,78 @@ class ParagraphChunker:
     def chunk_with_metadata(
         self, text: str, source: str = "", extra_metadata: dict | None = None
     ) -> list[Chunk]:
-        raw_chunks = self.chunk(text)
-        meta = {"source": source, **(extra_metadata or {})}
+        paragraphs = _split_paragraphs(text)
+        extra = {**(extra_metadata or {})}
+        position_map = extra.pop("position_map", [])  # don't store in Qdrant
+        meta = {"source": source, **extra}
+
+        # Build paragraph -> char_offset map by searching in original text
+        para_offsets: list[int] = []
+        doc_pos = 0
+        for para in paragraphs:
+            idx = text.find(para, doc_pos)
+            if idx == -1:
+                idx = doc_pos  # fallback
+            para_offsets.append(idx)
+            # Advance past this paragraph and any trailing blank lines
+            after = idx + len(para)
+            while after < len(text) and text[after] in ("\r", "\n"):
+                after += 1
+            doc_pos = after
+
+        # Chunk paragraphs using the same logic as self.chunk()
+        raw_chunks: list[tuple[str, int]] = []  # (chunk_text, start_offset)
+        current_parts: list[str] = []
+        current_para_indices: list[int] = []
+        current_tokens = 0
+        chunk_start_offset = 0
+
+        for para_idx, para in enumerate(paragraphs):
+            para_tokens = _estimate_tokens(para)
+
+            if para_tokens > self.hard_limit:
+                if current_parts:
+                    raw_chunks.append(("\n\n".join(current_parts), chunk_start_offset))
+                    overlap = self._get_overlap_sentences("\n\n".join(current_parts))
+                    current_parts = list(overlap)
+                    current_tokens = sum(_estimate_tokens(s) for s in current_parts)
+                    current_para_indices = []
+                    chunk_start_offset = para_offsets[para_idx]  # reset for next chunk
+                sub_chunks = self._split_long_paragraph(para)
+                # Find offsets for sub-chunks within the paragraph
+                sub_pos = para_offsets[para_idx]
+                for sc in sub_chunks:
+                    sc_idx = text.find(sc, sub_pos)
+                    if sc_idx == -1:
+                        sc_idx = sub_pos
+                    raw_chunks.append((sc, sc_idx))
+                    sub_pos = sc_idx + len(sc)
+                continue
+
+            if current_parts and current_tokens + para_tokens > self.max_tokens:
+                raw_chunks.append(("\n\n".join(current_parts), chunk_start_offset))
+                overlap = self._get_overlap_sentences("\n\n".join(current_parts))
+                current_parts = list(overlap)
+                current_tokens = sum(_estimate_tokens(s) for s in current_parts)
+                current_para_indices = []
+                chunk_start_offset = para_offsets[para_idx]  # reset for next chunk
+
+            if not current_parts:
+                chunk_start_offset = para_offsets[para_idx]
+            current_parts.append(para)
+            current_para_indices.append(para_idx)
+            current_tokens += para_tokens
+
+        if current_parts:
+            raw_chunks.append(("\n\n".join(current_parts), chunk_start_offset))
+
+        raw_chunks = [(t, o) for t, o in raw_chunks if t.strip()]
         total = len(raw_chunks)
-        offset = 0
         chunks = []
-        for i, c in enumerate(raw_chunks):
-            chunks.append(
-                Chunk(
-                    text=c,
-                    metadata={**meta, "chunk_index": i, "total_chunks": total, "char_offset": offset},
-                )
-            )
-            offset += len(c)
+        for i, (c, offset) in enumerate(raw_chunks):
+            chunk_meta = {**meta, "chunk_index": i, "total_chunks": total, "char_offset": offset}
+            _annotate_position(chunk_meta, offset, position_map)
+            chunks.append(Chunk(text=c, metadata=chunk_meta))
         return chunks
 
 
@@ -468,23 +555,37 @@ class ParentChildChunker:
     ) -> list[Chunk]:
         """Returns both parent and child chunks."""
         parent_texts = self._split_parents(text)
-        meta = {"source": source, **(extra_metadata or {})}
+        extra = {**(extra_metadata or {})}
+        position_map = extra.pop("position_map", [])  # don't store in Qdrant
+        meta = {"source": source, **extra}
+
+        # Find each parent chunk's position in the original text
+        parent_offsets: list[int] = []
+        doc_pos = 0
+        for pt in parent_texts:
+            idx = text.find(pt, doc_pos)
+            if idx == -1:
+                idx = doc_pos
+            parent_offsets.append(idx)
+            doc_pos = idx + len(pt)
 
         all_chunks: list[Chunk] = []
-        parent_offset = 0
 
         for parent_idx, parent_text in enumerate(parent_texts):
             parent_id = str(uuid.uuid4())
+            parent_offset = parent_offsets[parent_idx]
 
             # Create parent chunk
+            parent_meta = {
+                **meta,
+                "chunk_id": parent_id,
+                "chunk_index": parent_idx,
+                "char_offset": parent_offset,
+            }
+            _annotate_position(parent_meta, parent_offset, position_map)
             parent_chunk = Chunk(
                 text=parent_text,
-                metadata={
-                    **meta,
-                    "chunk_id": parent_id,
-                    "chunk_index": parent_idx,
-                    "char_offset": parent_offset,
-                },
+                metadata=parent_meta,
                 parent_id=None,
                 chunk_type="parent",
             )
@@ -493,24 +594,41 @@ class ParentChildChunker:
             # Split parent into child chunks
             child_texts = self.child_chunker.chunk(parent_text)
             child_total = len(child_texts)
-            child_offset = 0
+
+            # Find each child's position within the parent text
+            child_doc_pos = 0
             for child_idx, child_text in enumerate(child_texts):
+                child_pos_in_parent = parent_text.find(child_text, child_doc_pos)
+                if child_pos_in_parent == -1:
+                    # Fallback: search by first line, then first few words
+                    first_line = child_text.split("\n", 1)[0].strip()
+                    fl_pos = parent_text.find(first_line, child_doc_pos) if first_line else -1
+                    if fl_pos == -1 and first_line:
+                        # Try first word/phrase (skip short tokens like |, ---)
+                        tokens = [t for t in first_line.split() if len(t) > 2]
+                        for token in tokens[:3]:
+                            fl_pos = parent_text.find(token, child_doc_pos)
+                            if fl_pos != -1:
+                                break
+                    child_pos_in_parent = fl_pos if fl_pos != -1 else child_doc_pos
+                child_doc_offset = parent_offset + child_pos_in_parent
+
+                child_meta = {
+                    **meta,
+                    "chunk_id": str(uuid.uuid4()),
+                    "chunk_index": child_idx,
+                    "total_chunks": child_total,
+                    "char_offset": child_doc_offset,
+                }
+                _annotate_position(child_meta, child_doc_offset, position_map)
                 child_chunk = Chunk(
                     text=child_text,
-                    metadata={
-                        **meta,
-                        "chunk_id": str(uuid.uuid4()),
-                        "chunk_index": child_idx,
-                        "total_chunks": child_total,
-                        "char_offset": child_offset,
-                    },
+                    metadata=child_meta,
                     parent_id=parent_id,
                     chunk_type="child",
                 )
                 all_chunks.append(child_chunk)
-                child_offset += len(child_text)
-
-            parent_offset += len(parent_text)
+                child_doc_pos = child_pos_in_parent + 1  # advance past this position
 
         # Set total_chunks on parent chunks
         parent_count = len(parent_texts)

@@ -60,9 +60,24 @@ class DocxParser(DocumentParser):
                         parts.append(md_table)
                     table_idx += 1
 
+        # Build content with position_map tracking paragraph boundaries
+        position_map: list[dict] = []
+        content_parts: list[str] = []
+        offset = 0
+        for i, part in enumerate(parts):
+            position_map.append({
+                "char_offset": offset,
+                "label": f"Paragraph {i + 1}",
+                "type": "section",
+                "paragraph_index": i + 1,
+            })
+            content_parts.append(part)
+            offset += len(part) + 2  # +2 for "\n\n" separator
+
         return ParsedDocument(
-            content="\n\n".join(parts),
+            content="\n\n".join(content_parts),
             metadata={"paragraphs": len(parts)},
             source_path=str(path),
             file_type="docx",
+            position_map=position_map,
         )
