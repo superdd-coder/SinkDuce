@@ -464,60 +464,147 @@
   display: none;
 }
 
-/* === Typora-style WYSIWYG editor === */
+/* === Milkdown WYSIWYG editor === */
 
-.typora-editor {
-  position: relative;
-  cursor: text;
+.milkdown-editor {
+  min-height: inherit;
 }
 
-.typora-textarea {
-  display: block;
-  width: 100%;
+/* Read-only mode */
+.milkdown-readonly .ProseMirror {
+  cursor: default;
+  user-select: text;
+}
+
+/* ProseMirror editor surface */
+.milkdown-editor .ProseMirror {
+  outline: none;
   padding: 0.75rem 1rem;
-  margin: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  /* Default: text & caret hidden (preview visible on top) */
-  color: transparent;
-  caret-color: transparent;
-  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  min-height: inherit;
   font-size: 0.875rem;
   line-height: 1.625;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  resize: none;
-  outline: none;
-  overflow: hidden;
-  field-sizing: content;
-  position: relative;
-  z-index: 2;
 }
 
-/* Focused: text & caret visible, raw markdown shown */
-.typora-textarea-focused {
-  color: var(--foreground);
-  caret-color: var(--foreground);
+/* Paragraphs */
+.milkdown-editor .ProseMirror p {
+  margin: 0.25em 0;
 }
 
-.typora-textarea::placeholder {
+/* Headings */
+.milkdown-editor .ProseMirror h1,
+.milkdown-editor .ProseMirror h2,
+.milkdown-editor .ProseMirror h3,
+.milkdown-editor .ProseMirror h4 {
+  font-weight: 600;
+  margin-top: 0.75em;
+  margin-bottom: 0.25em;
+}
+
+.milkdown-editor .ProseMirror h1 { font-size: 1.5em; }
+.milkdown-editor .ProseMirror h2 { font-size: 1.25em; }
+.milkdown-editor .ProseMirror h3 { font-size: 1.125em; }
+
+/* Code blocks */
+.milkdown-editor .ProseMirror pre {
+  background: var(--muted);
+  border-radius: 0.375rem;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+}
+
+.milkdown-editor .ProseMirror code {
+  background: var(--muted);
+  border-radius: 0.25rem;
+  padding: 0.125em 0.25em;
+  font-size: 0.875em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.milkdown-editor .ProseMirror pre code {
+  background: transparent;
+  padding: 0;
+}
+
+/* Blockquotes */
+.milkdown-editor .ProseMirror blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+  margin: 0.5em 0;
   color: var(--muted-foreground);
 }
 
-.typora-preview {
-  position: absolute;
-  inset: 0;
-  padding: 0.75rem 1rem;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 1;
-  font-size: 0.875rem;
-  line-height: 1.625;
+/* Lists */
+.milkdown-editor .ProseMirror ul,
+.milkdown-editor .ProseMirror ol {
+  padding-left: 1.5rem;
+  margin: 0.25em 0;
 }
 
-/* Dark mode caret */
-.dark .typora-textarea-focused {
-  caret-color: #fff;
+.milkdown-editor .ProseMirror li {
+  margin: 0.125em 0;
+}
+
+/* Task lists */
+.milkdown-editor .ProseMirror li[data-checked] {
+  list-style: none;
+  margin-left: -1.5rem;
+}
+
+.milkdown-editor .ProseMirror li[data-checked] > label > input[type="checkbox"] {
+  margin-right: 0.5em;
+}
+
+/* Horizontal rules */
+.milkdown-editor .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+/* Tables (GFM) */
+.milkdown-editor .ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+  font-size: 0.8125rem;
+}
+
+.milkdown-editor .ProseMirror td,
+.milkdown-editor .ProseMirror th {
+  border: 1px solid var(--border);
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+}
+
+.milkdown-editor .ProseMirror th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+/* Images */
+.milkdown-editor .ProseMirror img {
+  max-width: 100%;
+  border-radius: 0.375rem;
+}
+
+/* Links */
+.milkdown-editor .ProseMirror a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Selection highlight */
+.milkdown-editor .ProseMirror ::selection {
+  background: var(--primary) / 0.2;
+}
+
+/* Placeholder for empty editor */
+.milkdown-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  pointer-events: none;
+  float: left;
+  height: 0;
 }

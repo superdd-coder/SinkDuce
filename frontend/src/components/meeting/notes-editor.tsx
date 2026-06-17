@@ -188,18 +188,19 @@ export function NotesEditor({
               onChange={handleDraftChange}
               minHeight="250px"
               placeholder="Write your meeting notes here (Markdown supported)..."
-            />
+            >
+              {dirty && (
+                <>
+                  <Button size="sm" onClick={handleSave}>
+                    <Save className="h-3 w-3 mr-1" /> Save
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleDiscard}>
+                    <X className="h-3 w-3 mr-1" /> Discard
+                  </Button>
+                </>
+              )}
+            </MarkdownEditor>
           </div>
-          {dirty && (
-            <div className="flex gap-2 px-2 pb-2">
-              <Button size="sm" onClick={handleSave}>
-                <Save className="h-3 w-3 mr-1" /> Save
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleDiscard}>
-                <X className="h-3 w-3 mr-1" /> Discard
-              </Button>
-            </div>
-          )}
         </TabsContent>
       </Tabs>
     </div>

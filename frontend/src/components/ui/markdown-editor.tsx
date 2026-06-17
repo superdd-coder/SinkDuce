@@ -1,78 +1,130 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import remarkBreaks from "remark-breaks"
+import { Crepe } from "@milkdown/crepe"
+import { editorViewCtx, parserCtx } from "@milkdown/kit/core"
+import "@milkdown/crepe/theme/common/style.css"
+import "@milkdown/crepe/theme/common/reset.css"
+import "@milkdown/crepe/theme/nord.css"
 
 interface MarkdownEditorProps {
   value: string
-  onChange: (value: string) => void
+  onChange?: (value: string) => void
   className?: string
   minHeight?: string
   placeholder?: string
-  /** "block" = Typora-style WYSIWYG (default). "plain" = simple textarea + preview overlay. */
+  children?: ReactNode
+  readonly?: boolean
+  /** "block" = Milkdown Crepe WYSIWYG (default). "plain" = simple textarea + preview overlay. */
   variant?: "block" | "plain"
 }
 
-// ─── Typora-style editor ──────────────────────────────────────────────────
-// Focused: textarea text visible (raw markdown, caret visible)
-// Blurred: rendered markdown preview visible (textarea transparent behind it)
+// ─── Milkdown Crepe WYSIWYG editor ────────────────────────────────────────
+// Supports both edit mode (Typora-like) and read-only mode via `readonly` prop.
 
-function TyporaEditor({ value, onChange, className, minHeight, placeholder }: MarkdownEditorProps) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const previewRef = useRef<HTMLDivElement>(null)
-  const [focused, setFocused] = useState(false)
+function TyporaEditor({
+  value,
+  onChange,
+  className,
+  minHeight,
+  placeholder,
+  children,
+  readonly = false,
+}: Omit<MarkdownEditorProps, "variant">) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const crepeRef = useRef<Crepe | null>(null)
+  const lastEmitted = useRef(value)
+  const onChangeRef = useRef(onChange)
+  const initValueRef = useRef(value)
+  const mountedRef = useRef(false)
+  const createPromiseRef = useRef<Promise<void> | null>(null)
+  onChangeRef.current = onChange
 
-  // Auto-grow textarea to match content
   useEffect(() => {
-    const ta = textareaRef.current
-    if (!ta) return
-    ta.style.height = "auto"
-    ta.style.height = ta.scrollHeight + "px"
+    const root = containerRef.current
+    if (!root) return
+    mountedRef.current = false
+
+    const crepe = new Crepe({
+      root,
+      defaultValue: initValueRef.current,
+      featureConfigs: {
+        [Crepe.Feature.Placeholder]: {
+          text: placeholder || "Start writing...",
+        },
+      },
+    })
+
+    crepe.on((api) => {
+      api.markdownUpdated((_ctx, markdown) => {
+        lastEmitted.current = markdown
+        if (mountedRef.current && !externalUpdateRef.current) {
+          console.log("[Milkdown onChange]", JSON.stringify(markdown.slice(0, 200)))
+          onChangeRef.current?.(markdown)
+        }
+      })
+      api.mounted(() => {
+        mountedRef.current = true
+        crepe.setReadonly(readonly)
+      })
+    })
+
+    let destroyed = false
+    createPromiseRef.current = crepe.create().then(() => {
+      if (!destroyed) crepeRef.current = crepe
+    }) as unknown as Promise<void>
+
+    return () => {
+      destroyed = true
+      mountedRef.current = false
+      crepeRef.current = null
+      createPromiseRef.current = null
+      crepe.destroy()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toggle readonly mode
+  useEffect(() => {
+    const p = createPromiseRef.current
+    if (!p) return
+    p.then(() => { crepeRef.current?.setReadonly(readonly) })
+  }, [readonly])
+
+  // Sync external value changes
+  const externalUpdateRef = useRef(false)
+  useEffect(() => {
+    const p = createPromiseRef.current
+    if (!p) return
+    if (value === lastEmitted.current) return
+    p.then(() => {
+      const crepe = crepeRef.current
+      if (!crepe) return
+      externalUpdateRef.current = true
+      try {
+        crepe.editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx)
+          const parser = ctx.get(parserCtx)
+          const doc = parser(value)
+          if (doc) {
+            const tr = view.state.tr.replaceWith(0, view.state.doc.content.size, doc)
+            view.dispatch(tr)
+          }
+        })
+      } catch { /* editor not ready yet */ }
+      lastEmitted.current = value
+      requestAnimationFrame(() => { externalUpdateRef.current = false })
+    })
   }, [value])
 
-  // Sync scroll between textarea and rendered layer
-  useEffect(() => {
-    const ta = textareaRef.current
-    if (!ta) return
-    const handleScroll = () => {
-      if (previewRef.current) {
-        previewRef.current.scrollTop = ta.scrollTop
-      }
-    }
-    ta.addEventListener("scroll", handleScroll)
-    return () => ta.removeEventListener("scroll", handleScroll)
-  }, [])
-
-  const isEmpty = !value.trim()
-
   return (
-    <div
-      className={cn("typora-editor", className)}
-      style={{ minHeight }}
-      onClick={() => textareaRef.current?.focus()}
-    >
-      {/* Textarea: visible when focused (raw markdown + caret), transparent when blurred */}
-      <textarea
-        ref={textareaRef}
-        className={cn("typora-textarea", focused && "typora-textarea-focused")}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        placeholder={placeholder}
-        spellCheck={false}
-      />
-      {/* Rendered preview: visible when blurred, hidden when focused */}
-      {!focused && (
-        <div ref={previewRef} className="typora-preview">
-          <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-0.5 prose-pre:my-2 prose-ul:my-0.5 prose-ol:my-0.5 prose-li:my-0 prose-headings:my-1 prose-hr:my-2">
-            {isEmpty ? (
-              <span className="text-muted-foreground/50">{placeholder || "Start writing..."}</span>
-            ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{value}</ReactMarkdown>
-            )}
-          </div>
+    <div className={cn("milkdown-editor relative", readonly && "milkdown-readonly", className)} style={{ minHeight }} ref={containerRef}>
+      {children && !readonly && (
+        <div
+          className="absolute top-2 right-2 z-10 flex gap-1 pointer-events-auto"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {children}
         </div>
       )}
     </div>
@@ -84,7 +136,6 @@ function TyporaEditor({ value, onChange, className, minHeight, placeholder }: Ma
 function PlainEditor({ value, onChange, className, minHeight, placeholder }: MarkdownEditorProps) {
   const [focused, setFocused] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
   const isEmpty = !value.trim()
 
   return (
@@ -92,7 +143,7 @@ function PlainEditor({ value, onChange, className, minHeight, placeholder }: Mar
       <textarea
         ref={textareaRef}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => onChange?.(e.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         className={cn("md-editor-textarea", focused && "md-editor-textarea-focused")}

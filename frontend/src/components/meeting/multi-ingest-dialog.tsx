@@ -5,8 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Progress } from "@/components/ui/progress"
 import { Loader2, CheckCircle, SkipForward } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { useAppStore } from "@/stores/app-store"
 import {
   splitMeetingByProject,
@@ -263,17 +262,13 @@ export function MultiIngestDialog({ open, onOpenChange, meetingId, isReingest, a
                       {p.summary && (
                         <div>
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Summary</p>
-                          <div className="prose prose-sm max-w-none dark:prose-invert">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{p.summary}</ReactMarkdown>
-                          </div>
+                          <MarkdownEditor value={p.summary} readonly />
                         </div>
                       )}
                       {p.detail && (
                         <div>
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Detail</p>
-                          <div className="prose prose-sm max-w-none dark:prose-invert">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{p.detail}</ReactMarkdown>
-                          </div>
+                          <MarkdownEditor value={p.detail} readonly />
                         </div>
                       )}
                     </div>

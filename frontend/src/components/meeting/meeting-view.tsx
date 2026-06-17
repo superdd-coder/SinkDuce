@@ -65,14 +65,16 @@ export function MeetingView() {
   // When realtime transcription finalizes (user stops recording), the hook
   // persists segments to the backend. Refetch the meeting so the new
   // transcript_path / status flip the Summarize + Allocate buttons visible.
+  const transcriptionRef = useRef(transcription)
+  transcriptionRef.current = transcription
   useEffect(() => {
     if (!activeMeeting) return
-    transcription.setOnFinalized(() => {
+    transcriptionRef.current.setOnFinalized(() => {
       fetchMeeting(activeMeeting)
       fetchMeetings()
     })
-    return () => transcription.setOnFinalized(null)
-  }, [activeMeeting, transcription])
+    return () => { transcriptionRef.current.setOnFinalized(null) }
+  }, [activeMeeting]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const notesDraftRef = useRef("")
@@ -117,6 +119,7 @@ export function MeetingView() {
 
   // Fetch single meeting detail
   const fetchMeeting = useCallback(async (id: string) => {
+    console.trace("[fetchMeeting]", id)
     try {
       const m = await getMeeting(id)
       setMeeting(m)
@@ -348,10 +351,15 @@ export function MeetingView() {
     setMultiIngestOpen(true)
   }
 
-  const handleUpdateGenerated = async (data: { summary?: string; todos?: TodoItem[] }) => {
+  const handleUpdateGenerated = async (data: { summary?: string; detail?: string; todos?: TodoItem[] }) => {
     if (!activeMeeting) return
+    const key = data.summary !== undefined ? "summary" : "detail"
+    const content = data.summary ?? data.detail ?? ""
+    console.log(`[Save ${key}] sent:`, JSON.stringify(content.slice(0, 300)))
     try {
       const m = await updateMeeting(activeMeeting, data)
+      const returned = key === "summary" ? m.summary : m.detail
+      console.log(`[Save ${key}] returned:`, JSON.stringify((returned ?? "").slice(0, 300)))
       setMeeting(m)
       toast.success("Updated")
     } catch (err) {

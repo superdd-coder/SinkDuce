@@ -2,23 +2,40 @@ import { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { Pencil, X, Save, Loader2, Search } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import type { TodoItem } from "@/api/client"
-import { unified } from "unified"
-import remarkParse from "remark-parse"
-import remarkRehype from "remark-rehype"
-import rehypeStringify from "rehype-stringify"
 
-function markdownToHTML(md: string): string {
-  return String(
-    unified()
-      .use(remarkParse)
-      .use(remarkGfm)
-      .use(remarkRehype)
-      .use(rehypeStringify)
-      .processSync(md)
-  )
+/** Normalize Milkdown-style markdown to strict CommonMark before saving to API */
+export function normalizeMd(md: string): string {
+  return md
+    .replace(/\*\*\s+([^*]+?)\s*\*\*/g, "**$1**")
+    .replace(/(?<!\*)\*(?!\*)\s+([^*]+?)\s*(?<!\*)\*(?!\*)/g, "*$1*")
+    .replace(/`([^`]+?)`/g, (_, inner: string) => "`" + inner.trim() + "`")
+    .replace(/\[([^\]]+)\]\(\s+([^)]+?)\s*\)/g, "[$1]($2)")
+    .replace(/^(#{1,6})\s{2,}/gm, "$1 ")
+}
+
+function highlightTextNodes(el: HTMLElement, query: string) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text)
+  for (const node of nodes) {
+    const text = node.textContent || ""
+    if (!text.toLowerCase().includes(query)) continue
+    const fragment = document.createDocumentFragment()
+    let last = 0
+    const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")
+    let match: RegExpExecArray | null
+    while ((match = re.exec(text)) !== null) {
+      if (match.index > last) fragment.appendChild(document.createTextNode(text.slice(last, match.index)))
+      const mark = document.createElement("mark")
+      mark.className = "bg-yellow-200 dark:bg-yellow-800 rounded px-0.5"
+      mark.textContent = match[0]
+      fragment.appendChild(mark)
+      last = match.index + match[0].length
+    }
+    if (last < text.length) fragment.appendChild(document.createTextNode(text.slice(last)))
+    node.parentNode?.replaceChild(fragment, node)
+  }
 }
 
 interface GeneratedContentProps {
@@ -26,7 +43,7 @@ interface GeneratedContentProps {
   content: string | null
   todos?: TodoItem[] | null
   loading: boolean
-  onSave: (data: { summary?: string; todos?: TodoItem[] }) => void
+  onSave: (data: { summary?: string; detail?: string; todos?: TodoItem[] }) => void
 }
 
 export function GeneratedContent({ tab, content, todos, loading, onSave }: GeneratedContentProps) {
@@ -68,27 +85,25 @@ export function GeneratedContent({ tab, content, todos, loading, onSave }: Gener
           )}
         </div>
         {editing ? (
-          <>
-            <MarkdownEditor
-              variant="block"
-              value={draft}
-              onChange={setDraft}
-              minHeight="250px"
-              placeholder="Write summary in Markdown..."
-            />
-            <div className="flex gap-2">
-              <Button size="sm" onClick={() => { onSave({ summary: draft }); setEditing(false) }}>
-                <Save className="h-3 w-3 mr-1" /> Save
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>
-                <X className="h-3 w-3 mr-1" /> Cancel
-              </Button>
-            </div>
-          </>
+          <MarkdownEditor
+            value={draft}
+            onChange={setDraft}
+            minHeight="250px"
+            placeholder="Write summary in Markdown..."
+          >
+            <Button size="sm" onClick={() => { onSave({ summary: draft }); setEditing(false) }}>
+              <Save className="h-3 w-3 mr-1" /> Save
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setEditing(false)}>
+              <X className="h-3 w-3 mr-1" /> Cancel
+            </Button>
+          </MarkdownEditor>
         ) : (
-          <div className="prose prose-sm max-w-none dark:prose-invert text-sm leading-relaxed">
-            {content ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown> : <span className="text-muted-foreground">No summary generated yet.</span>}
-          </div>
+          content ? (
+            <MarkdownEditor value={content} readonly />
+          ) : (
+            <span className="text-muted-foreground">No summary generated yet.</span>
+          )
         )}
       </div>
     )
@@ -197,55 +212,22 @@ export function GeneratedContent({ tab, content, todos, loading, onSave }: Gener
   )
 }
 
-function DetailWithSearch({ content, onSave }: { content: string | null; onSave?: (data: { summary?: string; todos?: TodoItem[] }) => void }) {
+function DetailWithSearch({ content, onSave }: { content: string | null; onSave?: (data: { summary?: string; detail?: string; todos?: TodoItem[] }) => void }) {
   const [search, setSearch] = useState("")
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState("")
-  const contentRef = useRef<HTMLDivElement>(null)
+  const editorWrapRef = useRef<HTMLDivElement>(null)
   const query = search.toLowerCase().trim()
 
   useEffect(() => {
     if (!editing) setDraft(content ?? "")
   }, [content, editing])
 
-  // DOM-based highlighting — walks text nodes, avoids breaking HTML tags
+  // DOM-based search highlighting on Milkdown readonly output
   useLayoutEffect(() => {
-    const el = contentRef.current
-    if (!el || !content || editing) return
-
-    // Reset to clean rendered HTML
-    el.innerHTML = markdownToHTML(content)
-
-    if (!query) return
-
-    // Walk all text nodes and wrap matches
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-    const nodes: Text[] = []
-    while (walker.nextNode()) nodes.push(walker.currentNode as Text)
-
-    for (const node of nodes) {
-      const text = node.textContent || ""
-      const lower = text.toLowerCase()
-      if (!lower.includes(query)) continue
-
-      const fragment = document.createDocumentFragment()
-      let last = 0
-      let match: RegExpExecArray | null
-      const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")
-
-      while ((match = re.exec(lower)) !== null) {
-        const start = match.index
-        const end = start + query.length
-        if (start > last) fragment.appendChild(document.createTextNode(text.slice(last, start)))
-        const mark = document.createElement("mark")
-        mark.className = "bg-yellow-200 dark:bg-yellow-800 rounded px-0.5"
-        mark.textContent = text.slice(start, end)
-        fragment.appendChild(mark)
-        last = end
-      }
-      if (last < text.length) fragment.appendChild(document.createTextNode(text.slice(last)))
-      node.parentNode?.replaceChild(fragment, node)
-    }
+    const el = editorWrapRef.current
+    if (!el || !query || editing || !content) return
+    highlightTextNodes(el, query)
   }, [content, query, editing])
 
   const matchCount = useMemo(() => {
@@ -262,20 +244,16 @@ function DetailWithSearch({ content, onSave }: { content: string | null; onSave?
 
   if (editing) {
     return (
-      <div className="flex flex-col h-full gap-2">
-        <MarkdownEditor
-          variant="block"
-          value={draft}
-          onChange={setDraft}
-          minHeight="250px"
-          placeholder="Write detail in Markdown..."
-          className="flex-1 min-h-0"
-        />
-        <div className="flex gap-2 justify-end">
-          <Button variant="outline" size="sm" onClick={() => { setEditing(false); setDraft(content ?? "") }}>Discard</Button>
-          <Button size="sm" onClick={() => { onSave?.({ summary: draft }); setEditing(false) }}>Save</Button>
-        </div>
-      </div>
+      <MarkdownEditor
+        value={draft}
+        onChange={setDraft}
+        minHeight="250px"
+        placeholder="Write detail in Markdown..."
+        className="flex-1 min-h-0"
+      >
+        <Button variant="outline" size="sm" onClick={() => { setEditing(false); setDraft(content ?? "") }}>Discard</Button>
+        <Button size="sm" onClick={() => { onSave?.({ detail: draft }); setEditing(false) }}>Save</Button>
+      </MarkdownEditor>
     )
   }
 
@@ -297,10 +275,9 @@ function DetailWithSearch({ content, onSave }: { content: string | null; onSave?
         </Button>
       </div>
       {query && <p className="text-[10px] text-muted-foreground px-1 pb-1">{matchCount} match{matchCount !== 1 ? "es" : ""}</p>}
-      <div
-        ref={contentRef}
-        className="flex-1 overflow-auto prose prose-sm max-w-none dark:prose-invert text-sm leading-relaxed"
-      />
+      <div ref={editorWrapRef} className="flex-1 overflow-auto">
+        {content && <MarkdownEditor value={content} readonly />}
+      </div>
     </div>
   )
 }
