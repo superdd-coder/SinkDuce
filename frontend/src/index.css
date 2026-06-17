@@ -479,9 +479,9 @@
   border: none;
   border-radius: 0;
   background: transparent;
-  /* Text invisible, caret visible — sits ON TOP of rendered preview */
+  /* Default: text & caret hidden (preview visible on top) */
   color: transparent;
-  caret-color: currentColor;
+  caret-color: transparent;
   font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
   font-size: 0.875rem;
   line-height: 1.625;
@@ -496,8 +496,14 @@
   z-index: 2;
 }
 
+/* Focused: text & caret visible, raw markdown shown */
+.typora-textarea-focused {
+  color: var(--foreground);
+  caret-color: var(--foreground);
+}
+
 .typora-textarea::placeholder {
-  color: transparent;
+  color: var(--muted-foreground);
 }
 
 .typora-preview {
@@ -511,6 +517,7 @@
   line-height: 1.625;
 }
 
-.dark .typora-textarea {
+/* Dark mode caret */
+.dark .typora-textarea-focused {
   caret-color: #fff;
 }

@@ -14,11 +14,14 @@ interface MarkdownEditorProps {
   variant?: "block" | "plain"
 }
 
-// ─── Typora-style editor (transparent textarea + live rendered overlay) ────
+// ─── Typora-style editor ──────────────────────────────────────────────────
+// Focused: textarea text visible (raw markdown, caret visible)
+// Blurred: rendered markdown preview visible (textarea transparent behind it)
 
 function TyporaEditor({ value, onChange, className, minHeight, placeholder }: MarkdownEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
+  const [focused, setFocused] = useState(false)
 
   // Auto-grow textarea to match content
   useEffect(() => {
@@ -49,25 +52,29 @@ function TyporaEditor({ value, onChange, className, minHeight, placeholder }: Ma
       style={{ minHeight }}
       onClick={() => textareaRef.current?.focus()}
     >
-      {/* Textarea: transparent text, visible caret — sits ON TOP of rendered preview */}
+      {/* Textarea: visible when focused (raw markdown + caret), transparent when blurred */}
       <textarea
         ref={textareaRef}
-        className="typora-textarea"
+        className={cn("typora-textarea", focused && "typora-textarea-focused")}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         placeholder={placeholder}
         spellCheck={false}
       />
-      {/* Rendered preview: behind textarea, shows live markdown through transparent textarea */}
-      <div ref={previewRef} className="typora-preview">
-        <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-0.5 prose-pre:my-2 prose-ul:my-0.5 prose-ol:my-0.5 prose-li:my-0 prose-headings:my-1 prose-hr:my-2">
-          {isEmpty ? (
-            <span className="text-muted-foreground/50">{placeholder || "Start writing..."}</span>
-          ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{value}</ReactMarkdown>
-          )}
+      {/* Rendered preview: visible when blurred, hidden when focused */}
+      {!focused && (
+        <div ref={previewRef} className="typora-preview">
+          <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-0.5 prose-pre:my-2 prose-ul:my-0.5 prose-ol:my-0.5 prose-li:my-0 prose-headings:my-1 prose-hr:my-2">
+            {isEmpty ? (
+              <span className="text-muted-foreground/50">{placeholder || "Start writing..."}</span>
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{value}</ReactMarkdown>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
