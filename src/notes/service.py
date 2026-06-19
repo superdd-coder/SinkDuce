@@ -77,11 +77,13 @@ def get_llm():
 
 def distill_note(collection: str, source_note_id: str, target_note_id: str) -> str:
     """Distill source note content for embedding into target note.
-    Uses cache if available. Returns the distilled markdown."""
-    # Check cache first
-    cached = store.get_distillation(collection, source_note_id, target_note_id)
+    Uses cache if available. Cache is keyed by (collection, source_note_id) —
+    distillation result depends only on the source, not the target.
+    Returns the distilled markdown."""
+    # Check cache (single-key: collection + source_note_id)
+    cached = store.get_distillation(collection, source_note_id)
     if cached is not None:
-        logger.info("Using cached distillation for %s→%s", source_note_id, target_note_id)
+        logger.info("Using cached distillation for %s", source_note_id)
         return cached
 
     # Get source content and expand nested distill blocks
@@ -95,7 +97,7 @@ def distill_note(collection: str, source_note_id: str, target_note_id: str) -> s
     source_content = expand_distill_blocks(collection, source_content)
 
     # Call LLM
-    logger.info("Generating distillation for %s→%s (%d chars)", source_note_id, target_note_id, len(source_content))
+    logger.info("Generating distillation for %s (%d chars)", source_note_id, len(source_content))
     llm = get_llm()
     system_prompt, user_prompt = get_distillation_prompt(source_content)
     result = llm.generate(user_prompt, system=system_prompt, max_tokens=4096)
@@ -109,8 +111,8 @@ def distill_note(collection: str, source_note_id: str, target_note_id: str) -> s
             if nl != -1:
                 result = result[nl + 1:].strip()
 
-    # Cache the result
-    store.save_distillation(collection, source_note_id, target_note_id, result)
+    # Cache the result (single-key)
+    store.save_distillation(collection, source_note_id, result)
     return result
 
 
@@ -124,8 +126,8 @@ def propagate_forward(collection: str, source_note_id: str, auto: bool = False) 
     if not source_note:
         return updated
 
-    # Invalidate existing distillations for this source
-    store.invalidate_distillations(collection, source_note_id)
+    # Delete existing distillation so it gets regenerated
+    store.delete_distillation(collection, source_note_id)
 
     for target_id in referenced_by:
         target_content = store.get_content(collection, target_id)

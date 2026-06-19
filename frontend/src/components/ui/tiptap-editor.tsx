@@ -613,7 +613,16 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           if (typeof getPos === "function") {
             const pos = getPos()
             if (pos !== undefined) {
+              const blockId = node.attrs.blockId
+              const sourceNoteId = node.attrs.sourceNoteId
               editor.chain().focus().deleteRange({ from: pos, to: pos + node.nodeSize }).run()
+              // Dispatch on editor.view.dom (always in document) — dom is detached
+              // after deleteRange, so events dispatched on it won't bubble.
+              if (blockId || sourceNoteId) {
+                const detail = { blockId, sourceNoteId }
+                const event = new CustomEvent("distill:block-remove", { bubbles: true, detail })
+                editor.view.dom.dispatchEvent(event)
+              }
             }
           }
         })
@@ -733,6 +742,12 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
             return true
           },
+          // NOTE: No destroy() callback here. destroy() fires on every NodeView
+          // teardown — including when switching notes (Tiptap replaces content,
+          // old NodeViews are destroyed). At that point activeNoteId has already
+          // changed but latestContentRef may still hold old content, so saving
+          // would overwrite the target note's content. Backspace/Delete removal
+          // of distill blocks is detected in handleContentChange instead.
         }
       }
     },

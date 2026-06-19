@@ -4,14 +4,15 @@ Directory layout (mirrors meeting/store.py convention):
     data/notes/{collection}/{note_id}/
         meta.json           – Note metadata
         content.md          – User-authored markdown
-        distillations/      – Cached LLM distillations (one per source note)
-            {source_note_id}.md
+        distillation.md     – Cached LLM distillation (single copy, source-content-keyed)
+        distillation.hash   – Source content hash at cache time
         references.json     – List of injection-block references in this note
-        referenced_by.json  – List of notes that reference this note
+        referenced_by.json  – List of notes that reference this note (backlinks)
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -149,44 +150,104 @@ def save_content(collection: str, note_id: str, content: str) -> str:
 
 
 # ── Distillation caching ───────────────────────────────────────
+# Single-key cache: one .md file per source note (not per target).
+# The distillation result depends only on the source note content,
+# so it can be shared across all targets that reference this source.
+#
+# Layout:
+#   data/notes/{collection}/{note_id}/distillation.md    – Cached distillation
+#   data/notes/{collection}/{note_id}/distillation.hash  – Source content hash at cache time
 
 
-def get_distillation(collection: str, source_note_id: str, target_note_id: str) -> str | None:
-    """Get cached distillation of source_note for target_note."""
-    dist_dir = _note_dir(collection, source_note_id) / "distillations"
-    dist_path = dist_dir / f"{target_note_id}.md"
+def get_distillation(collection: str, source_note_id: str) -> str | None:
+    """Get cached distillation for a source note (content-hash-verified)."""
+    ndir = _note_dir(collection, source_note_id)
+    dist_path = ndir / "distillation.md"
+    hash_path = ndir / "distillation.hash"
     if not dist_path.exists():
         return None
+    # Verify source content hasn't changed since cache was written
+    current_content = get_content(collection, source_note_id) or ""
+    current_hash = hashlib.sha256(current_content.encode("utf-8")).hexdigest()
+    if hash_path.exists():
+        stored_hash = hash_path.read_text(encoding="utf-8").strip()
+        if stored_hash != current_hash:
+            logger.info("Distillation cache for %s is stale (content changed), discarding", source_note_id)
+            dist_path.unlink()
+            hash_path.unlink()
+            return None
     return dist_path.read_text(encoding="utf-8")
 
 
-def save_distillation(collection: str, source_note_id: str, target_note_id: str, content: str) -> None:
-    """Cache a distillation result."""
-    dist_dir = _note_dir(collection, source_note_id) / "distillations"
-    dist_dir.mkdir(parents=True, exist_ok=True)
-    dist_path = dist_dir / f"{target_note_id}.md"
+def save_distillation(collection: str, source_note_id: str, content: str) -> None:
+    """Cache a distillation result with a content hash of the source note."""
+    ndir = _note_dir(collection, source_note_id)
+    ndir.mkdir(parents=True, exist_ok=True)
+    dist_path = ndir / "distillation.md"
+    hash_path = ndir / "distillation.hash"
     dist_path.write_text(content, encoding="utf-8")
-    logger.info("Saved distillation %s→%s (%d chars)", source_note_id, target_note_id, len(content))
+    source_content = get_content(collection, source_note_id) or ""
+    content_hash = hashlib.sha256(source_content.encode("utf-8")).hexdigest()
+    hash_path.write_text(content_hash, encoding="utf-8")
+    logger.info("Saved distillation for %s (%d chars)", source_note_id, len(content))
 
 
-def invalidate_distillations(collection: str, source_note_id: str) -> list[str]:
-    """Delete all cached distillations for a source note.
-    Returns list of target note IDs that were invalidated."""
-    dist_dir = _note_dir(collection, source_note_id) / "distillations"
-    invalidated = []
-    if dist_dir.exists():
-        for f in dist_dir.iterdir():
-            if f.suffix == ".md":
-                target_id = f.stem
-                invalidated.append(target_id)
-                f.unlink()
-        logger.info("Invalidated %d distillations for note %s", len(invalidated), source_note_id)
-    return invalidated
+def delete_distillation(collection: str, source_note_id: str) -> bool:
+    """Delete the cached distillation for a source note."""
+    ndir = _note_dir(collection, source_note_id)
+    dist_path = ndir / "distillation.md"
+    hash_path = ndir / "distillation.hash"
+    deleted = False
+    if dist_path.exists():
+        dist_path.unlink()
+        deleted = True
+    if hash_path.exists():
+        hash_path.unlink()
+    if deleted:
+        logger.info("Deleted distillation for %s", source_note_id)
+    return deleted
 
 
-def has_distillation(collection: str, source_note_id: str, target_note_id: str) -> bool:
-    dist_dir = _note_dir(collection, source_note_id) / "distillations"
-    return (dist_dir / f"{target_note_id}.md").exists()
+def get_distillation_content_hash(collection: str, source_note_id: str) -> str | None:
+    """Get the content hash at the time the distillation was cached."""
+    hash_path = _note_dir(collection, source_note_id) / "distillation.hash"
+    if not hash_path.exists():
+        return None
+    return hash_path.read_text(encoding="utf-8").strip()
+
+
+def source_content_changed(collection: str, source_note_id: str) -> bool:
+    """Check if the source note's content has changed since distillation was cached."""
+    ndir = _note_dir(collection, source_note_id)
+    hash_path = ndir / "distillation.hash"
+    if not hash_path.exists():
+        return True  # No cache at all → treat as "changed"
+    current_content = get_content(collection, source_note_id) or ""
+    current_hash = hashlib.sha256(current_content.encode("utf-8")).hexdigest()
+    stored_hash = hash_path.read_text(encoding="utf-8").strip()
+    return stored_hash != current_hash
+
+
+def cleanup_distillations_if_unused(collection: str, source_note_id: str) -> None:
+    """If a source note no longer has any referencers, clean up its distillation cache.
+    - If content hasn't changed since caching: keep the cache (can be reused later)
+    - If content has changed: delete the cache (it's stale)
+    """
+    refs = get_referenced_by(collection, source_note_id)
+    if refs:  # Still has referencers — don't clean up
+        return
+
+    # No more referencers — decide whether to keep or delete cache
+    ndir = _note_dir(collection, source_note_id)
+    dist_path = ndir / "distillation.md"
+    if not dist_path.exists():
+        return  # No cache to clean up
+
+    if source_content_changed(collection, source_note_id):
+        delete_distillation(collection, source_note_id)
+        logger.info("Cleared stale distillation for %s (content changed after last reference removed)", source_note_id)
+    else:
+        logger.info("Preserved distillation for %s (content unchanged, cache may be reused)", source_note_id)
 
 
 # ── References (injection blocks within a note) ────────────────
@@ -249,6 +310,9 @@ def _remove_referenced_by(collection: str, source_note_id: str, target_note_id: 
     if target_note_id in refs:
         refs.remove(target_note_id)
         _write_json(_note_dir(collection, source_note_id) / "referenced_by.json", refs)
+        # If no more referencers, clean up stale distillation cache
+        if not refs:
+            cleanup_distillations_if_unused(collection, source_note_id)
 
 
 def _remove_reference(collection: str, note_id: str, source_note_id: str) -> None:

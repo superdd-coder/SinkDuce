@@ -65,6 +65,19 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   contentRef.current = content
   // Snapshot of content right before distill API call — immune to Tiptap round-trip
   const preDistillContentRef = useRef<string | null>(null)
+  // Synchronous snapshot updated in handleContentChange — not dependent on React re-render
+  const latestContentRef = useRef(content)
+
+  // ── Helpers ────────────────────────────────────────────
+
+  const getDistillBlockIds = (md: string): Set<string> => {
+    const ids = new Set<string>()
+    const re = /:::distill-block\{[^}]*"id"\s*:\s*"([^"]*)"[^}]*\}/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(md)) !== null) ids.add(m[1])
+    return ids
+  }
+  const prevBlockIdsRef = useRef<Set<string>>(new Set())
 
   // ── Navigation helpers ────────────────────────────────
 
@@ -103,6 +116,11 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   // Track if user has actually made changes (not just loading)
   const userChangedRef = useRef(false)
 
+  // Ref for notesList title map — avoids fetchNote depending on notesList state
+  // (which would cause fetchNote to be recreated on every notesList update,
+  // triggering useEffect → setContent → Tiptap re-render → destroy() loop)
+  const notesTitleMapRef = useRef<Map<string, string>>(new Map())
+
   // Sync activeNoteId when dialog opens
   useEffect(() => {
     if (open) {
@@ -119,7 +137,11 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   useEffect(() => {
     if (!open) return
     getNotes(collection)
-      .then(res => setNotesList(res.notes ?? []))
+      .then(res => {
+        const notes = res.notes ?? []
+        setNotesList(notes)
+        notesTitleMapRef.current = new Map(notes.map(n => [n.id, n.title]))
+      })
       .catch(() => setNotesList([]))
   }, [open, collection])
 
@@ -132,8 +154,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
       // Sync distill block titles with current note titles
       let content = note.content || ""
-      if (notesList.length > 0) {
-        const titleMap = new Map(notesList.map(n => [n.id, n.title]))
+      const titleMap = notesTitleMapRef.current
+      if (titleMap.size > 0) {
         content = content.replace(
           /:::distill-block(\{[^}]+\})/g,
           (match: string, jsonAttrs: string) => {
@@ -153,6 +175,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setCurrentNote(note)
       setContent(content)
       setSavedContent(content)
+      // Initialize prevBlockIdsRef for Backspace/Delete removal detection
+      prevBlockIdsRef.current = getDistillBlockIds(content)
 
       // Mark as ready for user changes after a short delay (to ignore initial onChange)
       setTimeout(() => {
@@ -164,7 +188,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     } finally {
       setLoading(false)
     }
-  }, [collection, notesList])
+  }, [collection])
 
   useEffect(() => {
     if (open) fetchNote(activeNoteId)
@@ -185,6 +209,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   }
 
   const scheduleSave = useCallback((newContent: string) => {
+    // Ignore auto-save triggers before user has had a chance to edit
+    // (prevents Tiptap init normalization from bumping updated_at)
+    if (!userChangedRef.current) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     const id = activeNoteId
     saveTimerRef.current = setTimeout(async () => {
@@ -201,16 +228,49 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
   const handleContentChange = useCallback((newContent: string) => {
     setContent(newContent)
+    latestContentRef.current = newContent
 
     // Only show propagate button if user actually made changes (not from loading)
     if (userChangedRef.current) {
       setUserEdited(true)
       // Reset dismiss state when user makes new changes
       setPropagateDismissed(false)
+
+      // Detect distill block removal (Backspace/Delete key — not via ✕ button)
+      const prevIds = prevBlockIdsRef.current
+      if (prevIds.size > 0) {
+        const currIds = getDistillBlockIds(newContent)
+        const removed = [...prevIds].filter(id => !currIds.has(id))
+        if (removed.length > 0) {
+          // Distill block(s) were removed — flush save and refresh sidebars
+          if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = null
+          }
+          // Persist immediately
+          updateNote(collection, activeNoteId, { content: newContent })
+            .then(() => setSavedContent(newContent))
+            .catch(() => {})
+            .finally(() => {
+              // Refresh note metadata for sidebars
+              getNote(collection, activeNoteId)
+                .then(note => {
+                  setCurrentNote(note)
+                  const extractedIds = new Set(note.references?.map(r => r.source_note_id) ?? [])
+                  setNotesList(prev => prev.map(n => ({
+                    ...n,
+                    is_extracted: extractedIds.has(n.id),
+                  })))
+                })
+                .catch(() => {})
+            })
+        }
+      }
+      prevBlockIdsRef.current = getDistillBlockIds(newContent)
     }
 
     scheduleSave(newContent)
-  }, [scheduleSave])
+  }, [collection, activeNoteId, scheduleSave])
 
   // ── Switch / navigate ─────────────────────────────────
 
@@ -219,7 +279,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
     }
-    if (content !== savedContent) {
+    // Only save if user actually edited — prevents Tiptap initialization
+    // normalization from bumping updated_at on every note switch.
+    if (content !== savedContent && userChangedRef.current) {
       updateNote(collection, activeNoteId, { content }).catch(() => {})
     }
   }, [collection, activeNoteId, content, savedContent])
@@ -325,8 +387,46 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       const noteId = (e as CustomEvent).detail?.noteId
       if (noteId) { flushSave(); navigateToNote(noteId) }
     }
-    const handleRemove = () => {
-      setTimeout(() => fetchNote(activeNoteId), 200)
+    const handleRemove = async (_e: Event) => {
+      // deleteRange has already completed at this point; onChange → handleContentChange
+      // has already called setContent + scheduleSave, and latestContentRef is up-to-date.
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      // Save immediately with the current content (already without the deleted block)
+      const currentContent = latestContentRef.current
+      try {
+        await updateNote(collection, activeNoteId, { content: currentContent })
+        setSavedContent(currentContent)
+      } catch {
+        // Non-critical — the scheduled save will retry
+      }
+      // Re-fetch note metadata for right-sidebar — use getNote and only update
+      // currentNote (references/extracted_into). Do NOT call fetchNote because
+      // it calls setContent, which would reset the Tiptap editor and trigger
+      // NodeView destroy() callbacks, causing an infinite loop.
+      let note: NoteDetail | null = null
+      try {
+        note = await getNote(collection, activeNoteId)
+        setCurrentNote(note)
+      } catch {
+        // Non-critical — sidebar will update on next navigation
+      }
+      // Patch notesList in-place: only update is_extracted for the source note(s)
+      // whose distill blocks were just removed. Don't re-fetch the full list
+      // (which would change sort order due to bumped updated_at).
+      if (note) {
+        const currentExtractedIds = new Set(note.references?.map(r => r.source_note_id) ?? [])
+        setNotesList(prev =>
+          prev.map(n => ({
+            ...n,
+            // is_extracted should only be true if this note still appears as a
+            // source in the current note's references
+            is_extracted: currentExtractedIds.has(n.id),
+          }))
+        )
+      }
     }
     el.addEventListener("distill:navigate", handleNavigate)
     el.addEventListener("distill:block-remove", handleRemove)
@@ -334,7 +434,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       el.removeEventListener("distill:navigate", handleNavigate)
       el.removeEventListener("distill:block-remove", handleRemove)
     }
-  }, [activeNoteId, flushSave, navigateToNote, fetchNote])
+  }, [activeNoteId, collection, flushSave, navigateToNote, fetchNote])
 
   // ── Editor drop zone ──────────────────────────────────
 
