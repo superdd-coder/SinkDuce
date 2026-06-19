@@ -63,6 +63,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const contentRef = useRef(content)
   contentRef.current = content
+  // Snapshot of content right before distill API call — immune to Tiptap round-trip
+  const preDistillContentRef = useRef<string | null>(null)
 
   // ── Navigation helpers ────────────────────────────────
 
@@ -269,6 +271,10 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     const loadingMd = `\n\n:::distill-block{"id":"${tempBlockId}","source":"${sourceNoteId}","source-title":"${sourceTitle}","loading":true}\n⏳ Distilling content from "${sourceTitle}"...\n:::\n\n`
     const loadingContent = contentRef.current + loadingMd
     setContent(loadingContent)
+    // Snapshot the exact content with the loading block — Tiptap round-trip
+    // drops the "loading" attr from serialized markdown, so contentRef.current
+    // may no longer match the original placeholder pattern after onUpdate fires.
+    preDistillContentRef.current = loadingContent
 
     setDistilling(true)
     try {
@@ -282,22 +288,25 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       })
       const blockMd = `:::distill-block${attrs}\n${res.distilled_content}\n:::`
 
-      // Find and replace the loading block
-      const loadingPattern = `:::distill-block{"id":"${tempBlockId}"[^}]*}\\n[^]*?:::`
-      const newContent = contentRef.current.replace(
+      // Use the snapshot (not contentRef) — it still has "loading":true so the regex matches
+      const loadingPattern = `:::distill-block\\{"id":"${tempBlockId}"[^}]*\\}\\n[\\s\\S]*?\\n:::`
+      const newContent = (preDistillContentRef.current ?? contentRef.current).replace(
         new RegExp(loadingPattern),
         blockMd
       )
+      preDistillContentRef.current = null
 
       setContent(newContent)
       setSavedContent(newContent)
       await updateNote(collection, currentNote.id, { content: newContent })
-      fetchNote(currentNote.id)
+      await fetchNote(currentNote.id)
       toast.success(`Distilled "${res.source_title}" injected`)
     } catch (err) {
       // Remove loading placeholder on error
-      const errorContent = contentRef.current.replace(
-        new RegExp(`:::distill-block\\{"id":"${tempBlockId}"[^}]*\\}\\n[^]*?:::`),
+      const src = preDistillContentRef.current ?? contentRef.current
+      preDistillContentRef.current = null
+      const errorContent = src.replace(
+        new RegExp(`:::distill-block\\{"id":"${tempBlockId}"[^}]*\\}\\n[\\s\\S]*?\\n:::`),
         ""
       )
       setContent(errorContent)

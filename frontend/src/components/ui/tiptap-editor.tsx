@@ -741,11 +741,11 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
       return {
         markdown: {
           serialize: (state: { write: (text: string) => void; ensureNewLine: () => void }, node: ProseMirrorNode) => {
-            const { blockId, sourceNoteId, sourceTitle, text } = node.attrs
-            state.write(`:::distill-block{"id":"${blockId}","source":"${sourceNoteId}","source-title":"${sourceTitle}"}\n`)
+            const { blockId, sourceNoteId, sourceTitle, text, loading } = node.attrs
+            const loadingExtra = loading ? ',"loading":true' : ''
+            state.write(`:::distill-block{"id":"${blockId}","source":"${sourceNoteId}","source-title":"${sourceTitle}"${loadingExtra}}\n`)
             state.write(text + "\n")
-            state.write(":::\n")
-            state.ensureNewLine()
+            state.write(":::\n\n")  // double newline — terminates HTML block for next parse cycle
           },
         },
       }
@@ -1179,7 +1179,11 @@ export function preprocessDistillBlocks(markdown: string): {
       try {
         const attrs = JSON.parse(jsonAttrs)
         blocks.push({ id: attrs.id, text: body.trim() })
-        return `<div data-type="distill-block" data-block-id="${attrs.id}" data-source-note-id="${attrs.source}" data-source-title="${attrs["source-title"]}" data-text="${encodeURIComponent(body.trim())}"></div>\n`
+        const loadingAttr = attrs.loading ? ' data-loading="true"' : ''
+        // Two newlines after </div> — terminates markdown-it's HTML block mode
+        // so following markdown (## headings, **bold**, lists etc.) is parsed correctly.
+        // Without the blank line, markdown-it slurps the next line into the HTML block.
+        return `<div data-type="distill-block" data-block-id="${attrs.id}" data-source-note-id="${attrs.source}" data-source-title="${attrs["source-title"]}" data-text="${encodeURIComponent(body.trim())}"${loadingAttr}></div>\n\n`
       } catch { return match }
     }
   )
@@ -1187,12 +1191,18 @@ export function preprocessDistillBlocks(markdown: string): {
 }
 
 export function postprocessDistillBlocks(markdown: string): string {
-  // Convert distill block divs back to markdown
+  // Convert distill block divs back to markdown.
+  // Preserve all known attributes (id, source, source-title, loading) so the
+  // round-trip is idempotent — otherwise "loading" is lost and the loading
+  // placeholder can't be found/replaced.
   let processed = markdown.replace(
     /<div[^>]*data-type="distill-block"[^>]*data-block-id="([^"]*)"[^>]*data-source-note-id="([^"]*)"[^>]*data-source-title="([^"]*)"[^>]*data-text="([^"]*)"[^>]*><\/div>/g,
     (_match, blockId, sourceNoteId, sourceTitle, encodedText) => {
       const text = decodeURIComponent(encodedText)
-      return `:::distill-block{"id":"${blockId}","source":"${sourceNoteId}","source-title":"${sourceTitle}"}\n${text}\n:::`
+      // Preserve data-loading if present in the original HTML
+      const hasLoading = _match.includes('data-loading="true"')
+      const extra = hasLoading ? ',"loading":true' : ''
+      return `:::distill-block{"id":"${blockId}","source":"${sourceNoteId}","source-title":"${sourceTitle}"${extra}}\n${text}\n:::`
     }
   )
 
