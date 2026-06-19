@@ -9,7 +9,7 @@ import os
 import sys
 import httpx
 
-TEST_PORT = os.environ.get("WORKEEPER_API_PORT", "18920")
+TEST_PORT = os.environ.get("SINKDUCE_API_PORT", "18920")
 BASE = f"http://127.0.0.1:{TEST_PORT}/api"
 TIMEOUT = 30
 PASS = 0

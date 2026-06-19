@@ -8,7 +8,7 @@ from src.mcp.lifespan import app_lifespan
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("workeeper", lifespan=app_lifespan)
+mcp = FastMCP("sinkduce", lifespan=app_lifespan)
 
 # ── Collections ──────────────────────────────────────────────
 from src.mcp.tools.collections import (

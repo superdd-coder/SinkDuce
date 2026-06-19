@@ -1,10 +1,10 @@
 #!/bin/bash
 # End-to-end API test for embedding/rerank provider flow.
 # Run: bash tests/test_e2e_api.sh
-# Requires: curl, jq, running app. Set WORKEEPER_API_PORT to override default 18900.
+# Requires: curl, jq, running app. Set SINKDUCE_API_PORT to override default 18900.
 
 set -e
-PORT="${WORKEEPER_API_PORT:-18900}"
+PORT="${SINKDUCE_API_PORT:-18900}"
 BASE="http://localhost:${PORT}/api"
 PASS=0
 FAIL=0

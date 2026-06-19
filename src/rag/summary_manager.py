@@ -15,7 +15,7 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 from src.db.qdrant import QdrantManager
 
 # Fixed namespace for generating deterministic point IDs
-_NS = uuid.uuid5(uuid.NAMESPACE_DNS, "workeeper-summaries")
+_NS = uuid.uuid5(uuid.NAMESPACE_DNS, "sinkduce-summaries")
 
 
 class SummaryManager:

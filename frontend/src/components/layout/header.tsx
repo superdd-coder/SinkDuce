@@ -29,8 +29,8 @@ export function Header() {
       </Button>
 
       <h1 className="text-lg font-semibold tracking-tight flex items-center gap-2">
-        <img src="/favicon.png" alt="Workeeper" className="h-6 w-6" />
-        Workeeper
+        <img src="/favicon.png" alt="SinkDuce" className="h-6 w-6" />
+        SinkDuce
       </h1>
 
       <div className="flex-1" />

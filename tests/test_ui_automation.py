@@ -12,7 +12,7 @@ import os
 import pytest
 from playwright.sync_api import Page, expect
 
-PORT = os.environ.get("WORKEEPER_API_PORT", "18900")
+PORT = os.environ.get("SINKDUCE_API_PORT", "18900")
 BASE_URL = f"http://localhost:{PORT}"
 
 

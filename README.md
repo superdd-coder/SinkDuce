@@ -1,6 +1,6 @@
-# Workeeper
+# SinkDuce
 
-<p align="center"><img src="logo.png" alt="Workeeper" width="120" /></p>
+<p align="center"><img src="logo.png" alt="SinkDuce" width="120" /></p>
 
 [中文](README_CN.md)
 
@@ -13,8 +13,8 @@ A knowledge base and meeting memory system built for project managers. Ingest pr
 **Prerequisites**: Docker
 
 ```bash
-git clone https://github.com/superdd-coder/workeeper.git
-cd workeeper
+git clone https://github.com/superdd-coder/sinkduce.git
+cd sinkduce
 
 # Optional: customize ports
 cp .env.template .env
@@ -53,11 +53,11 @@ You can override any model name in the dialog before applying. After setup, adju
 
 ## How It Works
 
-Workeeper connects two worlds — meetings and documents — into a unified project memory.
+SinkDuce connects two worlds — meetings and documents — into a unified project memory.
 
 ### Meeting → Database Pipeline
 
-When you transcribe a meeting, Workeeper captures everything: the transcript with speaker diarization, auto-generated detail/summary/action items, and speaker notes. With one click, you allocate the meeting content to a Project Database:
+When you transcribe a meeting, SinkDuce captures everything: the transcript with speaker diarization, auto-generated detail/summary/action items, and speaker notes. With one click, you allocate the meeting content to a Project Database:
 
 ![Meeting to Database](screenshots/meeting-ingest.jpg)
 
@@ -167,7 +167,7 @@ API keys are stored locally in `data/config.yaml` (gitignored, never committed).
 
 ## MCP Server
 
-Workeeper ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the full RAG pipeline as tools for AI coding agents. Use it with Claude Code, Cursor, or any MCP-compatible client to query your knowledge bases directly from your IDE.
+SinkDuce ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the full RAG pipeline as tools for AI coding agents. Use it with Claude Code, Cursor, or any MCP-compatible client to query your knowledge bases directly from your IDE.
 
 ### Quick Setup (Claude Code)
 
@@ -176,10 +176,10 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project-level
 ```json
 {
   "mcpServers": {
-    "workeeper": {
+    "sinkduce": {
       "command": "python",
       "args": ["-m", "src.mcp.server"],
-      "cwd": "/path/to/workeeper"
+      "cwd": "/path/to/sinkduce"
     }
   }
 }

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[None]:
-    """Initialize Workeeper services on MCP server startup."""
+    """Initialize SinkDuce services on MCP server startup."""
     from src.services import init_services
 
     logger.info("MCP server: initializing services")

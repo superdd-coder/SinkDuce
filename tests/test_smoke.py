@@ -1,10 +1,10 @@
 """Smoke test: run with `docker compose up` then execute this.
-Set WORKEEPER_API_PORT env var to override default (18900)."""
+Set SINKDUCE_API_PORT env var to override default (18900)."""
 import os
 import httpx
 import sys
 
-PORT = os.environ.get("WORKEEPER_API_PORT", "18900")
+PORT = os.environ.get("SINKDUCE_API_PORT", "18900")
 BASE = f"http://localhost:{PORT}"
 
 

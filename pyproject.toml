@@ -1,5 +1,5 @@
 [project]
-name = "workeeper"
+name = "sinkduce"
 version = "0.1.0"
 description = "One-click deployable RAG Agent system"
 requires-python = ">=3.11"
@@ -44,7 +44,7 @@ dev = [
 ]
 
 [project.scripts]
-workeeper-mcp = "src.mcp.server:main"
+sinkduce-mcp = "src.mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]

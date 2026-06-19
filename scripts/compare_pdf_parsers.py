@@ -12,7 +12,7 @@ import pdfplumber
 
 
 def parse_with_pymupdf(path: Path) -> list[dict]:
-    """Current Workeeper approach: PyMuPDF text + find_tables()."""
+    """Current SinkDuce approach: PyMuPDF text + find_tables()."""
     doc = fitz.open(str(path))
     pages = []
 

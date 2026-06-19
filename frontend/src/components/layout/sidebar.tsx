@@ -39,7 +39,7 @@ export function Sidebar() {
       <Separator />
 
       <div className="p-3 text-xs text-muted-foreground">
-        Workeeper v0.1
+        SinkDuce v0.1
       </div>
     </aside>
   )

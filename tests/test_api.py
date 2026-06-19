@@ -1,14 +1,14 @@
 """Backend API integration test script.
 
 Run: python3 tests/test_api.py
-Requires: API server running on http://localhost:18900 (set WORKEEPER_API_PORT to override)
+Requires: API server running on http://localhost:18900 (set SINKDUCE_API_PORT to override)
 """
 
 import os
 import sys
 import httpx
 
-TEST_PORT = os.environ.get("WORKEEPER_API_PORT", "18900")
+TEST_PORT = os.environ.get("SINKDUCE_API_PORT", "18900")
 BASE = f"http://127.0.0.1:{TEST_PORT}/api"
 TIMEOUT = 30
 PASS = 0
@@ -289,7 +289,7 @@ def test_history():
 
 def main():
     print("=" * 50)
-    print("  Workeeper Backend API Test")
+    print("  SinkDuce Backend API Test")
     print("=" * 50)
 
     try:
