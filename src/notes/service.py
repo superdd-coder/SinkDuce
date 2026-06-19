@@ -79,7 +79,10 @@ def distill_note(collection: str, source_note_id: str, target_note_id: str) -> s
     """Distill source note content for embedding into target note.
     Uses cache if available. Cache is keyed by (collection, source_note_id) —
     distillation result depends only on the source, not the target.
-    Returns the distilled markdown."""
+    Returns the distilled markdown.
+
+    NOTE: This function is synchronous (calls LLM via blocking generate()).
+    Callers in async contexts must wrap with asyncio.to_thread()."""
     # Check cache (single-key: collection + source_note_id)
     cached = store.get_distillation(collection, source_note_id)
     if cached is not None:
