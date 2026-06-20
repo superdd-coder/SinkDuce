@@ -147,11 +147,9 @@ const ResizableImage = Node.create({
         default: null,
         parseHTML: (element: HTMLElement) => {
           const src = element.getAttribute("src")
-          // Decode URI component to get original URL
           return src ? decodeURIComponent(src) : null
         },
         renderHTML: (attrs: any) => {
-          // Encode URL to handle spaces and special characters
           const encodedSrc = attrs.src ? encodeURI(attrs.src) : ""
           return { src: encodedSrc }
         },
@@ -167,14 +165,33 @@ const ResizableImage = Node.create({
         renderHTML: (attrs: any) => ({ title: attrs.title }),
       },
       width: {
-        default: "auto",
-        parseHTML: (element: HTMLElement) => element.style.width || "auto",
-        renderHTML: (attrs: any) => attrs.width !== "auto" ? { style: `width: ${attrs.width}` } : {},
+        default: "55%",
+        parseHTML: (element: HTMLElement) => {
+          // Check data-width first (our serialized format), then style.width
+          const dw = element.getAttribute("data-width")
+          if (dw) return dw
+          const sw = element.style.width
+          if (sw && sw.endsWith("%")) return sw
+          return "55%"
+        },
+        renderHTML: (attrs: any) => {
+          const w = attrs.width
+          if (w && w !== "auto") return { "data-width": w, style: `width: ${w}` }
+          return {}
+        },
       },
       alignment: {
         default: "center",
-        parseHTML: () => "center",
-        renderHTML: () => ({}),
+        parseHTML: (element: HTMLElement) => {
+          const da = element.getAttribute("data-align")
+          if (da) return da
+          const cs = element.style.textAlign
+          if (cs) return cs
+          return "center"
+        },
+        renderHTML: (attrs: any) => ({
+          "data-align": attrs.alignment || "center",
+        }),
       },
     }
   },
@@ -198,8 +215,20 @@ const ResizableImage = Node.create({
           const alt = node.attrs.alt || ""
           const src = node.attrs.src || ""
           const title = node.attrs.title ? ` "${node.attrs.title}"` : ""
-          // Always output standard markdown - postprocessDistillBlocks will handle spaces
-          state.write(`![${alt}](${src})${title}`)
+          const width = node.attrs.width || ""
+          const alignment = node.attrs.alignment || ""
+
+          // Build HTML img tag to preserve width, alignment, alt, and title.
+          // Standard ![](src) loses width/alignment on round-trip — HTML <img>
+          // survives tiptap-markdown's HTML parser and lets parseHTML recover them.
+          const attrs: string[] = []
+          attrs.push(`src="${src}"`)
+          if (alt) attrs.push(`alt="${alt}"`)
+          if (title) attrs.push(`title="${title}"`)
+          if (width && /^\d+%$/.test(width) && width !== "55%") attrs.push(`data-width="${width}" style="width: ${width}"`)
+          if (alignment && alignment !== "center") attrs.push(`data-align="${alignment}"`)
+
+          state.write(`<img ${attrs.join(" ")} />`)
         },
       },
     }
@@ -209,27 +238,68 @@ const ResizableImage = Node.create({
     return ({ node, getPos, editor }) => {
       const container = document.createElement("div")
       container.className = "image-container"
-      container.style.cssText = `
-        position: relative;
-        display: inline-block;
-        max-width: 100%;
-        margin: 8px 0;
-        text-align: ${node.attrs.alignment || "center"};
-      `
       container.contentEditable = "false"
+
+      // Apply alignment to the container — percentage widths are relative
+      // to the container, and alignment moves the container within the
+      // ProseMirror column via margin-left: auto / margin-right: auto.
+      const align = node.attrs.alignment || "center"
+      const rawWidth = node.attrs.width
+      const hasPct = typeof rawWidth === "string" && /^\d+%$/.test(rawWidth)
+      const applyLayout = () => {
+        let marginLeft = "0"
+        let marginRight = "0"
+        if (align === "center") {
+          marginLeft = "auto"
+          marginRight = "auto"
+        } else if (align === "right") {
+          marginLeft = "auto"
+          marginRight = "0"
+        }
+        container.style.cssText = `
+          position: relative;
+          display: block;
+          width: ${hasPct ? rawWidth : "auto"};
+          max-width: 100%;
+          margin: 8px ${marginRight} 8px ${marginLeft};
+        `
+      }
+      applyLayout()
 
       const img = document.createElement("img")
       img.src = node.attrs.src
       img.alt = node.attrs.alt || ""
       img.title = node.attrs.title || ""
       img.style.cssText = `
-        max-width: 100%;
+        width: 100%;
         height: auto;
-        width: ${node.attrs.width || "auto"};
         cursor: pointer;
         border-radius: 4px;
         transition: box-shadow 0.2s;
+        display: block;
       `
+      // When no % width is set, let img use max-width restraint
+      if (!hasPct) {
+        img.style.maxWidth = "100%"
+      }
+
+      // Caption element — always present in the container, created once.
+      // Its text is kept in sync via update() and setCaption() helper.
+      const captionEl = document.createElement("div")
+      captionEl.className = "image-caption"
+      captionEl.style.cssText = `
+        font-size: 13px;
+        color: #666;
+        text-align: center;
+        margin-top: 8px;
+        font-style: italic;
+        cursor: text;
+        min-height: 20px;
+      `
+      captionEl.textContent = node.attrs.alt || ""
+      const setCaption = (text: string) => {
+        captionEl.textContent = text || ""
+      }
 
       // Show resize handles on hover
       let resizeHandle: HTMLElement | null = null
@@ -242,7 +312,7 @@ const ResizableImage = Node.create({
         handle.style.cssText = `
           position: absolute;
           right: -2px;
-          bottom: -2px;
+          bottom: 0px;
           width: 20px;
           height: 20px;
           cursor: nwse-resize;
@@ -251,6 +321,9 @@ const ResizableImage = Node.create({
           display: flex;
           align-items: center;
           justify-content: center;
+          z-index: 5;
+          background: rgba(59,130,246,0.15);
+          border-radius: 0 0 4px 0;
         `
         // Diagonal resize arrows SVG - two arrows pointing from corners
         handle.innerHTML = `
@@ -265,6 +338,7 @@ const ResizableImage = Node.create({
 
       resizeHandle = createResizeHandle()
       container.appendChild(img)
+      container.appendChild(captionEl)
       container.appendChild(resizeHandle)
 
       // Show/hide resize handle on hover
@@ -280,18 +354,36 @@ const ResizableImage = Node.create({
         }
       })
 
-      // Resize functionality
+      // Resize functionality — percentage-based width
+      const getEditorContentWidth = (): number => {
+        const pmEl = editor.view.dom as HTMLElement
+        return pmEl?.clientWidth ?? container.parentElement?.clientWidth ?? 600
+      }
+
       resizeHandle.addEventListener("mousedown", (e) => {
         e.preventDefault()
         isResizing = true
         startX = e.clientX
-        startWidth = img.offsetWidth
+
+        // Always read the current visual width of the container — never
+        // trust the closure `width` variable, which is stale after external
+        // updates (e.g. switching notes changes `width` in attrs).
+        const containerStyle = container.style.width || ""
+        const contentWidth = getEditorContentWidth()
+        if (containerStyle && containerStyle.endsWith("%")) {
+          const pct = parseFloat(containerStyle)
+          startWidth = (pct / 100) * contentWidth
+        } else {
+          startWidth = container.offsetWidth || img.offsetWidth
+        }
+        // Switch to pixel-based during drag for smooth resizing
+        container.style.width = `${startWidth}px`
 
         const onMouseMove = (e: MouseEvent) => {
           if (!isResizing) return
           const diff = e.clientX - startX
           const newWidth = Math.max(50, startWidth + diff)
-          img.style.width = `${newWidth}px`
+          container.style.width = `${newWidth}px`
         }
 
         const onMouseUp = () => {
@@ -299,21 +391,29 @@ const ResizableImage = Node.create({
           if (resizeHandle) resizeHandle.style.opacity = "0"
           img.style.boxShadow = ""
 
-          // Update node attributes
+          // Compute percentage relative to editor content width
+          const contentW = getEditorContentWidth()
+          const pct = Math.round((container.offsetWidth / contentW) * 100)
+          const newPctWidth = `${pct}%`
+
+          // Persist as percentage in node attributes
           if (typeof getPos === "function") {
             const pos = getPos()
-            if (pos !== undefined) {
+            if (pos !== undefined && pos !== null) {
               const { tr } = editor.state
               const nodeAtPos = editor.state.doc.nodeAt(pos)
               if (nodeAtPos) {
                 tr.setNodeMarkup(pos, undefined, {
                   ...nodeAtPos.attrs,
-                  width: img.style.width,
+                  width: newPctWidth,
                 })
                 editor.view.dispatch(tr)
               }
             }
           }
+
+          // Restore percentage-based layout
+          container.style.width = newPctWidth
 
           document.removeEventListener("mousemove", onMouseMove)
           document.removeEventListener("mouseup", onMouseUp)
@@ -323,22 +423,46 @@ const ResizableImage = Node.create({
         document.addEventListener("mouseup", onMouseUp)
       })
 
-      // Image click handler - show floating menu
+      // Image click handler — always read current attrs from editor doc,
+      // NOT from stale closure node.attrs (which is frozen at creation time).
       container.addEventListener("click", (e) => {
         if (!isResizing) {
           e.stopPropagation()
-          showImageFloatingMenu(container, node.attrs, (newAttrs: any) => {
-            if (typeof getPos === "function") {
-              const pos = getPos()
-              if (pos !== undefined) {
-                const { tr } = editor.state
-                const nodeAtPos = editor.state.doc.nodeAt(pos)
-                if (nodeAtPos) {
-                  tr.setNodeMarkup(pos, undefined, { ...nodeAtPos.attrs, ...newAttrs })
-                  editor.view.dispatch(tr)
-                }
-              }
-            }
+          // Read current attrs fresh from the document — they may have changed
+          // since this node view was created (e.g. resize updated width).
+          const pos = typeof getPos === "function" ? getPos() : undefined
+          const currentAttrs = (pos !== undefined && pos !== null
+            ? editor.state.doc.nodeAt(pos)?.attrs
+            : null) ?? node.attrs
+
+          showImageFloatingMenu(container, currentAttrs, (newAttrs: any) => {
+            // Re-read position — it may have shifted
+            const freshPos = typeof getPos === "function" ? getPos() : undefined
+            if (freshPos === undefined || freshPos === null) return
+            // Always read the LATEST attrs from the doc — never trust closure node.attrs
+            const docAttrs = editor.state.doc.nodeAt(freshPos)?.attrs
+            if (!docAttrs) return
+            const merged = { ...docAttrs, ...newAttrs }
+
+            // Apply layout visually immediately
+            const w = merged.width
+            const hasPct = typeof w === "string" && /^\d+%$/.test(w)
+            const align = merged.alignment || "center"
+            let ml = "0", mr = "0"
+            if (align === "center") { ml = "auto"; mr = "auto" }
+            else if (align === "right") { ml = "auto" }
+            container.style.cssText = `
+              position: relative;
+              display: block;
+              width: ${hasPct ? w : "auto"};
+              max-width: 100%;
+              margin: 8px ${mr} 8px ${ml};
+            `
+
+            // Persist to ProseMirror node
+            const { tr } = editor.state
+            tr.setNodeMarkup(freshPos, undefined, merged)
+            editor.view.dispatch(tr)
           })
         }
       })
@@ -350,8 +474,21 @@ const ResizableImage = Node.create({
           img.src = updatedNode.attrs.src
           img.alt = updatedNode.attrs.alt || ""
           img.title = updatedNode.attrs.title || ""
-          img.style.width = updatedNode.attrs.width || "auto"
-          container.style.textAlign = updatedNode.attrs.alignment || "center"
+          const w = updatedNode.attrs.width
+          const hasPctW = typeof w === "string" && /^\d+%$/.test(w)
+          const a = updatedNode.attrs.alignment || "center"
+          let ml = "0", mr = "0"
+          if (a === "center") { ml = "auto"; mr = "auto" }
+          else if (a === "right") { ml = "auto" }
+          container.style.cssText = `
+            position: relative;
+            display: block;
+            width: ${hasPctW ? w : "auto"};
+            max-width: 100%;
+            margin: 8px ${mr} 8px ${ml};
+          `
+          // Refresh caption
+          setCaption(updatedNode.attrs.alt || "")
           return true
         },
         ignoreMutation: () => true,
@@ -430,10 +567,16 @@ function showImageFloatingMenu(
     })
     btn.addEventListener("click", (e) => {
       e.stopPropagation()
+      attrs.alignment = opt.value
       onUpdate({ alignment: opt.value })
-      container.style.textAlign = opt.value
-      menu.remove()
+      // Update visual highlight — re-style all buttons
+      menu.querySelectorAll("button.align-btn").forEach((b, i) => {
+        const el = b as HTMLElement
+        el.style.background = alignmentOptions[i].value === opt.value ? "rgba(255,255,255,0.2)" : "transparent"
+      })
+      // Don't remove menu so user can see effect and adjust further
     })
+    btn.className = "align-btn"
     menu.appendChild(btn)
   })
 
@@ -442,7 +585,7 @@ function showImageFloatingMenu(
   divider.style.cssText = `width: 1px; background: rgba(255,255,255,0.2); margin: 4px 2px;`
   menu.appendChild(divider)
 
-  // Caption button with pencil icon
+  // Caption button — inline editing instead of system prompt()
   const captionBtn = document.createElement("button")
   captionBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`
   captionBtn.title = "Add caption"
@@ -462,26 +605,48 @@ function showImageFloatingMenu(
   captionBtn.addEventListener("mouseleave", () => { captionBtn.style.background = "transparent" })
   captionBtn.addEventListener("click", (e) => {
     e.stopPropagation()
-    const caption = prompt("Enter image caption:", attrs.alt || "")
-    if (caption !== null) {
-      onUpdate({ alt: caption })
-      // Update or create caption element
-      let captionEl = container.querySelector(".image-caption") as HTMLElement
-      if (!captionEl) {
-        captionEl = document.createElement("div")
-        captionEl.className = "image-caption"
-        captionEl.style.cssText = `
-          font-size: 13px;
-          color: #666;
-          text-align: center;
-          margin-top: 8px;
-          font-style: italic;
-        `
-        container.appendChild(captionEl)
-      }
-      captionEl.textContent = caption
+    menu.remove() // close floating menu
+
+    // Make the container's caption element directly editable.
+    // No separate input/prompt — just click the text and type.
+    const captionEl = container.querySelector(".image-caption") as HTMLElement | null
+    if (!captionEl) return
+
+    captionEl.contentEditable = "true"
+    captionEl.focus()
+    // Place cursor at end
+    const sel = window.getSelection()
+    if (sel) {
+      sel.selectAllChildren(captionEl)
+      sel.collapseToEnd()
     }
-    menu.remove()
+
+    const save = () => {
+      captionEl.contentEditable = "false"
+      const val = captionEl.textContent?.trim() ?? ""
+      onUpdate({ alt: val })
+    }
+
+    const onBlur = () => {
+      save()
+      captionEl.removeEventListener("blur", onBlur)
+    }
+    captionEl.addEventListener("blur", onBlur)
+
+    const onKey = (ke: KeyboardEvent) => {
+      if (ke.key === "Enter") {
+        ke.preventDefault()
+        captionEl.blur() // triggers save via blur
+      }
+      if (ke.key === "Escape") {
+        // Revert and exit
+        captionEl.textContent = attrs.alt || ""
+        captionEl.contentEditable = "false"
+        captionEl.removeEventListener("blur", onBlur)
+        captionEl.removeEventListener("keydown", onKey)
+      }
+    }
+    captionEl.addEventListener("keydown", onKey)
   })
   menu.appendChild(captionBtn)
 
