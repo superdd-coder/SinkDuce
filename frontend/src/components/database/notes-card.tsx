@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import { Loader2, StickyNote, Plus, FileText } from "lucide-react"
+import { Loader2, StickyNote, Plus, FileText, FileDown } from "lucide-react"
 import { toast } from "sonner"
 import {
   getNotes,
   createNote,
+  updateNote,
   type NoteListItem,
 } from "@/api/client"
 import { NoteEditorDialog } from "./note-editor-dialog"
@@ -49,6 +50,26 @@ export function NotesCard({ collection }: NotesCardProps) {
       setActiveNoteId(res.id)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create note")
+    }
+  }
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+
+    try {
+      const text = await file.text()
+      const title = file.name.replace(/\.(md|txt|markdown)$/i, "") || file.name
+      const res = await createNote(collection, title)
+      await updateNote(collection, res.id, { content: text })
+      toast.success(`Imported "${title}"`)
+      await fetchNotes()
+      setActiveNoteId(res.id)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Import failed")
     }
   }
 
@@ -101,10 +122,16 @@ export function NotesCard({ collection }: NotesCardProps) {
             <StickyNote className="h-4 w-4" />
             Notes
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={handleCreate}>
-            <Plus className="h-4 w-4 mr-1.5" />
-            New Note
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+              <FileDown className="h-4 w-4 mr-1.5" />
+              Import
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleCreate}>
+              <Plus className="h-4 w-4 mr-1.5" />
+              New Note
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -156,6 +183,14 @@ export function NotesCard({ collection }: NotesCardProps) {
           }}
         />
       )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".md,.txt,.markdown"
+        className="hidden"
+        onChange={handleImportFile}
+      />
     </>
   )
 }

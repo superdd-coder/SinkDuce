@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { FileText, GripVertical } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { FileText, GripVertical, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type NoteListItem } from "@/api/client"
 
@@ -8,19 +9,32 @@ interface NoteSidebarLeftProps {
   notes: NoteListItem[]
   activeNoteId: string
   onSwitchNote: (id: string) => void
+  onCreateNote?: () => void
 }
 
 export function NoteSidebarLeft({
   notes,
   activeNoteId,
   onSwitchNote,
+  onCreateNote,
 }: NoteSidebarLeftProps) {
   return (
     <div className="w-56 border-r flex flex-col shrink-0 bg-muted/30">
-      <div className="px-3 py-2 border-b">
+      <div className="px-3 py-2 border-b flex items-center justify-between">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
           Notes
         </span>
+        {onCreateNote && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 w-6 p-0"
+            onClick={onCreateNote}
+            title="New Note"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
       <ScrollArea className="flex-1">
         <div className="p-1.5 space-y-0.5">

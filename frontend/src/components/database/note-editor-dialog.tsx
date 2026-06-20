@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Loader2, Pencil, Check, X, ChevronLeft, ArrowDownToLine, ArrowLeft, ArrowRight, Upload } from "lucide-react"
+import { Loader2, Pencil, Check, X, ChevronLeft, ArrowDownToLine, ArrowLeft, ArrowRight, Upload, FileUp } from "lucide-react"
 import { toast } from "sonner"
 import {
   getNote,
   getNotes,
+  createNote,
   updateNote,
   distillNote,
   triggerPropagation,
@@ -15,6 +16,7 @@ import {
   type NoteListItem,
 } from "@/api/client"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import { preprocessDistillBlocks } from "@/components/ui/tiptap-editor"
 import { NoteSidebarLeft } from "./note-sidebar-left"
 import { NoteSidebarRight } from "./note-sidebar-right"
 
@@ -24,6 +26,9 @@ interface NoteEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
+
+// Module-level — survives component unmount (dialog close/reopen)
+const _perNoteState = new Map<string, { userEdited: boolean; propagateDismissed: boolean }>()
 
 export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: NoteEditorDialogProps) {
   // Notes list — only fetched on open, never reordered during session
@@ -122,8 +127,11 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
   // ── Data loading ──────────────────────────────────────
 
-  // Track if user has actually made changes (not just loading)
-  const userChangedRef = useRef(false)
+  // Baseline content after Tiptap normalization — used to detect real user edits
+  // (normalize is deterministic, so same input → same output → no false triggers)
+  const baselineContentRef = useRef("")
+
+  // Per-note edit state — uses module-level map to survive dialog close/reopen
 
   // Ref for notesList title map — avoids fetchNote depending on notesList state
   // (which would cause fetchNote to be recreated on every notesList update,
@@ -139,7 +147,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setNavIndex(-1)
       setUserEdited(false)
       setPropagateDismissed(false)
-      userChangedRef.current = false
+      baselineContentRef.current = ""
     }
   }, [open, noteId])
 
@@ -161,7 +169,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   // Fetch note content
   const fetchNote = useCallback(async (id: string) => {
     setLoading(true)
-    userChangedRef.current = false // Reset change tracking
+    baselineContentRef.current = "" // Block user-edit detection during load
     // Bug 2 fix: reset title editing state on note switch
     setEditingTitle(false)
     try {
@@ -194,11 +202,14 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       scrollContainerRef.current?.scrollTo(0, 0)
       // Initialize prevBlockIdsRef for Backspace/Delete removal detection
       prevBlockIdsRef.current = getDistillBlockIds(content)
+      // baselineContentRef stays "" here — it will be set on the first
+      // onChange from Tiptap (which reflects the actual normalized content).
+      // This avoids false user-edit detection from normalize differences.
 
-      // Mark as ready for user changes after a short delay (to ignore initial onChange)
-      setTimeout(() => {
-        userChangedRef.current = true
-      }, 500)
+      // Restore per-note edit state (propagate button visibility)
+      const saved = _perNoteState.get(id)
+      setUserEdited(saved?.userEdited ?? false)
+      setPropagateDismissed(saved?.propagateDismissed ?? false)
     } catch {
       toast.error("Failed to load note")
       setCurrentNote(null)
@@ -226,9 +237,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   }
 
   const scheduleSave = useCallback((newContent: string) => {
-    // Ignore auto-save triggers before user has had a chance to edit
-    // (prevents Tiptap init normalization from bumping updated_at)
-    if (!userChangedRef.current) return
+    // Don't save while baseline hasn't been set (still loading/normalizing)
+    if (!baselineContentRef.current) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     const id = activeNoteId
     saveTimerRef.current = setTimeout(async () => {
@@ -237,6 +247,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
         const contentToSave = encodeImageUrls(newContent)
         await updateNote(collection, id, { content: contentToSave })
         setSavedContent(contentToSave)
+        // Update baseline so the saved (possibly encoded) content is the new reference
+        baselineContentRef.current = newContent
       } catch {
         toast.error("Auto-save failed")
       }
@@ -247,8 +259,15 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     setContent(newContent)
     latestContentRef.current = newContent
 
-    // Only show propagate button if user actually made changes (not from loading)
-    if (userChangedRef.current) {
+    // Set baseline on first onChange after load (captures Tiptap-normalized content)
+    if (!baselineContentRef.current) {
+      baselineContentRef.current = newContent
+    }
+
+    // Only show propagate button if content actually differs from baseline
+    // (normalize is deterministic → same input produces same output → no false triggers)
+    const isRealEdit = newContent !== baselineContentRef.current && distillCountRef.current === 0
+    if (isRealEdit) {
       setUserEdited(true)
       // Reset dismiss state when user makes new changes
       setPropagateDismissed(false)
@@ -298,15 +317,38 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     }
     // Only save if user actually edited — prevents Tiptap initialization
     // normalization from bumping updated_at on every note switch.
-    if (content !== savedContent && userChangedRef.current) {
+    if (content !== savedContent && baselineContentRef.current && content !== baselineContentRef.current) {
       updateNote(collection, activeNoteId, { content }).catch(() => {})
     }
   }, [collection, activeNoteId, content, savedContent])
 
   const handleSwitchNote = useCallback((id: string) => {
+    // Save current note's edit state before switching
+    _perNoteState.set(activeNoteId, { userEdited, propagateDismissed })
     flushSave()
     navigateToNote(id)
-  }, [flushSave, navigateToNote])
+  }, [flushSave, navigateToNote, activeNoteId, userEdited, propagateDismissed])
+
+  // ── Create new note ─────────────────────────────────
+
+  const handleCreateNote = useCallback(async () => {
+    const title = new Date().toLocaleString(undefined, {
+      year: "numeric", month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    })
+    try {
+      flushSave()
+      const res = await createNote(collection, title)
+      // Refresh notes list
+      const notesRes = await getNotes(collection)
+      const notes = notesRes.notes ?? []
+      setNotesList(notes)
+      notesTitleMapRef.current = new Map(notes.map(n => [n.id, n.title]))
+      navigateToNote(res.id)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create note")
+    }
+  }, [collection, flushSave, navigateToNote])
 
   // ── Title editing ─────────────────────────────────────
 
@@ -331,6 +373,20 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     const result = await uploadNoteImage(collection, activeNoteId, file)
     return result.url
   }, [collection, activeNoteId])
+
+  // ── Download note as .md file ─────────────────────────
+
+  const handleDownload = useCallback(() => {
+    if (!currentNote) return
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${currentNote.title}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success("Exported")
+  }, [currentNote, content])
 
   // ── Distillation (drop) ───────────────────────────────
 
@@ -398,11 +454,13 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       if (pmPos !== null && pmPos >= 0) {
         const editor = tiptapEditorRef.current
         if (editor) {
-          // Insert at the correct doc position using markdown string.
-          // insertContentAt parses markdown via Tiptap's Markdown extension,
-          // which handles distillBlock serialization/deserialization correctly.
+          // Insert at the correct doc position using preprocessed markdown.
+          // Must preprocess distill blocks to HTML divs so the DistillBlock
+          // extension can parse them — raw :::distill-block syntax is not
+          // recognized by ProseMirror/insertContentAt.
           loadingContent = targetContent + loadingMd // fallback
-          editor.commands.insertContentAt(pmPos, loadingMd)
+          const { processed } = preprocessDistillBlocks(loadingMd)
+          editor.commands.insertContentAt(pmPos, processed)
           // Read back the full markdown after insertion
           const storage = editor.storage as any
           loadingContent = storage?.markdown?.getMarkdown?.() ?? targetContent + loadingMd
@@ -475,6 +533,11 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     } finally {
       distillCountRef.current--
       setDistilling(distillCountRef.current > 0)
+      // Reset propagate state — distill insertion is not a user edit
+      if (distillCountRef.current === 0) {
+        setUserEdited(false)
+        setPropagateDismissed(false)
+      }
     }
   }, [collection, currentNote, notesList, lockedServerReplace, dropCoordsToProseMirrorPos])
 
@@ -731,6 +794,16 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
               >
                 <Pencil className="h-3 w-3" />
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs gap-1 shrink-0"
+                onClick={handleDownload}
+                title="Export as .md"
+              >
+                <FileUp className="h-3.5 w-3.5" />
+                Export
+              </Button>
             </div>
           )}
 
@@ -769,6 +842,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
               notes={notesList}
               activeNoteId={activeNoteId}
               onSwitchNote={handleSwitchNote}
+              onCreateNote={handleCreateNote}
             />
           )}
 

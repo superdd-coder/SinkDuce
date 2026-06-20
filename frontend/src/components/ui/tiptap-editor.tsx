@@ -566,6 +566,12 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           overflow: hidden; position: relative;
         `
         dom.contentEditable = "false"
+        // Disable drag for loading blocks — ProseMirror sets draggable="true"
+        // on this element via node spec; dom.draggable property overrides it.
+        if (node.attrs.loading) {
+          dom.draggable = false
+          dom.style.cursor = "default"
+        }
 
         // Header
         const header = document.createElement("div")
@@ -576,7 +582,14 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
         const handle = document.createElement("span")
         handle.textContent = "⠿"
-        handle.style.cssText = `cursor: grab; color: #666; font-size: 14px; user-select: none;`
+        // Disable drag for loading blocks — dragging a loading placeholder
+        // moves it to a new position, so the distill result can't find it.
+        handle.style.cssText = node.attrs.loading
+          ? `cursor: not-allowed; color: #bbb; font-size: 14px; user-select: none;`
+          : `cursor: grab; color: #666; font-size: 14px; user-select: none;`
+        if (node.attrs.loading) {
+          handle.addEventListener("dragstart", (e) => { e.preventDefault(); e.stopPropagation() })
+        }
 
         const link = document.createElement("span")
         link.textContent = `📎 ${node.attrs.sourceTitle}`
@@ -730,6 +743,21 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
             badge.textContent = updatedNode.attrs.sourceNoteId?.slice(-3) || "?"
             dom.setAttribute("data-block-id", updatedNode.attrs.blockId)
             dom.setAttribute("data-loading", updatedNode.attrs.loading ? "true" : "false")
+
+            // Toggle handle drag state on loading transition
+            if (updatedNode.attrs.loading) {
+              handle.style.cursor = "not-allowed"
+              handle.style.color = "#bbb"
+              handle.setAttribute("draggable", "false")
+              dom.draggable = false
+              dom.style.cursor = "default"
+            } else {
+              handle.style.cursor = "grab"
+              handle.style.color = "#666"
+              handle.removeAttribute("draggable")
+              dom.draggable = true
+              dom.style.cursor = ""
+            }
 
             // Re-check overflow
             requestAnimationFrame(() => {
@@ -1247,6 +1275,73 @@ interface MarkdownEditorProps {
 // ──────────────────────────────────────────────
 // Tiptap Editor Component
 // ──────────────────────────────────────────────
+
+/** Lightweight markdown → HTML for paste interception (no deps). */
+function markdownToHtml(md: string): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  const inline = (s: string) =>
+    esc(s)
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/__(.+?)__/g, "<strong>$1</strong>")
+      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      .replace(/_(.+?)_/g, "<em>$1</em>")
+      .replace(/`([^`]+?)`/g, "<code>$1</code>")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+
+  const lines = md.split("\n")
+  const blocks: string[] = []
+  let i = 0
+  while (i < lines.length) {
+    const l = lines[i]
+    // blank line
+    if (!l.trim()) { i++; continue }
+    // distill block — pass through unchanged (preprocessed separately)
+    if (l.trimStart().startsWith(":::distill-block")) {
+      const blockLines: string[] = [l]; i++
+      while (i < lines.length && !lines[i].trimStart().startsWith(":::")) { blockLines.push(lines[i]); i++ }
+      if (i < lines.length) { blockLines.push(lines[i]); i++ }
+      blocks.push(blockLines.join("\n")); continue
+    }
+    // heading
+    const m = l.match(/^(#{1,6})\s+(.*)$/)
+    if (m) { blocks.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); i++; continue }
+    // code block
+    if (l.trimStart().startsWith("```")) {
+      const code: string[] = []; i++
+      while (i < lines.length && !lines[i].trimStart().startsWith("```")) { code.push(esc(lines[i])); i++ }
+      if (i < lines.length) i++
+      blocks.push(`<pre><code>${code.join("\n")}</code></pre>`); continue
+    }
+    // hr
+    if (/^[-*_]{3,}\s*$/.test(l.trim())) { blocks.push("<hr>"); i++; continue }
+    // blockquote
+    if (/^>\s?/.test(l)) {
+      const qLines: string[] = []
+      while (i < lines.length && /^>\s?/.test(lines[i])) { qLines.push(lines[i].replace(/^>\s?/, "")); i++ }
+      blocks.push(`<blockquote>${inline(qLines.join(" "))}</blockquote>`); continue
+    }
+    // unordered list
+    if (/^\s*[-*+]\s/.test(l)) {
+      const items: string[] = []
+      while (i < lines.length && /^\s*[-*+]\s/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s/, "")); i++ }
+      blocks.push(`<ul>${items.map(it => `<li>${inline(it)}</li>`).join("")}</ul>`); continue
+    }
+    // ordered list
+    if (/^\s*\d+\.\s/.test(l)) {
+      const items: string[] = []
+      while (i < lines.length && /^\s*\d+\.\s/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+\.\s/, "")); i++ }
+      blocks.push(`<ol>${items.map(it => `<li>${inline(it)}</li>`).join("")}</ol>`); continue
+    }
+    // paragraph (collect consecutive non-blank lines)
+    const pLines: string[] = []
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|>\s?|\s*[-*+]\s|\s*\d+\.\s|[-*_]{3,}\s*$|```|:::)/.test(lines[i])) {
+      pLines.push(lines[i]); i++
+    }
+    if (pLines.length) blocks.push(`<p>${inline(pLines.join(" "))}</p>`)
+  }
+  return blocks.join("")
+}
+
 export function TiptapEditor({
   value, onChange, className, minHeight, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
@@ -1285,7 +1380,7 @@ export function TiptapEditor({
         tightLists: true,
         bulletListMarker: "-",
         linkify: true,
-        transformPastedText: false,
+        transformPastedText: true,
         transformCopiedText: false,
       }),
     ],
@@ -1311,6 +1406,25 @@ export function TiptapEditor({
           }
           return false
         },
+      },
+      handlePaste: (_view, event) => {
+        // Intercept plain-text clipboard and convert markdown to HTML.
+        // Without this, ProseMirror prefers text/html from the clipboard,
+        // so patterns like "### heading" or "**bold**" are inserted as-is.
+        const text = event.clipboardData?.getData("text/plain")
+        if (!text) return false
+        const hasMarkdown = /^#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|^>\s|```|\*\*.+?\*\*|__.+?__|^[-*_]{3,}\s*$|:::/m.test(text)
+        if (!hasMarkdown) return false
+        try {
+          // Preprocess distill blocks first (converts :::distill-block{...} to HTML divs)
+          const { processed } = preprocessDistillBlocks(text)
+          const html = markdownToHtml(processed)
+          if (html) {
+            editorRef.current?.commands.insertContent(html)
+            return true  // prevent default (raw text) insertion
+          }
+        } catch { /* fall through to default paste */ }
+        return false
       },
     },
   })
@@ -1389,7 +1503,7 @@ export function TiptapEditor({
 
   return (
     <div
-      className={cn("tiptap-editor relative border rounded-lg", readonly && "bg-muted/50", className)}
+      className={cn("tiptap-editor relative", readonly && "bg-muted/50", className)}
       style={{ minHeight }}
       onClick={handleClick}
     >

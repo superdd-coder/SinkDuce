@@ -160,22 +160,16 @@ def save_content(collection: str, note_id: str, content: str) -> str:
 
 
 def get_distillation(collection: str, source_note_id: str) -> str | None:
-    """Get cached distillation for a source note (hash-verified)."""
+    """Get cached distillation for a source note.
+
+    Cache validity is determined by whether the source note still has
+    references (distill blocks) in other notes — NOT by content hash.
+    Hash-based invalidation only happens in cleanup_distillations_if_unused()
+    when ALL references are removed."""
     ndir = _note_dir(collection, source_note_id)
     dist_path = ndir / "distillation.md"
-    hash_path = ndir / "distillation.hash"
     if not dist_path.exists():
         return None
-    # Verify source content hasn't changed since cache was written
-    current_content = get_content(collection, source_note_id) or ""
-    current_hash = hashlib.sha256(current_content.encode("utf-8")).hexdigest()
-    if hash_path.exists():
-        stored_hash = hash_path.read_text(encoding="utf-8").strip()
-        if stored_hash != current_hash:
-            logger.info("Distillation cache for %s is stale (content changed), discarding", source_note_id)
-            dist_path.unlink()
-            hash_path.unlink()
-            return None
     return dist_path.read_text(encoding="utf-8")
 
 
