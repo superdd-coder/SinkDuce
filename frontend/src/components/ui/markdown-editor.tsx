@@ -32,7 +32,6 @@ function TyporaEditor({
   value,
   onChange,
   className,
-  minHeight,
   placeholder,
   children,
   readonly = false,
@@ -46,7 +45,6 @@ function TyporaEditor({
       value={value}
       onChange={onChange}
       className={className}
-      minHeight={minHeight}
       placeholder={placeholder}
       children={children}
       readonly={readonly}

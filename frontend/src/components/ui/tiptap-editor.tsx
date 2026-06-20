@@ -1343,9 +1343,9 @@ function markdownToHtml(md: string): string {
 }
 
 export function TiptapEditor({
-  value, onChange, className, minHeight, placeholder, children,
+  value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
-}: Omit<MarkdownEditorProps, "variant">) {
+}: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
   const editorRef = useRef<any>(null)
@@ -1459,6 +1459,24 @@ export function TiptapEditor({
         const noteId = distillBlock.getAttribute("data-source-note-id")
         if (noteId) onNoteLinkClick?.(noteId)
       }
+      // If clicked outside ProseMirror content area (empty editor space),
+      // focus the editor and place cursor at the nearest content position.
+      const pmEl = editorRef.current?.view?.dom as HTMLElement | undefined
+      if (pmEl && !pmEl.contains(target)) {
+        const editor = editorRef.current
+        if (editor && !editor.isDestroyed) {
+          // Use posAtCoords to find the nearest valid document position
+          // for the click coordinates, then place the cursor there.
+          const pos = editor.view.posAtCoords({
+            left: e.clientX,
+            top: e.clientY,
+          })
+          if (pos) {
+            editor.commands.setTextSelection(pos.pos)
+          }
+          editor.commands.focus()
+        }
+      }
     },
     [onNoteLinkClick]
   )
@@ -1503,14 +1521,16 @@ export function TiptapEditor({
 
   return (
     <div
-      className={cn("tiptap-editor relative", readonly && "bg-muted/50", className)}
-      style={{ minHeight }}
+      className={cn("tiptap-editor relative min-h-full flex flex-col", readonly && "bg-muted/50", className)}
       onClick={handleClick}
     >
       {children && !readonly && (
         <div className="absolute top-2 right-2 z-10 flex gap-1 pointer-events-auto">{children}</div>
       )}
       <style>{`
+        .tiptap-editor .ProseMirror {
+          min-height: 100%;
+        }
         .tiptap-editor [data-type="taskList"] {
           list-style: none;
           padding-left: 0;
@@ -1592,7 +1612,7 @@ export function TiptapEditor({
           transform: translateX(-50%);
         }
       `}</style>
-      <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4" />
+      <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4 min-h-full flex-1" />
     </div>
   )
 }

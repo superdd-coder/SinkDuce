@@ -860,7 +860,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                 Loading...
               </div>
             ) : (
-              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
+              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0">
                 <MarkdownEditor
                   value={content}
                   onEditorReady={(editor) => { tiptapEditorRef.current = editor }}
