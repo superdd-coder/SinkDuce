@@ -1240,6 +1240,8 @@ interface MarkdownEditorProps {
   onNoteLinkClick?: (noteId: string) => void
   onDistill?: () => void
   onDistillNavigate?: (noteId: string) => void // Add this for distill block navigation
+  /** Called when the editor instance is ready. Passes back the Tiptap editor. */
+  onEditorReady?: (editor: any) => void
 }
 
 // ──────────────────────────────────────────────
@@ -1247,7 +1249,7 @@ interface MarkdownEditorProps {
 // ──────────────────────────────────────────────
 export function TiptapEditor({
   value, onChange, className, minHeight, placeholder, children,
-  readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate,
+  readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
 }: Omit<MarkdownEditorProps, "variant">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
@@ -1314,6 +1316,7 @@ export function TiptapEditor({
   })
 
   useEffect(() => { editorRef.current = editor }, [editor])
+  useEffect(() => { if (editor && onEditorReady) onEditorReady(editor) }, [editor, onEditorReady])
 
   useEffect(() => {
     if (!editor) return

@@ -21,6 +21,8 @@ interface MarkdownEditorProps {
   onNoteLinkClick?: (noteId: string) => void
   /** Called when user triggers distill action from slash command. */
   onDistill?: () => void
+  /** Called when the Tiptap editor instance is ready. */
+  onEditorReady?: (editor: any) => void
 }
 
 // ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
@@ -37,6 +39,7 @@ function TyporaEditor({
   onImageUpload,
   onNoteLinkClick,
   onDistill,
+  onEditorReady,
 }: Omit<MarkdownEditorProps, "variant">) {
   return (
     <TiptapEditor
@@ -50,6 +53,7 @@ function TyporaEditor({
       onImageUpload={onImageUpload}
       onNoteLinkClick={onNoteLinkClick}
       onDistill={onDistill}
+      onEditorReady={onEditorReady}
     />
   )
 }
@@ -100,4 +104,3 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
 
 // Re-export utilities for backward compatibility
 export { preprocessDistillBlocks, postprocessDistillBlocks }
-

@@ -132,6 +132,15 @@ def propagate_forward(collection: str, source_note_id: str, auto: bool = False) 
     # Delete existing distillation so it gets regenerated
     store.delete_distillation(collection, source_note_id)
 
+    # Set loading=true on downstream notes' distill blocks before distillation
+    for target_id in referenced_by:
+        target_content = store.get_content(collection, target_id)
+        if target_content is None:
+            continue
+        loading_content = _set_loading_flag(target_content, source_note_id, True)
+        if loading_content != target_content:
+            store.save_content(collection, target_id, loading_content)
+
     for target_id in referenced_by:
         target_content = store.get_content(collection, target_id)
         if target_content is None:
@@ -141,7 +150,9 @@ def propagate_forward(collection: str, source_note_id: str, auto: bool = False) 
         new_distilled = distill_note(collection, source_note_id, target_id)
 
         # Replace the injection block in target's content
-        new_content = replace_injection_block(target_content, source_note_id, new_distilled, source_note.title)
+        # Re-read content (may have loading flag set above)
+        current_content = store.get_content(collection, target_id) or target_content
+        new_content = replace_injection_block(current_content, source_note_id, new_distilled, source_note.title)
         if new_content != target_content:
             store.save_content(collection, target_id, new_content)
             updated.append(target_id)
@@ -152,10 +163,41 @@ def propagate_forward(collection: str, source_note_id: str, auto: bool = False) 
             sub_updated = propagate_forward(collection, target_id, auto=True)
             updated.extend(sub_updated)
 
+    # Touch the source note's updated_at so the frontend can detect completion
+    if updated:
+        note = store.get_note(collection, source_note_id)
+        if note:
+            # Save content to update updated_at without changing the actual content
+            current_content = store.get_content(collection, source_note_id)
+            if current_content is not None:
+                store.save_content(collection, source_note_id, current_content)
+
     return updated
 
 
 # ── New format: :::distill-block{...} fences ─────────────────
+
+def _set_loading_flag(content: str, source_note_id: str, loading: bool) -> str:
+    """Set or clear the loading flag on distill-blocks matching source_note_id."""
+    # Match "source":"<source_note_id>" in the distill-block attrs
+    source_attr = '"source":"' + re.escape(source_note_id) + '"'
+    pattern = re.compile(
+        r'(:::distill-block\{[^}]*' + source_attr + r'[^}]*?)("loading"\s*:\s*(?:true|false))',
+        re.DOTALL,
+    )
+    # If there's already a loading key, replace it
+    result, count = pattern.subn(r'\g<1>"loading":' + str(loading).lower(), content)
+    if count > 0:
+        return result
+    # No loading key yet — insert it after the opening brace
+    pattern2 = re.compile(
+        r'(:::distill-block\{[^}]*' + source_attr + r'[^}]*?)\}',
+        re.DOTALL,
+    )
+    result2, count2 = pattern2.subn(r'\g<1>,"loading":' + str(loading).lower() + '}', content)
+    if count2 > 0:
+        return result2
+    return content
 
 def replace_injection_block(content: str, source_note_id: str, new_distilled: str, source_title: str) -> str:
     """Replace the content of a distill-block matching source_note_id.

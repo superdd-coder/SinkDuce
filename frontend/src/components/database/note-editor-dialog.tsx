@@ -64,12 +64,18 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   const contentRef = useRef(content)
   contentRef.current = content
   const latestContentRef = useRef(content)
+  // Ref for editor scroll container — reset scroll on note switch
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   // Ref mirror of activeNoteId — always current, immune to async closure staleness
   const activeNoteIdRef = useRef(activeNoteId)
   // Concurrent distill counter (boolean state flickers when one finishes before others)
   const distillCountRef = useRef(0)
   // Serializes server-side content updates for the same note (read-modify-write lock)
   const serverWriteLockRef = useRef<Map<string, Promise<void>>>(new Map())
+
+  // Ref to Tiptap editor instance -- needed for cursor-position calculations during drop
+  const tiptapEditorRef = useRef<any>(null)
+
 
   // ── Helpers ────────────────────────────────────────────
 
@@ -156,6 +162,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   const fetchNote = useCallback(async (id: string) => {
     setLoading(true)
     userChangedRef.current = false // Reset change tracking
+    // Bug 2 fix: reset title editing state on note switch
+    setEditingTitle(false)
     try {
       const note = await getNote(collection, id)
 
@@ -182,6 +190,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setCurrentNote(note)
       setContent(content)
       setSavedContent(content)
+      // Bug 4 fix: reset scroll position to top on note switch
+      scrollContainerRef.current?.scrollTo(0, 0)
       // Initialize prevBlockIdsRef for Backspace/Delete removal detection
       prevBlockIdsRef.current = getDistillBlockIds(content)
 
@@ -307,6 +317,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setCurrentNote({ ...currentNote, title: titleDraft.trim() })
       // Update in local list (no re-fetch)
       setNotesList(prev => prev.map(n => n.id === currentNote.id ? { ...n, title: titleDraft.trim() } : n))
+      // Bug 1 fix: keep title map in sync so fetchNote can update distill block titles
+      notesTitleMapRef.current.set(currentNote.id, titleDraft.trim())
     } catch {
       toast.error("Failed to update title")
     }
@@ -343,7 +355,25 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     await task
   }, [collection])
 
-  const handleDrop = useCallback(async (sourceNoteId: string) => {
+
+  /**
+   * Convert a drop pixel coordinate to a ProseMirror document position.
+   * Uses the editor's posAtCoords directly for accurate placement,
+   * then snaps to the nearest block boundary so insertion never lands mid-paragraph.
+   */
+  const dropCoordsToProseMirrorPos = useCallback((x: number, y: number): number | null => {
+    const editor = tiptapEditorRef.current
+    if (!editor?.view) return null
+    const view = editor.view
+    const pos = view.posAtCoords({ left: x, top: y })
+    if (!pos) return null
+    // Use posAtCoords raw pos directly. Falls between paragraphs when mouse is in the gap,
+    return pos.pos
+  }, [])
+  const handleDrop = useCallback(async (
+    sourceNoteId: string,
+    dropCoords?: { x: number; y: number },
+  ) => {
     if (!currentNote || sourceNoteId === currentNote.id) return
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current)
@@ -359,11 +389,39 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
     // Build and insert loading placeholder
     const loadingMd = `\n\n:::distill-block{"id":"${tempBlockId}","source":"${sourceNoteId}","source-title":"${sourceTitle}","loading":true}\n⏳ Distilling content from "${sourceTitle}"...\n:::\n\n`
-    const loadingContent = targetContent + loadingMd
-    // Update ref synchronously — concurrent distills read contentRef.current,
-    // and React won't re-render until the microtask queue drains.
-    contentRef.current = loadingContent
-    setContent(loadingContent)
+    let loadingContent: string
+    if (dropCoords) {
+      // Use ProseMirror's posAtCoords + insertContentAt for accurate block-level
+      // insertion. ProseMirror's posAtCoords already handles positioning correctly
+      // (never lands mid-paragraph), matching how internal NodeView drag-and-drop works.
+      const pmPos = dropCoordsToProseMirrorPos(dropCoords.x, dropCoords.y)
+      if (pmPos !== null && pmPos >= 0) {
+        const editor = tiptapEditorRef.current
+        if (editor) {
+          // Insert at the correct doc position using markdown string.
+          // insertContentAt parses markdown via Tiptap's Markdown extension,
+          // which handles distillBlock serialization/deserialization correctly.
+          loadingContent = targetContent + loadingMd // fallback
+          editor.commands.insertContentAt(pmPos, loadingMd)
+          // Read back the full markdown after insertion
+          const storage = editor.storage as any
+          loadingContent = storage?.markdown?.getMarkdown?.() ?? targetContent + loadingMd
+          // Sync ref (React state is already updated by onUpdate → handleContentChange)
+          contentRef.current = loadingContent
+        } else {
+          loadingContent = targetContent + loadingMd
+        }
+      } else {
+        loadingContent = targetContent + loadingMd
+      }
+    } else {
+      // Fallback: append to end
+      loadingContent = targetContent + loadingMd
+      // Update ref synchronously — concurrent distills read contentRef.current,
+      // and React won't re-render until the microtask queue drains.
+      contentRef.current = loadingContent
+      setContent(loadingContent)
+    }
 
     // Persist loading placeholder to server NOW — the switch-away path
     // reads from server, so the block must be there before distill returns.
@@ -418,7 +476,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       distillCountRef.current--
       setDistilling(distillCountRef.current > 0)
     }
-  }, [collection, currentNote, notesList, lockedServerReplace])
+  }, [collection, currentNote, notesList, lockedServerReplace, dropCoordsToProseMirrorPos])
 
   // ── Distill block event listeners ─────────────────────
 
@@ -498,7 +556,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     e.preventDefault()
     setDropOver(false)
     const droppedNoteId = e.dataTransfer.getData("application/note-id")
-    if (droppedNoteId) handleDrop(droppedNoteId)
+    if (droppedNoteId) handleDrop(droppedNoteId, { x: e.clientX, y: e.clientY })
   }, [handleDrop])
 
   // ── Propagation ───────────────────────────────────────
@@ -535,34 +593,38 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       await updateNote(collection, currentNote.id, { content })
       setSavedContent(content)
 
-      // Set all distill blocks to loading state in the UI
-      const loadingContent = content.replace(
-        /:::distill-block(\{[^}]+\})/g,
-        (match: string, jsonAttrs: string) => {
-          try {
-            const attrs = JSON.parse(jsonAttrs)
-            attrs.loading = true
-            return `:::distill-block${JSON.stringify(attrs)}`
-          } catch {
-            return match
-          }
-        }
-      )
-      setContent(loadingContent)
-
       // Trigger propagation (runs in background)
+      // Propagation saves content to server, so save current content first.
+      // The backend sets loading=true on downstream notes' distill blocks.
+      const propagateNoteId = currentNote.id
       await triggerPropagation(collection, currentNote.id)
       toast.success("Propagation started - distill blocks are updating...")
 
-      // Wait a bit then refresh to get updated content
-      setTimeout(async () => {
-        await fetchNote(currentNote.id)
+      // Poll for propagation completion by checking the source note's updated_at.
+      // (The backend saves loading onto downstream notes, so checking the source
+      // for loading:true won't work.)
+      const poll = async () => {
+        const initialUpdatedAt = currentNote?.updated_at
+        for (let i = 0; i < 30; i++) {
+          await new Promise(r => setTimeout(r, 2000))
+          try {
+            const note = await getNote(collection, propagateNoteId)
+            if (note.updated_at !== initialUpdatedAt) {
+              // Source note's content changed — propagation completed
+              if (activeNoteIdRef.current === propagateNoteId) {
+                await fetchNote(propagateNoteId)
+              }
+              break
+            }
+          } catch { /* retry */ }
+        }
         setPropagateDismissed(true)
         setPropagateDialogOpen(false)
         setPropagatePreview(null)
         setUserEdited(false)
         setPropagating(false)
-      }, 3000) // Refresh after 3 seconds
+      }
+      poll()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Propagation failed")
       setPropagating(false)
@@ -724,9 +786,10 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                 Loading...
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto">
+              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
                 <MarkdownEditor
                   value={content}
+                  onEditorReady={(editor) => { tiptapEditorRef.current = editor }}
                   onChange={handleContentChange}
                   onImageUpload={handleImageUpload}
                   onNoteLinkClick={(id) => {
