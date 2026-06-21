@@ -1790,59 +1790,30 @@ export function TiptapEditor({
           margin: 0;
           line-height: 1.5;
         }
-        /* Table styles */
-        .tiptap-editor .tiptap-table {
+        /* Table styles — Typora-like */
+        .tiptap-editor table {
           position: relative;
           border-collapse: collapse;
           width: 100%;
           margin: 8px 0;
+          font-size: 0.875rem;
         }
-        .tiptap-editor .tiptap-table td,
-        .tiptap-editor .tiptap-table th {
-          border: 1px solid #e0e0e0;
-          padding: 8px 12px;
+        .tiptap-editor table td,
+        .tiptap-editor table th {
+          border: 1px solid var(--border, #c0c0c0);
+          padding: 6px 12px;
           position: relative;
           min-width: 60px;
+          text-align: left;
         }
-        .tiptap-editor .tiptap-table th {
-          background: #f5f5f5;
-          font-weight: 600;
+        /* Zebra striping — odd rows gray, even rows white */
+        .tiptap-editor table tr:nth-child(odd) td,
+        .tiptap-editor table tr:nth-child(odd) th {
+          background: var(--muted, #f0f0f0) !important;
         }
-        /* Table add row/column buttons on hover */
-        .tiptap-editor .tiptap-table td:hover::after,
-        .tiptap-editor .tiptap-table th:hover::after {
-          content: '+';
-          position: absolute;
-          width: 20px;
-          height: 20px;
-          background: #3b82f6;
-          color: white;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 14px;
-          cursor: pointer;
-          z-index: 10;
-          opacity: 0;
-          transition: opacity 0.2s;
-        }
-        .tiptap-editor .tiptap-table td:hover::after,
-        .tiptap-editor .tiptap-table th:hover::after {
-          opacity: 0.8;
-        }
-        /* Add column button - right side */
-        .tiptap-editor .tiptap-table td:last-child::after,
-        .tiptap-editor .tiptap-table th:last-child::after {
-          right: -12px;
-          top: 50%;
-          transform: translateY(-50%);
-        }
-        /* Add row button - bottom */
-        .tiptap-editor .tiptap-table tr:last-child td::after {
-          bottom: -12px;
-          left: 50%;
-          transform: translateX(-50%);
+        .tiptap-editor table tr:nth-child(even) td,
+        .tiptap-editor table tr:nth-child(even) th {
+          background: transparent !important;
         }
       `}</style>
       <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4 min-h-full flex-1" />
