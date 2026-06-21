@@ -717,7 +717,14 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(newOpen, eventDetails) => {
+        // Block ESC key from closing — only allow close via X button / overlay click
+        if (!newOpen && eventDetails.reason === 'escape-key') return
+        onOpenChange(newOpen)
+      }}
+    >
       <DialogContent
         showCloseButton
         className="!max-w-[90vw] !w-[90vw] h-[85vh] p-0 flex flex-col"
