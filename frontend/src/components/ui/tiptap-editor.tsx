@@ -9,10 +9,18 @@ import TaskList from "@tiptap/extension-task-list"
 import TaskItem from "@tiptap/extension-task-item"
 import Placeholder from "@tiptap/extension-placeholder"
 import Youtube from "@tiptap/extension-youtube"
+import Highlight from "@tiptap/extension-highlight"
+import { TextStyle } from "@tiptap/extension-text-style"
+import Color from "@tiptap/extension-color"
 import { Markdown } from "tiptap-markdown"
-import { Node, mergeAttributes, Extension } from "@tiptap/core"
+import { Node, mergeAttributes, Extension, type Editor } from "@tiptap/core"
 import { Plugin, PluginKey } from "@tiptap/pm/state"
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model"
+import {
+  Bold, Italic, Strikethrough, Highlighter,
+  List, ListOrdered, ListTodo, Heading1, Heading2, Heading3,
+  ChevronDown,
+} from "lucide-react"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -1955,6 +1963,299 @@ function markdownToHtml(md: string): string {
   return blocks.join("")
 }
 
+// ──────────────────────────────────────────────
+// Editor Toolbar
+// ──────────────────────────────────────────────
+
+const HIGHLIGHT_PRESETS = [
+  { color: "#fef08a", label: "Yellow" },
+  { color: "#bbf7d0", label: "Green" },
+  { color: "#fca5a5", label: "Red" },
+  { color: "#c4b5fd", label: "Purple" },
+  { color: "#fdba74", label: "Orange" },
+]
+
+const TEXT_COLOR_PRESETS = [
+  { color: "#000000", label: "Black" },
+  { color: "#ef4444", label: "Red" },
+  { color: "#3b82f6", label: "Blue" },
+  { color: "#22c55e", label: "Green" },
+  { color: "#a855f7", label: "Purple" },
+  { color: "#f97316", label: "Orange" },
+]
+
+function ToolbarBtn({
+  active, disabled, tooltip, onClick, children, className,
+}: {
+  active?: boolean; disabled?: boolean; tooltip: string; onClick: () => void
+  children: ReactNode; className?: string
+}) {
+  return (
+    <button
+      type="button"
+      title={tooltip}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "h-7 w-7 p-0 flex items-center justify-center rounded-sm text-muted-foreground",
+        "hover:bg-accent hover:text-foreground transition-colors cursor-pointer",
+        "disabled:opacity-30 disabled:pointer-events-none",
+        active && "bg-accent text-foreground",
+        className,
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function ColorSwatch({
+  color, active, tooltip, onClick,
+}: {
+  color: string; active: boolean; tooltip: string; onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={tooltip}
+      onClick={onClick}
+      className={cn(
+        "h-5 w-5 rounded-full border border-border cursor-pointer transition-transform hover:scale-110",
+        active && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
+      )}
+      style={{ backgroundColor: color }}
+    />
+  )
+}
+
+function ColorDropdown({
+  trigger, presets, activeColor, onSelect,
+}: {
+  trigger: ReactNode; presets: typeof HIGHLIGHT_PRESETS; activeColor: string | null; onSelect: (color: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <div onClick={() => setOpen(o => !o)} className="cursor-pointer">
+        {trigger}
+      </div>
+      {open && (
+        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 bg-popover border border-border rounded-md shadow-md p-2 flex gap-1.5">
+          {presets.map(p => (
+            <ColorSwatch
+              key={p.color}
+              color={p.color}
+              tooltip={p.label}
+              active={activeColor === p.color}
+              onClick={() => { onSelect(p.color); setOpen(false) }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HeadingDropdown({ editor }: { editor: Editor }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  const levels: { level: 1 | 2 | 3; Icon: typeof Heading1; label: string }[] = [
+    { level: 1, Icon: Heading1, label: "Heading 1" },
+    { level: 2, Icon: Heading2, label: "Heading 2" },
+    { level: 3, Icon: Heading3, label: "Heading 3" },
+  ]
+
+  const activeLevel = levels.find(l => editor.isActive("heading", { level: l.level }))
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        title="Headings"
+        onClick={() => setOpen(o => !o)}
+        className={cn(
+          "h-7 px-1.5 flex items-center gap-0.5 rounded-sm text-muted-foreground text-xs font-medium cursor-pointer",
+          "hover:bg-accent hover:text-foreground transition-colors",
+          activeLevel && "bg-accent text-foreground",
+        )}
+      >
+        {activeLevel ? <activeLevel.Icon className="h-4 w-4" /> : <Heading1 className="h-4 w-4" />}
+        <ChevronDown className="h-3 w-3" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 bg-popover border border-border rounded-md shadow-md p-1 flex gap-0.5">
+          {levels.map(({ level, Icon, label }) => (
+            <ToolbarBtn
+              key={level}
+              active={editor.isActive("heading", { level })}
+              tooltip={label}
+              onClick={() => { editor.chain().focus().toggleHeading({ level }).run(); setOpen(false) }}
+            >
+              <Icon className="h-4 w-4" />
+            </ToolbarBtn>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EditorToolbar({ editor }: { editor: Editor }) {
+  // Force re-render on selection/content changes so active states stay in sync
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const cb = () => setTick(t => t + 1)
+    editor.on("selectionUpdate", cb)
+    editor.on("transaction", cb)
+    return () => { editor.off("selectionUpdate", cb); editor.off("transaction", cb) }
+  }, [editor])
+
+  // Find active highlight color
+  const activeHighlight: string | null = (() => {
+    const attrs = editor.getAttributes("highlight")
+    return attrs.color ?? (editor.isActive("highlight") ? "#fef08a" : null)
+  })()
+
+  // Find active text color
+  const activeTextColor: string | null = (() => {
+    const attrs = editor.getAttributes("textStyle")
+    return attrs.color ?? null
+  })()
+
+  return (
+    <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border bg-muted/30 shrink-0 flex-wrap">
+      {/* Text style */}
+      <ToolbarBtn active={editor.isActive("bold")} tooltip="Bold (Ctrl+B)"
+        onClick={() => editor.chain().focus().toggleBold().run()}>
+        <Bold className="h-4 w-4" />
+      </ToolbarBtn>
+      <ToolbarBtn active={editor.isActive("italic")} tooltip="Italic (Ctrl+I)"
+        onClick={() => editor.chain().focus().toggleItalic().run()}>
+        <Italic className="h-4 w-4" />
+      </ToolbarBtn>
+      <ToolbarBtn active={editor.isActive("strike")} tooltip="Strikethrough"
+        onClick={() => editor.chain().focus().toggleStrike().run()}>
+        <Strikethrough className="h-4 w-4" />
+      </ToolbarBtn>
+
+      <div className="w-px h-5 bg-border mx-1" />
+
+      {/* Highlight — 2 primary + more dropdown */}
+      <ToolbarBtn
+        active={activeHighlight === "#fef08a"}
+        tooltip="Highlight Yellow"
+        onClick={() => editor.chain().focus().toggleHighlight({ color: "#fef08a" }).run()}
+      >
+        <div className="relative">
+          <Highlighter className="h-4 w-4" />
+          <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-yellow-300 border border-border" />
+        </div>
+      </ToolbarBtn>
+      <ToolbarBtn
+        active={activeHighlight === "#bbf7d0"}
+        tooltip="Highlight Green"
+        onClick={() => editor.chain().focus().toggleHighlight({ color: "#bbf7d0" }).run()}
+      >
+        <div className="relative">
+          <Highlighter className="h-4 w-4" />
+          <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-300 border border-border" />
+        </div>
+      </ToolbarBtn>
+      <ColorDropdown
+        trigger={
+          <div className="h-7 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer">
+            <ChevronDown className="h-3 w-3" />
+          </div>
+        }
+        presets={HIGHLIGHT_PRESETS}
+        activeColor={activeHighlight}
+        onSelect={(color) => editor.chain().focus().toggleHighlight({ color }).run()}
+      />
+
+      <div className="w-px h-5 bg-border mx-1" />
+
+      {/* Text color — 3 primary + more dropdown */}
+      {TEXT_COLOR_PRESETS.slice(0, 3).map(p => (
+        <ToolbarBtn
+          key={p.color}
+          active={activeTextColor === p.color}
+          tooltip={`Text ${p.label}`}
+          onClick={() => {
+            if (p.color === "#000000") {
+              editor.chain().focus().unsetMark("textStyle").run()
+            } else {
+              editor.chain().focus().setColor(p.color).run()
+            }
+          }}
+        >
+          <div className="flex flex-col items-center">
+            <span className="text-xs font-bold leading-none" style={{ color: p.color }}>A</span>
+            <div className="w-3 h-0.5 rounded-full mt-0.5" style={{ backgroundColor: p.color }} />
+          </div>
+        </ToolbarBtn>
+      ))}
+      <ColorDropdown
+        trigger={
+          <div className="h-7 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer">
+            <ChevronDown className="h-3 w-3" />
+          </div>
+        }
+        presets={TEXT_COLOR_PRESETS}
+        activeColor={activeTextColor}
+        onSelect={(color) => {
+          if (color === "#000000") {
+            editor.chain().focus().unsetMark("textStyle").run()
+          } else {
+            editor.chain().focus().setColor(color).run()
+          }
+        }}
+      />
+
+      <div className="w-px h-5 bg-border mx-1" />
+
+      {/* Heading dropdown */}
+      <HeadingDropdown editor={editor} />
+
+      <div className="w-px h-5 bg-border mx-1" />
+
+      {/* Lists */}
+      <ToolbarBtn active={editor.isActive("bulletList")} tooltip="Bullet List"
+        onClick={() => editor.chain().focus().toggleBulletList().run()}>
+        <List className="h-4 w-4" />
+      </ToolbarBtn>
+      <ToolbarBtn active={editor.isActive("orderedList")} tooltip="Numbered List"
+        onClick={() => editor.chain().focus().toggleOrderedList().run()}>
+        <ListOrdered className="h-4 w-4" />
+      </ToolbarBtn>
+      <ToolbarBtn active={editor.isActive("taskList")} tooltip="Task List"
+        onClick={() => editor.chain().focus().toggleTaskList().run()}>
+        <ListTodo className="h-4 w-4" />
+      </ToolbarBtn>
+    </div>
+  )
+}
+
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
@@ -1988,6 +2289,9 @@ export function TiptapEditor({
       Placeholder.configure({ placeholder: placeholder || 'Type "/" for commands...' }),
       SlashCmd,
       Youtube.configure({ width: 640, height: 360 }),
+      Highlight.configure({ multicolor: true }),
+      TextStyle,
+      Color,
       Markdown.configure({
         html: true,
         tightLists: true,
@@ -2154,31 +2458,36 @@ export function TiptapEditor({
         .tiptap-editor .ProseMirror {
           min-height: 100%;
         }
-        .tiptap-editor [data-type="taskList"] {
-          list-style: none;
-          padding-left: 0;
+        .tiptap-editor ul[data-type="taskList"] {
+          list-style: none !important;
+          padding-left: 0 !important;
         }
-        .tiptap-editor [data-type="taskItem"] {
-          display: flex;
-          align-items: flex-start;
-          gap: 8px;
+        .tiptap-editor ul[data-type="taskList"] > li[data-checked] {
+          display: flex !important;
+          align-items: center !important;
+          gap: 8px !important;
+          margin-top: 0.5em !important;
+          margin-bottom: 0.5em !important;
         }
-        .tiptap-editor [data-type="taskItem"] > label {
-          flex-shrink: 0;
-          margin-top: 4px;
+        .tiptap-editor ul[data-type="taskList"] > li[data-checked] > label {
+          flex-shrink: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          line-height: 1 !important;
         }
-        .tiptap-editor [data-type="taskItem"] > label input[type="checkbox"] {
+        .tiptap-editor ul[data-type="taskList"] > li[data-checked] > label input[type="checkbox"] {
           width: 16px;
           height: 16px;
+          margin: 0 !important;
           cursor: pointer;
         }
-        .tiptap-editor [data-type="taskItem"] > div {
-          flex: 1;
-          min-width: 0;
+        .tiptap-editor ul[data-type="taskList"] > li[data-checked] > div {
+          flex: 1 !important;
+          min-width: 0 !important;
         }
-        .tiptap-editor [data-type="taskItem"] > div p {
-          margin: 0;
-          line-height: 1.5;
+        .tiptap-editor ul[data-type="taskList"] > li[data-checked] > div p {
+          margin: 0 !important;
+          line-height: 1.5 !important;
         }
         /* Table styles — Typora-like */
         .tiptap-editor table {
@@ -2206,6 +2515,7 @@ export function TiptapEditor({
           background: transparent !important;
         }
       `}</style>
+      {!readonly && <EditorToolbar editor={editor} />}
       <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4 min-h-full flex-1" />
     </div>
   )

@@ -1,0 +1,236 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - banner [ref=e4]:
+        - button [ref=e5]:
+          - img
+        - heading [level=1] [ref=e89]:
+          - img [ref=e90]
+          - text: SinkDuce
+        - button [ref=e91]:
+          - img
+        - generic [ref=e9]: online
+      - generic [ref=e11]:
+        - complementary [ref=e12]:
+          - navigation [ref=e13]:
+            - button [ref=e92]:
+              - img
+              - text: Chat
+            - button [ref=e93]:
+              - img
+              - text: Collection
+            - button [ref=e94]:
+              - img
+              - text: Recall
+            - button [ref=e95]:
+              - img
+              - text: Meeting
+            - button [ref=e96]:
+              - img
+              - text: Settings
+          - separator [ref=e19]
+          - generic [ref=e20]: SinkDuce v0.1
+        - main [ref=e21]:
+          - generic [ref=e23]:
+            - generic [ref=e24]:
+              - generic [ref=e25]:
+                - generic [ref=e26]: Collections
+                - button [ref=e27]:
+                  - img
+              - generic [ref=e29]:
+                - generic [ref=e38] [cursor=pointer]:
+                  - generic [ref=e39]: 笔记测试collection
+                  - button [ref=e40]:
+                    - img [ref=e41]
+                  - button [ref=e44]:
+                    - img [ref=e45]
+                - generic [ref=e48] [cursor=pointer]:
+                  - generic [ref=e49]: Project B
+                  - button [ref=e50]:
+                    - img [ref=e51]
+                  - button [ref=e54]:
+                    - img [ref=e55]
+                - generic [ref=e58] [cursor=pointer]:
+                  - generic [ref=e59]: new 11
+                  - button [ref=e60]:
+                    - img [ref=e61]
+                  - button [ref=e64]:
+                    - img [ref=e65]
+                - generic [ref=e68] [cursor=pointer]:
+                  - generic [ref=e69]: Project A
+                  - generic [ref=e70]: "21"
+                  - button [ref=e71]:
+                    - img [ref=e72]
+                  - button [ref=e75]:
+                    - img [ref=e76]
+                - generic [ref=e79] [cursor=pointer]:
+                  - generic [ref=e80]: SinkDuce Project Dev
+                  - button [ref=e81]:
+                    - img [ref=e82]
+                  - button [ref=e85]:
+                    - img [ref=e86]
+            - generic [ref=e97]:
+              - tablist [ref=e98]:
+                - tab [selected] [ref=e99]: Info
+                - tab [ref=e100]: Files
+                - tab [ref=e101]: Config
+              - tabpanel [ref=e102]:
+                - generic [ref=e104]:
+                  - generic [ref=e105]:
+                    - generic [ref=e106]:
+                      - generic [ref=e107]:
+                        - img [ref=e108]
+                        - text: Summary
+                      - button [ref=e110]:
+                        - img
+                        - text: Consolidate
+                    - paragraph [ref=e112]: No summary yet. Upload files and consolidate.
+                  - generic [ref=e113]:
+                    - generic [ref=e115]:
+                      - img [ref=e116]
+                      - text: Conflicts
+                    - paragraph [ref=e119]: No conflicts detected.
+                  - separator [ref=e120]
+                  - generic [ref=e121]:
+                    - generic [ref=e122]:
+                      - generic [ref=e123]:
+                        - img [ref=e124]
+                        - text: Notes
+                      - generic [ref=e127]:
+                        - button [ref=e128]:
+                          - img
+                          - text: Import
+                        - button [ref=e129]:
+                          - img
+                          - text: New Note
+                    - generic [ref=e131]:
+                      - tablist [ref=e132]:
+                        - tab [selected] [ref=e133]: Notes (7)
+                        - tab [ref=e134]: Extracted (1)
+                      - tabpanel [ref=e135]:
+                        - generic [ref=e136]:
+                          - button [ref=e137]:
+                            - img [ref=e138]
+                            - generic [ref=e141]: 表格模块优化
+                            - generic [ref=e142]: 8h ago
+                          - button [ref=e143]:
+                            - img [ref=e144]
+                            - generic [ref=e147]: PTT_Proposal_export
+                            - generic [ref=e148]: 8h ago
+                          - button [ref=e149]:
+                            - img [ref=e150]
+                            - generic [ref=e153]: "B: 多源数据采集"
+                            - generic [ref=e154]: 16h ago
+                          - button [ref=e155]:
+                            - img [ref=e156]
+                            - generic [ref=e159]: C：基于 TensorRT 的轻量化推理部署
+                            - generic [ref=e160]: 22h ago
+                          - button [ref=e161]:
+                            - img [ref=e162]
+                            - generic [ref=e165]: "D: 项目里程碑与停机损失"
+                            - generic [ref=e166]: 22h ago
+                          - button [ref=e167]:
+                            - img [ref=e168]
+                            - generic [ref=e171]: Jun 20, 2026, 08:17 PM
+                            - generic [ref=e172]: 22h ago
+                          - button [ref=e173]:
+                            - img [ref=e174]
+                            - generic [ref=e177]: Jun 20, 2026, 05:58 PM
+                            - generic [ref=e178]: 1d ago
+                  - separator [ref=e179]
+                  - generic [ref=e180]:
+                    - generic [ref=e182]:
+                      - img [ref=e183]
+                      - text: Meeting Log
+                    - paragraph [ref=e187]: No meetings linked.
+    - region "Notifications alt+T"
+  - dialog [ref=e193]:
+    - generic [ref=e194]:
+      - button [ref=e195]:
+        - img
+      - generic [ref=e196]:
+        - button "Back" [disabled]:
+          - img
+        - button "Forward" [disabled]:
+          - img
+      - generic [ref=e197]:
+        - generic [ref=e198]: 表格模块优化
+        - button [ref=e199]:
+          - img
+        - button "Export" [ref=e200]:
+          - img
+          - text: Export
+    - generic [ref=e201]:
+      - generic [ref=e202]:
+        - generic [ref=e203]:
+          - generic [ref=e204]: Notes
+          - button "New Note" [ref=e205]:
+            - img
+        - generic [ref=e207]:
+          - button "表格模块优化" [ref=e208]:
+            - img [ref=e209]
+            - generic [ref=e212]: 表格模块优化
+          - button "PTT_Proposal_export" [ref=e213]:
+            - img [ref=e214]
+            - img [ref=e221]
+            - generic [ref=e224]: PTT_Proposal_export
+          - 'button "A: 锂离子电池老化机理与电化学特征 Has been extracted" [ref=e225]':
+            - img [ref=e226]
+            - img [ref=e233]
+            - generic [ref=e236]: "A: 锂离子电池老化机理与电化学特征"
+            - generic "Has been extracted" [ref=e237]
+          - 'button "B: 多源数据采集" [ref=e238]':
+            - img [ref=e239]
+            - img [ref=e246]
+            - generic [ref=e249]: "B: 多源数据采集"
+          - button "C：基于 TensorRT 的轻量化推理部署" [ref=e250]:
+            - img [ref=e251]
+            - img [ref=e258]
+            - generic [ref=e261]: C：基于 TensorRT 的轻量化推理部署
+          - 'button "D: 项目里程碑与停机损失" [ref=e262]':
+            - img [ref=e263]
+            - img [ref=e270]
+            - generic [ref=e273]: "D: 项目里程碑与停机损失"
+          - button "Jun 20, 2026, 08:17 PM" [ref=e274]:
+            - img [ref=e275]
+            - img [ref=e282]
+            - generic [ref=e285]: Jun 20, 2026, 08:17 PM
+          - button "Jun 20, 2026, 05:58 PM" [ref=e286]:
+            - img [ref=e287]
+            - img [ref=e294]
+            - generic [ref=e297]: Jun 20, 2026, 05:58 PM
+      - generic [active] [ref=e302]:
+        - heading "This Note is for Table Module Test" [level=1] [ref=e303]
+        - paragraph [ref=e304]
+        - paragraph [ref=e305]
+        - paragraph [ref=e306]
+        - paragraph [ref=e307]
+        - paragraph [ref=e308]
+        - paragraph [ref=e309]
+        - table [ref=e311]:
+          - rowgroup [ref=e316]:
+            - row [ref=e317]:
+              - columnheader [ref=e318]:
+                - paragraph [ref=e319]
+              - columnheader [ref=e320]:
+                - paragraph [ref=e321]
+              - columnheader [ref=e322]:
+                - paragraph [ref=e323]
+            - row [ref=e324]:
+              - cell [ref=e325]:
+                - paragraph [ref=e326]
+              - cell [ref=e327]:
+                - paragraph [ref=e328]
+              - cell [ref=e329]:
+                - paragraph [ref=e330]
+            - row [ref=e331]:
+              - cell [ref=e332]:
+                - paragraph [ref=e333]
+              - cell [ref=e334]:
+                - paragraph [ref=e335]
+              - cell [ref=e336]:
+                - paragraph [ref=e337]
+        - paragraph [ref=e338]
+    - button "Close" [ref=e339]:
+      - img
+      - generic [ref=e340]: Close
