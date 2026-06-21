@@ -1,8 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import { Loader2, StickyNote, Plus, FileText, FileDown } from "lucide-react"
 import { toast } from "sonner"
 import {
   getNotes,

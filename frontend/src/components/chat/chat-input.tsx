@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react"
-import { Send, Paperclip, Layers, Bot, Settings } from "lucide-react"
+import { Layers, Bot, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { useAppStore } from "@/stores/app-store"

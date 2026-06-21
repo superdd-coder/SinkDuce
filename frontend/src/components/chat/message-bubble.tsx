@@ -1,12 +1,9 @@
 import { memo } from "react"
-import { Avatar } from "@/components/ui/avatar"
-import { Bot, User } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { SourcesCard } from "./sources-card"
 import { ThinkingSteps } from "./thinking-steps"
 import type { Message, Source } from "@/stores/app-store"
-import { cn } from "@/lib/utils"
 
 interface MessageBubbleProps {
   message: Message

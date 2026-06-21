@@ -48,9 +48,6 @@ interface FileDetailDialogProps {
   openKey?: number
 }
 
-function HighlightedText({ text, highlight, offset, chunkLength }: {
-  text: string; highlight: string; offset?: number; chunkLength?: number
-}) {
   if (offset !== undefined && offset >= 0 && offset < text.length) {
     const len = chunkLength && chunkLength > 0 ? chunkLength : highlight.length
     const end = Math.min(offset + len, text.length)
@@ -112,7 +109,6 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
   const [docSummary, setDocSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [extractedText, setExtractedText] = useState<string | null>(null)
-  const [extractedFormat, setExtractedFormat] = useState<string>("text")
   const [extractedLoading, setExtractedLoading] = useState(false)
   const extractedContentRef = useRef<HTMLDivElement>(null)
   const [highlightOffset, setHighlightOffset] = useState<number | undefined>(undefined)

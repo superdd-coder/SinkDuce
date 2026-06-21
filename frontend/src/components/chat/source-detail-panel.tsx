@@ -40,9 +40,6 @@ function _getHighlightOffset(source: Source): number | undefined {
   return typeof v === "number" ? v : undefined
 }
 
-function HighlightedText({ text, highlight, offset, chunkLength }: {
-  text: string; highlight: string; offset?: number; chunkLength?: number
-}) {
   // If we have a char_offset, validate it and use precise offset-based highlighting
   if (offset !== undefined && offset >= 0 && offset < text.length) {
     const len = chunkLength && chunkLength > 0 ? chunkLength : highlight.length
@@ -128,7 +125,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const [docSummary, setDocSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [extractedText, setExtractedText] = useState<string | null>(null)
-  const [extractedFormat, setExtractedFormat] = useState<string>("text")
   const [extractedLoading, setExtractedLoading] = useState(false)
   const extractedContentRef = useRef<HTMLDivElement>(null)
   const [activeTab, setActiveTab] = useState("preview")
@@ -330,7 +326,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     setActiveTab("extracted")
   }, [])
 
-  const highlightText = source?.text || ""
 
   if (!source || !sourceName) return null
 
