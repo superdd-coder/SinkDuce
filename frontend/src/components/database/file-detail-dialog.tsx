@@ -58,7 +58,8 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
   const [extractedLoading, setExtractedLoading] = useState(false)
   const extractedContentRef = useRef<HTMLDivElement>(null)
   const [highlightOffset, setHighlightOffset] = useState<number | undefined>(undefined)
-  const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined)  const [activeTab, setActiveTab] = useState("source")
+  const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined)
+  const [activeTab, setActiveTab] = useState("source")
   const textContentRef = useRef<HTMLDivElement>(null)
 
   const isPdf = source?.toLowerCase().endsWith(".pdf")
