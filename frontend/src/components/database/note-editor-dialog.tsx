@@ -16,7 +16,7 @@ import {
   type NoteListItem,
 } from "@/api/client"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { preprocessDistillBlocks } from "@/components/ui/tiptap-editor"
+import { preprocessDistillBlocks, EditorToolbar } from "@/components/ui/tiptap-editor"
 import { NoteSidebarLeft } from "./note-sidebar-left"
 import { NoteSidebarRight } from "./note-sidebar-right"
 
@@ -80,6 +80,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
   // Ref to Tiptap editor instance -- needed for cursor-position calculations during drop
   const tiptapEditorRef = useRef<any>(null)
+  const [editorInstance, setEditorInstance] = useState<any>(null)
 
 
   // ── Helpers ────────────────────────────────────────────
@@ -148,6 +149,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setUserEdited(false)
       setPropagateDismissed(false)
       baselineContentRef.current = ""
+    } else {
+      setEditorInstance(null)
     }
   }, [open, noteId])
 
@@ -727,7 +730,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     >
       <DialogContent
         showCloseButton
-        className="!max-w-[90vw] !w-[90vw] h-[85vh] p-0 flex flex-col"
+        className="!max-w-[90vw] !w-[90vw] h-[85vh] p-0 !gap-0 flex flex-col"
       >
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
@@ -867,20 +870,24 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                 Loading...
               </div>
             ) : (
-              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0">
-                <MarkdownEditor
-                  value={content}
-                  onEditorReady={(editor) => { tiptapEditorRef.current = editor }}
-                  onChange={handleContentChange}
-                  onImageUpload={handleImageUpload}
-                  onNoteLinkClick={(id) => {
-                    flushSave()
-                    navigateToNote(id)
-                  }}
-                  className="px-8 py-6"
-                  placeholder="Start writing your note..."
-                />
-              </div>
+              <>
+                {editorInstance && <EditorToolbar editor={editorInstance} />}
+                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0">
+                  <MarkdownEditor
+                    value={content}
+                    showToolbar={false}
+                    onEditorReady={(editor) => { tiptapEditorRef.current = editor; setEditorInstance(editor) }}
+                    onChange={handleContentChange}
+                    onImageUpload={handleImageUpload}
+                    onNoteLinkClick={(id) => {
+                      flushSave()
+                      navigateToNote(id)
+                    }}
+                    className="px-8 py-6"
+                    placeholder="Start writing your note..."
+                  />
+                </div>
+              </>
             )}
 
             {/* Drop overlay */}

@@ -1891,6 +1891,8 @@ interface MarkdownEditorProps {
   onDistillNavigate?: (noteId: string) => void // Add this for distill block navigation
   /** Called when the editor instance is ready. Passes back the Tiptap editor. */
   onEditorReady?: (editor: any) => void
+  /** Whether to show the built-in formatting toolbar. Default true. */
+  showToolbar?: boolean
 }
 
 // ──────────────────────────────────────────────
@@ -2121,7 +2123,7 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
   )
 }
 
-function EditorToolbar({ editor }: { editor: Editor }) {
+export function EditorToolbar({ editor }: { editor: Editor }) {
   // Force re-render on selection/content changes so active states stay in sync
   const [, setTick] = useState(0)
   useEffect(() => {
@@ -2259,6 +2261,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
+  showToolbar = true,
 }: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
@@ -2515,7 +2518,7 @@ export function TiptapEditor({
           background: transparent !important;
         }
       `}</style>
-      {!readonly && <EditorToolbar editor={editor} />}
+      {!readonly && showToolbar && <EditorToolbar editor={editor} />}
       <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4 min-h-full flex-1" />
     </div>
   )

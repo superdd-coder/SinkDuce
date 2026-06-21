@@ -23,6 +23,8 @@ interface MarkdownEditorProps {
   onDistill?: () => void
   /** Called when the Tiptap editor instance is ready. */
   onEditorReady?: (editor: any) => void
+  /** Whether to show the built-in formatting toolbar. Default true. */
+  showToolbar?: boolean
 }
 
 // ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
@@ -39,6 +41,7 @@ function TyporaEditor({
   onNoteLinkClick,
   onDistill,
   onEditorReady,
+  showToolbar,
 }: Omit<MarkdownEditorProps, "variant">) {
   return (
     <TiptapEditor
@@ -52,6 +55,7 @@ function TyporaEditor({
       onNoteLinkClick={onNoteLinkClick}
       onDistill={onDistill}
       onEditorReady={onEditorReady}
+      showToolbar={showToolbar}
     />
   )
 }
