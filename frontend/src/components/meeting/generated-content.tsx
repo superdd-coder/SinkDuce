@@ -4,7 +4,7 @@ import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { Pencil, X, Save, Loader2, Search } from "lucide-react"
 import type { TodoItem } from "@/api/client"
 
-/** Normalize Milkdown-style markdown to strict CommonMark before saving to API */
+/** Normalize TipTap-style markdown to strict CommonMark before saving to API */
 export function normalizeMd(md: string): string {
   return md
     .replace(/\*\*\s+([^*]+?)\s*\*\*/g, "**$1**")
@@ -76,14 +76,14 @@ export function GeneratedContent({ tab, content, todos, loading, onSave }: Gener
 
   if (tab === "summary") {
     return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-end">
-          {!editing && content && (
+      <div>
+        {!editing && content && (
+          <div className="flex items-center justify-end mb-2">
             <Button variant="ghost" size="sm" onClick={() => { setDraft(content); setEditing(true) }}>
               <Pencil className="h-3 w-3 mr-1" /> Edit
             </Button>
-          )}
-        </div>
+          </div>
+        )}
         {editing ? (
           <MarkdownEditor
             value={draft}
@@ -223,7 +223,7 @@ function DetailWithSearch({ content, onSave }: { content: string | null; onSave?
     if (!editing) setDraft(content ?? "")
   }, [content, editing])
 
-  // DOM-based search highlighting on Milkdown readonly output
+  // DOM-based search highlighting on TipTap readonly output
   useLayoutEffect(() => {
     const el = editorWrapRef.current
     if (!el || !query || editing || !content) return

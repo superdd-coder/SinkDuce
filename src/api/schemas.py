@@ -9,6 +9,7 @@ class QueryRequest(BaseModel):
     collections: list[str] | None = None  # Multi-collection support
     use_agent: bool = True
     search_mode: str | None = None  # dense / hybrid — per-query, not per-collection
+    sparse_llm_tokenize: bool | None = None  # per-query override for LLM keyword extraction
     top_k: int | None = None
     rerank_top_k: int | None = None
     use_reranker: bool | None = None  # per-query override
@@ -46,6 +47,7 @@ class CollectionCreateRequest(BaseModel):
     child_chunk_overlap: int = 32
     # Per-collection config: search
     search_mode: str = "dense"
+    sparse_llm_tokenize: bool = True
     # Per-collection config: contextual
     contextual_enabled: bool = True
     contextual_window: int = 1
@@ -87,6 +89,7 @@ class CollectionConfigUpdateRequest(BaseModel):
     child_chunk_size: int | None = None
     child_chunk_overlap: int | None = None
     search_mode: str | None = None
+    sparse_llm_tokenize: bool | None = None
     contextual_enabled: bool | None = None
     contextual_window: int | None = None
     agent_enabled: bool | None = None
@@ -126,6 +129,7 @@ class RecallSearchRequest(BaseModel):
     use_reranker: bool | None = None  # None falls back to True (matching chat behavior)
     use_agent: bool = False
     min_score: float = 0.0  # similarity threshold
+    sparse_llm_tokenize: bool | None = None  # per-query override for LLM keyword extraction in hybrid mode
     rerank_provider_id: str | None = None  # temporary rerank provider override
     max_iterations: int | None = None  # per-query override for agentic iterations
 
@@ -184,4 +188,5 @@ class EvalRequest(BaseModel):
     use_reranker: bool | None = None
     rerank_top_k: int | None = None
     min_score: float = 0.0  # similarity threshold passed through to retrieval
+    sparse_llm_tokenize: bool | None = None  # per-query override for LLM keyword extraction in hybrid mode
     rerank_provider_id: str | None = None  # temporary rerank provider override

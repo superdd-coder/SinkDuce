@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/stores/app-store"
 import {
@@ -271,11 +270,8 @@ export function InfoPanel({ collection }: InfoPanelProps) {
             <span className="text-sm">Loading…</span>
           </div>
         ) : summary ? (
-          <div
-            className="text-sm leading-[1.8] pl-4 border-l prose prose-sm max-w-none prose-p:my-1 text-foreground border-border"
-            style={{ fontFamily: "var(--font-serif)" }}
-          >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
+          <div className="pl-4 border-l border-border">
+            <TiptapEditor value={summary} readonly showToolbar={false} />
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">No summary yet. Upload files and consolidate.</p>

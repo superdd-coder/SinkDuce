@@ -11,6 +11,8 @@ from qdrant_client.models import (
     Filter,
     MatchValue,
     PointStruct,
+    SparseVector,
+    SparseVectorParams,
     VectorParams,
 )
 
@@ -46,6 +48,7 @@ _DEFAULT_COLLECTION_CONFIG = {
     "agent_enabled": True,
     "agent_max_iterations": 3,
     "search_mode": "dense",
+    "sparse_llm_tokenize": True,
     "summary_change_counter": 0,
     "summary_consolidate_threshold": 10,
     "cloud_parsing": False,
@@ -74,7 +77,9 @@ class QdrantManager:
         self.client.create_collection(
             collection_name=name,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+            sparse_vectors_config={"sparse": SparseVectorParams()},
         )
+        logger.info("[HYBRID-VERIFY] collection=%s sparse_vectors_config={\"sparse\": SparseVectorParams()}", name)
         # Store full collection config as a dedicated point
         if chunk_config:
             cfg = {**_DEFAULT_COLLECTION_CONFIG, **chunk_config}
@@ -139,6 +144,35 @@ class QdrantManager:
             for id_, vec, pl in zip(ids, vectors, payloads)
         ]
         self.client.upsert(collection_name=collection, points=points)
+
+    def upsert_sparse_vectors(
+        self,
+        collection: str,
+        ids: list[str],
+        sparse_vectors: list[dict[int, float]],
+    ) -> None:
+        """Add sparse vectors to existing points without touching dense vectors.
+
+        Uses Qdrant's update_vectors API to set only the ``"sparse"`` named vector,
+        leaving the unnamed dense vector unchanged.
+        """
+        if not ids or not sparse_vectors:
+            return
+        from qdrant_client.models import PointVectors
+        points = []
+        for id_, sv in zip(ids, sparse_vectors):
+            points.append(PointVectors(
+                id=id_,
+                vector={"sparse": SparseVector(
+                    indices=list(sv.keys()),
+                    values=list(sv.values()),
+                )},
+            ))
+        self.client.update_vectors(collection_name=collection, points=points)
+        logger.info(
+            "[HYBRID-VERIFY] upsert_sparse_vectors collection=%s total=%d",
+            collection, len(points),
+        )
 
     def search(
         self,
@@ -226,6 +260,7 @@ class QdrantManager:
         query_vector: list[float],
         sparse_vector: dict[int, float] | None = None,
         top_k: int = 10,
+        filter_condition: Filter | None = None,
     ) -> list[dict[str, Any]]:
         """Dense + sparse hybrid search with RRF fusion.
 
@@ -233,23 +268,33 @@ class QdrantManager:
         falls back to dense-only search otherwise.
         """
         if not sparse_vector:
-            return self.search(collection, query_vector, top_k)
+            logger.warning("[HYBRID-VERIFY] hybrid_search: sparse_vector is None, falling back to dense")
+            return self.search(collection, query_vector, top_k, filter_condition=filter_condition)
 
-        from qdrant_client.models import FusionQuery, Prefetch, SparseVector
+        from qdrant_client.models import FusionQuery, Prefetch
 
         sparse = SparseVector(
             indices=list(sparse_vector.keys()),
             values=list(sparse_vector.values()),
         )
+        logger.info(
+            "[HYBRID-VERIFY] hybrid_search collection=%s dense_dim=%d sparse_dim=%d top_k=%d",
+            collection, len(query_vector), len(sparse.indices), top_k,
+        )
 
         results = self.client.query_points(
             collection_name=collection,
             prefetch=[
-                Prefetch(query=query_vector, using="default", limit=top_k * 2),
-                Prefetch(query=sparse, using="sparse", limit=top_k * 2),
+                Prefetch(query=query_vector, limit=top_k * 2, filter=filter_condition),
+                Prefetch(query=sparse, using="sparse", limit=top_k * 2, filter=filter_condition),
             ],
             query=FusionQuery(fusion="rrf"),
             limit=top_k,
+        )
+        scores = [f"{r.score:.4f}" for r in results.points]
+        logger.info(
+            "[HYBRID-VERIFY] hybrid_search results: %d points (top_k=%d) scores=%s",
+            len(results.points), top_k, scores,
         )
         return [
             {"id": str(r.id), "score": r.score, "payload": r.payload or {}}

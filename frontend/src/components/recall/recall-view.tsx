@@ -1,20 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
-  Search, Loader2, FlaskConical, Trash2, Wand2, Play, RotateCw,
-  CheckCircle, XCircle, Clock, BarChart3, ChevronDown, ChevronRight,
+  Loader2, FlaskConical, Trash2, Wand2, Play, RotateCw,
+  CheckCircle, XCircle, Clock, ChevronDown, ChevronRight,
+  Bot, Sparkles,
 } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import {
   recallSearch, type RecallResult,
   getEvalCases, deleteEvalCase, generateEvalCases,
-  runEval, getEvalHistory, getRerankProviders, getChunkContent,
-  type EvalTestCase, type EvalReport, type RerankProvider, type ChunkContent,
+  runEval, getEvalHistory, getChunkContent,
+  type EvalTestCase, type EvalReport, type ChunkContent,
 } from "@/api/client"
 import { toast } from "sonner"
 import { ResultList } from "./result-list"
@@ -29,21 +28,21 @@ function SearchTab() {
   const [topK, setTopK] = useState("10")
   const [rerankTopK, setRerankTopK] = useState("5")
   const [searchMode, setSearchMode] = useState("dense")
+  const [sparseLlmTokenize, setSparseLlmTokenize] = useState(true)
   const [useReranker, setUseReranker] = useState(false)
   const [useAgent, setUseAgent] = useState(false)
   const [minScore, setMinScore] = useState(0)
-  const [rerankProviderId, setRerankProviderId] = useState("")
-  const [rerankProviders, setRerankProviders] = useState<RerankProvider[]>([])
   const [results, setResults] = useState<RecallResult[]>([])
   const [timeMs, setTimeMs] = useState(0)
   const [searching, setSearching] = useState(false)
   const [showCollections, setShowCollections] = useState(false)
   const collectionMenuRef = useRef<HTMLDivElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     fetchCollections()
-    getRerankProviders().then(setRerankProviders).catch(() => {})
   }, [fetchCollections])
 
   useEffect(() => {
@@ -58,6 +57,13 @@ function SearchTab() {
     document.addEventListener("mousedown", handleClickOutside)
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = Math.min(el.scrollHeight, 300) + "px"
+  }, [query])
 
   const toggleCollection = (id: string) => {
     const exists = selectedCollections.includes(id)
@@ -77,7 +83,7 @@ function SearchTab() {
         top_k: parseInt(topK) || 10, rerank_top_k: parseInt(rerankTopK) || 5,
         use_reranker: useReranker, use_agent: useAgent,
         min_score: minScore,
-        rerank_provider_id: useReranker && rerankProviderId ? rerankProviderId : undefined,
+        sparse_llm_tokenize: searchMode === "hybrid" ? sparseLlmTokenize : undefined,
       })
       setResults(res.results)
       setTimeMs(res.time_ms)
@@ -90,138 +96,232 @@ function SearchTab() {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardContent className="p-4 space-y-4">
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                placeholder="Search query..."
-                disabled={searching}
-              />
-            </div>
-            <Button onClick={handleSearch} disabled={searching || !query.trim()}>
-              {searching ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Search className="h-4 w-4 mr-2" />}
-              Search
-            </Button>
+      <div className="pb-6 mb-6 border-b border-primary/30 space-y-4">
+          <div className="flex items-end gap-3">
+            <textarea
+              ref={textareaRef}
+              className="flex-1 resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[300px] outline-none bg-transparent leading-[1.7] focus:border-primary"
+              style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", color: "var(--ze-text)", borderRadius: 0 }}
+              placeholder="Search query…"
+              rows={1}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              disabled={searching}
+            />
+            <button
+              type="button"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer transition-opacity border-none text-white font-sans"
+              style={{
+                background: "var(--ze-green)",
+                fontSize: "10px", fontWeight: 600,
+                textTransform: "uppercase", letterSpacing: "0.12em",
+                padding: "8px 16px", borderRadius: "2px",
+                opacity: !query.trim() || searching ? 0.3 : 1,
+              }}
+              onClick={handleSearch}
+              disabled={!query.trim() || searching}
+            >
+              {searching ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
+              )}
+              <span>{searching ? "Searching" : "Search"}</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-4 flex-wrap">
+            {/* Collection dropdown — animated menu style */}
             <div className="relative" ref={collectionMenuRef}>
-              <Button variant="outline" size="sm" onClick={() => setShowCollections(!showCollections)}>
-                Collections ({selectedCollections.length})
-              </Button>
-              {showCollections && (
-                <div ref={dropdownRef} className="fixed z-50 mt-1 w-56 rounded-md border bg-popover shadow-md p-2 space-y-1 max-h-60 overflow-y-auto" style={{ top: collectionMenuRef.current ? collectionMenuRef.current.getBoundingClientRect().bottom + 4 : 0, left: collectionMenuRef.current ? collectionMenuRef.current.getBoundingClientRect().left : 0 }}>
-                  {collections.map((col) => (
-                    <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer px-2 py-1 rounded hover:bg-accent">
-                      <input type="checkbox" checked={selectedCollections.includes(col.id)} onChange={() => toggleCollection(col.id)} className="rounded" />
-                      {col.name}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <TooltipLabel label="Search Mode" tooltip="dense: vector similarity only. hybrid: vector + BM25 keyword matching." />
-              <select className="h-8 rounded-md border border-input bg-background px-2 text-xs" value={searchMode} onChange={(e) => setSearchMode(e.target.value)}>
-                <option value="dense">Dense</option>
-                <option value="hybrid">Hybrid</option>
-              </select>
-            </div>
-
-            <label className="flex items-center gap-2 text-xs cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useReranker || useAgent}
-                disabled={useAgent}
-                onChange={(e) => setUseReranker(e.target.checked)}
-                className="rounded"
-              />
-              <TooltipLabel label="Use Reranker" tooltip={useAgent ? "Reranker is required for Agentic RAG" : "Apply a reranker model to re-score retrieved results for better precision."} />
-            </label>
-
-            {useReranker && rerankProviders.length > 0 && (
-              <select
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                value={rerankProviderId}
-                onChange={(e) => setRerankProviderId(e.target.value)}
+              <button
+                type="button"
+                ref={buttonRef}
+                onClick={() => setShowCollections(!showCollections)}
+                className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
+                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: showCollections ? "var(--color-primary-foreground)" : selectedCollections.length > 0 ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
               >
-                <option value="">Default</option>
-                {rerankProviders.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name || p.model}</option>
+                <span className="relative z-10 whitespace-nowrap text-center">
+                  Collections ({selectedCollections.length})
+                </span>
+                <span
+                  className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
+                  style={{
+                    transform: showCollections ? "scaleX(1)" : "scaleX(0)",
+                    transformOrigin: showCollections ? "right" : "left",
+                  }}
+                />
+              </button>
+              <div
+                ref={dropdownRef}
+                className={`fixed z-[100] mt-1 flex-col items-center overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                  showCollections
+                    ? "opacity-100 visible translate-y-0 pointer-events-auto"
+                    : "opacity-0 invisible -translate-y-3 pointer-events-none"
+                }`}
+                style={{
+                  width: buttonRef.current ? buttonRef.current.getBoundingClientRect().width : "auto",
+                  top: collectionMenuRef.current ? collectionMenuRef.current.getBoundingClientRect().bottom + 4 : 0,
+                  left: collectionMenuRef.current ? collectionMenuRef.current.getBoundingClientRect().left : 0,
+                }}
+              >
+                {collections.map((col) => (
+                  <label
+                    key={col.id}
+                    onClick={() => toggleCollection(col.id)}
+                    className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+                  >
+                    <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                      {selectedCollections.includes(col.id) ? (
+                        <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
+                      ) : (
+                        <span className="w-1.5 h-1.5 shrink-0" />
+                      )}
+                      <span className="whitespace-normal break-words min-w-0 leading-snug">{col.name}</span>
+                    </span>
+                    <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                  </label>
                 ))}
-              </select>
-            )}
+              </div>
+            </div>
+
+            <div className="w-px h-3 bg-border self-center" />
+
+            {/* Agent toggle */}
+            <button
+              type="button"
+              className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${useAgent ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
+              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: useAgent ? "3px 8px" : "0", borderRadius: "2px" }}
+              onClick={() => {
+                const next = !useAgent
+                setUseAgent(next)
+                if (next) setUseReranker(true)
+              }}
+              title={useAgent ? "Agentic RAG ON" : "Agentic RAG OFF — direct retrieval"}
+            >
+              <Bot className="h-3 w-3" />
+              {useAgent ? "Agent" : "Direct"}
+            </button>
+
+            {/* Reranker toggle */}
+            <button
+              type="button"
+              className={`cursor-pointer border-none font-sans transition-all ${
+                useAgent
+                  ? "bg-primary/50 text-primary-foreground/60 cursor-not-allowed"
+                  : useReranker
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-transparent text-muted-foreground hover:text-primary"
+              }`}
+              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: (useAgent || useReranker) ? "3px 8px" : "0", borderRadius: "2px" }}
+              disabled={useAgent}
+              onClick={() => { if (!useAgent) setUseReranker(!useReranker) }}
+              title={useAgent ? "Reranker is required for Agentic RAG" : "Toggle reranker"}
+            >
+              Rerank
+            </button>
+
+            {/* Search Mode + optional LLM — grouped when hybrid, with animation */}
+            <div
+              className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
+                searchMode === "hybrid"
+                  ? "rounded border border-primary/30 py-1 pl-1 pr-2 max-w-[200px] opacity-100"
+                  : "max-w-[60px] border-transparent opacity-100"
+              }`}
+            >
+              <button
+                type="button"
+                className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${
+                  searchMode === "hybrid"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-transparent text-muted-foreground hover:text-primary"
+                }`}
+                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: searchMode === "hybrid" ? "3px 8px" : "0", borderRadius: "2px" }}
+                onClick={() => setSearchMode(searchMode === "hybrid" ? "dense" : "hybrid")}
+                title={searchMode === "hybrid" ? "Hybrid — Dense + BM25" : "Dense — vector similarity"}
+              >
+                {searchMode === "hybrid" ? "Hybrid" : "Dense"}
+              </button>
+              <div
+                className={`flex items-center gap-2 transition-all duration-300 ease-in-out overflow-hidden ${
+                  searchMode === "hybrid" ? "opacity-100 max-w-[100px]" : "opacity-0 max-w-0"
+                }`}
+              >
+                <span className="text-[10px] text-muted-foreground/60 select-none">·</span>
+                <button
+                  type="button"
+                  className={`cursor-pointer border-none font-sans transition-all ${
+                    useAgent
+                      ? "bg-primary/50 text-primary-foreground/60 cursor-not-allowed"
+                      : sparseLlmTokenize
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-transparent text-muted-foreground hover:text-primary"
+                  }`}
+                  style={{ fontSize: "10px", padding: (useAgent || sparseLlmTokenize) ? "3px 5px" : "0", borderRadius: "2px", lineHeight: 1 }}
+                  disabled={useAgent}
+                  onClick={() => { if (!useAgent) setSparseLlmTokenize(!sparseLlmTokenize) }}
+                  title={useAgent ? "Always on in Agentic mode" : sparseLlmTokenize ? "LLM keyword extraction ON" : "LLM keyword extraction OFF — raw tokenization"}
+                >
+                  <Sparkles className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+
+            <div className="w-px h-3 bg-border self-center" />
 
             <div className="flex items-center gap-2">
               <TooltipLabel label="Top K" tooltip="Number of top results to retrieve." />
-              <Input className="w-16 h-8" value={topK} onChange={(e) => setTopK(e.target.value)} />
+              <Input className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary" value={topK} onChange={(e) => setTopK(e.target.value)} />
             </div>
-
-            {searchMode !== "hybrid" && (
-              <div className="flex items-center gap-2">
-                <TooltipLabel label="Threshold" tooltip="Minimum similarity score (0-1). Results below this are filtered out." />
-                <input
-                  type="range" min={0} max={1} step={0.05} value={minScore}
-                  onChange={(e) => setMinScore(parseFloat(e.target.value))}
-                  className="w-20"
-                />
-                <span className="text-xs text-muted-foreground w-8">{minScore.toFixed(2)}</span>
-              </div>
-            )}
 
             {useReranker && (
               <div className="flex items-center gap-2">
                 <TooltipLabel label="Rerank Top K" tooltip="Number of results after reranking." />
-                <Input className="w-16 h-8" value={rerankTopK} onChange={(e) => setRerankTopK(e.target.value)} />
+                <Input className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary" value={rerankTopK} onChange={(e) => setRerankTopK(e.target.value)} />
+              </div>
+            )}
+
+            {searchMode !== "hybrid" && (
+              <div className="flex items-center gap-1">
+                <TooltipLabel label="Threshold" tooltip="Minimum similarity score (0-1). Results below this are filtered out." />
+                <input
+                  type="text" inputMode="numeric"
+                  value={Math.round(minScore * 100)}
+                  onChange={(e) => { const raw = e.target.value; if (raw === "") { setMinScore(0); return } const v = parseInt(raw); if (!isNaN(v)) setMinScore(Math.max(0, Math.min(99, v)) / 100) }}
+                  className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                />
+                <span className="text-[10px] text-muted-foreground">%</span>
               </div>
             )}
           </div>
+      </div>
 
-          <Separator />
-          <div className="space-y-3">
-            <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useAgent}
-                onChange={(e) => {
-                  const next = e.target.checked
-                  setUseAgent(next)
-                  if (next) setUseReranker(true)  // agentic requires reranker
-                }}
-                className="rounded"
-              />
-              <TooltipLabel label="Agentic RAG" tooltip="Uses LLM agent to analyze queries, route to relevant collections, and iteratively improve results. Reranker is required." />
-            </label>
+      <div
+        className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+          results.length > 0
+            ? "grid-rows-[1fr] opacity-100"
+            : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div
+            className={`transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              results.length > 0
+                ? "translate-y-0 opacity-100"
+                : "-translate-y-4 opacity-0"
+            }`}
+          >
+            <div className="flex items-center gap-3 text-sm text-muted-foreground mb-3">
+              <span>{results.length} results</span>
+              <span>in {timeMs}ms</span>
+              <Badge variant="outline">{searchMode}</Badge>
+              {useReranker && <Badge variant="secondary">Reranked</Badge>}
+              {useAgent && <Badge variant="secondary">Agentic</Badge>}
+            </div>
+            <ResultList results={results} />
           </div>
-        </CardContent>
-      </Card>
-
-      {results.length > 0 && (
-        <>
-          <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <span>{results.length} results</span>
-            <span>in {timeMs}ms</span>
-            <Badge variant="outline">{searchMode}</Badge>
-            {useReranker && <Badge variant="secondary">Reranked</Badge>}
-            {useAgent && <Badge variant="secondary">Agentic</Badge>}
-          </div>
-          <ResultList results={results} />
-        </>
-      )}
-
-      {results.length === 0 && !searching && (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            <Search className="h-12 w-12 mx-auto mb-3 opacity-30" />
-            <p>Enter a query to search your collections</p>
-          </CardContent>
-        </Card>
-      )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -238,24 +338,66 @@ function EvaluateTab() {
   const [loading, setLoading] = useState(false)
   const [evalTopK, setEvalTopK] = useState("10")
   const [evalSearchMode, setEvalSearchMode] = useState("dense")
+  const [evalSparseLlmTokenize, setEvalSparseLlmTokenize] = useState(true)
   const [evalUseReranker, setEvalUseReranker] = useState(false)
   const [evalRerankTopK, setEvalRerankTopK] = useState("5")
   const [evalMinScore, setEvalMinScore] = useState(0)
-  const [evalRerankProviderId, setEvalRerankProviderId] = useState("")
-  const [evalRerankProviders, setEvalRerankProviders] = useState<RerankProvider[]>([])
   const [running, setRunning] = useState(false)
+  const [evalShowCollections, setEvalShowCollections] = useState(false)
+  const evalCollectionMenuRef = useRef<HTMLDivElement>(null)
+  const evalDropdownRef = useRef<HTMLDivElement>(null)
+  const evalButtonRef = useRef<HTMLButtonElement>(null)
   const [report, setReport] = useState<EvalReport | null>(null)
+  const [dashboardVisible, setDashboardVisible] = useState(false)
+  const [metricsVisible, setMetricsVisible] = useState(false)
   const [history, setHistory] = useState<EvalReport[]>([])
+  const [historyExpanded, setHistoryExpanded] = useState(false)
   const [expandedQuery, setExpandedQuery] = useState<string | null>(null)
   const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null)
   const [expandedChunk, setExpandedChunk] = useState<ChunkContent | null>(null)
   const [chunkLoading, setChunkLoading] = useState(false)
+  const [expandedChunkKey, setExpandedChunkKey] = useState<string | null>(null)
   const autoRecovered = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     fetchCollections()
-    getRerankProviders().then(setEvalRerankProviders).catch(() => {})
   }, [fetchCollections])
+
+  // Animate dashboard section when report changes
+  useEffect(() => {
+    if (report && !historyExpanded) {
+      setMetricsVisible(false)
+      setDashboardVisible(false)
+      const t1 = setTimeout(() => setDashboardVisible(true), 50)
+      const t2 = setTimeout(() => setMetricsVisible(true), 600)
+      return () => { clearTimeout(t1); clearTimeout(t2) }
+    } else {
+      setDashboardVisible(false)
+      setMetricsVisible(false)
+    }
+  }, [report, historyExpanded])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        evalCollectionMenuRef.current && !evalCollectionMenuRef.current.contains(e.target as Node) &&
+        evalDropdownRef.current && !evalDropdownRef.current.contains(e.target as Node)
+      ) {
+        setEvalShowCollections(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [])
+
+  const selectEvalCollection = (id: string) => {
+    if (collection === id) {
+      setSelectedCollections([])
+    } else {
+      setSelectedCollections([id])
+    }
+    setEvalShowCollections(false)
+  }
 
   // Auto-recover in-flight eval after refresh / tab switch
   useEffect(() => {
@@ -273,7 +415,6 @@ function EvaluateTab() {
         if (data.params.use_reranker !== undefined) setEvalUseReranker(data.params.use_reranker)
         if (data.params.rerank_top_k) setEvalRerankTopK(String(data.params.rerank_top_k))
         if (data.params.min_score !== undefined) setEvalMinScore(data.params.min_score)
-        if (data.params.rerank_provider_id) setEvalRerankProviderId(data.params.rerank_provider_id)
         setRunning(true)
         setReport(null)
         runEval(collection, data.params)
@@ -315,7 +456,7 @@ function EvaluateTab() {
     if (!collection) return
     try {
       const res = await getEvalHistory(collection)
-      setHistory(res.history)
+      setHistory([...res.history].reverse())
     } catch { /* ignore */ }
   }, [collection])
 
@@ -356,9 +497,9 @@ function EvaluateTab() {
       top_k: parseInt(evalTopK) || 10,
       search_mode: evalSearchMode,
       use_reranker: evalUseReranker,
+      sparse_llm_tokenize: evalSearchMode === "hybrid" ? evalSparseLlmTokenize : undefined,
       rerank_top_k: parseInt(evalRerankTopK) || 5,
       min_score: evalMinScore,
-      rerank_provider_id: evalUseReranker && evalRerankProviderId ? evalRerankProviderId : undefined,
     }
     const key = EVAL_RUNNING_PREFIX + collection
     localStorage.setItem(key, JSON.stringify({ running: true, params, ts: Date.now() }))
@@ -378,120 +519,240 @@ function EvaluateTab() {
 
   if (!collection) {
     return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground space-y-4">
-          <FlaskConical className="h-12 w-12 mx-auto mb-3 opacity-30" />
-          <p>Select a collection to evaluate</p>
-          <div className="flex justify-center">
-            <select
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-              value=""
-              onChange={(e) => {
-                if (e.target.value) setSelectedCollections([e.target.value])
+      <div className="py-12 text-center text-muted-foreground space-y-4">
+        <FlaskConical className="h-12 w-12 mx-auto mb-3 opacity-30" />
+        <p>Select a collection to evaluate</p>
+        <div className="flex justify-center">
+          <div className="relative" ref={evalCollectionMenuRef}>
+            <button
+              type="button"
+              ref={evalButtonRef}
+              onClick={() => setEvalShowCollections(!evalShowCollections)}
+              className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
+              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: evalShowCollections ? "var(--color-primary-foreground)" : "var(--color-muted-foreground)" }}
+            >
+              <span className="relative z-10 whitespace-nowrap text-center">Choose a collection...</span>
+              <span
+                className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
+                style={{
+                  transform: evalShowCollections ? "scaleX(1)" : "scaleX(0)",
+                  transformOrigin: evalShowCollections ? "right" : "left",
+                }}
+              />
+            </button>
+            <div
+              ref={evalDropdownRef}
+              className={`fixed z-[100] mt-1 flex-col items-center overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                evalShowCollections
+                  ? "opacity-100 visible translate-y-0 pointer-events-auto"
+                  : "opacity-0 invisible -translate-y-3 pointer-events-none"
+              }`}
+              style={{
+                width: evalButtonRef.current ? evalButtonRef.current.getBoundingClientRect().width : "auto",
+                top: evalCollectionMenuRef.current ? evalCollectionMenuRef.current.getBoundingClientRect().bottom + 4 : 0,
+                left: evalCollectionMenuRef.current ? evalCollectionMenuRef.current.getBoundingClientRect().left : 0,
               }}
             >
-              <option value="">Choose a collection...</option>
               {collections.map((col) => (
-                <option key={col.id} value={col.id}>{col.name}</option>
+                <label
+                  key={col.id}
+                  onClick={() => selectEvalCollection(col.id)}
+                  className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+                >
+                  <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                    {collection === col.id ? (
+                      <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
+                    ) : (
+                      <span className="w-1.5 h-1.5 shrink-0" />
+                    )}
+                    <span className="whitespace-normal break-words min-w-0 leading-snug">{col.name}</span>
+                  </span>
+                  <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                </label>
               ))}
-            </select>
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
       {/* Config bar */}
-      <Card>
-        <CardContent className="p-3">
+      <div className="pb-6 mb-6 border-b border-primary/30">
           <div className="flex items-center gap-4 flex-wrap">
-            <select
-              className="h-8 rounded-md border border-input bg-background px-2 text-xs font-medium"
-              value={collection}
-              onChange={(e) => {
-                if (e.target.value) setSelectedCollections([e.target.value])
-              }}
-            >
-              {collections.map((col) => (
-                <option key={col.id} value={col.id}>{col.name}</option>
-              ))}
-            </select>
-            <div className="flex items-center gap-2">
-              <TooltipLabel label="Search Mode" tooltip="dense or hybrid" />
-              <select className="h-8 rounded-md border border-input bg-background px-2 text-xs" value={evalSearchMode} onChange={(e) => setEvalSearchMode(e.target.value)}>
-                <option value="dense">Dense</option>
-                <option value="hybrid">Hybrid</option>
-              </select>
-            </div>
-            <label className="flex items-center gap-2 text-xs cursor-pointer">
-              <input type="checkbox" checked={evalUseReranker} onChange={(e) => setEvalUseReranker(e.target.checked)} className="rounded" />
-              Reranker
-            </label>
-            {evalUseReranker && evalRerankProviders.length > 0 && (
-              <select
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                value={evalRerankProviderId}
-                onChange={(e) => setEvalRerankProviderId(e.target.value)}
+            {/* Collection dropdown — single select */}
+            <div className="relative" ref={evalCollectionMenuRef}>
+              <button
+                type="button"
+                ref={evalButtonRef}
+                onClick={() => setEvalShowCollections(!evalShowCollections)}
+                className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
+                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: evalShowCollections ? "var(--color-primary-foreground)" : collection ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
               >
-                <option value="">Default</option>
-                {evalRerankProviders.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name || p.model}</option>
+                <span className="relative z-10 whitespace-nowrap text-center">
+                  {collection ? collections.find(c => c.id === collection)?.name || collection : "Choose a collection..."}
+                </span>
+                <span
+                  className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
+                  style={{
+                    transform: evalShowCollections ? "scaleX(1)" : "scaleX(0)",
+                    transformOrigin: evalShowCollections ? "right" : "left",
+                  }}
+                />
+              </button>
+              <div
+                ref={evalDropdownRef}
+                className={`fixed z-[100] mt-1 flex-col items-center overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                  evalShowCollections
+                    ? "opacity-100 visible translate-y-0 pointer-events-auto"
+                    : "opacity-0 invisible -translate-y-3 pointer-events-none"
+                }`}
+                style={{
+                  width: evalButtonRef.current ? evalButtonRef.current.getBoundingClientRect().width : "auto",
+                  top: evalCollectionMenuRef.current ? evalCollectionMenuRef.current.getBoundingClientRect().bottom + 4 : 0,
+                  left: evalCollectionMenuRef.current ? evalCollectionMenuRef.current.getBoundingClientRect().left : 0,
+                }}
+              >
+                {collections.map((col) => (
+                  <label
+                    key={col.id}
+                    onClick={() => selectEvalCollection(col.id)}
+                    className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+                  >
+                    <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                      {collection === col.id ? (
+                        <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
+                      ) : (
+                        <span className="w-1.5 h-1.5 shrink-0" />
+                      )}
+                      <span className="whitespace-normal break-words min-w-0 leading-snug">{col.name}</span>
+                    </span>
+                    <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                  </label>
                 ))}
-              </select>
-            )}
+              </div>
+            </div>
+            <div className="w-px h-3 bg-border self-center" />
+
+            {/* Reranker toggle */}
+            <button
+              type="button"
+              className={`cursor-pointer border-none font-sans transition-all ${
+                evalUseReranker
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-transparent text-muted-foreground hover:text-primary"
+              }`}
+              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: evalUseReranker ? "3px 8px" : "0", borderRadius: "2px" }}
+              onClick={() => setEvalUseReranker(!evalUseReranker)}
+              title="Toggle reranker"
+            >
+              Rerank
+            </button>
+
+            {/* Search Mode + optional LLM — grouped when hybrid, with animation */}
+            <div
+              className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
+                evalSearchMode === "hybrid"
+                  ? "rounded border border-primary/30 py-1 pl-1 pr-2 max-w-[200px] opacity-100"
+                  : "max-w-[60px] border-transparent opacity-100"
+              }`}
+            >
+              <button
+                type="button"
+                className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${
+                  evalSearchMode === "hybrid"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-transparent text-muted-foreground hover:text-primary"
+                }`}
+                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: evalSearchMode === "hybrid" ? "3px 8px" : "0", borderRadius: "2px" }}
+                onClick={() => setEvalSearchMode(evalSearchMode === "hybrid" ? "dense" : "hybrid")}
+                title={evalSearchMode === "hybrid" ? "Hybrid — Dense + BM25" : "Dense — vector similarity"}
+              >
+                {evalSearchMode === "hybrid" ? "Hybrid" : "Dense"}
+              </button>
+              <div
+                className={`flex items-center gap-2 transition-all duration-300 ease-in-out overflow-hidden ${
+                  evalSearchMode === "hybrid" ? "opacity-100 max-w-[100px]" : "opacity-0 max-w-0"
+                }`}
+              >
+                <span className="text-[10px] text-muted-foreground/60 select-none">·</span>
+                <button
+                  type="button"
+                  className={`cursor-pointer border-none font-sans transition-all ${
+                    evalSparseLlmTokenize
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-transparent text-muted-foreground hover:text-primary"
+                  }`}
+                  style={{ fontSize: "10px", padding: evalSparseLlmTokenize ? "3px 5px" : "0", borderRadius: "2px", lineHeight: 1 }}
+                  onClick={() => setEvalSparseLlmTokenize(!evalSparseLlmTokenize)}
+                  title={evalSparseLlmTokenize ? "LLM keyword extraction ON" : "LLM keyword extraction OFF — raw tokenization"}
+                >
+                  <Sparkles className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+
+            <div className="w-px h-3 bg-border self-center" />
             <div className="flex items-center gap-2">
               <TooltipLabel label="Top K" tooltip="Results to retrieve per query" />
-              <Input className="w-16 h-8" value={evalTopK} onChange={(e) => setEvalTopK(e.target.value)} />
+              <Input className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary" value={evalTopK} onChange={(e) => setEvalTopK(e.target.value)} />
             </div>
             {evalUseReranker && (
               <div className="flex items-center gap-2">
                 <TooltipLabel label="Rerank Top K" tooltip="Number of results after reranking." />
-                <Input className="w-16 h-8" value={evalRerankTopK} onChange={(e) => setEvalRerankTopK(e.target.value)} />
+                <Input className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary" value={evalRerankTopK} onChange={(e) => setEvalRerankTopK(e.target.value)} />
               </div>
             )}
             {evalSearchMode !== "hybrid" && (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <TooltipLabel label="Threshold" tooltip="Minimum similarity score (0-1). Filter retrieved chunks below this. Same as the slider in Search tab." />
                 <input
-                  type="range" min={0} max={1} step={0.05} value={evalMinScore}
-                  onChange={(e) => setEvalMinScore(parseFloat(e.target.value))}
-                  className="w-20"
+                  type="text" inputMode="numeric"
+                  value={Math.round(evalMinScore * 100)}
+                  onChange={(e) => { const raw = e.target.value; if (raw === "") { setEvalMinScore(0); return } const v = parseInt(raw); if (!isNaN(v)) setEvalMinScore(Math.max(0, Math.min(99, v)) / 100) }}
+                  className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
                 />
-                <span className="text-xs text-muted-foreground w-8">{evalMinScore.toFixed(2)}</span>
+                <span className="text-[10px] text-muted-foreground">%</span>
               </div>
             )}
-            <div className="flex-1" />
+          </div>
+          <div className="mt-4">
             <Button onClick={handleRun} disabled={running || cases.length === 0}>
               {running ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Play className="h-4 w-4 mr-2" />}
               Run Evaluation ({cases.length} cases)
             </Button>
           </div>
-        </CardContent>
-      </Card>
+      </div>
 
       {/* Test Cases */}
-      <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm">Test Cases ({cases.length})</CardTitle>
-            <div className="flex gap-2">
-              {cases.length === 0 ? (
-                <Button variant="outline" size="sm" onClick={() => handleGenerate(false)} disabled={loading}>
-                  {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Wand2 className="h-3 w-3 mr-1" />}
-                  Auto-generate
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" onClick={() => handleGenerate(true)} disabled={loading}>
-                  {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RotateCw className="h-3 w-3 mr-1" />}
-                  Regenerate All
-                </Button>
-              )}
-            </div>
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Test Cases ({cases.length})</span>
+          <div className="flex gap-2">
+            {cases.length === 0 ? (
+              <button
+                className="cursor-pointer border-none font-sans text-muted-foreground hover:text-primary transition-colors"
+                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", background: "transparent" }}
+                onClick={() => handleGenerate(false)} disabled={loading}
+              >
+                {loading ? <Loader2 className="h-3 w-3 mr-1 inline animate-spin" /> : <Wand2 className="h-3 w-3 mr-1 inline" />}
+                Auto-generate
+              </button>
+            ) : (
+              <button
+                className="cursor-pointer border-none font-sans text-muted-foreground hover:text-primary transition-colors"
+                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", background: "transparent" }}
+                onClick={() => handleGenerate(true)} disabled={loading}
+              >
+                {loading ? <Loader2 className="h-3 w-3 mr-1 inline animate-spin" /> : <RotateCw className="h-3 w-3 mr-1 inline" />}
+                Regenerate All
+              </button>
+            )}
           </div>
-        </CardHeader>
-        <CardContent className="space-y-2">
+        </div>
+        <div className="space-y-2">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -502,7 +763,7 @@ function EvaluateTab() {
               No test cases. Click "Auto-generate" to create cases from indexed files.
             </p>
           ) : (
-            <div className="space-y-1 max-h-60 overflow-y-auto">
+            <div className="space-y-1">
               {cases.map((c) => (
                 <div key={c.id}>
                   <div
@@ -534,121 +795,210 @@ function EvaluateTab() {
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
-                  {expandedCaseId === c.id && (
-                    <div className="pl-8 pb-3 space-y-2 text-xs border-l-2 border-muted ml-1 mt-1">
-                      <div>
-                        <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Query</div>
-                        <div className="text-foreground/90 whitespace-pre-wrap">{c.query}</div>
-                      </div>
-                      <div className="flex gap-4 text-[10px] text-muted-foreground">
-                        <span>Target chunk: <span className="font-mono text-foreground/70">{c.target_chunk_id}</span></span>
-                        <span>Source: <span className="text-foreground/70">{c.target_source?.split("/").pop()}</span></span>
-                      </div>
-                      <div>
-                        <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Target Chunk Content</div>
-                        {chunkLoading ? (
-                          <div className="flex items-center gap-2 text-muted-foreground py-2">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Loading...
-                          </div>
-                        ) : expandedChunk ? (
-                          <div className="text-foreground/80 text-[11px] whitespace-pre-wrap bg-muted/30 p-2 rounded max-h-48 overflow-y-auto">
-                            {expandedChunk.text}
-                          </div>
-                        ) : (
-                          <div className="text-muted-foreground italic text-[11px]">Chunk not found (may have been deleted)</div>
-                        )}
+                  <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                    expandedCaseId === c.id ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                  }`}>
+                    <div className="overflow-hidden">
+                      <div className={`pl-8 pb-3 space-y-2 text-xs border-l-2 border-muted ml-1 mt-1 transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                        expandedCaseId === c.id ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
+                      }`}>
+                        <div>
+                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Query</div>
+                          <div className="text-foreground/90 whitespace-pre-wrap">{c.query}</div>
+                        </div>
+                        <div className="flex gap-4 text-[10px] text-muted-foreground">
+                          <span>Target chunk: <span className="font-mono text-foreground/70">{c.target_chunk_id}</span></span>
+                          <span>Source: <span className="text-foreground/70">{c.target_source?.split("/").pop()}</span></span>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Target Chunk Content</div>
+                          {chunkLoading ? (
+                            <div className="flex items-center gap-2 text-muted-foreground py-2">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Loading...
+                            </div>
+                          ) : expandedChunk ? (
+                            <div className="text-foreground/80 text-[11px] whitespace-pre-wrap bg-muted/30 p-2 rounded max-h-48 overflow-y-auto">
+                              {expandedChunk.text}
+                            </div>
+                          ) : (
+                            <div className="text-muted-foreground italic text-[11px]">Chunk not found (may have been deleted)</div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* History */}
-      {history.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Evaluation History</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-1">
-              {history.map((h, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-3 text-xs py-1.5 px-2 rounded hover:bg-accent cursor-pointer"
-                  onClick={() => setReport(h)}
+      {history.length > 0 && (() => {
+        const hSelIdx = report
+          ? history.findIndex(h => h.timestamp === report.timestamp)
+          : -1
+        const hSelected = hSelIdx >= 0 ? history[hSelIdx] : history[0]
+        const moreCount = history.length - 1
+        return (
+        <div>
+          <div className="mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Evaluation History</span>
+          </div>
+          {/* Always-visible selected row */}
+          <div
+            className="flex items-center gap-3 text-xs py-1.5 px-2 rounded hover:bg-accent cursor-pointer"
+            onClick={() => { if (moreCount > 0) setHistoryExpanded(!historyExpanded) }}
+          >
+            {moreCount > 0 ? (
+              historyExpanded ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" /> : <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+            ) : (
+              <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+            )}
+            {hSelIdx >= 0 ? (
+              <>
+                <span className="text-muted-foreground">
+                  {hSelected.timestamp
+                    ? new Date(hSelected.timestamp).toLocaleString()
+                    : "Run 1"}
+                </span>
+                <Badge variant="outline" className="text-[10px]">{hSelected.total_cases} cases</Badge>
+                <span>Recall: {((hSelected.avg_recall ?? hSelected.avg_hard_recall ?? 0) * 100).toFixed(0)}%</span>
+                <span className={`font-mono ${qualityColor(hSelected.avg_quality_score ?? 0)}`}>Q: {formatSigned(hSelected.avg_quality_score ?? 0)}</span>
+                <span className="text-muted-foreground">{(hSelected.avg_time_ms ?? 0).toFixed(0)}ms</span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">Browse Evaluation Records</span>
+            )}
+            {moreCount > 0 && (
+              <span
+                className="ml-auto cursor-pointer select-none"
+                style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-primary)" }}
+                onClick={(e) => { e.stopPropagation(); setHistoryExpanded(!historyExpanded) }}
+              >
+                {history.length} Record{history.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          {/* Expandable list */}
+          <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+            historyExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+          }`}>
+            <div className="overflow-hidden">
+              <div className={`transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                historyExpanded ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
+              }`}>
+                <div className="space-y-1 pt-1"
+                  style={{ maxHeight: `${Math.min(history.length * 36, 200)}px`, overflowY: "auto" }}
                 >
-                  <Clock className="h-3 w-3 text-muted-foreground" />
-                  <span className="text-muted-foreground">
-                    {h.timestamp
-                      ? new Date(h.timestamp).toLocaleString()
-                      : `Run ${i + 1}`}
-                  </span>
-                  <Badge variant="outline" className="text-[10px]">{h.total_cases} cases</Badge>
-                  <span>Recall: {((h.avg_recall ?? h.avg_hard_recall ?? 0) * 100).toFixed(0)}%</span>
-                  <span className={`font-mono ${qualityColor(h.avg_quality_score ?? 0)}`}>Q: {formatSigned(h.avg_quality_score ?? 0)}</span>
-                  <span className="text-muted-foreground">{(h.avg_time_ms ?? 0).toFixed(0)}ms</span>
+                  {history.map((h, i) => (
+                    <div
+                      key={i}
+                      className={`flex items-center gap-3 text-xs py-1.5 px-2 rounded hover:bg-accent cursor-pointer ${h.timestamp === hSelected.timestamp ? "bg-accent/50" : ""}`}
+                      onClick={() => { setReport(h); setHistoryExpanded(false) }}
+                    >
+                      <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span className="text-muted-foreground">
+                        {h.timestamp
+                          ? new Date(h.timestamp).toLocaleString()
+                          : `Run ${i + 1}`}
+                      </span>
+                      <Badge variant="outline" className="text-[10px]">{h.total_cases} cases</Badge>
+                      <span>Recall: {((h.avg_recall ?? h.avg_hard_recall ?? 0) * 100).toFixed(0)}%</span>
+                      <span className={`font-mono ${qualityColor(h.avg_quality_score ?? 0)}`}>Q: {formatSigned(h.avg_quality_score ?? 0)}</span>
+                      <span className="text-muted-foreground">{(h.avg_time_ms ?? 0).toFixed(0)}ms</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        </div>
+        )
+      })()}
 
       {/* Results Dashboard */}
-      {report && (
-        <>
-          <div className="grid grid-cols-4 gap-3">
-            <MetricCard label="Recall" value={`${((report.avg_recall ?? 0) * 100).toFixed(1)}%`} icon={<CheckCircle className="h-4 w-4" />} tooltip="target in K OR LLM holistic 'can answer correctly'. The two query-level signals OR'd together." />
-            <MetricCard label="Hard Recall" value={`${((report.avg_hard_recall ?? 0) * 100).toFixed(1)}%`} icon={<CheckCircle className="h-4 w-4" />} tooltip="Target chunk id found in top K (deterministic)" />
-            <MetricCard label="Quality" value={formatSigned(report.avg_quality_score ?? 0)} icon={<BarChart3 className="h-4 w-4" />} tooltip="Coverage-dominant on per-chunk judgments. Useful info present ≈ high. Noise-only ≈ low. Range [-1, 1]." />
-            <MetricCard label="MRR" value={(report.avg_mrr ?? 0).toFixed(3)} icon={<BarChart3 className="h-4 w-4" />} tooltip="Mean reciprocal rank of target chunk" />
+      <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+        dashboardVisible ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+      }`}>
+        <div className="overflow-hidden">
+          <div className={`transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+            dashboardVisible ? "translate-y-0 opacity-100" : "-translate-y-4 opacity-0"
+          }`}>
+            {report && <>
+            <div className="flex justify-between pb-5 border-b border-dashed border-border">
+            <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              metricsVisible ? "opacity-100" : "opacity-0"
+            }`} style={{ transitionDelay: metricsVisible ? "0ms" : "0ms" }}>
+              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{((report.avg_recall ?? 0) * 100).toFixed(1)}%</span>
+              <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground mt-1.5">Recall</span>
+            </div>
+            <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              metricsVisible ? "opacity-100" : "opacity-0"
+            }`} style={{ transitionDelay: metricsVisible ? "300ms" : "0ms" }}>
+              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{((report.avg_hard_recall ?? 0) * 100).toFixed(1)}%</span>
+              <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground mt-1.5">Hard Recall</span>
+            </div>
+            <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              metricsVisible ? "opacity-100" : "opacity-0"
+            }`} style={{ transitionDelay: metricsVisible ? "600ms" : "0ms" }}>
+              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{formatSigned(report.avg_quality_score ?? 0)}</span>
+              <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground mt-1.5">Quality</span>
+            </div>
+            <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              metricsVisible ? "opacity-100" : "opacity-0"
+            }`} style={{ transitionDelay: metricsVisible ? "900ms" : "0ms" }}>
+              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{(report.avg_mrr ?? 0).toFixed(3)}</span>
+              <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground mt-1.5">MRR</span>
+            </div>
           </div>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Per-Query Results</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-1">
-                {report.per_query.map((r) => (
-                  <div key={r.test_case_id}>
-                    <div
-                      className="flex items-center gap-2 text-xs py-2 px-2 rounded hover:bg-accent cursor-pointer"
-                      onClick={() => setExpandedQuery(expandedQuery === r.test_case_id ? null : r.test_case_id)}
-                    >
-                      {expandedQuery === r.test_case_id ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
-                      {r.recalled ? <CheckCircle className="h-3 w-3 text-green-500 shrink-0" /> : <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
-                      <span className="flex-1 truncate">{r.query}</span>
-                      {r.hard_recall ? (
-                        <Badge className="text-[10px] px-1 bg-green-600">target</Badge>
-                      ) : r.holistic_can_answer ? (
-                        <Badge variant="secondary" className="text-[10px] px-1">holistic</Badge>
-                      ) : (
-                        <Badge variant="destructive" className="text-[10px] px-1">miss</Badge>
-                      )}
-                      <span className={`w-14 text-right font-mono ${qualityColor(r.quality_score ?? 0)}`}>
-                        Q:{formatSigned(r.quality_score ?? 0)}
-                      </span>
-                      <span className="text-muted-foreground w-12 text-right">{r.time_ms}ms</span>
-                    </div>
-                    {expandedQuery === r.test_case_id && (
-                      <div className="pl-8 pb-3 space-y-2 text-xs border-l-2 border-muted ml-1">
+          <div>
+            <div className="mb-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Per-Query Results</span>
+            </div>
+            <div className="space-y-1">
+              {report.per_query.map((r) => (
+                <div key={r.test_case_id}>
+                  <div
+                    className="flex items-center gap-2 text-xs py-2 px-2 rounded hover:bg-accent cursor-pointer"
+                    onClick={() => setExpandedQuery(expandedQuery === r.test_case_id ? null : r.test_case_id)}
+                  >
+                    {expandedQuery === r.test_case_id ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+                    {r.recalled ? <CheckCircle className="h-3 w-3 text-emerald-500 shrink-0" /> : <XCircle className="h-3 w-3 text-orange-500 shrink-0" />}
+                    <span className="flex-1 truncate">{r.query}</span>
+                    {r.hard_recall ? (
+                      <Badge className="text-[10px] px-1 bg-emerald-600">target</Badge>
+                    ) : r.holistic_can_answer ? (
+                      <Badge variant="secondary" className="text-[10px] px-1">holistic</Badge>
+                    ) : (
+                      <Badge className="text-[10px] px-1 bg-orange-600">miss</Badge>
+                    )}
+                    <span className={`w-14 text-right font-mono ${qualityColor(r.quality_score ?? 0)}`}>
+                      Q:{formatSigned(r.quality_score ?? 0)}
+                    </span>
+                    <span className="text-muted-foreground w-12 text-right">{r.time_ms}ms</span>
+                  </div>
+                  <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                    expandedQuery === r.test_case_id ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                  }`}>
+                    <div className="overflow-hidden">
+                      <div className={`pl-8 pb-3 space-y-2 text-xs border-l-2 border-muted ml-1 transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                        expandedQuery === r.test_case_id ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
+                      }`}>
                         <div className="flex gap-3 text-muted-foreground flex-wrap">
-                          <span>Recall: <span className={r.recalled ? "text-green-600 font-medium" : "text-red-500"}>{r.recalled ? "✓" : "✗"}</span></span>
-                          <span>Hard: <span className={r.hard_recall ? "text-green-600 font-medium" : "text-red-500"}>{r.hard_recall ? "✓" : "✗"}</span></span>
-                          <span>Holistic: <span className={r.holistic_can_answer ? "text-blue-600 font-medium" : "text-muted-foreground"}>{r.holistic_can_answer ? "✓" : "✗"}</span></span>
+                          <span>Recall: <span className={r.recalled ? "text-emerald-500 font-medium" : "text-orange-500"}>{r.recalled ? "✓" : "✗"}</span></span>
+                          <span>Hard: <span className={r.hard_recall ? "text-emerald-500 font-medium" : "text-orange-500"}>{r.hard_recall ? "✓" : "✗"}</span></span>
+                          <span>Holistic: <span className={r.holistic_can_answer ? "text-emerald-500 font-medium" : "text-muted-foreground"}>{r.holistic_can_answer ? "✓" : "✗"}</span></span>
                           <span>Quality: <span className={`font-mono ${qualityColor(r.quality_score ?? 0)}`}>{formatSigned(r.quality_score ?? 0)}</span> <span className="text-[10px]">[-1, 1]</span></span>
                           <span>MRR: {(r.mrr ?? 0).toFixed(3)}</span>
-                          {(r.target_position ?? 0) > 0 && <span className="text-green-600">target @ #{r.target_position}</span>}
+                          {(r.target_position ?? 0) > 0 && <span className="text-emerald-500 font-medium">target @ #{r.target_position}</span>}
                         </div>
                         {r.holistic_reason && (
-                          <div className="text-foreground/80 italic text-[11px] bg-blue-50 dark:bg-blue-950/20 px-2 py-1.5 rounded border-l-2 border-blue-400">
-                            <span className="font-medium text-blue-700 dark:text-blue-300 not-italic">Holistic: </span>
+                          <div className="text-foreground/80 italic text-[11px] bg-indigo-50/40 dark:bg-indigo-950/15 px-2 py-1.5 rounded border-l-2 border-indigo-300/50">
+                            <span className="font-medium text-indigo-500 not-italic">Holistic: </span>
                             "{r.holistic_reason}"
                           </div>
                         )}
@@ -659,9 +1009,9 @@ function EvaluateTab() {
                             </div>
                             {r.chunk_judgments.map((j, i) => {
                               const judgmentStyles: Record<string, { border: string; bg: string; badge: string; label: string }> = {
-                                "1": { border: "border-l-green-500", bg: "bg-green-50 dark:bg-green-950/30", badge: "bg-green-600", label: "+1" },
-                                "0": { border: "border-l-gray-400", bg: "", badge: "bg-gray-500", label: "0" },
-                                "-1": { border: "border-l-red-500", bg: "bg-red-50 dark:bg-red-950/20", badge: "bg-red-600", label: "-1" },
+                                "1": { border: "border-l-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-950/30", badge: "bg-emerald-600", label: "+1" },
+                                "0": { border: "border-l-muted-foreground/30", bg: "", badge: "bg-muted-foreground", label: "0" },
+                                "-1": { border: "border-l-orange-500", bg: "bg-orange-50 dark:bg-orange-950/20", badge: "bg-orange-600", label: "-1" },
                               }
                               const judgmentColors = judgmentStyles[String(j.judgment)] || judgmentStyles["0"]
                               const text = r.retrieved_chunks?.[i]?.text || ""
@@ -673,7 +1023,7 @@ function EvaluateTab() {
                                       {judgmentColors.label}
                                     </span>
                                     {j.is_target ? (
-                                      <span className="px-1.5 py-0.5 rounded bg-purple-600 text-white font-medium">
+                                      <span className="px-1.5 py-0.5 rounded bg-emerald-600 text-white font-medium">
                                         TARGET
                                       </span>
                                     ) : null}
@@ -688,16 +1038,29 @@ function EvaluateTab() {
                                       "{j.reason}"
                                     </div>
                                   )}
-                                  {text ? (
-                                    <details className="mt-1" open={j.is_target}>
-                                      <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground select-none">
-                                        {j.is_target ? "Show target chunk text" : "Show chunk text"}
-                                      </summary>
-                                      <div className="mt-1 text-foreground/70 text-[11px] whitespace-pre-wrap bg-muted/30 p-2 rounded max-h-64 overflow-y-auto">
-                                        {text}
+                                  {text ? (() => {
+                                    const ck = `${r.test_case_id}-${j.id || i}`
+                                    const show = expandedChunkKey === ck
+                                    return (
+                                    <div className="mt-1">
+                                      <button
+                                        className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground select-none border-none bg-transparent p-0"
+                                        onClick={() => setExpandedChunkKey(show ? null : ck)}
+                                      >
+                                        {show ? "Hide chunk text" : (j.is_target ? "Show target chunk text" : "Show chunk text")}
+                                      </button>
+                                      <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                                        show ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                                      }`}>
+                                        <div className="overflow-hidden">
+                                          <div className="mt-1 text-foreground/70 text-[11px] whitespace-pre-wrap bg-muted/30 p-2 rounded max-h-64 overflow-y-auto">
+                                            {text}
+                                          </div>
+                                        </div>
                                       </div>
-                                    </details>
-                                  ) : (
+                                    </div>
+                                    )
+                                  })() : (
                                     <div className="mt-1 text-[10px] text-muted-foreground italic">
                                       (no chunk text available)
                                     </div>
@@ -712,14 +1075,16 @@ function EvaluateTab() {
                           </div>
                         )}
                       </div>
-                    )}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
+                </div>
+              ))}
+            </div>
+          </div>
+          </>}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -731,25 +1096,11 @@ function formatSigned(n: number, digits = 2): string {
 }
 
 function qualityColor(n: number): string {
-  if (n >= 0.7) return "text-green-600"
-  if (n > 0.2) return "text-green-500"
+  if (n >= 0.7) return "text-emerald-500 dark:text-emerald-400"
+  if (n > 0.2) return "text-emerald-600 dark:text-emerald-400/80"
   if (n > -0.2) return "text-muted-foreground"
-  if (n > -0.6) return "text-red-500"
-  return "text-red-600"
-}
-
-function MetricCard({ label, value, icon, tooltip }: { label: string; value: string; icon: React.ReactNode; tooltip?: string }) {
-  return (
-    <Card>
-      <CardContent className="p-3 text-center">
-        <div className="flex items-center justify-center gap-1 text-muted-foreground mb-1">
-          {icon}
-          {tooltip ? <TooltipLabel label={label} tooltip={tooltip} /> : <span className="text-xs">{label}</span>}
-        </div>
-        <div className="text-lg font-semibold">{value}</div>
-      </CardContent>
-    </Card>
-  )
+  if (n > -0.6) return "text-orange-500/80"
+  return "text-orange-600 dark:text-orange-400"
 }
 
 // ── Main View ──────────────────────────────────────────────
@@ -758,23 +1109,19 @@ export function RecallView() {
   return (
     <div className="h-full overflow-auto p-6">
       <div className="max-w-4xl mx-auto space-y-6">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Search className="h-6 w-6" />
+        <div className="mb-5">
+          <span className="text-[14px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
             Recall
-          </h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Search and evaluate retrieval quality
+          </span>
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            Search &amp; evaluate retrieval quality
           </p>
         </div>
 
         <Tabs defaultValue="search">
           <TabsList>
-            <TabsTrigger value="search">Search</TabsTrigger>
-            <TabsTrigger value="evaluate">
-              <FlaskConical className="h-3 w-3 mr-1" />
-              Evaluate
-            </TabsTrigger>
+            <TabsTrigger value="search" className="font-light uppercase tracking-wider">Search</TabsTrigger>
+            <TabsTrigger value="evaluate" className="font-light uppercase tracking-wider">Evaluate</TabsTrigger>
           </TabsList>
           <TabsContent value="search" className="mt-4">
             <SearchTab />

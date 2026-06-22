@@ -104,6 +104,9 @@ def retrieve_parent_child(
     embedding: EmbeddingProvider | None = None,
     db=None,
     min_score: float = 0.0,
+    retriever=None,
+    search_mode: str = "dense",
+    llm=None,
 ) -> tuple[list[RetrievedChunk], list[dict]]:
     """Search child chunks, return parent chunks with best child scores.
 
@@ -116,7 +119,6 @@ def retrieve_parent_child(
     _db = db or services.db
     emb = embedding or services.embedding
 
-    query_vector = emb.embed_query(query)
     child_filter = Filter(
         must=[FieldCondition(key="chunk_type", match=MatchValue(value="child"))]
     )
@@ -125,21 +127,36 @@ def retrieve_parent_child(
     top_k = int(top_k) if top_k else 10
     child_search_limit = max(top_k * 10, 50)
     logger.info(
-        "retrieve_parent_child: collection=%s, child_search_limit=%d, min_score=%.2f",
-        collection, child_search_limit, min_score,
+        "retrieve_parent_child: collection=%s, child_search_limit=%d, min_score=%.2f, search_mode=%s",
+        collection, child_search_limit, min_score, search_mode,
     )
-    child_results = _db.search(
-        collection=collection,
-        query_vector=query_vector,
-        top_k=child_search_limit,
-        filter_condition=child_filter,
-    )
+
+    if search_mode == "hybrid" and retriever:
+        child_chunks = retriever.retrieve(
+            query, collection=collection, top_k=child_search_limit,
+            search_mode="hybrid", min_score=min_score,
+            filter_condition=child_filter, llm=llm,
+        )
+        # Convert RetrievedChunk → dict for downstream processing
+        child_results = [
+            {"id": c.metadata.get("id", ""), "score": c.score,
+             "payload": {**c.metadata, "text": c.text}}
+            for c in child_chunks
+        ]
+    else:
+        query_vector = emb.embed_query(query)
+        child_results = _db.search(
+            collection=collection,
+            query_vector=query_vector,
+            top_k=child_search_limit,
+            filter_condition=child_filter,
+        )
     logger.info(
         "retrieve_parent_child: collection=%s, got %d child results",
         collection, len(child_results),
     )
 
-    if min_score > 0:
+    if min_score > 0 and search_mode != "hybrid":
         child_results = [r for r in child_results if r["score"] >= min_score]
 
     if not child_results:
@@ -203,11 +220,22 @@ def retrieve_parent_child(
     return results[:top_k], groups
 
 
+def _resolve_collection_name(col_id: str) -> str:
+    """Resolve a collection ID to its display name. Falls back to ID if not found."""
+    from src.collections import store as cs
+    meta = cs.get_collection_meta(col_id)
+    if meta:
+        return meta.get("name", col_id)
+    return col_id
+
+
 def build_context(chunks: list) -> str:
     """Build context string from chunks, prepending summary and context metadata.
 
     Accepts either RetrievedChunk objects or dicts with 'text' and 'metadata' keys.
     """
+    # Detect distinct collections for cross-collection hint
+    collections_used: set[str] = set()
     parts = []
     for c in chunks:
         if hasattr(c, "text"):
@@ -219,6 +247,10 @@ def build_context(chunks: list) -> str:
         else:
             continue
 
+        col = meta.get("collection", "")
+        if col:
+            collections_used.add(col)
+
         ctx = meta.get("context", "")
         summ = meta.get("summary", "")
         if summ:
@@ -227,7 +259,21 @@ def build_context(chunks: list) -> str:
             text = f"[Context: {ctx}]\n{text}"
         parts.append(text)
 
-    return "\n\n".join(parts)
+    context = "\n\n".join(parts)
+
+    # Prepend multi-collection hint when chunks span different collections
+    if len(collections_used) > 1:
+        col_list = sorted(_resolve_collection_name(c) for c in collections_used)
+        hint = (
+            f"[IMPORTANT: The following context comes from {len(collections_used)} DIFFERENT "
+            f"collections: {', '.join(col_list)}. These are separate knowledge bases "
+            f"that may contain overlapping or conflicting information. When answering, "
+            f"be mindful of collection boundaries — note which collection each key "
+            f"fact originates from, and do not assume consistency across collections.]"
+        )
+        context = hint + "\n\n" + context
+
+    return context
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -245,6 +291,7 @@ def retrieve_standard(
     min_score: float = 0.0,
     reranker=None,
     rerank_top_k: int | None = None,
+    llm=None,
 ) -> list[RetrievedChunk]:
     """Standard dense/hybrid retrieval across one or more collections.
 
@@ -258,7 +305,7 @@ def retrieve_standard(
         chunks = multi_collection_retrieve(
             services.retriever, query, target_collections,
             top_k=top_k, embedding_overrides=embedding_overrides,
-            search_mode=search_mode, min_score=min_score,
+            search_mode=search_mode, min_score=min_score, llm=llm,
         )
     else:
         col = target_collections[0]
@@ -266,7 +313,7 @@ def retrieve_standard(
         chunks = services.retriever.retrieve(
             query=query, collection=col, top_k=top_k,
             embedding_override=embedding_override,
-            search_mode=search_mode, min_score=min_score,
+            search_mode=search_mode, min_score=min_score, llm=llm,
         )
 
     if reranker and chunks:
@@ -285,6 +332,9 @@ def retrieve_parent_child_multi(
     reranker=None,
     rerank_top_k: int | None = None,
     return_child_groups: bool = False,
+    retriever=None,
+    search_mode: str = "dense",
+    llm=None,
 ) -> list[RetrievedChunk] | tuple[list[RetrievedChunk], list[dict]]:
     """Parent-child retrieval across multiple collections.
 
@@ -301,6 +351,7 @@ def retrieve_parent_child_multi(
         emb = embedding_overrides.get(col)
         chunks, groups = retrieve_parent_child(
             query, col, top_k, embedding=emb, min_score=min_score,
+            retriever=retriever, search_mode=search_mode, llm=llm,
         )
         for c in chunks:
             c.metadata["collection"] = col

@@ -28,6 +28,31 @@ HISTORY_DIR = Path("data/history")
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _col_display_name(col_id: str) -> str:
+    """Resolve a collection ID to its display name. Falls back to ID if not found."""
+    meta = collections_store.get_collection_meta(col_id)
+    if meta:
+        return meta.get("name", col_id)
+    return col_id
+
+
+def _multi_collection_note(sources: list) -> str:
+    """Return a warning note if sources span multiple collections, empty string otherwise."""
+    cols: set[str] = set()
+    for s in sources:
+        meta = s.get("metadata", {}) if isinstance(s, dict) else getattr(s, "metadata", {})
+        col = meta.get("collection", "")
+        if col:
+            cols.add(_col_display_name(col))
+    if len(cols) > 1:
+        return (
+            f"\n\n---\n\n> ⚠️ This answer synthesizes information from {len(cols)} "
+            f"different collections ({', '.join(sorted(cols))}). "
+            f"Cross-collection information may introduce inconsistencies."
+        )
+    return ""
+
+
 def _save_history(question: str, answer: str, collection: str, sources: list):
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -56,7 +81,26 @@ def _resolve_params(req: QueryRequest, col_config: dict) -> dict:
         "min_score": req.min_score if req.min_score is not None else 0.0,
         "use_reranker": use_reranker,
         "max_iterations": req.max_iterations if req.max_iterations is not None else col_config.get("agent_max_iterations", col_config.get("self_rag_max_iterations", 3)),
+        "sparse_llm_tokenize": _resolve_sparse_llm_tokenize(req, col_config, agent_enabled),
     }
+
+
+def _resolve_sparse_llm_tokenize(req: QueryRequest, col_config: dict, agent_enabled: bool) -> bool:
+    """Resolve whether to use LLM keyword extraction for sparse encoding.
+
+    Agentic RAG → always True (LLM is already in the loop).
+    Non-agentic Hybrid → per-query override or collection config (default True).
+    Dense mode → False (sparse encoding not used).
+    """
+    search_mode = req.search_mode or col_config.get("search_mode", "dense")
+    if search_mode != "hybrid":
+        return False
+    if agent_enabled:
+        return True
+    # Per-query override takes precedence over collection config
+    if req.sparse_llm_tokenize is not None:
+        return req.sparse_llm_tokenize
+    return col_config.get("sparse_llm_tokenize", True)
 
 
 def _resolve_llm(req: QueryRequest) -> tuple:
@@ -107,8 +151,8 @@ def query(req: QueryRequest):
         embedding_overrides = get_embedding_overrides(target_collections)
         col_embedding = embedding_overrides.get(collection) or next(iter(embedding_overrides.values()))
 
-        logger.info("Query: collections=%s, min_score=%.2f, search_mode=%s",
-                     target_collections, params["min_score"], params["search_mode"])
+        logger.info("Query: collections=%s, min_score=%.2f, search_mode=%s, sparse_llm_tokenize=%s",
+                     target_collections, params["min_score"], params["search_mode"], params["sparse_llm_tokenize"])
 
         is_parent_child = col_config.get("chunk_mode") == "parent_child"
         reranker = services.reranker if (params["use_reranker"] and services.reranker and services.reranker.provider) else None
@@ -120,6 +164,9 @@ def query(req: QueryRequest):
                 min_score=params["min_score"],
                 reranker=reranker,
                 rerank_top_k=params["rerank_top_k"],
+                retriever=services.retriever,
+                search_mode=params["search_mode"],
+                llm=llm if params["sparse_llm_tokenize"] else None,
             )
             context = build_context(chunks)
             sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
@@ -147,11 +194,17 @@ def query(req: QueryRequest):
                 min_score=params["min_score"],
                 reranker=reranker,
                 rerank_top_k=params["rerank_top_k"],
+                llm=llm if params["sparse_llm_tokenize"] else None,
             )
             context = build_context(chunks)
             sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
             answer = llm.generate(f"Answer based on context:\n{context}\n\nQuestion: {req.question}", temperature=temperature)
             result = AgentResult(answer=answer, sources=sources, iterations=1, query_used=req.question)
+
+        # Append multi-collection note if applicable
+        note = _multi_collection_note(result.sources)
+        if note:
+            result.answer += note
 
         sources = [SourceItem(**s) for s in result.sources]
         _save_history(req.question, result.answer, req.collection, result.sources)
@@ -189,8 +242,8 @@ async def query_stream(req: QueryRequest):
             embedding_overrides = get_embedding_overrides(target_collections)
             col_embedding = embedding_overrides.get(collection) or next(iter(embedding_overrides.values()))
 
-            logger.info("Query stream: collections=%s, min_score=%.2f, search_mode=%s",
-                         target_collections, params["min_score"], params["search_mode"])
+            logger.info("Query stream: collections=%s, min_score=%.2f, search_mode=%s, sparse_llm_tokenize=%s",
+                         target_collections, params["min_score"], params["search_mode"], params["sparse_llm_tokenize"])
 
             is_parent_child = col_config.get("chunk_mode") == "parent_child"
             reranker = services.reranker if (params["use_reranker"] and services.reranker and services.reranker.provider) else None
@@ -202,6 +255,9 @@ async def query_stream(req: QueryRequest):
                     min_score=params["min_score"],
                     reranker=reranker,
                     rerank_top_k=params["rerank_top_k"],
+                    retriever=services.retriever,
+                    search_mode=params["search_mode"],
+                    llm=llm if params["sparse_llm_tokenize"] else None,
                 )
                 context = build_context(chunks)
                 sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
@@ -216,6 +272,10 @@ async def query_stream(req: QueryRequest):
                 for token in llm.generate_stream(f"Answer based on context:\n{context}\n\nQuestion: {req.question}", temperature=temperature):
                     answer_parts.append(token)
                     yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                note = _multi_collection_note(sources)
+                if note:
+                    answer_parts.append(note)
+                    yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
                 _save_history(req.question, "".join(answer_parts), req.collection, sources)
 
             elif params["agent_enabled"]:
@@ -256,13 +316,19 @@ async def query_stream(req: QueryRequest):
                     }
                     yield f"data: {json.dumps(meta)}\n\n"
                     if result.answer:
-                        yield f"data: {json.dumps({'type': 'token', 'content': result.answer})}\n\n"
-                        _save_history(req.question, result.answer, req.collection, result.sources)
+                        note = _multi_collection_note(result.sources)
+                        answer_text = result.answer + note
+                        yield f"data: {json.dumps({'type': 'token', 'content': answer_text})}\n\n"
+                        _save_history(req.question, answer_text, req.collection, result.sources)
                     else:
                         answer_parts = []
                         for token in stream:
                             answer_parts.append(token)
                             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                        note = _multi_collection_note(result.sources)
+                        if note:
+                            answer_parts.append(note)
+                            yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
                         _save_history(req.question, "".join(answer_parts), req.collection, result.sources)
 
             else:
@@ -273,6 +339,7 @@ async def query_stream(req: QueryRequest):
                     min_score=params["min_score"],
                     reranker=reranker,
                     rerank_top_k=params["rerank_top_k"],
+                    llm=llm if params["sparse_llm_tokenize"] else None,
                 )
                 context = build_context(chunks)
                 sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
@@ -287,6 +354,10 @@ async def query_stream(req: QueryRequest):
                 for token in llm.generate_stream(f"Answer based on context:\n{context}\n\nQuestion: {req.question}", temperature=temperature):
                     answer_parts.append(token)
                     yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                note = _multi_collection_note(sources)
+                if note:
+                    answer_parts.append(note)
+                    yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
                 _save_history(req.question, "".join(answer_parts), req.collection, sources)
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"

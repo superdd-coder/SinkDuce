@@ -71,10 +71,28 @@ def _do_enrich(chunks, doc, config):
         return chunks
 
 
+def _build_enriched_text(chunk) -> str:
+    """Build text for embedding/sparse encoding from chunk text + key metadata."""
+    parts = []
+    source = chunk.metadata.get("source", "")
+    if source:
+        # Use just the filename, not the full path
+        filename = source.replace("\\", "/").rsplit("/", 1)[-1]
+        parts.append(f"Source: {filename}")
+    summary = chunk.metadata.get("summary", "")
+    if summary:
+        parts.append(f"Document: {summary}")
+    context = chunk.metadata.get("context", "")
+    if context:
+        parts.append(f"Context: {context}")
+    parts.append(chunk.text)
+    return "\n".join(parts)
+
+
 def _do_embed(chunks, config, collection):
     """Run embedding (blocking). Must be called with _embed_lock held."""
     embedding = get_collection_embedding(config, collection)
-    texts = [c.text for c in chunks]
+    texts = [_build_enriched_text(c) for c in chunks]
     return embedding.embed_texts(texts)
 
 
@@ -485,8 +503,65 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 payloads.append(payload)
             logger.info("[%s] Embedding done in %.1fs", filename_param, time.time() - t_emb)
 
+            # ── Sparse encoding ──
+            sparse_vectors = None
+            try:
+                from src.rag.sparse_encoder import SparseEncoder
+                encoder = SparseEncoder()
+                vocab_path = Path("data") / collection / "sparse_vocab.json"
+                if vocab_path.exists():
+                    fsize = vocab_path.stat().st_size
+                    encoder.load(str(vocab_path))
+                    logger.info(
+                        "[HYBRID-VERIFY] _do_store: loaded existing vocab file=%s size=%d "
+                        "terms=%d docs=%d",
+                        vocab_path, fsize, len(encoder.term_to_id), encoder._doc_count,
+                    )
+                else:
+                    logger.info(
+                        "[HYBRID-VERIFY] _do_store: no vocab yet, building from scratch "
+                        "file=%s",
+                        vocab_path,
+                    )
+                texts = [_build_enriched_text(c) for c in chunks]
+                t0 = time.time()
+                sparse_vectors = encoder.encode(texts)
+                t_sparse = time.time() - t0
+                # Log a sample of the first chunk's top BM25 terms
+                sample_info = ""
+                if sparse_vectors and sparse_vectors[0]:
+                    # Get term names for top-5 weighted term IDs
+                    id_to_term = {v: k for k, v in encoder.term_to_id.items()}
+                    top5 = sorted(sparse_vectors[0].items(), key=lambda x: x[1], reverse=True)[:5]
+                    top_terms = [f"{id_to_term.get(tid, '?')}({w:.2f})" for tid, w in top5]
+                    sample_info = f" top_terms=[{', '.join(top_terms)}]"
+                encoder.save(str(vocab_path))
+                # Show enriched text prefix for the first chunk
+                enriched_preview = texts[0][:200].replace("\n", "\\n") if texts else "N/A"
+                logger.info(
+                    "[HYBRID-VERIFY] _do_store: encoded %d vectors in %.2fs "
+                    "total_terms=%d vocab_size=%d avg_sparse_dim=%d%s "
+                    "enriched_text=%.200s",
+                    len(sparse_vectors), t_sparse,
+                    len(encoder.term_to_id),
+                    vocab_path.stat().st_size,
+                    sum(len(v) for v in sparse_vectors) // max(len(sparse_vectors), 1),
+                    sample_info,
+                    enriched_preview,
+                )
+            except Exception:
+                logger.warning("[%s] Sparse encoding failed, storing dense-only", filename_param, exc_info=True)
+
             t_store = time.time()
-            services.db.upsert_points(collection=collection, ids=ids, vectors=embeddings, payloads=payloads)
+            services.db.upsert_points(
+                collection=collection, ids=ids, vectors=embeddings,
+                payloads=payloads,
+            )
+            # Add sparse vectors separately — does not touch dense vectors
+            if sparse_vectors:
+                services.db.upsert_sparse_vectors(
+                    collection=collection, ids=ids, sparse_vectors=sparse_vectors,
+                )
             logger.info("[%s] Store done in %.1fs. Total: %.1fs",
                         filename_param, time.time() - t_store, time.time() - t_start)
 

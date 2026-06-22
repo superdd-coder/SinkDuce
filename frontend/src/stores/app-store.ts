@@ -111,6 +111,7 @@ interface AppState {
   setLastMessageSources: (sources: Source[]) => void
   setLastMessageMetaInfo: (info: MetaInfo) => void
   setLastMessageThinkingSteps: (steps: ThinkingIteration[]) => void
+  finishLastMessage: () => void
   setStreaming: (v: boolean) => void
 
   isOnline: boolean
@@ -214,7 +215,7 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       const msgs = [...s.messages]
       if (msgs.length > 0) {
-        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], sources, isStreaming: false }
+        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], sources }
       }
       return { messages: msgs }
     }),
@@ -233,6 +234,14 @@ export const useAppStore = create<AppState>((set) => ({
         msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], thinkingSteps: steps }
       }
       return { messages: msgs }
+    }),
+  finishLastMessage: () =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], isStreaming: false }
+      }
+      return { messages: msgs, isStreaming: false }
     }),
   setStreaming: (v) => set({ isStreaming: v }),
 

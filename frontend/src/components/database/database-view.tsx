@@ -258,13 +258,13 @@ export function DatabaseView() {
                         {files.map((file) => (
                           <div
                             key={file.source}
-                            className="flex items-center gap-3 py-2.5 cursor-pointer text-sm border-b transition-colors hover:opacity-70 border-b border-dashed border-border text-foreground"
+                            className="flex items-center gap-3 py-2.5 cursor-pointer text-sm border-b transition-colors group border-b border-dashed border-border text-foreground"
                             onClick={() => openFileDetail(file.source)}
                           >
                             <span className="flex-1 truncate text-xs">{file.source}</span>
                             <span className="text-[10px] font-medium text-muted-foreground">{file.chunk_count} chunks</span>
                             <button
-                              className="text-[10px] opacity-0 hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
+                              className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
                               style={{ background: "none", border: "none" }}
                               onClick={(e) => { e.stopPropagation(); setDeleteFileTarget(file.source) }}
                             >

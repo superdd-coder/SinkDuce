@@ -115,14 +115,14 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>OneShot Setting with Dashscope API</DialogTitle>
           <DialogDescription>
             Enter your Dashscope API Key to configure all providers at once. Model names are prefilled with defaults.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2">
+        <div className="space-y-4 py-2 min-w-0">
           {/* API Key */}
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Dashscope API Key</label>

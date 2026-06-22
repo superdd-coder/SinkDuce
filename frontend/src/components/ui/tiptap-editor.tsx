@@ -1325,13 +1325,15 @@ function showSlashMenu(
     renderCommands((e.target as HTMLInputElement).value)
   })
 
-  // Position menu
-  const coords = editor.view.coordsAtPos(position)
-  const PADDING = 12
-
+  // Render commands FIRST so we measure actual menu dimensions
   menu.style.visibility = "hidden"
   menu.style.position = "fixed"
   document.body.appendChild(menu)
+  renderCommands()
+
+  // Position menu with actual content dimensions
+  const coords = editor.view.coordsAtPos(position)
+  const PADDING = 12
 
   const menuRect = menu.getBoundingClientRect()
   const viewportWidth = window.innerWidth
@@ -1349,7 +1351,6 @@ function showSlashMenu(
   menu.style.left = `${left}px`
   menu.style.visibility = "visible"
 
-  renderCommands()
   searchInput.focus()
 
   setTimeout(() => {
@@ -2449,7 +2450,7 @@ export function TiptapEditor({
 
   return (
     <div
-      className={cn("tiptap-editor relative min-h-full flex flex-col", readonly && "bg-muted/50", className)}
+      className={cn("tiptap-editor relative min-h-full flex flex-col", className)}
       onClick={handleClick}
     >
       {children && !readonly && (

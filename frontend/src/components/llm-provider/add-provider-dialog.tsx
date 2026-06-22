@@ -3,6 +3,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Eye, EyeOff, Loader2, RefreshCw } from "lucide-react"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { cn } from "@/lib/utils"
 import { createLLMProvider, updateLLMProvider, getAvailableModels, type LLMProvider } from "@/api/client"
 import { useProviderTypes } from "@/hooks/use-provider-types"
 import { toast } from "sonner"
@@ -142,37 +144,33 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{provider ? "Edit Provider" : "Add Provider"}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="space-y-4 py-2 min-w-0">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Name</label>
-            <Input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="My LLM" />
+            <label className="text-sm font-light uppercase tracking-wider">Name</label>
+            <Input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="My LLM" className="uppercase" />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Provider Type</label>
-            <select
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            <label className="text-sm font-light uppercase tracking-wider">Provider Type</label>
+            <DropdownSelect
               value={form.provider}
-              onChange={(e) => set("provider", e.target.value)}
-            >
-              {llmOptions.map((p) => (
-                <option key={p.name} value={p.name}>{p.display_name}</option>
-              ))}
-            </select>
+              onChange={(v) => set("provider", v)}
+              options={llmOptions.map((p) => ({ value: p.name, label: p.display_name }))}
+            />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Base URL</label>
+            <label className="text-sm font-light uppercase tracking-wider">Base URL</label>
             <Input value={form.base_url} onChange={(e) => set("base_url", e.target.value)} placeholder="https://api.openai.com/v1" />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">API Key</label>
+            <label className="text-sm font-light uppercase tracking-wider">API Key</label>
             <div className="relative">
               <Input
                 type={showApiKey ? "text" : "password"}
@@ -191,13 +189,13 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-[120px_1fr] gap-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Max Tokens</label>
+              <label className="text-sm font-light uppercase tracking-wider">Max Tokens</label>
               <Input value={form.max_tokens} onChange={(e) => set("max_tokens", e.target.value)} placeholder="4096" />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Max Concurrent Requests</label>
+              <label className="text-sm font-light uppercase tracking-wider whitespace-nowrap">Max Concurrent Requests</label>
               <Input value={form.max_concurrent_requests} onChange={(e) => set("max_concurrent_requests", e.target.value)} placeholder="10" />
             </div>
           </div>
@@ -205,11 +203,11 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
           {/* Fetch Models */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium">Models</label>
+              <label className="text-sm font-light uppercase tracking-wider">Models</label>
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-xs"
+                className="h-7 text-xs font-light uppercase"
                 onClick={fetchModels}
                 disabled={fetchingModels || !form.base_url.trim()}
               >
@@ -223,64 +221,66 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
             </div>
 
             {availableModels.length > 0 && (
-              <div className="border rounded-md p-2 max-h-40 overflow-y-auto space-y-1">
-                {availableModels.map((model) => (
-                  <label key={model} className="flex items-center gap-2 text-sm cursor-pointer px-2 py-1 rounded hover:bg-accent">
-                    <input
-                      type="checkbox"
-                      checked={form.selected_models.includes(model)}
-                      onChange={() => toggleModelSelection(model)}
-                      className="rounded"
-                    />
-                    <span className="flex-1 truncate font-mono text-xs">{model}</span>
-                    {form.selected_models.includes(model) && (
+              <div className="border rounded-md p-2 max-h-40 overflow-y-auto space-y-0.5">
+                {availableModels.map((model) => {
+                  const selected = form.selected_models.includes(model)
+                  return (
+                    <label key={model} onClick={() => toggleModelSelection(model)} className="flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded hover:bg-accent transition-colors min-w-0">
+                      <span className={cn(
+                        "w-1.5 h-1.5 shrink-0 transition-all",
+                        selected ? "bg-primary rotate-45" : "border border-muted-foreground/30 rotate-45",
+                      )} />
+                      <span className="flex-1 truncate font-mono text-xs min-w-0">{model}</span>
+                      {selected && (
+                        <button
+                          type="button"
+                          className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap ${
+                            form.default_model === model
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground hover:bg-accent"
+                          }`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDefaultModel(model)
+                          }}
+                        >
+                          {form.default_model === model ? "default" : "set default"}
+                        </button>
+                      )}
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+
+            {availableModels.length === 0 && !fetchingModels && form.selected_models.length > 0 && (
+              <div className="border rounded-md p-2 space-y-0.5">
+                {form.selected_models.map((model) => {
+                  const selected = form.selected_models.includes(model)
+                  return (
+                    <label key={model} onClick={() => toggleModelSelection(model)} className="flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded hover:bg-accent transition-colors min-w-0">
+                      <span className={cn(
+                        "w-1.5 h-1.5 shrink-0 transition-all",
+                        selected ? "bg-primary rotate-45" : "border border-muted-foreground/30 rotate-45",
+                      )} />
+                      <span className="flex-1 truncate font-mono text-xs min-w-0">{model}</span>
                       <button
                         type="button"
-                        className={`text-[10px] px-1.5 py-0.5 rounded ${
+                        className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap ${
                           form.default_model === model
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted text-muted-foreground hover:bg-accent"
                         }`}
                         onClick={(e) => {
-                          e.preventDefault()
+                          e.stopPropagation()
                           setDefaultModel(model)
                         }}
                       >
                         {form.default_model === model ? "default" : "set default"}
                       </button>
-                    )}
-                  </label>
-                ))}
-              </div>
-            )}
-
-            {availableModels.length === 0 && !fetchingModels && form.selected_models.length > 0 && (
-              <div className="border rounded-md p-2 space-y-1">
-                {form.selected_models.map((model) => (
-                  <label key={model} className="flex items-center gap-2 text-sm cursor-pointer px-2 py-1 rounded hover:bg-accent">
-                    <input
-                      type="checkbox"
-                      checked
-                      onChange={() => toggleModelSelection(model)}
-                      className="rounded"
-                    />
-                    <span className="flex-1 truncate font-mono text-xs">{model}</span>
-                    <button
-                      type="button"
-                      className={`text-[10px] px-1.5 py-0.5 rounded ${
-                        form.default_model === model
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground hover:bg-accent"
-                      }`}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        setDefaultModel(model)
-                      }}
-                    >
-                      {form.default_model === model ? "default" : "set default"}
-                    </button>
-                  </label>
-                ))}
+                    </label>
+                  )
+                })}
               </div>
             )}
 
@@ -291,7 +291,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
             )}
           </div>
 
-          <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+          <label className="flex items-center gap-2 text-sm font-light uppercase tracking-wider cursor-pointer">
             <input
               type="checkbox"
               checked={form.is_default}
@@ -303,8 +303,8 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="font-light uppercase">Cancel</Button>
+          <Button onClick={handleSave} disabled={saving} className="font-light uppercase">
             {saving ? "Saving..." : provider ? "Update" : "Create"}
           </Button>
         </div>

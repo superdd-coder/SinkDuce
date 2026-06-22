@@ -98,6 +98,7 @@ def _retrieve_across_collections(
     search_mode: str = "dense",
     min_score: float = 0.0,
     db: QdrantManager | None = None,
+    llm=None,
 ) -> list[RetrievedChunk]:
     """Retrieve chunks from multiple collections, merging results.
 
@@ -112,12 +113,13 @@ def _retrieve_across_collections(
                 chunks, _ = retrieve_parent_child(
                     query, col, top_k,
                     embedding=emb, db=db, min_score=min_score,
+                    retriever=retriever, search_mode=search_mode, llm=llm,
                 )
             else:
                 chunks = retriever.retrieve(
                     query, collection=col, top_k=top_k,
                     embedding_override=emb, search_mode=search_mode,
-                    min_score=min_score,
+                    min_score=min_score, llm=llm,
                 )
             logger.info(
                 "[AgenticRAG] Collection '%s': %d chunks (pc=%s)",
@@ -219,6 +221,7 @@ def node_retrieve_and_rerank(
     search_mode: str = "dense",
     min_score: float = 0.0,
     db: QdrantManager | None = None,
+    llm=None,
 ) -> list[RetrievedChunk]:
     """Retrieve, rerank, dedup; returns fresh batch for grading.
 
@@ -238,6 +241,7 @@ def node_retrieve_and_rerank(
         search_mode=search_mode,
         min_score=min_score,
         db=db,
+        llm=llm,
     )
 
     if not raw_chunks:
@@ -539,7 +543,7 @@ def node_parallel_sub_queries(
             raw = _retrieve_across_collections(
                 sub_query, state.collections, state.top_k,
                 retriever=retriever, embedding_overrides=embedding_overrides,
-                search_mode=search_mode, min_score=min_score, db=db,
+                search_mode=search_mode, min_score=min_score, db=db, llm=llm,
             )
             if not raw:
                 logger.info("[AgenticRAG] N5 sq%d: 0 raw results", index + 1)
@@ -689,6 +693,22 @@ def node_build_context(state: AgentState) -> str:
     # Count stats for log
     col_count = len(clusters)
     src_count = sum(len(sources) for sources in clusters.values())
+    # Multi-collection hint: warn LLM when chunks span different collections
+    if col_count > 1:
+        from src.collections import store as _cs
+        col_list = sorted(
+            _cs.get_collection_meta(c).get("name", c) if _cs.get_collection_meta(c) else c
+            for c in clusters.keys()
+        )
+        hint = (
+            f"[IMPORTANT: The following context comes from {col_count} DIFFERENT "
+            f"collections: {', '.join(col_list)}. These are separate knowledge bases "
+            f"that may contain overlapping or conflicting information. When answering, "
+            f"be mindful of collection boundaries — note which collection each key "
+            f"fact originates from, and do not assume consistency across collections.]"
+        )
+        context = hint + "\n\n" + context
+
     logger.info("[AgenticRAG] N6 context: %d chunks → %d DBs, %d sources, ~%d chars",
                 len(unique), col_count, src_count, len(context))
     return context

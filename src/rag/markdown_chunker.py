@@ -35,6 +35,8 @@ class MarkdownBlock:
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})", re.MULTILINE)
 _TABLE_ROW_RE = re.compile(r"^\|.+\|\s*$", re.MULTILINE)
+_HTML_TABLE_OPEN_RE = re.compile(r"^<table\b", re.IGNORECASE)
+_HTML_TABLE_CLOSE_RE = re.compile(r"</table>\s*$", re.IGNORECASE)
 _LIST_RE = re.compile(r"^(\s*[-*+]|\s*\d+\.)\s", re.MULTILINE)
 _BLOCKQUOTE_RE = re.compile(r"^>\s?", re.MULTILINE)
 _HR_RE = re.compile(r"^[-*_]{3,}\s*$", re.MULTILINE)
@@ -134,7 +136,19 @@ def _parse_blocks(text: str) -> list[MarkdownBlock]:
             char_offset += line_len
             continue
 
-        # Table row
+        # HTML table (<table>...</table> — single or multi-line)
+        if _HTML_TABLE_OPEN_RE.match(stripped) or current_type == "html_table":
+            if current_type != "html_table":
+                flush(char_offset)
+                current_type = "html_table"
+                current_start = char_offset
+            current_lines.append(line)
+            char_offset += line_len
+            if _HTML_TABLE_CLOSE_RE.search(stripped):
+                flush(char_offset)
+            continue
+
+        # GFM table row
         if _TABLE_ROW_RE.match(stripped):
             if current_type != "table":
                 flush(char_offset)
@@ -203,45 +217,144 @@ def _heading_level(heading_text: str) -> int:
 
 # ── Block Overflow Splitting ─────────────────────────────────
 
+
+def _prune_empty_table_columns(table_text: str) -> str:
+    """Remove columns that have no data (only header) from a Markdown table.
+
+    When a large table is split into sub-tables, some columns may end up with
+    empty cells across all data rows in that sub-table.  Pruning them keeps
+    the chunk compact and avoids confusing the LLM with header-only columns.
+    Returns the original text if pruning would leave zero columns.
+    """
+    lines = table_text.split("\n")
+    if len(lines) < 3:
+        return table_text
+
+    def _parse_cells(row: str) -> list[str]:
+        """Split a Markdown table row into cells, stripping surrounding whitespace."""
+        stripped = row.strip()
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        return [c.strip() for c in stripped.split("|")]
+
+    header_cells = _parse_cells(lines[0])
+    data_rows = lines[2:]  # skip header + separator
+    col_count = len(header_cells)
+    if col_count == 0:
+        return table_text
+
+    # Determine which columns have at least one non-empty data cell
+    has_data = [False] * col_count
+    for row in data_rows:
+        cells = _parse_cells(row)
+        for ci in range(min(len(cells), col_count)):
+            if cells[ci]:
+                has_data[ci] = True
+
+    # If all columns have data, nothing to prune
+    if all(has_data):
+        return table_text
+
+    # If no column has data (degenerate), keep original
+    if not any(has_data):
+        return table_text
+
+    keep_indices = [i for i, ok in enumerate(has_data) if ok]
+
+    def _rebuild_row(row: str, is_separator: bool = False) -> str:
+        cells = _parse_cells(row)
+        # Pad with empty strings if row has fewer cells than header
+        padded = cells + [""] * max(0, col_count - len(cells))
+        kept = [padded[i] for i in keep_indices]
+        sep_cell = "---" if is_separator else ""
+        return "| " + " | ".join(kept) + " |"
+
+    rebuilt_lines = [
+        _rebuild_row(lines[0]),
+        _rebuild_row(lines[1], is_separator=True),
+    ] + [_rebuild_row(r) for r in data_rows]
+
+    return "\n".join(rebuilt_lines)
+
+
 def _split_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
-    """Split an oversized table by row groups, preserving the header row."""
-    lines = block.content.split("\n")
+    """Split an oversized table by row groups, preserving the header row.
+
+    Empty columns (no data across the *entire* table) are pruned globally
+    before splitting, so they don't waste token budget.  Per-sub-table
+    pruning is then applied as a safety net for columns that only have
+    data in some sub-tables.
+
+    The header row + separator are always included in output but do NOT
+    count toward ``max_tokens`` — only data rows participate in the budget.
+    This keeps sub-tables compact while letting each one carry more data.
+
+    For the *first* sub-block ``start_offset`` points to the real header in
+    the original text.  For *subsequent* sub-blocks ``start_offset`` points
+    to the first data row in the original text (the repeated header is
+    injected and doesn't exist there).
+    """
+    # ── Global prune: remove columns empty across ALL data rows ─────
+    full_table = _prune_empty_table_columns(block.content)
+    lines = full_table.split("\n")
     if len(lines) < 3:
         return [block]
 
-    # Identify header (first row) and separator (second row)
     header_line = lines[0]
     separator_line = lines[1]
     data_lines = lines[2:]
 
-    header_tokens = _estimate_tokens(header_line + "\n" + separator_line)
+    # Pre-compute position of each data line within the *original* block.content
+    _orig_lines = block.content.split("\n")
+    _data_start_positions: list[int] = []
+    _pos = len(_orig_lines[0]) + 1 + len(_orig_lines[1]) + 1  # +1 for each \n
+    for row_text in _orig_lines[2:]:
+        _data_start_positions.append(_pos)
+        _pos += len(row_text) + 1
+
     parts: list[MarkdownBlock] = []
     current_rows: list[str] = []
-    current_tokens = header_tokens
-    part_start_offset = block.start_offset + len(header_line) + len(separator_line) + 2
+    current_tokens = 0  # header does NOT count toward max_tokens
+    _data_start_idx = 0  # index into _data_start_positions for the current group
 
-    for row in data_lines:
+    for i, row in enumerate(data_lines):
         row_tokens = _estimate_tokens(row)
         if current_rows and current_tokens + row_tokens > max_tokens:
             # Flush current group
-            part_content = header_line + "\n" + separator_line + "\n" + "\n".join(current_rows)
+            part_content = _prune_empty_table_columns(
+                header_line + "\n" + separator_line + "\n" + "\n".join(current_rows)
+            )
+            # First sub-block: start_offset = block.start_offset (real header)
+            # Subsequent: start_offset = first data row's position in original text
+            tbl_start = block.start_offset if _data_start_idx == 0 else (
+                block.start_offset + _data_start_positions[_data_start_idx]
+            )
             parts.append(MarkdownBlock(
                 block_type="table", content=part_content,
-                start_offset=block.start_offset, end_offset=part_start_offset,
+                start_offset=tbl_start,
+                end_offset=block.end_offset,
                 heading_path=list(block.heading_path),
             ))
             current_rows = []
-            current_tokens = header_tokens
+            current_tokens = 0  # header does NOT count
+            _data_start_idx = i
 
         current_rows.append(row)
         current_tokens += row_tokens
-        part_start_offset += len(row) + 1
 
     if current_rows:
-        part_content = header_line + "\n" + separator_line + "\n" + "\n".join(current_rows)
+        part_content = _prune_empty_table_columns(
+            header_line + "\n" + separator_line + "\n" + "\n".join(current_rows)
+        )
+        tbl_start = block.start_offset if _data_start_idx == 0 else (
+            block.start_offset + _data_start_positions[_data_start_idx]
+        )
         parts.append(MarkdownBlock(
             block_type="table", content=part_content,
-            start_offset=block.start_offset, end_offset=block.end_offset,
+            start_offset=tbl_start,
+            end_offset=block.end_offset,
             heading_path=list(block.heading_path),
         ))
 
@@ -249,7 +362,14 @@ def _split_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBl
 
 
 def _split_code_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
-    """Split an oversized code block at blank lines, preserving the fence."""
+    """Split an oversized code block at blank lines, preserving the fence.
+
+    Each sub-block repeats the opening/closing fences so it remains valid code.
+    For the *first* sub-block ``start_offset`` points to the real opening fence
+    in the original text.  For *subsequent* sub-blocks ``start_offset`` points
+    to the first body line in the original text (the repeated fences are
+    injected and don't exist there).
+    """
     lines = block.content.split("\n")
     if not lines:
         return [block]
@@ -259,21 +379,35 @@ def _split_code_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlo
     closing_fence = lines[-1] if lines[-1].strip().startswith("```") or lines[-1].strip().startswith("~~~") else ""
 
     body_lines = lines[1:-1] if closing_fence else lines[1:]
+
+    # Pre-compute position of each body line within block.content
+    _body_positions: list[int] = []
+    _pos = len(opening_fence) + 1  # +1 for \n after opening fence
+    for bl in body_lines:
+        _body_positions.append(_pos)
+        _pos += len(bl) + 1
+
     parts: list[MarkdownBlock] = []
     current_lines: list[str] = []
     current_tokens = _estimate_tokens(opening_fence)
+    body_start_idx = 0
 
-    for line in body_lines:
+    for i, line in enumerate(body_lines):
         line_tokens = _estimate_tokens(line)
         if current_lines and current_tokens + line_tokens > max_tokens:
             part_content = opening_fence + "\n" + "\n".join(current_lines) + "\n" + closing_fence
+            code_start = block.start_offset if body_start_idx == 0 else (
+                block.start_offset + _body_positions[body_start_idx]
+            )
             parts.append(MarkdownBlock(
                 block_type="code", content=part_content,
-                start_offset=block.start_offset, end_offset=block.end_offset,
+                start_offset=code_start,
+                end_offset=block.end_offset,
                 heading_path=list(block.heading_path),
             ))
             current_lines = []
             current_tokens = _estimate_tokens(opening_fence)
+            body_start_idx = i
 
         current_lines.append(line)
         current_tokens += line_tokens
@@ -282,9 +416,13 @@ def _split_code_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlo
         part_content = opening_fence + "\n" + "\n".join(current_lines)
         if closing_fence:
             part_content += "\n" + closing_fence
+        code_start = block.start_offset if body_start_idx == 0 else (
+            block.start_offset + _body_positions[body_start_idx]
+        )
         parts.append(MarkdownBlock(
             block_type="code", content=part_content,
-            start_offset=block.start_offset, end_offset=block.end_offset,
+            start_offset=code_start,
+            end_offset=block.end_offset,
             heading_path=list(block.heading_path),
         ))
 
@@ -297,44 +435,58 @@ def _split_list_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlo
     if len(lines) <= 1:
         return [block]
 
-    # Group lines by top-level list items
-    items: list[list[str]] = []
+    # Pre-compute line start positions within block.content
+    _line_positions: list[int] = [0]
+    for ln in lines[:-1]:
+        _line_positions.append(_line_positions[-1] + len(ln) + 1)  # +1 for \n
+
+    # Group lines by top-level list items, tracking line index
+    items: list[tuple[list[str], int]] = []  # (lines, start_line_index)
     current_item: list[str] = []
+    cur_start_line = 0
     item_re = re.compile(r"^(\s*[-*+]|\s*\d+\.)\s")
 
-    for line in lines:
+    for i, line in enumerate(lines):
         if item_re.match(line.strip()) and not line.startswith("  "):
-            # Top-level item
             if current_item:
-                items.append(current_item)
+                items.append((current_item, cur_start_line))
             current_item = [line]
+            cur_start_line = i
         else:
             current_item.append(line)
     if current_item:
-        items.append(current_item)
+        items.append((current_item, cur_start_line))
 
     parts: list[MarkdownBlock] = []
     current_items: list[str] = []
     current_tokens = 0
+    part_start_line = 0
 
-    for item_lines in items:
+    for item_lines, start_line in items:
         item_text = "\n".join(item_lines)
         item_tokens = _estimate_tokens(item_text)
         if current_items and current_tokens + item_tokens > max_tokens:
+            content = "\n".join(current_items)
+            actual_start = block.start_offset + _line_positions[part_start_line]
             parts.append(MarkdownBlock(
-                block_type="list", content="\n".join(current_items),
-                start_offset=block.start_offset, end_offset=block.end_offset,
+                block_type="list", content=content,
+                start_offset=actual_start, end_offset=actual_start + len(content),
                 heading_path=list(block.heading_path),
             ))
             current_items = []
             current_tokens = 0
+            part_start_line = start_line
+        if not current_items:
+            part_start_line = start_line
         current_items.append(item_text)
         current_tokens += item_tokens
 
     if current_items:
+        content = "\n".join(current_items)
+        actual_start = block.start_offset + _line_positions[part_start_line]
         parts.append(MarkdownBlock(
-            block_type="list", content="\n".join(current_items),
-            start_offset=block.start_offset, end_offset=block.end_offset,
+            block_type="list", content=content,
+            start_offset=actual_start, end_offset=actual_start + len(content),
             heading_path=list(block.heading_path),
         ))
 
@@ -348,27 +500,161 @@ def _split_paragraph_block(block: MarkdownBlock, max_tokens: int) -> list[Markdo
         # No sentence boundaries — hard split
         return [block]
 
+    # Pre-compute sentence start positions within block.content
+    _sent_positions: list[int] = []
+    _pos = 0
+    for s in sentences:
+        idx = block.content.find(s, _pos)
+        _sent_positions.append(idx if idx >= 0 else _pos)
+        _pos = _sent_positions[-1] + len(s)
+
     parts: list[MarkdownBlock] = []
     current_parts: list[str] = []
     current_tokens = 0
+    part_start_idx = 0
 
-    for sent in sentences:
+    for i, sent in enumerate(sentences):
         sent_tokens = _estimate_tokens(sent)
         if current_parts and current_tokens + sent_tokens > max_tokens:
+            actual_start = block.start_offset + _sent_positions[part_start_idx]
             parts.append(MarkdownBlock(
                 block_type="paragraph", content=" ".join(current_parts),
-                start_offset=block.start_offset, end_offset=block.end_offset,
+                start_offset=actual_start, end_offset=block.end_offset,
                 heading_path=list(block.heading_path),
             ))
             current_parts = []
             current_tokens = 0
+            part_start_idx = i
         current_parts.append(sent)
         current_tokens += sent_tokens
 
     if current_parts:
+        actual_start = block.start_offset + _sent_positions[part_start_idx]
         parts.append(MarkdownBlock(
             block_type="paragraph", content=" ".join(current_parts),
-            start_offset=block.start_offset, end_offset=block.end_offset,
+            start_offset=actual_start, end_offset=block.end_offset,
+            heading_path=list(block.heading_path),
+        ))
+
+    return parts if parts else [block]
+
+
+def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
+    """Split an oversized HTML <table> by row groups, preserving headers.
+
+    HTML tables can have ``<thead>``, ``<tbody>``, and ``<tfoot>`` sections.
+    Each sub-block repeats ``<thead>`` (and optionally column-level ``<colgroup>``)
+    so the table remains valid.  The opening ``<table ...>`` and closing
+    ``</table>`` wrappers are also injected for every sub-block.
+
+    ``start_offset`` for the first sub-block points to the original ``<table>``
+    opening tag.  For subsequent sub-blocks it points to the first ``<tr>`` of
+    the data rows in the original text (the repeated header/table-wrappers are
+    injected — they don't exist at those positions).
+    """
+    import re as _re
+
+    content = block.content
+
+    # ── Extract opening <table ...> and closing </table> ──
+    _table_open_m = _re.search(r"^<table[^>]*>", content, _re.IGNORECASE)
+    _table_close_m = _re.search(r"</table>\s*$", content, _re.IGNORECASE)
+    table_open = _table_open_m.group(0) if _table_open_m else "<table>"
+    table_close = _table_close_m.group(0) if _table_close_m else "</table>"
+
+    # Strip outer <table> wrappers — we'll re-wrap each sub-block
+    inner = content
+    if _table_open_m:
+        inner = inner[_table_open_m.end():]
+    if _table_close_m:
+        inner = inner[:_table_close_m.start()]
+
+    # ── Extract <thead> (header section, optional) ──
+    _thead_m = _re.search(r"<thead[^>]*>(.*?)</thead>", inner, _re.DOTALL | _re.IGNORECASE)
+    thead_content = _thead_m.group(0) if _thead_m else ""
+    # If no explicit <thead>, the first <tr> might still be a header
+    has_explicit_thead = bool(_thead_m)
+
+    # ── Parse all <tr> groups (body rows) ──
+    # Remove <thead> from inner before extracting body rows
+    body_inner = inner
+    if _thead_m:
+        body_inner = inner[:_thead_m.start()] + inner[_thead_m.end():]
+
+    # Extract remaining <tr> blocks (could be in <tbody>, <tfoot>, or bare)
+    _tr_re = _re.compile(r"<tr[^>]*>(.*?)</tr>", _re.DOTALL | _re.IGNORECASE)
+    all_tr_matches = list(_tr_re.finditer(body_inner))
+
+    if not all_tr_matches:
+        # No rows found — keep as single block
+        return [block]
+
+    # Determine which rows are "header" rows (to repeat for each sub-block)
+    # First row(s) inside <thead> are header; if no <thead>, use the
+    # first *data* row as the de-facto header template
+    header_tr_content: list[str] = []  # raw text of each header <tr>
+    data_tr_matches = all_tr_matches
+
+    if _thead_m:
+        header_trs = list(_tr_re.finditer(thead_content))
+        header_tr_content = [m.group(0) for m in header_trs]
+    else:
+        # First data row serves as the header template
+        if all_tr_matches:
+            header_tr_content = [all_tr_matches[0].group(0)]
+            data_tr_matches = all_tr_matches[1:]
+
+    if not data_tr_matches:
+        return [block]
+
+    # ── Pre-compute each data <tr> position within block.content ──
+    _tr_positions: list[int] = []
+    for m in data_tr_matches:
+        _tr_positions.append(m.start())
+
+    # ── Group data rows into sub-blocks ──
+    parts: list[MarkdownBlock] = []
+    current_rows: list[str] = []
+    current_tokens = _estimate_tokens(
+        table_open + "\n" + "".join(header_tr_content) + table_close
+    )
+    _data_start_idx = 0
+
+    for i, m in enumerate(data_tr_matches):
+        row_text = m.group(0)
+        row_tokens = _estimate_tokens(row_text)
+        if current_rows and current_tokens + row_tokens > max_tokens:
+            # Flush current group — rebuild a full HTML table
+            part_inner = "".join(header_tr_content) + "\n" + "\n".join(current_rows)
+            part_content = table_open + "\n" + part_inner + "\n" + table_close
+            tbl_start = block.start_offset if _data_start_idx == 0 else (
+                block.start_offset + _tr_positions[_data_start_idx]
+            )
+            parts.append(MarkdownBlock(
+                block_type="html_table", content=part_content,
+                start_offset=tbl_start,
+                end_offset=block.end_offset,
+                heading_path=list(block.heading_path),
+            ))
+            current_rows = []
+            current_tokens = _estimate_tokens(
+                table_open + "\n" + "".join(header_tr_content) + table_close
+            )
+            _data_start_idx = i
+
+        current_rows.append(row_text)
+        current_tokens += row_tokens
+
+    if current_rows:
+        part_inner = "".join(header_tr_content) + "\n" + "\n".join(current_rows)
+        part_content = table_open + "\n" + part_inner + "\n" + table_close
+        tbl_start = block.start_offset if _data_start_idx == 0 else (
+            block.start_offset + _tr_positions[_data_start_idx]
+        )
+        parts.append(MarkdownBlock(
+            block_type="html_table", content=part_content,
+            start_offset=tbl_start,
+            end_offset=block.end_offset,
             heading_path=list(block.heading_path),
         ))
 
@@ -379,6 +665,8 @@ def _split_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
     """Split an oversized block using type-appropriate strategy."""
     if block.block_type == "table":
         return _split_table_block(block, max_tokens)
+    elif block.block_type == "html_table":
+        return _split_html_table_block(block, max_tokens)
     elif block.block_type == "code":
         return _split_code_block(block, max_tokens)
     elif block.block_type == "list":
@@ -659,6 +947,10 @@ class MarkdownParentChildChunker:
                 child.metadata["chunk_index"] = child_idx
                 child.parent_id = parent_id
                 child.chunk_type = "child"
+                # Adjust child's char_offset to be document-level (not parent-relative)
+                child_co = child.metadata.get("char_offset")
+                if child_co is not None:
+                    child.metadata["char_offset"] = child_co + parent_offset
                 # Propagate heading_path from parent
                 if heading_path:
                     child.metadata["heading_path"] = " > ".join(heading_path)

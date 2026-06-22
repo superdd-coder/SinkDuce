@@ -25,7 +25,7 @@ export function Sidebar() {
       className="w-[172px] border-r border-border flex flex-col shrink-0 py-6 px-4 bg-background"
     >
       <nav className="flex flex-col flex-1">
-        <div className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground mb-3">
+        <div className="text-[14px] font-semibold uppercase tracking-[0.25em] text-muted-foreground mb-3">
           Navigate
         </div>
 
@@ -34,7 +34,7 @@ export function Sidebar() {
             <Button
               variant="ghost"
               className={cn(
-                "w-full justify-start gap-2.5 py-1.5 px-0 h-auto text-xs relative rounded-none",
+                "w-full justify-start gap-2.5 py-1.5 px-0 h-auto text-xs uppercase tracking-wider relative rounded-none",
                 "hover:bg-transparent hover:text-primary",
                 sidebarView === view ? "font-medium text-primary" : "font-normal text-muted-foreground",
               )}

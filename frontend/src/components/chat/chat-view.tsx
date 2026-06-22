@@ -49,11 +49,11 @@ export function ChatView() {
   const selectedSourceId = (selectedSource?.metadata?.id as string) || null
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden relative">
       <div className="flex-1 flex min-h-0">
         {/* Main chat area */}
         <div className={`flex flex-col flex-1 min-w-0 ${selectedSource ? "hidden sm:flex" : ""}`}>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto pb-44">
             {messages.length === 0 ? (
               <div
                 className="flex flex-col items-center justify-center h-full gap-2 py-20"
@@ -81,18 +81,25 @@ export function ChatView() {
               </div>
             )}
           </div>
-
-          <ChatInput />
         </div>
 
         {/* Right-side source detail panel */}
-        <div className={`${selectedSource ? "w-full sm:w-[42vw] shrink-0" : "hidden"}`}>
-          <div className="sm:hidden absolute top-0 right-0 z-10 p-2">
-            <Button variant="ghost" size="sm" onClick={handleClosePanel}>
-              <PanelRightClose className="h-4 w-4 mr-1" /> Back to chat
-            </Button>
+        <div className={`shrink-0 overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${selectedSource ? "w-full sm:w-[42vw]" : "w-0"}`}>
+          <div className={`w-full sm:w-[42vw] h-full transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${selectedSource ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0"}`}>
+            <div className="sm:hidden absolute top-0 right-0 z-10 p-2">
+              <Button variant="ghost" size="sm" onClick={handleClosePanel}>
+                <PanelRightClose className="h-4 w-4 mr-1" /> Back to chat
+              </Button>
+            </div>
+            <SourceDetailPanel source={selectedSource} onClose={handleClosePanel} />
           </div>
-          <SourceDetailPanel source={selectedSource} onClose={handleClosePanel} />
+        </div>
+      </div>
+
+      {/* Floating chat input — overlays the message area */}
+      <div className={`absolute bottom-4 left-0 z-10 pointer-events-none transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${selectedSource ? "right-[42vw] max-sm:hidden" : "right-0"}`}>
+        <div className="pointer-events-auto">
+          <ChatInput />
         </div>
       </div>
     </div>

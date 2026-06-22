@@ -63,7 +63,7 @@ export function LanguageHintsSelector({ selected, onChange, options }: Props) {
                   key={code}
                   className={cn(
                     "flex items-center gap-2 px-3 py-2 rounded cursor-pointer text-sm select-none",
-                    isSelected ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted"
+                    isSelected ? "text-primary font-light" : "hover:bg-muted"
                   )}
                   onClick={() => toggle(code)}
                 >

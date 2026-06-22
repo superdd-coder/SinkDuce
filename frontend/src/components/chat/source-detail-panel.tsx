@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2, X, ChevronRight, ChevronDown, RefreshCw, Locate } from "lucide-react"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
-import { getFileChunks, getFilePreviewUrl, isPreviewable, getDocSummary, generateDocSummary, setDocSummaryInclude, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
+import type { Editor } from "@tiptap/core"
+import { getFileChunks, getFilePreviewUrl, getDocSummary, generateDocSummary, setDocSummaryInclude, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
 import type { Source } from "@/stores/app-store"
 import { toast } from "sonner"
 
@@ -48,13 +49,11 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
   const [docSummary, setDocSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const [extractedText, setExtractedText] = useState<string | null>(null)
-  const [extractedLoading, setExtractedLoading] = useState(false)
-  const extractedContentRef = useRef<HTMLDivElement>(null)
   const [activeTab, setActiveTab] = useState("preview")
   const [highlightOffset, setHighlightOffset] = useState<number | undefined>(undefined)
   const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined)
-  const textContentRef = useRef<HTMLDivElement>(null)
+  const sourceContentRef = useRef<HTMLDivElement>(null)
+  const sourceEditorRef = useRef<Editor | null>(null)
 
   const sourceName = source?.metadata?.source as string | undefined
   const collection = source?.metadata?.collection as string | undefined
@@ -64,17 +63,22 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const genKey = collection && sourceName ? _genKey(collection, sourceName) : null
   const isGenerating = !!(genKey && _generating.has(genKey))
 
-  // Reset state when source changes (not on chunk change within same source)
+  // Reset file-level state only when the file changes
   useEffect(() => {
     setPreviewContent(null)
     setChunks([])
     setDocSummary(null)
-    setExtractedText(null)
     setExpandedParents(new Set())
-    setHighlightOffset(source ? _getHighlightOffset(source) : undefined)
-    setHighlightPage(source?.metadata?.page_number as number | undefined)
     setActiveTab("preview")
   }, [collection, sourceName])
+
+  // Update highlight position when selected source chunk changes
+  // (same file, different chunk — must fire even though collection/sourceName unchanged)
+  useEffect(() => {
+    const offset = source ? _getHighlightOffset(source) : undefined
+    setHighlightOffset(offset)
+    setHighlightPage(source?.metadata?.page_number as number | undefined)
+  }, [source?.metadata?.id])
 
   // Load chunks
   useEffect(() => {
@@ -93,45 +97,19 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     return () => { cancelled = true }
   }, [collection, sourceName, chunkId])
 
-  // Load preview text for non-PDF previewable files (for offset-based highlighting)
+  // Load source content: PDF uses iframe, non-PDF loads parsed/extracted text
   useEffect(() => {
     if (!sourceName) { setPreviewContent(null); return }
-    // Only fetch text for non-PDF previewable files (PDF uses iframe)
-    if (isPreviewable(sourceName) && !_isPdf(sourceName)) {
-      let cancelled = false
-      setPreviewLoading(true)
-      fetch(getFilePreviewUrl(sourceName))
-        .then(res => res.ok ? res.text() : Promise.reject(new Error(`HTTP ${res.status}`)))
-        .then(text => { if (!cancelled) setPreviewContent(text) })
-        .catch(() => { if (!cancelled) setPreviewContent(null) })
-        .finally(() => { if (!cancelled) setPreviewLoading(false) })
-      return () => { cancelled = true }
-    }
-    // For PDFs and non-previewable files, use existing logic
-    if (isPreviewable(sourceName)) { setPreviewContent(null); return }
+    // PDF files render via iframe — no text preview needed
+    if (_isPdf(sourceName)) { setPreviewContent(null); return }
     let cancelled = false
     setPreviewLoading(true)
-    fetch(getFilePreviewUrl(sourceName))
-      .then(res => res.ok ? res.text() : Promise.reject(new Error(`HTTP ${res.status}`)))
-      .then(text => { if (!cancelled) setPreviewContent(text) })
-      .catch(() => { if (!cancelled) setPreviewContent(null) })
-      .finally(() => { if (!cancelled) setPreviewLoading(false) })
-    return () => { cancelled = true }
-  }, [sourceName])
-
-  // Load extracted text
-  useEffect(() => {
-    if (!sourceName) { setExtractedText(null); return }
-    let cancelled = false
-    setExtractedLoading(true)
     getExtractedText(sourceName)
       .then((res) => {
-        if (!cancelled) {
-          setExtractedText(res.text)
-        }
+        if (!cancelled) setPreviewContent(res.text)
       })
-      .catch(() => { if (!cancelled) { setExtractedText(null) } })
-      .finally(() => { if (!cancelled) setExtractedLoading(false) })
+      .catch(() => { if (!cancelled) setPreviewContent(null) })
+      .finally(() => { if (!cancelled) setPreviewLoading(false) })
     return () => { cancelled = true }
   }, [sourceName])
 
@@ -163,52 +141,33 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     return () => clearInterval(poll)
   }, [isGenerating, collection, sourceName, genKey])
 
-  // Scroll to highlighted chunk offset when text content loads
+  // Scroll to highlightOffset — map raw-markdown offset → ProseMirror position.
+  // Uses textContent (not content.size) for ratio: textContent strips node-gate
+  // overhead, leaving only the syntax-char drift which is roughly proportional.
   useEffect(() => {
     if (highlightOffset === undefined || isPdfFile) return
-    // For markdown, highlight isn't rendered in preview — switch to chunks tab
-    if (sourceName?.toLowerCase().endsWith(".md")) {
-      setActiveTab("chunks")
-      return
-    }
     if (!previewContent) return
-    const attemptScroll = () => {
-      const el = textContentRef.current?.querySelector("mark")
-      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      // Fallback: search the ScrollArea viewport
-      const viewport = textContentRef.current?.closest("[data-radix-scroll-area-viewport]") as HTMLElement | null
-      if (viewport) {
-        const mark = viewport.querySelector("mark")
-        if (mark) { mark.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      }
-      return false
+    const editor = sourceEditorRef.current
+    if (!editor || (editor as any).isDestroyed) return
+    const rawLen = previewContent.length
+    const textLen = editor.state.doc.textContent.length
+    if (rawLen <= 1 || textLen <= 1) return
+    // Estimate text position: how many non-syntax chars precede highlightOffset
+    const textTarget = Math.round(highlightOffset * (textLen / rawLen))
+    // Binary-search the ProseMirror position where cumulative text reaches textTarget
+    let lo = 1
+    let hi = editor.state.doc.content.size
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (editor.state.doc.textBetween(0, mid).length < textTarget) lo = mid + 1
+      else hi = mid
     }
-    if (!attemptScroll()) {
-      // Retry in case DOM is still settling
-      const timer = setTimeout(attemptScroll, 100)
-      return () => clearTimeout(timer)
-    }
-  }, [previewContent, highlightOffset, isPdfFile, sourceName, chunkId])
-
-  // Scroll to highlighted chunk in extracted tab
-  useEffect(() => {
-    if (highlightOffset === undefined || activeTab !== "extracted") return
-    if (!extractedText) return
-    const attemptScroll = () => {
-      const el = extractedContentRef.current?.querySelector("mark")
-      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      const viewport = extractedContentRef.current?.closest("[data-radix-scroll-area-viewport]") as HTMLElement | null
-      if (viewport) {
-        const mark = viewport.querySelector("mark")
-        if (mark) { mark.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      }
-      return false
-    }
-    if (!attemptScroll()) {
-      const timer = setTimeout(attemptScroll, 100)
-      return () => clearTimeout(timer)
-    }
-  }, [extractedText, highlightOffset, activeTab])
+    const resolved = editor.state.doc.resolve(lo)
+    const domPos = editor.view.domAtPos(resolved.pos)
+    const node = domPos.node
+    const el = node.nodeType === 3 /* TEXT_NODE */ ? node.parentElement : node as HTMLElement
+    el?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [previewContent, highlightOffset, isPdfFile])
 
   const isParentChild = chunks.some(c => c.chunk_type === "parent")
 
@@ -242,11 +201,12 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     })
   }, [])
 
-  const handleLocate = useCallback((offset?: number, pageNumber?: number) => {
+  const handleLocate = useCallback((offset?: number, pageNumber?: number, _length?: number) => {
+    console.log("[handleLocate]", { offset, _length, pageNumber, previewLen: previewContent?.length })
     setHighlightOffset(offset)
     if (pageNumber !== undefined) setHighlightPage(pageNumber)
-    setActiveTab("extracted")
-  }, [])
+    setActiveTab("preview")
+  }, [previewContent])
 
 
   if (!source || !sourceName) return null
@@ -271,9 +231,22 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
 
       {/* Chunk preview (compact, always visible) */}
       <div className="px-4 py-2 border-b border-border/50 shrink-0 bg-muted/20 max-h-40 overflow-y-auto">
-        <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
-          {source.text}
-        </p>
+        <div className="flex items-start gap-2">
+          <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap flex-1 min-w-0">
+            {source.text}
+          </p>
+          <button
+            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0 mt-0.5"
+            title="Locate in preview"
+            onClick={() => handleLocate(
+              _getHighlightOffset(source),
+              source.metadata?.page_number as number | undefined,
+              source.text?.length
+            )}
+          >
+            <Locate className="h-3 w-3" />
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -281,7 +254,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full min-h-0">
           <TabsList variant="line" className="mb-1 shrink-0">
             <TabsTrigger value="preview" className="text-xs">Source</TabsTrigger>
-            <TabsTrigger value="extracted" className="text-xs">Extracted</TabsTrigger>
             <TabsTrigger value="chunks" className="text-xs">Chunks{chunks.length > 0 ? ` (${chunks.length})` : ""}</TabsTrigger>
             <TabsTrigger value="summary" className="text-xs">Summary</TabsTrigger>
           </TabsList>
@@ -306,21 +278,12 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                 />
               ) : previewContent !== null ? (
                 <ScrollArea className="h-full">
-                  <div ref={textContentRef} className="p-4">
+                  <div ref={sourceContentRef} className="p-3">
                     <TiptapEditor
-                      value={(() => {
-                        const hlOffset = source?.metadata?.char_offset as number | undefined
-                        const hlLength = source?.text?.length || 0
-                        if (typeof hlOffset === "number" && hlLength > 0 && hlOffset >= 0 && hlOffset < previewContent.length) {
-                          const before = previewContent.substring(0, hlOffset)
-                          const match = previewContent.substring(hlOffset, hlOffset + hlLength)
-                          const after = previewContent.substring(hlOffset + hlLength)
-                          return before + "<mark>" + match + "</mark>" + after
-                        }
-                        return previewContent
-                      })()}
+                      value={previewContent ?? ""}
                       readonly
                       showToolbar={false}
+                      onEditorReady={(e) => { sourceEditorRef.current = e }}
                     />
                   </div>
                 </ScrollArea>
@@ -332,28 +295,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                     ))}
                   </CardContent>
                 </ScrollArea>
-              )}
-            </div>
-          </TabsContent>
-
-          {/* Extracted Tab */}
-          <TabsContent value="extracted" className="flex-1 overflow-hidden min-h-0">
-            <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
-              {extractedLoading ? (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                  Loading extracted text...
-                </div>
-              ) : extractedText !== null ? (
-                <ScrollArea className="h-full">
-                  <div ref={extractedContentRef} className="p-3">
-                    <TiptapEditor value={extractedText} readonly showToolbar={false} />
-                  </div>
-                </ScrollArea>
-              ) : (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  <p className="text-sm">No extracted text available.</p>
-                </div>
               )}
             </div>
           </TabsContent>
@@ -394,7 +335,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                                 <button
                                   className="ml-auto p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
                                   title="Locate in preview"
-                                  onClick={(e) => { e.stopPropagation(); handleLocate(group.parent.char_offset, group.parent.page_number) }}
+                                  onClick={(e) => { e.stopPropagation(); handleLocate(group.parent.char_offset, group.parent.page_number, group.parent.text?.length) }}
                                 >
                                   <Locate className="h-3 w-3" />
                                 </button>
@@ -419,8 +360,8 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                                   <div
                                     key={child.id}
                                     className={`border rounded-lg p-2.5 bg-background cursor-pointer hover:bg-accent/50 transition-colors ${isTargetChild ? "border-primary ring-1 ring-primary/30" : "border-border"}`}
-                                    onClick={(e) => { e.stopPropagation(); handleLocate(child.char_offset, child.page_number) }}
-                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); handleLocate(child.char_offset, child.page_number) } }}
+                                    onClick={(e) => { e.stopPropagation(); handleLocate(child.char_offset, child.page_number, child.text?.length) }}
+                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); handleLocate(child.char_offset, child.page_number, child.text?.length) } }}
                                     role="button"
                                     tabIndex={0}
                                   >
@@ -449,8 +390,8 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                         <div
                           key={chunk.id}
                           className={`border rounded-lg p-2.5 cursor-pointer hover:bg-accent/50 transition-colors ${isTarget ? "border-primary ring-1 ring-primary/30 bg-primary/5" : "border-border"}`}
-                          onClick={() => handleLocate(chunk.char_offset, chunk.page_number)}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleLocate(chunk.char_offset, chunk.page_number) }}
+                          onClick={() => handleLocate(chunk.char_offset, chunk.page_number, chunk.text?.length)}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleLocate(chunk.char_offset, chunk.page_number, chunk.text?.length) }}
                           role="button"
                           tabIndex={0}
                         >

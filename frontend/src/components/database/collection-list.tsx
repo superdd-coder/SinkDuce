@@ -19,17 +19,17 @@ export function CollectionList({ collections, activeCollection, onSelect, onCrea
     >
       {/* Header */}
       <div
-        className="flex items-center justify-between px-5 py-4 border-b border-border"
+        className="flex items-center justify-between px-4 h-12 border-b border-border"
       >
         <span
-          className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground"
+          className="text-[12px] font-semibold uppercase tracking-[0.25em] text-muted-foreground"
         >
           Collections
         </span>
         <button
           type="button"
           onClick={onCreate}
-          className="text-[9px] font-semibold uppercase tracking-[0.1em] px-2.5 py-1 cursor-pointer transition-opacity hover:opacity-85 bg-primary text-primary-foreground border-none"
+          className="text-[9px] font-light uppercase tracking-[0.1em] px-2 py-0.5 cursor-pointer transition-opacity hover:opacity-85 bg-primary text-primary-foreground border-none"
           style={{ borderRadius: "2px", fontFamily: "var(--font-sans)" }}
         >
           + New

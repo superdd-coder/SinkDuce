@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2, ChevronRight, ChevronDown, RefreshCw } from "lucide-react"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
-import { getFilePreviewUrl, isPreviewable, getDocSummary, setDocSummaryInclude, generateDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
+import type { Editor } from "@tiptap/core"
+import { getFilePreviewUrl, getDocSummary, setDocSummaryInclude, generateDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
 import { toast } from "sonner"
 
 // Module-level: survives component unmount across tab switches
@@ -54,13 +55,11 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
   const [docSummary, setDocSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const [extractedText, setExtractedText] = useState<string | null>(null)
-  const [extractedLoading, setExtractedLoading] = useState(false)
-  const extractedContentRef = useRef<HTMLDivElement>(null)
   const [highlightOffset, setHighlightOffset] = useState<number | undefined>(undefined)
   const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined)
   const [activeTab, setActiveTab] = useState("source")
-  const textContentRef = useRef<HTMLDivElement>(null)
+  const sourceContentRef = useRef<HTMLDivElement>(null)
+  const sourceEditorRef = useRef<Editor | null>(null)
 
   const isPdf = source?.toLowerCase().endsWith(".pdf")
 
@@ -74,7 +73,6 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
   useEffect(() => {
     setDocSummary(null)
     setPreviewContent(null)
-    setExtractedText(null)
     setHighlightOffset(undefined)
     setHighlightPage(undefined)
     setActiveTab("source")
@@ -108,6 +106,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
 
   const isParentChild = chunks.some((c) => c.chunk_type === "parent")
 
+
   // Group chunks: parents with their children
   const groupedChunks = useMemo(() => {
     if (!isParentChild) return null
@@ -136,101 +135,72 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
     })
   }
 
-  const handleLocate = useCallback((chunk: ChunkDetail) => {
+  const handleLocate = (chunk: ChunkDetail) => {
+    console.log("[FileDetail handleLocate]", JSON.stringify({
+      char_offset: chunk.char_offset,
+      length: chunk.text?.length,
+      text: chunk.text?.substring(0, 80),
+      chunk_id: chunk.id,
+      chunk_index: chunk.chunk_index,
+      chunk_type: chunk.chunk_type,
+    }))
     setHighlightOffset(chunk.char_offset)
     if (chunk.page_number !== undefined) setHighlightPage(chunk.page_number)
-    // Navigate to extracted tab (offsets match chunk positions)
-    setActiveTab("extracted")
-  }, [])
+    setActiveTab("source")
+    // Delay to read previewContent after state settles
+    setTimeout(() => {
+      console.log("[FileDetail after locate]", JSON.stringify({
+        highlightOffset: chunk.char_offset,
+        highlightLength: chunk.text?.length,
+        previewContentLen: previewContent?.length,
+        previewContentStart: previewContent?.substring(chunk.char_offset ?? 0, (chunk.char_offset ?? 0) + 50),
+      }))
+    }, 100)
+  }
 
-  // Scroll to highlighted chunk offset when text content loads
+  // Scroll to highlightOffset — map raw-markdown offset → ProseMirror position.
   useEffect(() => {
-    if (highlightOffset === undefined || isPdf) return
-    if (source?.toLowerCase().endsWith(".md")) return
+    if (highlightOffset === undefined) return
     if (!previewContent) return
-    const attemptScroll = () => {
-      const el = textContentRef.current?.querySelector("mark")
-      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      const viewport = textContentRef.current?.closest("[data-radix-scroll-area-viewport]") as HTMLElement | null
-      if (viewport) {
-        const mark = viewport.querySelector("mark")
-        if (mark) { mark.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      }
-      return false
+    const editor = sourceEditorRef.current
+    if (!editor || (editor as any).isDestroyed) return
+    const rawLen = previewContent.length
+    const textLen = editor.state.doc.textContent.length
+    if (rawLen <= 1 || textLen <= 1) return
+    // Estimate text position: how many non-syntax chars precede highlightOffset
+    const textTarget = Math.round(highlightOffset * (textLen / rawLen))
+    // Binary-search the ProseMirror position where cumulative text reaches textTarget
+    let lo = 1
+    let hi = editor.state.doc.content.size
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (editor.state.doc.textBetween(0, mid).length < textTarget) lo = mid + 1
+      else hi = mid
     }
-    if (!attemptScroll()) {
-      const timer = setTimeout(attemptScroll, 100)
-      return () => clearTimeout(timer)
-    }
-  }, [previewContent, highlightOffset, isPdf, source])
+    const resolved = editor.state.doc.resolve(lo)
+    const domPos = editor.view.domAtPos(resolved.pos)
+    const node = domPos.node
+    const el = node.nodeType === 3 /* TEXT_NODE */ ? node.parentElement : node as HTMLElement
+    el?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [previewContent, highlightOffset])
 
-  // Scroll to highlighted chunk in extracted tab
+  // Load source content: all files (including PDFs) load parsed/extracted text for Tiptap
   useEffect(() => {
-    if (highlightOffset === undefined || activeTab !== "extracted") return
-    if (!extractedText) return
-    const attemptScroll = () => {
-      const el = extractedContentRef.current?.querySelector("mark")
-      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      const viewport = extractedContentRef.current?.closest("[data-radix-scroll-area-viewport]") as HTMLElement | null
-      if (viewport) {
-        const mark = viewport.querySelector("mark")
-        if (mark) { mark.scrollIntoView({ behavior: "smooth", block: "center" }); return true }
-      }
-      return false
-    }
-    if (!attemptScroll()) {
-      const timer = setTimeout(attemptScroll, 100)
-      return () => clearTimeout(timer)
-    }
-  }, [extractedText, highlightOffset, activeTab])
-
-  // Load preview whenever source changes
-  useEffect(() => {
-    if (!source) {
-      setPreviewContent(null)
-      return
-    }
-    // For non-PDF previewable files, fetch text for offset-based highlighting
-    if (isPreviewable(source) && !isPdf) {
-      let cancelled = false
-      setPreviewLoading(true)
-      fetch(getFilePreviewUrl(source))
-        .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.text() })
-        .then((text) => { if (!cancelled) setPreviewContent(text) })
-        .catch(() => { if (!cancelled) setPreviewContent(null) })
-        .finally(() => { if (!cancelled) setPreviewLoading(false) })
-      return () => { cancelled = true }
-    }
-    // For PDFs, use iframe
-    if (isPdf) {
-      setPreviewContent(null)
-      return
-    }
-    // For non-previewable formats, fetch raw text
+    if (!source) { setPreviewContent(null); return }
     let cancelled = false
     setPreviewLoading(true)
-    fetch(getFilePreviewUrl(source))
-      .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.text() })
-      .then((text) => { if (!cancelled) setPreviewContent(text) })
-      .catch(() => { if (!cancelled) setPreviewContent(null) })
+    getExtractedText(source)
+      .then((res) => {
+        console.log("[FileDetail getExtractedText OK]", { source, textLen: res.text?.length, format: res.format })
+        if (!cancelled) setPreviewContent(res.text)
+      })
+      .catch((err) => {
+        console.error("[FileDetail getExtractedText FAIL]", { source, err })
+        if (!cancelled) setPreviewContent(null)
+      })
       .finally(() => { if (!cancelled) setPreviewLoading(false) })
     return () => { cancelled = true }
   }, [source, isPdf])
-
-  // Load extracted text
-  useEffect(() => {
-    if (!source) { setExtractedText(null); return }
-    let cancelled = false
-    setExtractedLoading(true)
-    getExtractedText(source)
-      .then((res) => {
-        if (!cancelled) {
-          setExtractedText(res.text)
-        }
-      })
-      .finally(() => { if (!cancelled) setExtractedLoading(false) })
-    return () => { cancelled = true }
-  }, [source])
 
   // Load doc summary when source or collection changes
   useEffect(() => {
@@ -262,7 +232,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
             <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full min-h-0">
               <TabsList variant="line" className="mb-2">
                 <TabsTrigger value="source">Source</TabsTrigger>
-                <TabsTrigger value="extracted">Extracted</TabsTrigger>
+                {isPdf && <TabsTrigger value="raw">Raw</TabsTrigger>}
                 <TabsTrigger value="summary">Summary</TabsTrigger>
               </TabsList>
 
@@ -273,23 +243,17 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
                       <Loader2 className="h-5 w-5 animate-spin mr-2" />
                       Loading...
                     </div>
-                  ) : isPdf && source ? (
-                    <iframe
-                      key={highlightPage ?? "default"}
-                      src={highlightPage
-                        ? `${getFilePreviewUrl(source)}#page=${highlightPage}`
-                        : getFilePreviewUrl(source)}
-                      className="w-full h-full border-0"
-                      title={`Preview: ${source}`}
-                    />
                   ) : previewContent !== null ? (
                     <ScrollArea className="h-full">
-                      <div className="p-4">
-                        <TiptapEditor
-                          value={previewContent}
-                          readonly
-                          showToolbar={false}
-                        />
+                      <div ref={sourceContentRef}>
+                        <div className="p-4">
+                          <TiptapEditor
+                            value={previewContent ?? ""}
+                            readonly
+                            showToolbar={false}
+                            onEditorReady={(e) => { sourceEditorRef.current = e }}
+                          />
+                        </div>
                       </div>
                     </ScrollArea>
                   ) : (
@@ -304,32 +268,22 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
                 </div>
               </TabsContent>
 
-              <TabsContent value="extracted" className="flex-1 overflow-hidden min-h-0">
-                <div className="h-full overflow-hidden">
-                  {extractedLoading ? (
-                    <div className="flex items-center justify-center h-full text-muted-foreground">
-                      <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                      Loading extracted text...
-                    </div>
-                  ) : extractedText !== null ? (
-                    <ScrollArea className="h-full">
-                      <div ref={extractedContentRef}>
-                        <div className="p-4">
-                          <TiptapEditor
-                            value={extractedText}
-                            readonly
-                            showToolbar={false}
-                          />
-                        </div>
-                      </div>
-                    </ScrollArea>
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-muted-foreground">
-                      <p className="text-sm">No extracted text available.</p>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
+              {isPdf && (
+                <TabsContent value="raw" className="flex-1 overflow-hidden min-h-0">
+                  <div className="h-full overflow-hidden">
+                    {source && (
+                      <iframe
+                        key={highlightPage ?? "default"}
+                        src={highlightPage
+                          ? `${getFilePreviewUrl(source)}#page=${highlightPage}`
+                          : getFilePreviewUrl(source)}
+                        className="w-full h-full border-0"
+                        title={`Raw PDF: ${source}`}
+                      />
+                    )}
+                  </div>
+                </TabsContent>
+              )}
 
               <TabsContent value="summary" className="flex-1 overflow-hidden min-h-0">
                 <div className="h-full overflow-hidden">

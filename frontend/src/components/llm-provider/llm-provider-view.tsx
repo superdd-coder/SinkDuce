@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Combobox } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Plus, Bot, Cpu, ArrowUpDown, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Mic, Zap, Download, RefreshCw, BookOpen, Cloud } from "lucide-react"
+import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw } from "lucide-react"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { useAppStore } from "@/stores/app-store"
 import {
   getLLMProviders, type LLMProvider,
@@ -51,7 +51,7 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
   const [testing, setTesting] = useState(false)
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
 
-  const statusColor = status === "ready" ? "bg-green-500" : status === "error" ? "bg-red-500" : "bg-gray-400"
+  const statusColor = status === "ready" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-muted-foreground/40"
 
   const handleTest = async () => {
     setTesting(true)
@@ -85,39 +85,46 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
   }
 
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{provider.name || "Unnamed"}</span>
-              <div className={`h-2 w-2 rounded-full ${statusColor}`} />
-            </div>
-            <p className="text-sm text-muted-foreground">{provider.model || "No model"}</p>
-            {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
-            <p className="text-xs text-muted-foreground truncate max-w-[200px]">{provider.base_url}</p>
-          </div>
-          {provider.is_default && (
-            <Badge className="text-xs bg-green-100 text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400"><Star className="h-3 w-3 mr-1" />Default</Badge>
-          )}
+    <div className="border border-border/50 rounded-lg p-4 flex flex-col h-full">
+      {/* Row 1: Provider name + status + default badge */}
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-light uppercase tracking-wider">{provider.name || "Unnamed"}</span>
+          <div className={`h-2 w-2 rounded-full shrink-0 ${statusColor}`} />
         </div>
-        <div className="flex gap-2 mt-4">
-          <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
-            {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Plug className="h-3 w-3 mr-1" />}
-            Test
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleSetDefault} disabled={provider.is_default}>
-            <Star className="h-3 w-3 mr-1" />Default
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => onEdit(provider)}>
-            <Pencil className="h-3 w-3 mr-1" />Edit
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
-            <Trash2 className="h-3 w-3 mr-1" />Delete
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+        {provider.is_default && (
+          <Badge className="text-xs bg-emerald-50 text-emerald-700 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 shrink-0"><Star className="h-3 w-3 mr-1" />Default</Badge>
+        )}
+      </div>
+
+      {/* Row 2: Model */}
+      <div className="mt-1 min-h-[1.25rem]">
+        <p className="text-sm text-muted-foreground">{provider.model || ""}</p>
+        {subtitle && <p className="text-[10px] text-muted-foreground/70">{subtitle}</p>}
+      </div>
+
+      {/* Row 3: URL */}
+      <div className="min-h-[1rem]">
+        <p className="text-xs text-muted-foreground truncate max-w-[200px]">{provider.base_url || ""}</p>
+      </div>
+
+      {/* Row 4: Buttons */}
+      <div className="flex gap-2 mt-auto pt-3">
+        <Button variant="outline" size="sm" onClick={handleTest} disabled={testing} className="font-light uppercase">
+          {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Plug className="h-3 w-3 mr-1" />}
+          Test
+        </Button>
+        <Button variant="outline" size="sm" onClick={handleSetDefault} disabled={provider.is_default} className="font-light uppercase">
+          <Star className="h-3 w-3 mr-1" />Default
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => onEdit(provider)} className="font-light uppercase">
+          <Pencil className="h-3 w-3 mr-1" />Edit
+        </Button>
+        <Button variant="outline" size="sm" onClick={handleDelete} className="font-light uppercase hover:text-orange-600 dark:hover:text-orange-400">
+          <Trash2 className="h-3 w-3 mr-1" />Delete
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -246,14 +253,14 @@ function SimpleProviderDialog<T extends { id: string }>({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{provider ? `Edit ${title}` : `Add ${title}`}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 py-2">
+        <div className="space-y-4 py-2 min-w-0">
           {resolvedFields.map((f) => (
             <div key={f.key} className="space-y-1.5">
-              <label className="text-sm font-medium">{f.label}</label>
+              <label className="text-sm font-light uppercase tracking-wider">{f.label}</label>
               {f.key === "model" && modelFetchSection ? (
                 <>
                   <div className="flex gap-2">
@@ -266,8 +273,7 @@ function SimpleProviderDialog<T extends { id: string }>({
                     />
                     <Button
                       variant="outline"
-                      size="sm"
-                      className="h-10 shrink-0"
+                      className="h-8 w-8 shrink-0 p-0"
                       onClick={fetchModels}
                       disabled={fetchingModels || !form.base_url?.trim()}
                     >
@@ -283,13 +289,11 @@ function SimpleProviderDialog<T extends { id: string }>({
                   )}
                 </>
               ) : f.options ? (
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                <DropdownSelect
                   value={form[f.key] || ""}
-                  onChange={(e) => set(f.key, e.target.value)}
-                >
-                  {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+                  onChange={(v) => set(f.key, v)}
+                  options={f.options}
+                />
               ) : f.key === "api_key" ? (
                 <div className="relative">
                   <Input type={showApiKey ? "text" : "password"} value={form[f.key] || ""} onChange={(e) => set(f.key, e.target.value)} placeholder={f.placeholder} />
@@ -298,19 +302,19 @@ function SimpleProviderDialog<T extends { id: string }>({
                   </Button>
                 </div>
               ) : (
-                <Input type={f.type || "text"} value={form[f.key] || ""} onChange={(e) => set(f.key, e.target.value)} placeholder={f.placeholder} />
+                <Input type={f.type || "text"} value={form[f.key] || ""} onChange={(e) => set(f.key, e.target.value)} placeholder={f.placeholder} className={f.key === "name" ? "uppercase" : ""} />
               )}
             </div>
           ))}
           {renderExtra?.(form, set)}
-          <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+          <label className="flex items-center gap-2 text-sm font-light uppercase tracking-wider cursor-pointer">
             <input type="checkbox" checked={form[checkboxField] === "true"} onChange={(e) => set(checkboxField, e.target.checked ? "true" : "false")} className="rounded" />
             {checkboxLabel}
           </label>
         </div>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving..." : provider ? "Update" : "Create"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="font-light uppercase">Cancel</Button>
+          <Button onClick={handleSave} disabled={saving} className="font-light uppercase">{saving ? "Saving..." : provider ? "Update" : "Create"}</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -321,6 +325,7 @@ function SimpleProviderDialog<T extends { id: string }>({
 
 interface TranscriptionProviderCardProps {
   provider: TranscriptionProvider
+  kind: "file" | "realtime"
   onEdit: (p: TranscriptionProvider) => void
   onRefresh: () => void
   onDelete: (id: string) => Promise<{ message?: string; error?: string }>
@@ -328,10 +333,13 @@ interface TranscriptionProviderCardProps {
   onTest: (id: string) => Promise<{ success: boolean; message?: string; error?: string }>
 }
 
-function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
+function TranscriptionProviderCard({ provider, kind, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
+  const modelLabel = provider.adapter === "dashscope"
+    ? kind === "file" ? "fun-asr" : "fun-asr-realtime"
+    : provider.adapter
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
   const [testing, setTesting] = useState(false)
-  const statusColor = status === "ready" ? "bg-green-500" : status === "error" ? "bg-red-500" : "bg-gray-400"
+  const statusColor = status === "ready" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-muted-foreground/40"
 
   const handleTest = async () => {
     setTesting(true)
@@ -369,38 +377,43 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
   }
 
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{provider.name || "Unnamed"}</span>
-              <div className={`h-2 w-2 rounded-full ${statusColor}`} />
-            </div>
-            <p className="text-sm text-muted-foreground">{provider.adapter}</p>
-            {provider.model && <p className="text-xs text-muted-foreground">{provider.model}</p>}
-          </div>
-          {provider.is_active && (
-            <Badge className="text-xs bg-green-100 text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400"><Star className="h-3 w-3 mr-1" />Default</Badge>
-          )}
+    <div className="border border-border/50 rounded-lg p-4 flex flex-col h-full">
+      {/* Row 1: Provider name + status + default badge */}
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-light uppercase tracking-wider">{provider.name || "Unnamed"}</span>
+          <div className={`h-2 w-2 rounded-full shrink-0 ${statusColor}`} />
         </div>
-        <div className="flex gap-2 mt-4">
-          <Button variant="outline" size="sm" onClick={handleSetActive} disabled={provider.is_active}>
-            <Star className="h-3 w-3 mr-1" />Default
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
-            {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Zap className="h-3 w-3 mr-1" />}
-            Test
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => onEdit(provider)}>
-            <Pencil className="h-3 w-3 mr-1" />Edit
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
-            <Trash2 className="h-3 w-3 mr-1" />Delete
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+        {provider.is_active && (
+          <Badge className="text-xs bg-emerald-50 text-emerald-700 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 shrink-0"><Star className="h-3 w-3 mr-1" />Default</Badge>
+        )}
+      </div>
+
+      {/* Row 2: Model */}
+      <div className="mt-1 min-h-[1.25rem]">
+        <p className="text-sm text-muted-foreground">{modelLabel}</p>
+      </div>
+
+      {/* Row 3: URL (reserved for uniform height) */}
+      <div className="min-h-[1rem]" />
+
+      {/* Row 4: Buttons */}
+      <div className="flex gap-2 mt-auto pt-3">
+        <Button variant="outline" size="sm" onClick={handleSetActive} disabled={provider.is_active} className="font-light uppercase">
+          <Star className="h-3 w-3 mr-1" />Default
+        </Button>
+        <Button variant="outline" size="sm" onClick={handleTest} disabled={testing} className="font-light uppercase">
+          {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Zap className="h-3 w-3 mr-1" />}
+          Test
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => onEdit(provider)} className="font-light uppercase">
+          <Pencil className="h-3 w-3 mr-1" />Edit
+        </Button>
+        <Button variant="outline" size="sm" onClick={handleDelete} className="font-light uppercase hover:text-orange-600 dark:hover:text-orange-400">
+          <Trash2 className="h-3 w-3 mr-1" />Delete
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -677,28 +690,26 @@ export function LLMProviderView() {
 
   return (
     <div className="h-full overflow-auto p-6">
-      <div className="max-w-4xl mx-auto space-y-8">
+      <div className="max-w-4xl mx-auto space-y-2">
         {/* ── OneShot Dashscope ── */}
-        <div className="flex items-center justify-between p-4 border border-dashed border-border rounded-lg bg-muted/30">
+        <div className="flex items-center justify-between pb-6 mb-2 border-b border-dashed border-border">
           <div>
-            <p className="text-sm font-medium">Quick Setup</p>
+            <p className="text-lg font-light tracking-tight uppercase">Quick Setup</p>
             <p className="text-xs text-muted-foreground">Configure all providers with a single Dashscope API Key</p>
           </div>
-          <Button variant="outline" onClick={() => setOneshotDialogOpen(true)}>
+          <Button variant="outline" onClick={() => setOneshotDialogOpen(true)} className="font-light uppercase">
             <Zap className="h-4 w-4 mr-2" />OneShot Dashscope
           </Button>
         </div>
 
         {/* ── LLM Providers ── */}
-        <section>
+        <section className="border-b border-border pb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-                <Bot className="h-6 w-6" />LLM Settings
-              </h2>
+              <h2 className="text-lg font-light tracking-tight uppercase">LLM Settings</h2>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={handleAdd}><Plus className="h-4 w-4 mr-2" />Add LLM Provider</Button>
+              <Button variant="default" onClick={handleAdd} className="font-light uppercase">ADD</Button>
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -709,18 +720,14 @@ export function LLMProviderView() {
         </section>
 
         {/* ── Embedding Providers ── */}
-        <section>
+        <section className="border-b border-border pb-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
-              <Cpu className="h-5 w-5" />Embedding Models
-            </h2>
-            <Button variant="outline" onClick={() => { setEditingEmb(null); setEmbDialogOpen(true) }}>
-              <Plus className="h-4 w-4 mr-2" />Add Embedding
-            </Button>
+            <h2 className="text-lg font-light tracking-tight uppercase">Embedding Models</h2>
+            <Button variant="default" onClick={() => { setEditingEmb(null); setEmbDialogOpen(true) }} className="font-light uppercase">ADD</Button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {embProviders.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
-              <SimpleProviderCard key={p.id} provider={p} subtitle={`batch ${p.batch_size}`}
+              <SimpleProviderCard key={p.id} provider={p}
                 onEdit={(p) => { setEditingEmb(p); setEmbDialogOpen(true) }}
                 onRefresh={fetchEmbProviders} onTest={testEmbeddingProvider}
                 onDelete={deleteEmbeddingProvider} onSetDefault={setDefaultEmbeddingProvider} />
@@ -729,14 +736,10 @@ export function LLMProviderView() {
         </section>
 
         {/* ── Rerank Providers ── */}
-        <section>
+        <section className="border-b border-border pb-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
-              <ArrowUpDown className="h-5 w-5" />Rerank Models
-            </h2>
-            <Button variant="outline" onClick={() => { setEditingRerank(null); setRerankDialogOpen(true) }}>
-              <Plus className="h-4 w-4 mr-2" />Add Reranker
-            </Button>
+            <h2 className="text-lg font-light tracking-tight uppercase">Rerank Models</h2>
+            <Button variant="default" onClick={() => { setEditingRerank(null); setRerankDialogOpen(true) }} className="font-light uppercase">ADD</Button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {rerankProviders.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
@@ -749,18 +752,14 @@ export function LLMProviderView() {
         </section>
 
         {/* ── Transcription ── */}
-        <section>
-          <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2 mb-4">
-            <Mic className="h-5 w-5" />Transcription
-          </h2>
+        <section className="border-b border-border pb-6">
+          <h2 className="text-lg font-light tracking-tight uppercase mb-4">Transcription</h2>
 
           {/* File Transcription */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-base font-medium">File Transcription</h3>
-              <Button variant="outline" size="sm" onClick={() => { setEditingFileTrans(null); setFileTransLangHints([]); setFileTransDialogOpen(true) }}>
-                <Plus className="h-3.5 w-3.5 mr-1" />Add
-              </Button>
+              <h3 className="text-sm font-light tracking-tight uppercase">File Transcription</h3>
+              <Button variant="default" size="sm" onClick={() => { setEditingFileTrans(null); setFileTransLangHints([]); setFileTransDialogOpen(true) }} className="font-light uppercase">ADD</Button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {builtinFileTrans && (
@@ -775,7 +774,7 @@ export function LLMProviderView() {
                 />
               )}
               {cloudFileProviders.map((p) => (
-                <TranscriptionProviderCard key={p.id} provider={p}
+                <TranscriptionProviderCard key={p.id} provider={p} kind="file"
                   onEdit={(p) => { setEditingFileTrans(p); setFileTransLangHints(p.language_hints_config || []); setFileTransDialogOpen(true) }}
                   onRefresh={fetchFileTransProviders} onDelete={deleteFileTranscriptionProvider}
                   onSetActive={setActiveFileTranscriptionProvider} onTest={testFileTranscriptionProvider} />
@@ -786,10 +785,8 @@ export function LLMProviderView() {
           {/* Realtime Transcription */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-base font-medium">Realtime Transcription</h3>
-              <Button variant="outline" size="sm" onClick={() => { setEditingRtTrans(null); setRtTransDialogOpen(true) }}>
-                <Plus className="h-3.5 w-3.5 mr-1" />Add
-              </Button>
+              <h3 className="text-sm font-light tracking-tight uppercase">Realtime Transcription</h3>
+              <Button variant="default" size="sm" onClick={() => { setEditingRtTrans(null); setRtTransDialogOpen(true) }} className="font-light uppercase">ADD</Button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {builtinRtTrans && (
@@ -804,7 +801,7 @@ export function LLMProviderView() {
                 />
               )}
               {cloudRtProviders.map((p) => (
-                <TranscriptionProviderCard key={p.id} provider={p}
+                <TranscriptionProviderCard key={p.id} provider={p} kind="realtime"
                   onEdit={(p) => { setEditingRtTrans(p); setRtTransDialogOpen(true) }}
                   onRefresh={fetchRtTransProviders} onDelete={deleteRealtimeTranscriptionProvider}
                   onSetActive={setActiveRealtimeTranscriptionProvider} onTest={testRealtimeTranscriptionProvider} />
@@ -813,12 +810,12 @@ export function LLMProviderView() {
           </div>
 
           {/* Local Transcription Model Settings */}
-          <div className="pt-4 border-t">
-            <h3 className="text-base font-medium mb-3">Local Model Settings</h3>
-            <div className="flex items-center gap-3 p-3 border border-border rounded-lg bg-card">
-              <span className="text-sm font-medium">Device</span>
+          <div>
+            <h3 className="text-sm font-light tracking-tight uppercase mb-3">Local Model Settings</h3>
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-light uppercase tracking-wider">Device</span>
               {(["cpu", "auto", "cuda", "mps"] as const).map((d) => (
-                <Button key={d} variant={localDevice === d ? "default" : "outline"} size="sm"
+                <Button key={d} variant={localDevice === d ? "default" : "outline"} size="sm" className="font-light uppercase"
                   onClick={() => {
                     updateConfig("transcription", { local_device: d })
                       .then(() => { toast.success(`Device set to ${d}`); setLocalDevice(d) })
@@ -828,7 +825,7 @@ export function LLMProviderView() {
                 </Button>
               ))}
               <div className="flex-1" />
-              <Button variant="outline" onClick={() => setModelDownloadOpen(true)}>
+              <Button variant="default" onClick={() => setModelDownloadOpen(true)} className="font-light uppercase">
                 <Download className="h-4 w-4 mr-2" />Download Models
               </Button>
             </div>
@@ -836,12 +833,10 @@ export function LLMProviderView() {
         </section>
 
         {/* ── Hot Words Management ── */}
-        <section>
+        <section className="border-b border-border pb-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
-              <BookOpen className="h-5 w-5" />Hot Words
-            </h2>
-            <Button variant="outline" onClick={() => setHotWordsManagerOpen(true)}>
+            <h2 className="text-lg font-light tracking-tight uppercase">Hot Words</h2>
+            <Button variant="default" onClick={() => setHotWordsManagerOpen(true)} className="font-light uppercase">
               Manage
             </Button>
           </div>
@@ -850,15 +845,12 @@ export function LLMProviderView() {
           </p>
         </section>
 
-        {/* ── MinerU Cloud Parsing ── */}
-        <section>
+        {/* ── MinerU CLOUD PARSING ── */}
+        <section className="pb-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
-              <Cloud className="h-5 w-5" />MinerU Cloud Parsing
-            </h2>
+            <h2 className="text-lg font-light tracking-tight">MinerU CLOUD PARSING</h2>
           </div>
-          <Card>
-            <CardContent className="pt-6 space-y-4">
+          <div className="space-y-4">
               <p className="text-sm text-muted-foreground mb-4">
                 Use MinerU's cloud API for high-quality document parsing with better table, formula, and layout preservation.
                 Get your API token at{" "}
@@ -868,7 +860,7 @@ export function LLMProviderView() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <span className="text-sm font-medium">Enable MinerU</span>
+                  <span className="text-sm font-light tracking-wider">ENABLE MinerU</span>
                   <p className="text-xs text-muted-foreground">Toggle cloud parsing globally</p>
                 </div>
                 <button
@@ -898,9 +890,11 @@ export function LLMProviderView() {
                 </button>
               </div>
 
-              <div className={`space-y-4 ${!mineruEnabled ? "opacity-50 pointer-events-none" : ""}`}>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">API Token</label>
+              <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${mineruEnabled ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
+                <div className="overflow-hidden">
+                  <div className="space-y-4 pt-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-light uppercase tracking-wider">API Token</label>
                   <div className="relative">
                     <Input
                       type={showMineruToken ? "text" : "password"}
@@ -922,7 +916,7 @@ export function LLMProviderView() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">Model Version</label>
+                    <label className="text-sm font-light uppercase tracking-wider">Model Version</label>
                     <select
                       value={mineruModel}
                       onChange={(e) => setMineruModel(e.target.value)}
@@ -935,7 +929,7 @@ export function LLMProviderView() {
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">Language</label>
+                    <label className="text-sm font-light uppercase tracking-wider">Language</label>
                     <select
                       value={mineruLanguage}
                       onChange={(e) => setMineruLanguage(e.target.value)}
@@ -963,63 +957,65 @@ export function LLMProviderView() {
                 </div>
 
                 <div className="space-y-3">
-                  <label className="text-sm font-medium">Parsing Options</label>
+                  <label className="text-sm font-light uppercase tracking-wider">Parsing Options</label>
                   <div className="space-y-2">
                     <label className={`flex items-start gap-2 text-sm ${!mineruEnabled ? "cursor-default" : "cursor-pointer"}`}>
                       <input type="checkbox" checked={mineruOcr} onChange={(e) => setMineruOcr(e.target.checked)} disabled={!mineruEnabled} className="rounded mt-0.5" />
                       <div>
-                        <span className="font-medium">Force OCR</span>
+                        <span className="font-light uppercase tracking-wider">Force OCR</span>
                         <p className="text-xs text-muted-foreground">Force OCR on all pages. When off, MinerU auto-detects whether pages need OCR (scanned/image pages will still be OCR'd automatically).</p>
                       </div>
                     </label>
                     <label className={`flex items-start gap-2 text-sm ${!mineruEnabled ? "cursor-default" : "cursor-pointer"}`}>
                       <input type="checkbox" checked={mineruFormula} onChange={(e) => setMineruFormula(e.target.checked)} disabled={!mineruEnabled} className="rounded mt-0.5" />
                       <div>
-                        <span className="font-medium">Formula Recognition</span>
+                        <span className="font-light uppercase tracking-wider">Formula Recognition</span>
                         <p className="text-xs text-muted-foreground">Recognize mathematical formulas and convert to LaTeX. Recommended for academic/technical documents.</p>
                       </div>
                     </label>
                     <label className={`flex items-start gap-2 text-sm ${!mineruEnabled ? "cursor-default" : "cursor-pointer"}`}>
                       <input type="checkbox" checked={mineruTable} onChange={(e) => setMineruTable(e.target.checked)} disabled={!mineruEnabled} className="rounded mt-0.5" />
                       <div>
-                        <span className="font-medium">Table Recognition</span>
+                        <span className="font-light uppercase tracking-wider">Table Recognition</span>
                         <p className="text-xs text-muted-foreground">Detect and extract tables as structured Markdown. Recommended for documents with tabular data.</p>
                       </div>
                     </label>
                   </div>
                 </div>
-
-                <div className="flex justify-end">
-                  <Button
-                    disabled={savingMineru || !mineruEnabled}
-                    onClick={async () => {
-                      setSavingMineru(true)
-                      try {
-                        await updateConfig("mineru", {
-                          enabled: mineruEnabled,
-                          api_token: mineruToken,
-                          base_url: "https://mineru.net/api/v4",
-                          model_version: mineruModel,
-                          is_ocr: mineruOcr,
-                          enable_formula: mineruFormula,
-                          enable_table: mineruTable,
-                          language: mineruLanguage,
-                        })
-                        toast.success("MinerU settings saved")
-                      } catch {
-                        toast.error("Failed to save MinerU settings")
-                      } finally {
-                        setSavingMineru(false)
-                      }
-                    }}
-                  >
-                    {savingMineru ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                    Save Settings
-                  </Button>
+                  </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
+
+              <div className="flex justify-end pt-4">
+                <Button
+                  disabled={savingMineru}
+                  className="font-light uppercase"
+                  onClick={async () => {
+                    setSavingMineru(true)
+                    try {
+                      await updateConfig("mineru", {
+                        enabled: mineruEnabled,
+                        api_token: mineruToken,
+                        base_url: "https://mineru.net/api/v4",
+                        model_version: mineruModel,
+                        is_ocr: mineruOcr,
+                        enable_formula: mineruFormula,
+                        enable_table: mineruTable,
+                        language: mineruLanguage,
+                      })
+                      toast.success("MinerU settings saved")
+                    } catch {
+                      toast.error("Failed to save MinerU settings")
+                    } finally {
+                      setSavingMineru(false)
+                    }
+                  }}
+                >
+                  {savingMineru ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                  Save Settings
+                </Button>
+              </div>
+          </div>
         </section>
 
         {/* ── Dialogs ── */}

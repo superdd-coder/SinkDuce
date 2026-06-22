@@ -111,7 +111,20 @@ def _resolve_recall_params(req: RecallSearchRequest, col_config: dict) -> dict:
         "min_score": req.min_score if req.min_score is not None else 0.0,
         "use_reranker": use_reranker,
         "max_iterations": req.max_iterations if req.max_iterations is not None else col_config.get("agent_max_iterations", col_config.get("self_rag_max_iterations", 3)),
+        "sparse_llm_tokenize": _resolve_recall_sparse_llm_tokenize(req, col_config, agent_enabled),
     }
+
+
+def _resolve_recall_sparse_llm_tokenize(req: RecallSearchRequest, col_config: dict, agent_enabled: bool) -> bool:
+    """Resolve LLM keyword extraction for sparse encoding in recall mode."""
+    search_mode = req.search_mode or col_config.get("search_mode", "dense")
+    if search_mode != "hybrid":
+        return False
+    if agent_enabled:
+        return True
+    if req.sparse_llm_tokenize is not None:
+        return req.sparse_llm_tokenize
+    return col_config.get("sparse_llm_tokenize", True)
 
 
 def _compute_metrics(results_list: list[dict], k: int = 5) -> dict:
@@ -217,13 +230,13 @@ def recall_search(req: RecallSearchRequest):
 
     resolved_collections = [resolve_collection(c) for c in req.collections]
     valid_collections = [c for c in resolved_collections if services.db.collection_exists(c)]
-    logger.info("Recall search: collections=%s, valid=%s, min_score=%.2f, search_mode=%s",
-                req.collections, valid_collections, req.min_score, req.search_mode)
     if not valid_collections:
         return RecallSearchResponse(results=[], time_ms=0, total=0, query_used=req.query)
 
     col_config = services.db.get_collection_config(valid_collections[0])
     params = _resolve_recall_params(req, col_config)
+    logger.info("Recall search: collections=%s, valid=%s, min_score=%.2f, search_mode=%s, sparse_llm_tokenize=%s",
+                req.collections, valid_collections, req.min_score, req.search_mode, params["sparse_llm_tokenize"])
     embedding_overrides = get_embedding_overrides(valid_collections)
 
     # ── Agentic branch ─────────────────────────────────────────────────
@@ -262,6 +275,8 @@ def recall_search(req: RecallSearchRequest):
     if params["use_reranker"]:
         reranker = _resolve_reranker(req.rerank_provider_id)
 
+    recall_llm = services.llm if params["sparse_llm_tokenize"] else None
+
     pc_collections = [c for c in valid_collections if services.db.get_collection_config(c).get("chunk_mode") == "parent_child"]
     normal_collections = [c for c in valid_collections if c not in pc_collections]
 
@@ -276,6 +291,9 @@ def recall_search(req: RecallSearchRequest):
             min_score=params["min_score"],
             reranker=None,  # defer to post-merge rerank
             return_child_groups=True,
+            retriever=services.retriever,
+            search_mode=params["search_mode"],
+            llm=recall_llm,
         )
         chunks.extend(pc_chunks)
         for group in child_groups_list:
@@ -289,6 +307,7 @@ def recall_search(req: RecallSearchRequest):
             search_mode=params["search_mode"],
             min_score=params["min_score"],
             reranker=None,  # defer to post-merge rerank
+            llm=recall_llm,
         ))
 
     # Post-merge: sort, truncate, rerank
@@ -584,7 +603,8 @@ def run_eval(collection: str, req: EvalRequest):
         search_req = RecallSearchRequest(
             query=query_text, collections=[collection], search_mode=req.search_mode,
             top_k=req.top_k, rerank_top_k=req.rerank_top_k, use_reranker=req.use_reranker,
-            min_score=req.min_score, rerank_provider_id=req.rerank_provider_id,
+            min_score=req.min_score, sparse_llm_tokenize=req.sparse_llm_tokenize,
+            rerank_provider_id=req.rerank_provider_id,
         )
         resp = recall_search(search_req)
 

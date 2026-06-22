@@ -50,6 +50,7 @@ export function useStreamChat() {
     setLastMessageSources,
     setLastMessageMetaInfo,
     setLastMessageThinkingSteps,
+    finishLastMessage,
     setStreaming,
   } = useAppStore()
 
@@ -60,7 +61,7 @@ export function useStreamChat() {
     model?: string | null,
     useAgent?: boolean,
     searchMode?: string,
-    params?: { top_k?: number; use_reranker?: boolean; max_iterations?: number; min_score?: number; rerank_top_k?: number },
+    params?: { top_k?: number; use_reranker?: boolean; max_iterations?: number; min_score?: number; rerank_top_k?: number; sparse_llm_tokenize?: boolean },
   ) => {
     const userId = crypto.randomUUID()
     const assistantId = crypto.randomUUID()
@@ -88,6 +89,7 @@ export function useStreamChat() {
       if (params?.use_reranker !== undefined) body.use_reranker = params.use_reranker
       if (params?.max_iterations) body.max_iterations = params.max_iterations
       if (params?.min_score !== undefined && params.min_score > 0) body.min_score = params.min_score
+      if (params?.sparse_llm_tokenize !== undefined) body.sparse_llm_tokenize = params.sparse_llm_tokenize
 
       const res = await fetch("/api/query/stream", {
         method: "POST",
@@ -98,7 +100,7 @@ export function useStreamChat() {
       if (!res.ok) {
         const text = await res.text()
         appendToLastMessage(`Error: ${res.status} - ${text}`)
-        setStreaming(false)
+        finishLastMessage()
         return
       }
 
@@ -199,11 +201,11 @@ export function useStreamChat() {
               appendToLastMessage(event.content)
               break
             case "done":
-              setStreaming(false)
+              finishLastMessage()
               return
             case "error":
               appendToLastMessage(`\n\n**Error:** ${event.content}`)
-              setStreaming(false)
+              finishLastMessage()
               return
           }
         }
@@ -211,7 +213,7 @@ export function useStreamChat() {
     } catch (err) {
       appendToLastMessage(`\n\n**Error:** ${err instanceof Error ? err.message : String(err)}`)
     } finally {
-      setStreaming(false)
+      finishLastMessage()
     }
   }
 

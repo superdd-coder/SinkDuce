@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Pencil, Trash2, Plug, Star, Loader2 } from "lucide-react"
@@ -20,10 +19,10 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
   const [deleting, setDeleting] = useState(false)
 
   const statusColor = provider.status === "ready"
-    ? "bg-green-500"
+    ? "bg-emerald-500"
     : provider.status === "error"
       ? "bg-red-500"
-      : "bg-gray-400"
+      : "bg-muted-foreground/40"
 
   const handleTest = async () => {
     setTesting(true)
@@ -72,70 +71,75 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
   }
 
   return (
-    <Card className="relative">
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{provider.name || "Unnamed"}</span>
-              <div className={`h-2 w-2 rounded-full ${statusColor}`} />
-            </div>
-            {provider.selected_models && provider.selected_models.length > 0 ? (
-              <div className="flex flex-wrap gap-1">
-                {provider.selected_models.map((m) => (
-                  <span
-                    key={m}
-                    className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                      m === provider.default_model
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {m}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">{provider.model}</p>
-            )}
-            <p className="text-xs text-muted-foreground truncate max-w-[200px]">
-              {provider.base_url}
-            </p>
-          </div>
-
-          {provider.is_default && (
-            <Badge className="text-xs bg-green-100 text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400">
-              <Star className="h-3 w-3 mr-1" />
-              Default
-            </Badge>
-          )}
+    <div className="border border-border/50 rounded-lg p-4 flex flex-col h-full">
+      {/* Row 1: Provider name + status + default badge */}
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-light uppercase tracking-wider">{provider.name || "Unnamed"}</span>
+          <div className={`h-2 w-2 rounded-full shrink-0 ${statusColor}`} />
         </div>
-
-        <div className="flex gap-2 mt-4">
-          <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
-            {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Plug className="h-3 w-3 mr-1" />}
-            Test
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleSetDefault} disabled={provider.is_default}>
+        {provider.is_default && (
+          <Badge className="text-xs bg-emerald-50 text-emerald-700 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 shrink-0">
             <Star className="h-3 w-3 mr-1" />
             Default
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => onEdit(provider)}>
-            <Pencil className="h-3 w-3 mr-1" />
-            Edit
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleDelete}
-            disabled={deleting}
-            className="text-destructive hover:text-destructive"
-          >
-            <Trash2 className="h-3 w-3 mr-1" />
-            Delete
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+          </Badge>
+        )}
+      </div>
+
+      {/* Row 2: Model */}
+      <div className="mt-1 min-h-[1.25rem]">
+        {provider.selected_models && provider.selected_models.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {provider.selected_models.map((m) => (
+              <span
+                key={m}
+                className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                  m === provider.default_model
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {m}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">{provider.model || ""}</p>
+        )}
+      </div>
+
+      {/* Row 3: URL */}
+      <div className="min-h-[1rem]">
+        <p className="text-xs text-muted-foreground truncate max-w-[200px]">
+          {provider.base_url || ""}
+        </p>
+      </div>
+
+      {/* Row 4: Buttons */}
+      <div className="flex gap-2 mt-auto pt-3">
+        <Button variant="outline" size="sm" onClick={handleTest} disabled={testing} className="font-light uppercase">
+          {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Plug className="h-3 w-3 mr-1" />}
+          Test
+        </Button>
+        <Button variant="outline" size="sm" onClick={handleSetDefault} disabled={provider.is_default} className="font-light uppercase">
+          <Star className="h-3 w-3 mr-1" />
+          Default
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => onEdit(provider)} className="font-light uppercase">
+          <Pencil className="h-3 w-3 mr-1" />
+          Edit
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleDelete}
+          disabled={deleting}
+          className="font-light uppercase hover:text-orange-600 dark:hover:text-orange-400"
+        >
+          <Trash2 className="h-3 w-3 mr-1" />
+          Delete
+        </Button>
+      </div>
+    </div>
   )
 }

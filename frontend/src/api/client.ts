@@ -506,6 +506,7 @@ export const recallSearch = (params: {
   use_reranker?: boolean
   use_agent?: boolean
   min_score?: number
+  sparse_llm_tokenize?: boolean
   rerank_provider_id?: string
 }) =>
   request<{ results: RecallResult[]; time_ms: number }>("/recall/search", {
@@ -597,6 +598,7 @@ export const runEval = (collection: string, params: {
   use_reranker?: boolean
   rerank_top_k?: number
   min_score?: number
+  sparse_llm_tokenize?: boolean
   rerank_provider_id?: string
 }) =>
   request<EvalReport>(`/recall/eval/${collection}/run`, {

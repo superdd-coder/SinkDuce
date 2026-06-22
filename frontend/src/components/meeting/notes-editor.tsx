@@ -129,12 +129,12 @@ export function NotesEditor({
         }}
       />
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
-        <div className="flex items-center justify-between border-b border-border px-1">
+        <div className="flex items-center justify-between border-b border-border px-2">
           <TabsList>
-            <TabsTrigger value="summary" disabled={!summary}>Summary</TabsTrigger>
-            <TabsTrigger value="todo" disabled={!todos?.length}>TODO</TabsTrigger>
-            <TabsTrigger value="detail" disabled={!detail}>Detail</TabsTrigger>
-            <TabsTrigger value="notes">Notes</TabsTrigger>
+            <TabsTrigger value="summary" disabled={!summary} className="font-light uppercase tracking-wider">Summary</TabsTrigger>
+            <TabsTrigger value="todo" disabled={!todos?.length} className="font-light uppercase tracking-wider">TODO</TabsTrigger>
+            <TabsTrigger value="detail" disabled={!detail} className="font-light uppercase tracking-wider">Detail</TabsTrigger>
+            <TabsTrigger value="notes" className="font-light uppercase tracking-wider">Notes</TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => notesInputRef.current?.click()}>
@@ -155,15 +155,15 @@ export function NotesEditor({
           </div>
         </div>
 
-        <TabsContent value="summary" className="flex-1 mt-0 min-h-0 overflow-auto p-3">
+        <TabsContent value="summary" className="flex-1 mt-0 min-h-0 overflow-auto p-2">
           <GeneratedContent tab="summary" content={summary} loading={generating} onSave={onUpdateGenerated} />
         </TabsContent>
 
-        <TabsContent value="todo" className="flex-1 mt-0 min-h-0 overflow-auto p-3">
+        <TabsContent value="todo" className="flex-1 mt-0 min-h-0 overflow-auto p-2">
           <GeneratedContent tab="todo" content={null} todos={todos} loading={generating} onSave={onUpdateGenerated} />
         </TabsContent>
 
-        <TabsContent value="detail" className="flex-1 mt-0 min-h-0 overflow-auto p-3">
+        <TabsContent value="detail" className="flex-1 mt-0 min-h-0 overflow-auto p-2">
           <GeneratedContent tab="detail" content={detail} loading={generating} onSave={onUpdateGenerated} />
         </TabsContent>
 

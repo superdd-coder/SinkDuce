@@ -113,6 +113,7 @@ class AgenticRAG:
                 search_mode=self.search_mode,
                 min_score=self.min_score,
                 db=self.db,
+                llm=self.llm,
             )
             if not current_batch:
                 self._emit_step("rewriting", "No results found, rewriting query...")

@@ -466,7 +466,7 @@ export function MeetingView() {
   }
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex [&_button]:font-light [&_button]:uppercase [&_button]:tracking-wider [&_button]:text-xs">
       <MeetingList
         meetings={meetings}
         activeMeeting={activeMeeting}
@@ -479,11 +479,11 @@ export function MeetingView() {
         {meeting ? (
           <div className="h-full flex flex-col">
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+            <div className="flex items-center justify-between px-4 h-12 border-b border-border">
               {editingTitle ? (
                 <div className="flex items-center gap-1 flex-1 min-w-0">
                   <input
-                    className="flex-1 text-lg font-semibold bg-transparent border-b border-primary outline-none px-0 py-0.5 min-w-0"
+                    className="flex-1 text-sm font-light bg-transparent border-b border-primary outline-none px-0 py-0.5 min-w-0"
                     value={titleDraft}
                     onChange={(e) => setTitleDraft(e.target.value)}
                     onKeyDown={(e) => {
@@ -501,7 +501,7 @@ export function MeetingView() {
                 </div>
               ) : (
                 <div className="flex items-center gap-1 min-w-0">
-                  <h2 className="text-lg font-semibold truncate">{meeting.title}</h2>
+                  <h2 className="text-sm font-light truncate">{meeting.title}</h2>
                   <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 opacity-60 hover:opacity-100" onClick={handleStartEditTitle}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
@@ -526,14 +526,13 @@ export function MeetingView() {
                 {meeting.allocated_collections?.length > 0 && (
                   <span className="text-xs text-muted-foreground flex items-center gap-1">
                     In:
-                    {meeting.allocated_collections.map((col) => (
+                    {[...new Set(meeting.allocated_collections)].map((col) => (
                       <button
                         key={col}
                         className="font-medium text-foreground hover:text-primary hover:underline"
                         onClick={() => {
                           setActiveCollection(col)
                           setSidebarView("database")
-                          // Dispatch event to switch to Info tab
                           setTimeout(() => window.dispatchEvent(new CustomEvent("show-meeting-log")), 100)
                         }}
                       >
@@ -543,7 +542,7 @@ export function MeetingView() {
                   </span>
                 )}
                   <Button
-                    variant="outline"
+                    variant={meeting?.allocated_collections?.length ? "outline" : "default"}
                     size="sm"
                     disabled={!hasContent || isIngesting}
                     title={!hasContent ? "Add notes or generate a summary first" : undefined}
@@ -591,7 +590,7 @@ export function MeetingView() {
 
             {/* Provider warning */}
             {!hasFileProvider && meeting.audio_path && (
-              <div className="mx-4 mt-1 flex items-center gap-2 px-3 py-2 text-sm bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg text-amber-700 dark:text-amber-300">
+              <div className="mx-4 mt-1 flex items-center gap-2 px-3 py-2 text-sm border border-amber-200 dark:border-amber-800 rounded-lg text-amber-700 dark:text-amber-300">
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span className="flex-1">No transcription provider configured.</span>
                 <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setSidebarView("llm_provider")}>
@@ -602,7 +601,7 @@ export function MeetingView() {
 
             {/* Notes + Transcript */}
             <div className="flex-1 flex min-h-0">
-              <div className="flex-1 min-h-0 p-2">
+              <div className="flex-1 min-h-0 px-2">
                 <NotesEditor
                   meetingId={meeting.id}
                   notesContent={notesDraft}

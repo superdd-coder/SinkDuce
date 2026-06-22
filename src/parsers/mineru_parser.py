@@ -16,9 +16,134 @@ from typing import Any
 
 import httpx
 
+import re as _re_module
+
 from src.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
+
+
+def _html_table_to_markdown(html: str) -> str:
+    """Convert an HTML <table> to a GitHub-Flavored Markdown table.
+
+    Handles colspan by repeating cells and rowspan via placeholder.
+    Returns the original HTML string if parsing fails.
+    """
+    try:
+        # Parse rows
+        rows: list[list[str]] = []
+        rowspan_tracker: dict[tuple[int, int], tuple[str, int]] = {}  # (row, col) → (text, remaining)
+
+        tr_matches = _re_module.findall(r"<tr[^>]*>(.*?)</tr>", html, _re_module.DOTALL | _re_module.IGNORECASE)
+        for ri, tr in enumerate(tr_matches):
+            cells: list[str] = []
+            ci = 0
+            # Add carry-over rowspan cells
+            while (ri, ci) in rowspan_tracker:
+                text, rem = rowspan_tracker[(ri, ci)]
+                cells.append(text)
+                if rem > 1:
+                    rowspan_tracker[(ri + 1, ci)] = (text, rem - 1)
+                ci += 1
+
+            td_matches = _re_module.findall(
+                r"<t[dh][^>]*?(?:colspan\s*=\s*[\"'](\d+)[\"'][^>]*?)?(?:rowspan\s*=\s*[\"'](\d+)[\"'][^>]*?)?>(.*?)</t[dh]>",
+                tr, _re_module.DOTALL | _re_module.IGNORECASE,
+            )
+            for m in td_matches:
+                colspan = int(m[0]) if m[0] else 1
+                rowspan = int(m[1]) if m[1] else 1
+                text = _re_module.sub(r"<[^>]+>", "", m[2]).strip().replace("|", "\\|").replace("\n", " ")
+                # Handle LaTeX math delimiters — keep them intact
+                for _ in range(colspan):
+                    cells.append(text)
+                    ci += 1
+                # Register rowspan
+                if rowspan > 1:
+                    for d in range(colspan):
+                        rowspan_tracker[(ri + 1, ci - colspan + d)] = (text, rowspan - 1)
+
+            if cells:
+                rows.append(cells)
+
+        if not rows:
+            return html
+
+        # Normalize column count
+        max_cols = max(len(r) for r in rows)
+        for r in rows:
+            while len(r) < max_cols:
+                r.append("")
+
+        # Build Markdown table
+        lines: list[str] = []
+        for ri, row in enumerate(rows):
+            lines.append("| " + " | ".join(row) + " |")
+            if ri == 0:
+                lines.append("| " + " | ".join(["---"] * max_cols) + " |")
+
+        return "\n".join(lines)
+    except Exception:
+        return html
+
+
+def _clean_markdown_for_tiptap(md: str) -> str:
+    """Convert MinerU-produced Markdown to Tiptap-compatible format.
+
+    Transformations:
+    1. HTML tables with colspan/rowspan → kept as-is (preserve merged cells)
+       Flat HTML tables → converted to GFM (cleaner, more compatible)
+    2. PDF font-encoding artifacts → standard Markdown characters
+       (PUA bullets, circle marks, misrecognised "o " bullets, etc.)
+    """
+    # ── 1. HTML tables: keep with merged cells, convert flat tables to GFM ──
+    _HAS_SPAN_RE = _re_module.compile(r"(?:colspan|rowspan)\s*=", _re_module.IGNORECASE)
+
+    def _replace_if_flat(match: _re_module.Match) -> str:
+        html = match.group(0)
+        if _HAS_SPAN_RE.search(html):
+            return html  # preserve merged cells
+        return _html_table_to_markdown(html)  # convert flat table
+
+    md = _re_module.sub(
+        r"<table[^>]*>.*?</table>",
+        _replace_if_flat,
+        md,
+        flags=_re_module.DOTALL | _re_module.IGNORECASE,
+    )
+
+    # ── 2. PDF font-encoding artifacts → standard Markdown ──
+    _BULLET_CHARS = (
+        ""   # PUA: ZapfDingbats/Symbol remapping
+        "○●◯"       # ○ ● ◯ (circle bullets)
+        "•‣◦"         # • ‣ ◦ (bullet, triangular bullet, white bullet)
+        "·"                      # · middle-dot
+        "°"                      # ° degree (misused as bullet)
+        "¤"                      # ¤ currency sign (sometimes garbled bullet)
+        "§"                      # § section sign (misused as bullet)
+    )
+
+    # a) Line-start bullets → "- " (real markdown list items), preserving indent
+    md = _re_module.sub(
+        rf"^(\s*)[{_BULLET_CHARS}]\s*",
+        r"\1- ",
+        md,
+        flags=_re_module.MULTILINE,
+    )
+
+    # "o " at line start followed by a capital letter — misrecognised bullet
+    md = _re_module.sub(r"^(\s*)o (?=[A-Z])", r"\1- ", md, flags=_re_module.MULTILINE)
+
+    # b) Bullet chars inside table cells (not at line start — preceded by "|")
+    #    → remove the bullet char, it's only decorative in the original PDF.
+    #    Table-cell text can't be a real markdown list item anyway.
+    for ch in _BULLET_CHARS:
+        md = md.replace(f"| {ch} ", "| ").replace(f"|{ch} ", "| ")
+        md = md.replace(f"| {ch}", "| ").replace(f"|{ch}", "| ")
+    # Also handle "o " inside table cells
+    md = _re_module.sub(r"\| o (?=[A-Z])", "| ", md)
+
+    return md
 
 # File extensions supported by MinerU's Precision Parsing API.
 # .docx excluded — always uses local mammoth parser for better Markdown output.
@@ -230,6 +355,12 @@ class MinerUParser:
                     break
 
         # Build position_map from layout data
+        # Clean MinerU Markdown for Tiptap compatibility (HTML tables → GFM tables)
+        original_len = len(markdown_content)
+        markdown_content = _clean_markdown_for_tiptap(markdown_content)
+        if len(markdown_content) != original_len:
+            logger.info("[MinerU] Cleaned markdown for Tiptap: %d → %d chars", original_len, len(markdown_content))
+
         position_map = self._build_position_map(layout_data, markdown_content)
         logger.info("[MinerU] Built position_map with %d entries (layout keys: %s)",
                     len(position_map), list(layout_data.keys()) if isinstance(layout_data, dict) else f"list[{len(layout_data)}]")

@@ -3,7 +3,7 @@ import { Info } from "lucide-react"
 
 export function TooltipLabel({ label, tooltip, className }: { label: string; tooltip: string; className?: string }) {
   return (
-    <label className={className ?? "text-xs text-muted-foreground inline-flex items-center gap-1"}>
+    <label className={className ?? "text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground inline-flex items-center gap-1"}>
       {label}
       <Tooltip>
         <TooltipTrigger className="cursor-help inline-flex">

@@ -84,7 +84,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   // Recording state
   if (isRecording || isPaused) {
     return (
-      <div className="flex items-center gap-3 p-3 border border-border rounded-lg bg-card">
+      <div className="flex items-center gap-3 py-3 px-0">
         <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
         <span className="font-mono text-sm tabular-nums">{formatDuration(duration)}</span>
         <div className="flex-1 flex items-center gap-1">
@@ -118,10 +118,10 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             <span className="text-sm flex-1">Transcription failed: {transcriptionError}</span>
           </div>
         )}
-        <div className="flex items-center gap-3 p-3 border border-border rounded-lg bg-card">
+        <div className="flex items-center gap-3 py-3 px-0">
           {/* Audio player during transcription */}
           {audioUrl ? (
-            <audio key={`transcribing-${audioVersion}`} ref={audioRef} controls src={audioUrl} preload="metadata" className="flex-1 h-8">
+            <audio key={`transcribing-${audioVersion}`} ref={audioRef} controls src={audioUrl} preload="metadata" className="flex-1 h-7 styled-audio">
               <track kind="captions" />
             </audio>
           ) : (
@@ -153,9 +153,9 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             <span className="text-sm flex-1">Transcription failed: {transcriptionError}</span>
           </div>
         )}
-        <div className="flex items-center gap-3 p-3 border border-border rounded-lg bg-card">
+        <div className="flex items-center gap-3 py-3 px-0">
           {audioUrl ? (
-            <audio key={`player-${audioVersion}`} ref={audioRef} controls src={audioUrl} preload="metadata" className="flex-1 h-8">
+            <audio key={`player-${audioVersion}`} ref={audioRef} controls src={audioUrl} preload="metadata" className="flex-1 h-7 styled-audio">
               <track kind="captions" />
             </audio>
           ) : (
@@ -166,36 +166,38 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
               </span>
             </div>
           )}
-          {!hasTranscript && (
-            <>
-              <input
-                ref={inputRef}
-                type="file"
-                accept="audio/*"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) onUploadAudio(file)
-                  e.target.value = ""
-                }}
-              />
-              <Button variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
-                <RefreshCw className="h-3 w-3 mr-1" />
-                Replace
+          <div className="flex items-center gap-2 shrink-0">
+            {!hasTranscript && (
+              <>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) onUploadAudio(file)
+                    e.target.value = ""
+                  }}
+                />
+                <Button variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                  Replace
+                </Button>
+              </>
+            )}
+            {!hasTranscript && (
+              <Button size="sm" onClick={onTranscribe}>
+                <Play className="h-4 w-4 mr-1" />
+                Transcribe
               </Button>
-            </>
-          )}
-          {!hasTranscript && (
-            <Button size="sm" onClick={onTranscribe}>
-              <Play className="h-4 w-4 mr-1" />
-              Transcribe
-            </Button>
-          )}
-          {hasTranscript && onReTranscribe && (
-            <Button variant="outline" size="sm" onClick={onReTranscribe}>
-              Re-transcribe
-            </Button>
-          )}
+            )}
+            {hasTranscript && onReTranscribe && (
+              <Button variant="outline" size="sm" onClick={onReTranscribe}>
+                Re-transcribe
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -203,7 +205,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 
   // No audio — upload / record
   return (
-    <div className="flex items-center gap-2 p-3 border border-border rounded-lg bg-card">
+    <div className="flex items-center gap-2 py-3 px-0">
       <input
         ref={inputRef}
         type="file"
@@ -230,7 +232,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
           className={cn(
             "flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors ml-auto",
             realtimeEnabled
-              ? "border-primary/30 text-primary bg-primary/5"
+              ? "border-primary/30 text-primary"
               : "border-border text-muted-foreground"
           )}
           title={realtimeEnabled ? "Live captions ON" : "Live captions OFF"}

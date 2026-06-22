@@ -109,7 +109,7 @@ export function HotWordsSelector({
           <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
         )}
         {isPending && (
-          <span className="text-[10px] bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 px-1 rounded">
+          <span className="text-[10px] text-amber-700 dark:text-amber-300 px-1 rounded">
             pending
           </span>
         )}
@@ -126,7 +126,7 @@ export function HotWordsSelector({
           </DialogHeader>
 
           {!providerSupportsHotWords && (
-            <div className="flex items-start gap-2 px-3 py-2 text-sm bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg text-amber-700 dark:text-amber-300">
+            <div className="flex items-start gap-2 px-3 py-2 text-sm border border-amber-200 dark:border-amber-800 rounded-lg text-amber-700 dark:text-amber-300">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>Current transcription model does not support hot words. Hot words will NOT be applied.</span>
             </div>
@@ -137,7 +137,7 @@ export function HotWordsSelector({
               <div
                 className={`flex items-center gap-2 px-3 py-2 rounded cursor-pointer text-sm ${
                   !currentLibraryId && !pendingLibraryId
-                    ? "bg-primary/10 text-primary font-medium"
+                    ? "text-primary font-light"
                     : "hover:bg-muted"
                 }`}
                 onClick={() => handleSelect(null)}
@@ -151,7 +151,7 @@ export function HotWordsSelector({
                     key={lib.id}
                     className={`flex items-center justify-between px-3 py-2 rounded cursor-pointer text-sm ${
                       isSelected
-                        ? "bg-primary/10 text-primary font-medium"
+                        ? "text-primary font-light"
                         : "hover:bg-muted"
                     }`}
                     onClick={() => handleSelect(lib.id)}

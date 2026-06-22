@@ -14,9 +14,9 @@ interface MeetingListProps {
 
 export function MeetingList({ meetings, activeMeeting, onSelect, onCreated, onDelete }: MeetingListProps) {
   return (
-    <div className="w-64 border-r border-border flex flex-col shrink-0" style={{ background: "var(--ze-bg)" }}>
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
+    <div className="w-64 border-r border-border flex flex-col shrink-0">
+      <div className="flex items-center justify-between px-4 h-12 border-b border-border">
+        <span className="text-[12px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
           Recordings
         </span>
         <CreateMeetingButton onCreated={onCreated} />

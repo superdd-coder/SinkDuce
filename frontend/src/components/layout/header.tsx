@@ -26,7 +26,7 @@ export function Header() {
       {/* Left block aligned with sidebar width */}
       <div className="w-[172px] px-4 flex items-center gap-3 shrink-0 border-r border-border h-full">
         <h1
-          className="text-[13px] font-light tracking-[0.15em] uppercase"
+          className="text-[14px] font-light tracking-[0.15em] uppercase"
           style={{ fontFamily: "var(--font-serif)", color: "var(--ze-ink)" }}
         >
           SINKDUCE
@@ -35,7 +35,10 @@ export function Header() {
 
       {/* Right side of header */}
       <div className="flex items-center gap-3.5 px-5 flex-1">
-        <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+        <span
+          className="text-[12px] font-light uppercase tracking-[0.15em] text-muted-foreground"
+          style={{ fontFamily: "var(--font-serif)" }}
+        >
           Spark. Sink. Educe.
         </span>
 
