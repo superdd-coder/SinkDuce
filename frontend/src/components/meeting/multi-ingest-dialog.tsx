@@ -173,7 +173,7 @@ export function MultiIngestDialog({ open, onOpenChange, meetingId, isReingest, a
       confirmed.forEach(({ index }) => { doneProgress[index] = "done" })
       setIngestState(meetingId, doneProgress, names)
 
-      const collNames = [...new Set(allocations.map((a) => a.collection))].join(", ")
+      const collNames = [...new Set(allocations.map((a) => collections.find(c => c.id === a.collection)?.name || a.collection))].join(", ")
       toast.success(`Ingested ${confirmed.length} project(s) to ${collNames}`)
 
       // Short delay so user sees the success state

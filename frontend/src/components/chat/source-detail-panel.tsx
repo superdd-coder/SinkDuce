@@ -8,7 +8,7 @@ import { Loader2, X, ChevronRight, ChevronDown, RefreshCw, Locate } from "lucide
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
 import { getFileChunks, getFilePreviewUrl, getDocSummary, generateDocSummary, setDocSummaryInclude, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
-import type { Source } from "@/stores/app-store"
+import { useAppStore, type Source } from "@/stores/app-store"
 import { toast } from "sonner"
 
 interface SourceDetailPanelProps {
@@ -56,8 +56,10 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const sourceEditorRef = useRef<Editor | null>(null)
 
   const sourceName = source?.metadata?.source as string | undefined
-  const collection = source?.metadata?.collection as string | undefined
+  const collectionRaw = source?.metadata?.collection as string | undefined
   const chunkId = source?.metadata?.id as string | undefined
+  const { collections } = useAppStore()
+  const collection = collections.find(c => c.id === collectionRaw)?.name || collectionRaw
   const isPdfFile = sourceName ? _isPdf(sourceName) : false
 
   const genKey = collection && sourceName ? _genKey(collection, sourceName) : null

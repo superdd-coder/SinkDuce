@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches pyproject.toml
+        run: |
+          TAG="${{ github.ref_name }}"
+          # Strip leading 'v'
+          TAG_VER="${TAG#v}"
+          TOML_VER=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          if [ "$TAG_VER" != "$TOML_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match pyproject.toml version '$TOML_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true

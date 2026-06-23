@@ -234,7 +234,11 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
         services.db.update_collection_config(collection, {"summary_change_counter": 0})
         return {"message": "No usable doc summaries to consolidate", "conflicts_count": 0}
 
-    # 2. Format and call LLM (generate first, delete old only on success)
+    # 2. Resolve collection display name (not the internal ID)
+    from src.rag.collection_utils import _resolve_collection_name
+    collection_name = _resolve_collection_name(collection)
+
+    # 3. Format and call LLM (generate first, delete old only on success)
     summaries_text = format_doc_summaries_for_prompt(doc_summaries)
     logger.info("[CONSOLIDATE] Formatted summaries (%d chars), calling LLM...", len(summaries_text))
     config = services.db.get_collection_config(collection)
@@ -251,13 +255,13 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
         logger.error("[CONSOLIDATE] LLM returned empty collection_summary, aborting to preserve old data. Raw: %s", raw[:500])
         return {"message": "Consolidation failed: LLM returned empty summary", "conflicts_count": 0}
 
-    # 3. Generate project description
+    # 4. Generate project description
     project_desc = ""
     try:
-        logger.info("[CONSOLIDATE] Generating project description...")
+        logger.info("[CONSOLIDATE] Generating project description for '%s'...", collection_name)
         desc_raw = await loop.run_in_executor(
             None, lambda: enriching_llm.generate(
-                PROJECT_DESCRIPTION_PROMPT.format(summaries=summaries_text, project_name=collection),
+                PROJECT_DESCRIPTION_PROMPT.format(summaries=summaries_text, project_name=collection_name),
                 max_tokens=512,
             )
         )
@@ -266,7 +270,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     except Exception as e:
         logger.error("[CONSOLIDATE] Project description generation failed: %s", e, exc_info=True)
 
-    # 4. Delete old data and store new (atomic: all new content ready before deleting)
+    # 5. Delete old data and store new (atomic: all new content ready before deleting)
     logger.info("[CONSOLIDATE] Deleting old data for collection='%s'", collection)
     summary_mgr.delete_collection_summary(collection)
     summary_mgr.delete_project_description(collection)

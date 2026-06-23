@@ -1117,3 +1117,31 @@ def get_setup_status():
 def mark_setup_complete():
     """Mark the first-run model setup as completed (no-op: local models are transcription-only)."""
     return {"success": True, "message": "Model setup marked as completed"}
+
+
+# ── Version ───────────────────────────────────────────────────
+
+
+def _get_app_version() -> str:
+    """Read the application version from pyproject.toml."""
+    import re
+    from pathlib import Path
+    pyproject = Path(__file__).resolve().parent.parent.parent.parent / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            text = pyproject.read_text(encoding="utf-8")
+            m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
+    return "0.0.0"
+
+
+@router.get("/version")
+def get_version():
+    """Return the current application version and repo info for update checking."""
+    return {
+        "version": _get_app_version(),
+        "repo": "superdd-coder/sinkduce",
+    }

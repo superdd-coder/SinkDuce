@@ -1,6 +1,12 @@
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { useAppStore } from "@/stores/app-store"
 import type { RecallResult } from "@/api/client"
+
+function getCollectionName(id: string) {
+  const collections = useAppStore.getState().collections
+  return collections.find(c => c.id === id)?.name || id
+}
 
 interface ResultListProps {
   results: RecallResult[]
@@ -19,7 +25,7 @@ function ResultCard({ result, rank }: { result: RecallResult; rank: number }) {
         <div className="flex-1 space-y-2">
           <div className="flex items-center gap-2">
             {result.collection && (
-              <Badge variant="outline" className="text-[10px]">{result.collection}</Badge>
+              <Badge variant="outline" className="text-[10px]">{getCollectionName(result.collection)}</Badge>
             )}
             {result.source && (
               <span className="text-xs text-muted-foreground truncate">{result.source}</span>

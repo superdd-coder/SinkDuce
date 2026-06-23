@@ -45,7 +45,9 @@ export function InfoPanel({ collection }: InfoPanelProps) {
   const [ingestedNotesCount, setIngestedNotesCount] = useState(0)
   const [docCount, setDocCount] = useState(0)
 
-  const { setSidebarView, setActiveMeeting, setPendingOpenFile } = useAppStore()
+  const { setSidebarView, setActiveMeeting, setPendingOpenFile, collections } = useAppStore()
+
+  const collectionName = collections.find(c => c.id === collection)?.name || collection
 
   useEffect(() => {
     setSummary(null)
@@ -153,7 +155,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
     setConsolidatingCollection(collection)
     try {
       const res = await triggerConsolidation(collection)
-      toast.info(`Consolidation started for ${collection}...`)
+      toast.info(`Consolidation started for ${collectionName}...`)
       const taskId = res.task?.id
       const targetCollection = collection
       if (taskId) {
@@ -166,7 +168,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
               setConsolidating(false)
               setConsolidatingCollection(null)
               if (task.status === "completed") {
-                toast.success(`Consolidation complete for ${targetCollection}`)
+                toast.success(`Consolidation complete for ${collectionName}`)
                 if (collection === targetCollection) {
                   fetchSummary()
                   fetchProjectDescription()
