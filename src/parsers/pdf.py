@@ -66,11 +66,15 @@ def _parse_with_pdfplumber(path: Path) -> tuple[list[str], bool]:
             table_bboxes = [t.bbox for t in tables]
             elements: list[tuple[float, str, str]] = []
 
-            # Convert each table to markdown
+            # Convert each table to markdown.
+            # Skip single-column "tables" — they are usually just text wrappers.
             for table in tables:
                 try:
                     data = table.extract()
-                    if data:
+                    if data and data[0]:
+                        col_count = len(data[0])
+                        if col_count < 2:
+                            continue  # skip single-column wrappers
                         md = _table_data_to_markdown(data)
                         if md:
                             elements.append((table.bbox[1], "table", md))
