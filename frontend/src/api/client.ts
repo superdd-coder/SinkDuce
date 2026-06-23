@@ -133,6 +133,10 @@ export const deleteDocument = (collection: string, source: string) =>
 export interface FileListItem {
   source: string
   chunk_count: number
+  file_type?: string
+  note_title?: string
+  has_meeting?: boolean
+  display_name?: string
 }
 
 export const getFiles = (collection: string) =>
@@ -156,6 +160,8 @@ export interface ChunkDetail {
   slide_number?: number
   section_label?: string
   heading_path?: string
+  note_id?: string
+  meeting_id?: string
 }
 
 export const getFileChunks = (collection: string, source: string, limit = 100) =>
@@ -281,6 +287,7 @@ export interface LLMProvider {
   is_default: boolean
   selected_models?: string[]
   default_model?: string
+  visual_model_ids?: string[]
 }
 
 export const getLLMProviders = () =>
@@ -861,6 +868,7 @@ export interface NoteListItem {
   updated_at: string
   is_extracted: boolean
   extracted_into: string[]
+  is_ingested: boolean
 }
 
 export interface NoteDetail {
@@ -873,6 +881,7 @@ export interface NoteDetail {
   references: NoteReference[]
   is_extracted: boolean
   extracted_into: string[]
+  is_ingested: boolean
 }
 
 export interface NoteReference {
@@ -948,6 +957,18 @@ export const triggerPropagation = (collection: string, noteId: string) =>
     { method: "POST" }
   )
 
+export const ingestNote = (collection: string, noteId: string) =>
+  request<{ message: string; status: string }>(
+    `/notes/${encodeURIComponent(collection)}/${noteId}/ingest`,
+    { method: "POST" }
+  )
+
+export const removeNoteIngestion = (collection: string, noteId: string) =>
+  request<{ message: string; is_ingested: boolean }>(
+    `/notes/${encodeURIComponent(collection)}/${noteId}/ingest`,
+    { method: "DELETE" }
+  )
+
 // ── Hot Words ──
 
 export interface HotWordItem {
@@ -1009,3 +1030,11 @@ export interface ActiveProviderInfo {
 
 export const getActiveProviderInfo = () =>
   request<ActiveProviderInfo>("/transcription/active-provider-info")
+
+// ── Visual ──
+
+export const describeImage = (imageUrl: string) =>
+  request<{ description: string; error?: string }>("/visual/describe", {
+    method: "POST",
+    body: JSON.stringify({ image_url: imageUrl }),
+  })

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { Sparkles, RefreshCw, Upload } from "lucide-react"
@@ -130,11 +130,12 @@ export function NotesEditor({
       />
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center justify-between border-b border-border px-2">
-          <TabsList>
-            <TabsTrigger value="summary" disabled={!summary} className="font-light uppercase tracking-wider">Summary</TabsTrigger>
-            <TabsTrigger value="todo" disabled={!todos?.length} className="font-light uppercase tracking-wider">TODO</TabsTrigger>
-            <TabsTrigger value="detail" disabled={!detail} className="font-light uppercase tracking-wider">Detail</TabsTrigger>
-            <TabsTrigger value="notes" className="font-light uppercase tracking-wider">Notes</TabsTrigger>
+          <TabsList className="relative" variant="line">
+            <TabsIndicator renderBeforeHydration />
+            <TabsTrigger value="summary" disabled={!summary} className="font-light uppercase tracking-wider after:!opacity-0">Summary</TabsTrigger>
+            <TabsTrigger value="todo" disabled={!todos?.length} className="font-light uppercase tracking-wider after:!opacity-0">TODO</TabsTrigger>
+            <TabsTrigger value="detail" disabled={!detail} className="font-light uppercase tracking-wider after:!opacity-0">Detail</TabsTrigger>
+            <TabsTrigger value="notes" className="font-light uppercase tracking-wider after:!opacity-0">Notes</TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => notesInputRef.current?.click()}>
@@ -155,19 +156,19 @@ export function NotesEditor({
           </div>
         </div>
 
-        <TabsContent value="summary" className="flex-1 mt-0 min-h-0 overflow-auto p-2">
+        <TabsContent key={`summary-${activeTab}`} value="summary" className="flex-1 mt-0 min-h-0 overflow-auto p-2 animate-tab-in">
           <GeneratedContent tab="summary" content={summary} loading={generating} onSave={onUpdateGenerated} />
         </TabsContent>
 
-        <TabsContent value="todo" className="flex-1 mt-0 min-h-0 overflow-auto p-2">
+        <TabsContent key={`todo-${activeTab}`} value="todo" className="flex-1 mt-0 min-h-0 overflow-auto p-2 animate-tab-in">
           <GeneratedContent tab="todo" content={null} todos={todos} loading={generating} onSave={onUpdateGenerated} />
         </TabsContent>
 
-        <TabsContent value="detail" className="flex-1 mt-0 min-h-0 overflow-auto p-2">
+        <TabsContent key={`detail-${activeTab}`} value="detail" className="flex-1 mt-0 min-h-0 overflow-auto p-2 animate-tab-in">
           <GeneratedContent tab="detail" content={detail} loading={generating} onSave={onUpdateGenerated} />
         </TabsContent>
 
-        <TabsContent value="notes" className="flex-1 mt-0 min-h-0 flex flex-col">
+        <TabsContent key={`notes-${activeTab}`} value="notes" className="flex-1 mt-0 min-h-0 flex flex-col animate-tab-in">
           <div className="flex-1 min-h-0 p-2 overflow-auto">
             <MarkdownEditor
               value={draft}

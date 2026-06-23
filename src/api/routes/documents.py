@@ -426,7 +426,7 @@ async def list_files(collection: str):
                 collection=collection,
                 limit=1000,
                 offset=offset,
-                with_payload=["source"],
+                with_payload=["source", "file_type", "note_title", "meeting_id", "ingested_at"],
                 with_vectors=False,
                 scroll_filter=filter_cond,
             )
@@ -435,14 +435,41 @@ async def list_files(collection: str):
                 break
 
         source_counts: dict[str, int] = {}
+        source_meta: dict[str, dict] = {}
         for p in all_points:
-            src = p["payload"].get("source", "unknown")
+            payload = p.get("payload", {})
+            src = payload.get("source", "unknown")
             source_counts[src] = source_counts.get(src, 0) + 1
+            if src not in source_meta:
+                source_meta[src] = {
+                    "file_type": payload.get("file_type", ""),
+                    "note_title": payload.get("note_title", ""),
+                    "has_meeting": bool(payload.get("meeting_id")),
+                    "ingested_at": payload.get("ingested_at", 0),
+                }
 
-        return {"collection": collection, "files": [
-            {"source": src, "chunk_count": count}
-            for src, count in sorted(source_counts.items())
-        ]}
+        # Sort by ingestion time descending (newest first), fallback to source name
+        def _sort_key(item: tuple[str, int]) -> tuple:
+            src = item[0]
+            ingested = source_meta.get(src, {}).get("ingested_at", 0)
+            return (-(ingested if isinstance(ingested, (int, float)) else 0), src)
+
+        files = []
+        for src, count in sorted(source_counts.items(), key=_sort_key):
+            meta = source_meta.get(src, {})
+            display_name = src
+            if meta.get("note_title"):
+                display_name = meta["note_title"]
+            files.append({
+                "source": src,
+                "chunk_count": count,
+                "file_type": meta.get("file_type", ""),
+                "note_title": meta.get("note_title", ""),
+                "has_meeting": meta.get("has_meeting", False),
+                "display_name": display_name,
+            })
+
+        return {"collection": collection, "files": files}
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _fetch)
@@ -489,6 +516,8 @@ def get_file_chunks(collection: str, source: str, limit: int = 100, offset: int 
             "slide_number": p["payload"].get("slide_number"),
             "section_label": p["payload"].get("section_label"),
             "heading_path": p["payload"].get("heading_path"),
+            "note_id": p["payload"].get("note_id", ""),
+            "meeting_id": p["payload"].get("meeting_id", ""),
         }
         for p in all_points
     ]

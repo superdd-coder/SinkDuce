@@ -1,21 +1,196 @@
-"""Notes API routes — CRUD, content, distillation, and propagation."""
+"""Notes API routes — CRUD, content, distillation, propagation, and ingestion."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from src.notes import store
 from src.notes.service import distill_note, propagate_forward, parse_injection_blocks
+from src.services import services
+from src.rag.markdown_chunker import MarkdownChunker, MarkdownParentChildChunker
+from src.rag.collection_utils import get_collection_embedding
+from src.tasks.handlers import (
+    _enrich_lock,
+    _embed_lock,
+    _do_enrich,
+    _do_embed,
+    _build_enriched_text,
+)
 
 logger = logging.getLogger("notes")
 router = APIRouter()
+
+
+# ── Helpers ────────────────────────────────────────────────────
+
+
+def _get_ingested_note_ids(collection: str) -> set[str]:
+    """Build a set of note IDs that have chunks ingested in Qdrant."""
+    ingested: set[str] = set()
+    try:
+        if not services.db.collection_exists(collection):
+            return ingested
+        filter_cond = Filter(
+            must=[FieldCondition(key="file_type", match=MatchValue(value="note"))]
+        )
+        offset = None
+        while True:
+            points, offset = services.db.scroll_points(
+                collection=collection,
+                limit=200,
+                offset=offset,
+                scroll_filter=filter_cond,
+                with_payload=["source"],
+                with_vectors=False,
+            )
+            for p in points:
+                source = p.get("payload", {}).get("source", "")
+                if isinstance(source, str) and source.startswith("__note__:"):
+                    ingested.add(source[len("__note__:"):])
+            if offset is None:
+                break
+    except Exception as e:
+        logger.warning("Failed to query ingested note IDs for collection %s: %s", collection, e)
+    return ingested
+
+
+def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str):
+    """Run full ingest pipeline: chunk → enrich → embed → store.
+
+    Runs in a background thread via BackgroundTasks. Reuses the
+    enrichment/embedding locks from handlers.py.
+    """
+    t_start = time.time()
+
+    # Ensure collection exists in Qdrant
+    if not services.db.collection_exists(collection):
+        vector_size = services.embedding.dimensions if services.embedding else 1024
+        services.db.create_collection(collection, vector_size=vector_size)
+
+    config = services.db.get_collection_config(collection)
+
+    # ── Stage 1: Chunking ──
+    source = f"__note__:{note_id}"
+    extra_meta = {
+        "file_type": "note",
+        "note_id": note_id,
+        "note_title": note_title,
+        "ingested_at": time.time(),
+    }
+
+    if config.get("chunk_mode") == "parent_child":
+        chunker = MarkdownParentChildChunker(
+            parent_strategy=config.get("parent_strategy", "heading"),
+            parent_chunk_size=config.get("parent_chunk_size", 1024),
+            parent_overlap=config.get("parent_chunk_overlap", 128),
+            parent_buffer_ratio=config.get("buffer_ratio", 0.5),
+            child_chunk_size=config.get("child_chunk_size", 128),
+            child_overlap=config.get("child_chunk_overlap", 32),
+            child_buffer_ratio=config.get("buffer_ratio", 0.5),
+        )
+    else:
+        chunker = MarkdownChunker(
+            max_tokens=config.get("chunk_size", 512),
+            buffer_ratio=config.get("buffer_ratio", 0.5),
+            chunk_overlap=config.get("chunk_overlap", 64),
+        )
+
+    chunks = chunker.chunk_with_metadata(
+        content, source=source, extra_metadata=extra_meta
+    )
+    logger.info("[INGEST] Note %s: chunked into %d chunks (%.1fs)",
+                note_id, len(chunks), time.time() - t_start)
+
+    if not chunks:
+        logger.warning("[INGEST] Note %s: chunking produced 0 chunks, aborting", note_id)
+        return
+
+    # ── Stage 2: Enrichment (serialized, non-fatal) ──
+    t_ctx = time.time()
+    contextual_enabled = config.get("contextual_enabled", True)
+    if contextual_enabled:
+        _Doc = type("_Doc", (), {"content": content})
+        _enrich_lock.acquire()
+        try:
+            chunks = _do_enrich(chunks, _Doc, config)
+            logger.info("[INGEST] Note %s: enrichment done (%.1fs)",
+                        note_id, time.time() - t_ctx)
+        except Exception as e:
+            logger.warning("[INGEST] Note %s: enrichment failed (%.1fs), continuing: %s",
+                        note_id, time.time() - t_ctx, e)
+        finally:
+            _enrich_lock.release()
+
+    # ── Stage 3: Embedding (serialized) ──
+    t_emb = time.time()
+    _embed_lock.acquire()
+    try:
+        embeddings = _do_embed(chunks, config, collection)
+    finally:
+        _embed_lock.release()
+    logger.info("[INGEST] Note %s: embedding done (%.1fs)",
+                note_id, time.time() - t_emb)
+
+    # ── Stage 4: Storage ──
+    ids = []
+    for c in chunks:
+        if c.chunk_type in ("parent", "child"):
+            ids.append(c.metadata["chunk_id"])
+        else:
+            new_id = str(uuid.uuid4())
+            c.metadata["chunk_id"] = new_id
+            ids.append(new_id)
+
+    payloads = []
+    for c in chunks:
+        payload = {
+            "text": c.text,
+            "parent_id": c.parent_id,
+            "chunk_type": c.chunk_type,
+        }
+        if c.metadata.get("context"):
+            payload["context"] = c.metadata["context"]
+        if c.metadata.get("summary"):
+            payload["summary"] = c.metadata.get("summary")
+        payload.update({k: v for k, v in c.metadata.items()
+                        if k not in ("context", "summary")})
+        payload["collection"] = collection
+        payloads.append(payload)
+
+    t_store = time.time()
+    services.db.upsert_points(
+        collection=collection, ids=ids, vectors=embeddings,
+        payloads=payloads,
+    )
+
+    # ── Sparse encoding ──
+    try:
+        from src.rag.sparse_encoder import SparseEncoder
+        encoder = SparseEncoder()
+        vocab_path = Path("data") / collection / "sparse_vocab.json"
+        if vocab_path.exists():
+            encoder.load(str(vocab_path))
+        texts = [_build_enriched_text(c) for c in chunks]
+        sparse_vectors = encoder.encode(texts)
+        encoder.save(str(vocab_path))
+        services.db.upsert_sparse_vectors(
+            collection=collection, ids=ids, sparse_vectors=sparse_vectors,
+        )
+    except Exception:
+        logger.warning("[INGEST] Note %s: sparse encoding failed", note_id, exc_info=True)
+
+    logger.info("[INGEST] Note %s: store done in %.1fs. Total: %.1fs",
+                note_id, time.time() - t_store, time.time() - t_start)
 
 
 # ── Notes CRUD ─────────────────────────────────────────────────
@@ -25,6 +200,7 @@ router = APIRouter()
 async def list_notes(collection: str):
     """List all notes for a collection, sorted by updated_at descending."""
     notes = store.list_notes(collection)
+    ingested_ids = _get_ingested_note_ids(collection)
     items = []
     for note in notes:
         referenced_by = store.get_referenced_by(collection, note.id)
@@ -36,6 +212,7 @@ async def list_notes(collection: str):
             "updated_at": note.updated_at.isoformat(),
             "is_extracted": len(referenced_by) > 0,
             "extracted_into": referenced_by,
+            "is_ingested": note.id in ingested_ids,
         })
     return {"collection": collection, "notes": items}
 
@@ -64,6 +241,18 @@ async def get_note(collection: str, note_id: str):
     content = store.get_content(collection, note_id) or ""
     references = store.get_references(collection, note_id)
     referenced_by = store.get_referenced_by(collection, note_id)
+
+    # Check if this note is ingested into Qdrant
+    is_ingested = False
+    try:
+        if services.db.collection_exists(collection):
+            filter_cond = Filter(
+                must=[FieldCondition(key="source", match=MatchValue(value=f"__note__:{note_id}"))]
+            )
+            is_ingested = services.db.count_by_filter(collection, filter_cond) > 0
+    except Exception:
+        pass
+
     # Enrich references with source titles
     for ref in references:
         source = store.get_note(collection, ref.get("source_note_id", ""))
@@ -78,6 +267,7 @@ async def get_note(collection: str, note_id: str):
         "references": references,
         "is_extracted": len(referenced_by) > 0,
         "extracted_into": referenced_by,
+        "is_ingested": is_ingested,
     }
 
 
@@ -129,8 +319,18 @@ async def update_note(collection: str, note_id: str, body: dict = Body()):
 
 @router.delete("/notes/{collection}/{note_id}")
 async def delete_note(collection: str, note_id: str):
-    """Delete a note and clean up all references."""
+    """Delete a note and clean up all references and ingested chunks."""
     logger.info("[DELETE] Note %s in collection '%s'", note_id, collection)
+
+    # Clean up ingested chunks from Qdrant
+    source = f"__note__:{note_id}"
+    try:
+        if services.db.collection_exists(collection):
+            services.db.delete_by_filter(collection, key="source", value=source)
+            logger.info("[DELETE] Cleaned up ingested chunks for note %s", note_id)
+    except Exception as e:
+        logger.warning("Failed to clean up ingested chunks for deleted note %s: %s", note_id, e)
+
     deleted = store.delete_note(collection, note_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
@@ -214,6 +414,60 @@ async def trigger_propagation(collection: str, note_id: str, background_tasks: B
         "message": "Propagation started in background",
         "status": "started",
     }
+
+
+# ── Ingestion ──────────────────────────────────────────────────
+
+
+@router.post("/notes/{collection}/{note_id}/ingest")
+async def ingest_note(collection: str, note_id: str, background_tasks: BackgroundTasks):
+    """Ingest a note's markdown content into the Qdrant vector store
+    so it becomes searchable via RAG."""
+    note = store.get_note(collection, note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+
+    content = store.get_content(collection, note_id) or ""
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="Note content is empty")
+
+    # Remove any existing ingestion first (allows re-ingestion after edits)
+    source = f"__note__:{note_id}"
+    try:
+        if services.db.collection_exists(collection):
+            services.db.delete_by_filter(collection, key="source", value=source)
+    except Exception:
+        pass
+
+    def run_ingestion():
+        logger.info("[INGEST] Starting ingestion for note %s in collection '%s'", note_id, collection)
+        try:
+            _do_ingest_note(collection, note_id, note.title, content)
+            logger.info("[INGEST] Completed ingestion for note %s", note_id)
+        except Exception as e:
+            logger.error("[INGEST] Failed to ingest note %s: %s", note_id, e, exc_info=True)
+
+    background_tasks.add_task(run_ingestion)
+
+    return {"message": "Ingestion started", "status": "pending"}
+
+
+@router.delete("/notes/{collection}/{note_id}/ingest")
+async def remove_note_ingestion(collection: str, note_id: str):
+    """Remove all ingested chunks for a note from Qdrant."""
+    note = store.get_note(collection, note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+
+    source = f"__note__:{note_id}"
+    try:
+        services.db.delete_by_filter(collection, key="source", value=source)
+        logger.info("[INGEST] Removed ingestion for note %s from collection '%s'", note_id, collection)
+    except Exception as e:
+        logger.error("[INGEST] Failed to remove note %s: %s", note_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to remove ingestion: {e}")
+
+    return {"message": "Ingestion removed", "is_ingested": False}
 
 
 # ── Image upload & serve ──────────────────────────────────────

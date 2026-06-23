@@ -34,6 +34,9 @@ export function MeetingView() {
   const [meeting, setMeeting] = useState<Meeting | null>(null)
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([])
 
+  // Guard against stale fetchMeeting results after activeMeeting changes
+  const fetchMeetingIdRef = useRef<string | null>(null)
+
   // UI state
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(true)
@@ -45,7 +48,7 @@ export function MeetingView() {
   const [isNotesDirty, setIsNotesDirty] = useState(false)
   const [multiIngestOpen, setMultiIngestOpen] = useState(false)
   const [hasRealtimeProvider, setHasRealtimeProvider] = useState(false)
-  const [hasFileProvider, setHasFileProvider] = useState(false)
+  const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [providerSupportsHotWords, setProviderSupportsHotWords] = useState(false)
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
   // Per-meeting language hints: keyed by meeting ID, persists across meeting switches during the session
@@ -124,9 +127,11 @@ export function MeetingView() {
 
   // Fetch single meeting detail
   const fetchMeeting = useCallback(async (id: string) => {
-    console.trace("[fetchMeeting]", id)
+    fetchMeetingIdRef.current = id
     try {
       const m = await getMeeting(id)
+      // Guard: if activeMeeting changed while fetching, discard stale result
+      if (fetchMeetingIdRef.current !== id) return
       setMeeting(m)
       // If a background summary is in progress, resume polling
       if (m.summarizing) {
@@ -475,9 +480,9 @@ export function MeetingView() {
         onDelete={handleDelete}
       />
 
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden" key={activeMeeting || "empty"}>
         {meeting ? (
-          <div className="h-full flex flex-col">
+          <div className="h-full flex flex-col animate-tab-in">
             {/* Header */}
             <div className="flex items-center justify-between px-4 h-12 border-b border-border">
               {editingTitle ? (
@@ -636,7 +641,7 @@ export function MeetingView() {
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
+          <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
             <div className="text-center">
               <Mic className="h-12 w-12 mx-auto mb-3 opacity-30" />
               <p>Select a meeting or create one</p>

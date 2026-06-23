@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger, TabsIndicator, TabsContent } from "@/components/ui/tabs"
 import {
   Loader2, FlaskConical, Trash2, Wand2, Play, RotateCw,
   CheckCircle, XCircle, Clock, ChevronDown, ChevronRight,
@@ -1119,14 +1119,15 @@ export function RecallView() {
         </div>
 
         <Tabs defaultValue="search">
-          <TabsList>
-            <TabsTrigger value="search" className="font-light uppercase tracking-wider">Search</TabsTrigger>
-            <TabsTrigger value="evaluate" className="font-light uppercase tracking-wider">Evaluate</TabsTrigger>
+          <TabsList className="relative" variant="line">
+            <TabsIndicator renderBeforeHydration />
+            <TabsTrigger value="search" className="font-light uppercase tracking-wider after:!opacity-0">Search</TabsTrigger>
+            <TabsTrigger value="evaluate" className="font-light uppercase tracking-wider after:!opacity-0">Evaluate</TabsTrigger>
           </TabsList>
-          <TabsContent value="search" className="mt-4">
+          <TabsContent key="search" value="search" className="mt-4 animate-tab-in">
             <SearchTab />
           </TabsContent>
-          <TabsContent value="evaluate" className="mt-4">
+          <TabsContent key="evaluate" value="evaluate" className="mt-4 animate-tab-in">
             <EvaluateTab />
           </TabsContent>
         </Tabs>

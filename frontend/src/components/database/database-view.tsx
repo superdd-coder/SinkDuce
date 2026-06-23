@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
@@ -15,6 +15,12 @@ import { CollectionConfig } from "./collection-config"
 import { InfoPanel } from "./info-panel"
 import { FileDetailDialog } from "./file-detail-dialog"
 import { UploadSection } from "./upload-section"
+
+// Module-level: allows note-editor-dialog to trigger files refresh after ingestion
+let _refreshFilesCallback: (() => void) | null = null
+export function _triggerFilesRefresh() {
+  _refreshFilesCallback?.()
+}
 
 export function DatabaseView() {
   const { activeCollection, setActiveCollection, removeDeletedCollection, pendingCreateCollection, setPendingCreateCollection, pendingOpenFile, setPendingOpenFile, collections, fetchCollections } = useAppStore()
@@ -84,6 +90,12 @@ export function DatabaseView() {
 
   // Keep ref in sync so polling always calls the latest fetchFiles
   fetchFilesRef.current = fetchFiles
+
+  // Wire module-level callback for external files refresh (e.g. note ingestion)
+  useEffect(() => {
+    _refreshFilesCallback = fetchFiles
+    return () => { _refreshFilesCallback = null }
+  }, [fetchFiles])
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -192,9 +204,9 @@ export function DatabaseView() {
         onRename={setRenameTarget}
       />
 
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden" key={activeCollection || "empty"}>
         {activeCollection ? (
-          <div className="h-full flex flex-col px-10 py-8">
+          <div className="h-full flex flex-col px-10 py-8 animate-tab-in">
             {/* Collection name header */}
             <div className="flex items-baseline justify-between mb-5">
               <span className="text-[12px] font-semibold uppercase tracking-[0.15em] text-foreground">
@@ -206,37 +218,38 @@ export function DatabaseView() {
             </div>
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
-              <TabsList className="w-fit bg-transparent p-0 gap-5 border-b rounded-none border-border">
+              <TabsList className="w-fit bg-transparent p-0 gap-5 border-b rounded-none border-border relative">
+                <TabsIndicator renderBeforeHydration />
                 <TabsTrigger
                   value="info"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground"
+                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
                   style={{ borderColor: "transparent" }}
                 >
                   Info
                 </TabsTrigger>
                 <TabsTrigger
                   value="files"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground"
+                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
                   style={{ borderColor: "transparent" }}
                 >
                   Files
                 </TabsTrigger>
                 <TabsTrigger
                   value="config"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground"
+                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
                   style={{ borderColor: "transparent" }}
                 >
                   Config
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="info" className="flex-1 mt-2 overflow-hidden min-h-0">
+              <TabsContent key={`info-${activeTab}`} value="info" className="flex-1 mt-2 overflow-hidden min-h-0 animate-tab-in">
                 <ScrollArea className="h-full">
                   <InfoPanel collection={activeCollection} />
                 </ScrollArea>
               </TabsContent>
 
-              <TabsContent value="files" className="flex-1 mt-2 overflow-hidden">
+              <TabsContent key={`files-${activeTab}`} value="files" className="flex-1 mt-2 overflow-hidden animate-tab-in">
                 <div className="h-full flex flex-col gap-4">
                   <UploadSection
                     hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
@@ -261,7 +274,36 @@ export function DatabaseView() {
                             className="flex items-center gap-3 py-2.5 cursor-pointer text-sm border-b transition-colors group border-b border-dashed border-border text-foreground"
                             onClick={() => openFileDetail(file.source)}
                           >
-                            <span className="flex-1 truncate text-xs">{file.source}</span>
+                            <div className="flex-1 min-w-0 flex items-center gap-3">
+                              {/* Fixed-width tag — equal width, text centered */}
+                              <span className="shrink-0 flex items-center" style={{ width: "72px" }}>
+                                {file.file_type === "note" && (
+                                  <span
+                                    className="text-[9px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
+                                    style={{
+                                      background: "rgba(37,99,235,0.08)",
+                                      color: "hsl(217.2 91.2% 59.8%)",
+                                      borderRadius: "2px",
+                                    }}
+                                  >
+                                    Note
+                                  </span>
+                                )}
+                                {file.has_meeting && (
+                                  <span
+                                    className="text-[9px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
+                                    style={{
+                                      background: "rgba(217,119,6,0.08)",
+                                      color: "hsl(32.2 94.6% 43.7%)",
+                                      borderRadius: "2px",
+                                    }}
+                                  >
+                                    Recording
+                                  </span>
+                                )}
+                              </span>
+                              <span className="truncate text-xs">{file.display_name || file.source}</span>
+                            </div>
                             <span className="text-[10px] font-medium text-muted-foreground">{file.chunk_count} chunks</span>
                             <button
                               className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
@@ -278,7 +320,7 @@ export function DatabaseView() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="config" className="flex-1 mt-2 overflow-hidden min-h-0">
+              <TabsContent key={`config-${activeTab}`} value="config" className="flex-1 mt-2 overflow-hidden min-h-0 animate-tab-in">
                 <ScrollArea className="h-full">
                   <CollectionConfig collection={activeCollection} />
                 </ScrollArea>
@@ -286,7 +328,7 @@ export function DatabaseView() {
             </Tabs>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
+          <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
             <div className="text-center">
               <div
                 className="w-10 h-10 border mx-auto mb-3 flex items-center justify-center border-border"
@@ -320,6 +362,7 @@ export function DatabaseView() {
       <FileDetailDialog
         collection={activeCollection}
         source={selectedFile}
+        displayName={files.find(f => f.source === selectedFile)?.display_name}
         openKey={dialogKey}
         chunks={chunks}
         chunksTotal={chunksTotal}

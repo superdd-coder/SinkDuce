@@ -25,6 +25,7 @@ class NoteListItem(BaseModel):
     updated_at: str
     is_extracted: bool = False
     extracted_into: list[str] = Field(default_factory=list)
+    is_ingested: bool = False
 
 
 class InjectionBlock(BaseModel):

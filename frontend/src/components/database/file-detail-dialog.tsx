@@ -3,11 +3,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { Loader2, ChevronRight, ChevronDown, RefreshCw } from "lucide-react"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
 import { getFilePreviewUrl, getDocSummary, setDocSummaryInclude, generateDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
+import { useAppStore } from "@/stores/app-store"
 import { toast } from "sonner"
 
 // Module-level: survives component unmount across tab switches
@@ -42,6 +43,7 @@ function _isMarked(key: string): boolean {
 interface FileDetailDialogProps {
   collection: string
   source: string | null
+  displayName?: string
   chunks: ChunkDetail[]
   chunksTotal: number
   loading: boolean
@@ -49,7 +51,7 @@ interface FileDetailDialogProps {
   openKey?: number
 }
 
-export function FileDetailDialog({ collection, source, chunks, chunksTotal, loading, onOpenChange, openKey }: FileDetailDialogProps) {
+export function FileDetailDialog({ collection, source, displayName, chunks, chunksTotal, loading, onOpenChange, openKey }: FileDetailDialogProps) {
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
@@ -217,12 +219,35 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
     return () => { cancelled = true }
   }, [source, collection])
 
+  // Navigation target derived from chunk metadata
+  const firstChunk = chunks[0]
+  const isNoteFile = firstChunk?.file_type === "note"
+  const isRecordingFile = !!firstChunk?.meeting_id
+  const noteId = isNoteFile ? (firstChunk?.note_id || (source?.startsWith("__note__:") ? source.slice("__note__:".length) : null)) : null
+  const meetingId = isRecordingFile ? firstChunk?.meeting_id : null
+
+  const { setActiveMeeting, setSidebarView, setPendingOpenNote } = useAppStore()
+
+  const handleGoToSource = () => {
+    if (isNoteFile && noteId) {
+      setPendingOpenNote(noteId)
+      setSidebarView("database")
+      onOpenChange(false)
+    } else if (isRecordingFile && meetingId) {
+      setActiveMeeting(meetingId)
+      setSidebarView("meeting")
+      onOpenChange(false)
+    }
+  }
+
+  const goToLabel = isNoteFile ? "GO TO THE NOTE" : isRecordingFile ? "GO TO THE RECORDING" : null
+
   return (
     <Dialog open={!!source} onOpenChange={(v) => onOpenChange(v)}>
       <DialogContent className="!max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <span className="truncate">{source}</span>
+            <span className="truncate font-light">{displayName || source}</span>
             <Badge variant="secondary" className="ml-2 shrink-0">{chunksTotal} chunks</Badge>
           </DialogTitle>
         </DialogHeader>
@@ -230,13 +255,26 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
         <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
           <div className="w-1/2 flex flex-col min-h-0">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full min-h-0">
-              <TabsList variant="line" className="mb-2">
-                <TabsTrigger value="source">Source</TabsTrigger>
-                {isPdf && <TabsTrigger value="raw">Raw</TabsTrigger>}
-                <TabsTrigger value="summary">Summary</TabsTrigger>
-              </TabsList>
+              <div className="flex items-center justify-between mb-2">
+                <TabsList variant="line" className="relative">
+                  <TabsIndicator renderBeforeHydration />
+                  <TabsTrigger value="source" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SOURCE</TabsTrigger>
+                  {isPdf && <TabsTrigger value="raw" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">RAW</TabsTrigger>}
+                  <TabsTrigger value="summary" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SUMMARY</TabsTrigger>
+                </TabsList>
+                {goToLabel && (
+                  <button
+                    type="button"
+                    className="text-[9px] font-light uppercase tracking-[0.12em] text-primary hover:opacity-80 transition-opacity cursor-pointer"
+                    style={{ background: "none", border: "none", fontFamily: "var(--font-sans)" }}
+                    onClick={handleGoToSource}
+                  >
+                    {goToLabel}
+                  </button>
+                )}
+              </div>
 
-              <TabsContent value="source" className="flex-1 overflow-hidden min-h-0">
+              <TabsContent key={`source-${activeTab}`} value="source" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
                 <div className="h-full overflow-hidden">
                   {loading || previewLoading ? (
                     <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -269,7 +307,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
               </TabsContent>
 
               {isPdf && (
-                <TabsContent value="raw" className="flex-1 overflow-hidden min-h-0">
+                <TabsContent key={`raw-${activeTab}`} value="raw" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
                   <div className="h-full overflow-hidden">
                     {source && (
                       <iframe
@@ -285,7 +323,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
                 </TabsContent>
               )}
 
-              <TabsContent value="summary" className="flex-1 overflow-hidden min-h-0">
+              <TabsContent key={`summary-${activeTab}`} value="summary" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
                 <div className="h-full overflow-hidden">
                   <ScrollArea className="h-full">
                     <div className="p-4">
@@ -335,6 +373,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
                             <Button
                               variant="ghost"
                               size="sm"
+                              className="font-light uppercase tracking-wider text-primary"
                               disabled={isGenerating}
                               onClick={async () => {
                                 if (!source || !collection) return
@@ -353,7 +392,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
                               }}
                             >
                               {isGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
-                              Re-summarize
+                              RE-SUMMARIZE
                             </Button>
                           </div>
                           {docSummary.data.length > 0 && (
@@ -396,6 +435,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
                           <Button
                             variant="outline"
                             size="sm"
+                            className="font-light uppercase tracking-wider text-primary border-primary"
                             disabled={!source || !collection || isGenerating}
                             onClick={async () => {
                               if (!source || !collection) return
@@ -414,7 +454,7 @@ export function FileDetailDialog({ collection, source, chunks, chunksTotal, load
                             }}
                           >
                             <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                            Summarize
+                            SUMMARIZE
                           </Button>
                         </div>
                       )}

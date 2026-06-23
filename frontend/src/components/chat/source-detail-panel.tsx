@@ -3,7 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { Loader2, X, ChevronRight, ChevronDown, RefreshCw, Locate } from "lucide-react"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
@@ -252,14 +252,15 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
       {/* Tabs */}
       <div className="flex-1 flex flex-col min-h-0 px-2">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full min-h-0">
-          <TabsList variant="line" className="mb-1 shrink-0">
-            <TabsTrigger value="preview" className="text-xs">Source</TabsTrigger>
-            <TabsTrigger value="chunks" className="text-xs">Chunks{chunks.length > 0 ? ` (${chunks.length})` : ""}</TabsTrigger>
-            <TabsTrigger value="summary" className="text-xs">Summary</TabsTrigger>
+          <TabsList variant="line" className="mb-1 shrink-0 relative">
+            <TabsIndicator renderBeforeHydration />
+            <TabsTrigger value="preview" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SOURCE</TabsTrigger>
+            <TabsTrigger value="chunks" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">CHUNKS{chunks.length > 0 ? ` (${chunks.length})` : ""}</TabsTrigger>
+            <TabsTrigger value="summary" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SUMMARY</TabsTrigger>
           </TabsList>
 
           {/* Preview Tab */}
-          <TabsContent value="preview" className="flex-1 overflow-hidden min-h-0">
+          <TabsContent key={`preview-${activeTab}`} value="preview" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
             <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
               {previewLoading || chunksLoading ? (
                 <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -300,7 +301,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
           </TabsContent>
 
           {/* Chunks Tab */}
-          <TabsContent value="chunks" className="flex-1 overflow-hidden min-h-0">
+          <TabsContent key={`chunks-${activeTab}`} value="chunks" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
             <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
               <ScrollArea className="h-full">
                 <CardContent className="p-3 space-y-2">
@@ -420,7 +421,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
           </TabsContent>
 
           {/* Summary Tab */}
-          <TabsContent value="summary" className="flex-1 overflow-hidden min-h-0">
+          <TabsContent key={`summary-${activeTab}`} value="summary" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
             <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
               <ScrollArea className="h-full">
                 <CardContent className="p-4">
@@ -468,6 +469,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                       <div className="flex justify-end">
                         <Button
                           variant="ghost" size="sm"
+                          className="font-light uppercase tracking-wider text-primary"
                           disabled={isGenerating}
                           onClick={async () => {
                             if (!sourceName || !collection) return
@@ -481,7 +483,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                           }}
                         >
                           {isGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
-                          Re-summarize
+                          RE-SUMMARIZE
                         </Button>
                       </div>
                       {docSummary.data.length > 0 && (
@@ -508,6 +510,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                       <p className="text-sm text-muted-foreground">No summary available.</p>
                       <Button
                         variant="outline" size="sm"
+                        className="font-light uppercase tracking-wider text-primary border-primary"
                         disabled={!sourceName || !collection || isGenerating}
                         onClick={async () => {
                           if (!sourceName || !collection) return
@@ -521,7 +524,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                         }}
                       >
                         <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                        Summarize
+                        SUMMARIZE
                       </Button>
                     </div>
                   )}

@@ -21,7 +21,7 @@ export function NoteSidebarLeft({
   return (
     <div className="w-56 border-r border-border flex flex-col shrink-0">
       <div className="px-3 h-9 border-b border-border flex items-center justify-between shrink-0">
-        <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
+        <span className="text-[12px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
           Notes
         </span>
         {onCreateNote && (
@@ -83,7 +83,7 @@ function NoteDraggableItem({ note, isActive, onClick }: NoteDraggableItemProps) 
   return (
     <button
       className={cn(
-        "w-full text-left flex items-center gap-2 px-2 py-1.5 text-sm transition-colors group border-b border-dashed border-border",
+        "w-full text-left flex items-center gap-2 px-2 py-1.5 text-[12px] transition-colors group border-b border-dashed border-border",
         isActive
           ? "text-primary font-medium cursor-default"
           : "hover:text-primary text-foreground cursor-grab active:cursor-grabbing",

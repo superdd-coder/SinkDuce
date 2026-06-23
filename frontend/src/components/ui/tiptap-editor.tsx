@@ -140,9 +140,201 @@ function createMarkdownHoverPlugin() {
 }
 
 // ──────────────────────────────────────────────
+// Async Visual Translate Manager (module-level — survives React unmount)
+// ──────────────────────────────────────────────
+
+let _vtCallback: ((imageUrl: string) => Promise<string>) | null = null
+const _generatingImages = new Set<string>()
+const _pendingResults = new Map<string, string>() // imageId → description
+/** Tracks the current DOM container for each generating image so we can
+ *  remove the image-generating CSS class when generation ends, even if
+ *  the editor instance was destroyed and recreated. */
+const _vtContainers = new Map<string, HTMLElement>() // imageId → container
+/** Flush pending auto-save to server before async generation — ensures imageId is
+ *  persisted so cross-note pending-injection finds its target on reload. */
+let _flushSaveBeforeGenerate: (() => Promise<void>) | null = null
+
+export function _setFlushSaveBeforeGenerate(fn: (() => Promise<void>) | undefined) {
+  _flushSaveBeforeGenerate = fn ?? null
+}
+
+function _setVTCallback(fn: ((imageUrl: string) => Promise<string>) | undefined) {
+  _vtCallback = fn ?? null
+}
+
+async function _runVisualTranslate(
+  imageUrl: string,
+  imageId: string,
+  editor: any,
+  container: HTMLElement,
+) {
+  if (!_vtCallback) return
+  _generatingImages.add(imageId)
+  // Track the container so we can remove the generating class later,
+  // even if the editor is recreated by a note-switch round-trip.
+  _vtContainers.set(imageId, container)
+
+  // Lock image
+  container.style.pointerEvents = "none"
+  container.classList.add("image-generating")
+
+  // Flush auto-save to server BEFORE the async call, mirroring distill block's
+  // pattern. This ensures the image's data-image-id is persisted on the server,
+  // so if the user switches notes mid-generation, applyPendingDescriptions
+  // can find and update it when they return.
+  try {
+    if (_flushSaveBeforeGenerate) await _flushSaveBeforeGenerate()
+  } catch { /* non-critical */ }
+
+  let _desc: string | null = null
+  try {
+    _desc = await _vtCallback(imageUrl)
+    // Always store result — survives note switching / editor content changes
+    _pendingResults.set(imageId, _desc)
+
+
+
+    // Try to apply immediately to the current editor document.
+    // Wrapped in its own try/catch: if the editor was destroyed (note switch),
+    // the dispatch will fail, but we KEEP the result in _pendingResults so
+    // applyPendingDescriptions can inject it when the note is reloaded.
+    try {
+      const { doc } = editor.state
+      let foundPos: number | null = null
+      doc.descendants((node: any, pos: number) => {
+        if (node.type.name === "image" && node.attrs.imageId === imageId) {
+          foundPos = pos
+          return false
+        }
+        return true
+      })
+      if (foundPos !== null && !editor.isDestroyed) {
+const nodeAt = doc.nodeAt(foundPos)
+        if (nodeAt) {
+          const tr = editor.state.tr
+          tr.setNodeMarkup(foundPos, undefined, {
+            ...nodeAt.attrs,
+            visualDescription: _desc,
+          })
+          editor.view.dispatch(tr)
+          // Result applied to editor — persisted when onChange fires.
+          _pendingResults.delete(imageId)
+          // Fallback: also update DOM directly.
+          try {
+            const descArea = container.querySelector(".image-visual-desc") as HTMLElement | null
+            const descTextEl = container.querySelector(".image-visual-desc-text") as HTMLElement | null
+            if (descArea && descTextEl) {
+              descTextEl.textContent = _desc
+              descArea.style.display = "block"
+              container.classList.add("image-has-description")
+            }
+          } catch { /* best-effort fallback */ }
+        }
+      }
+      // If foundPos is null, the editor is showing different content.
+      // Result stays in _pendingResults — it will be applied when the
+      // note's content is reloaded (see applyPendingDescriptions).
+    } catch (_dispatchErr: any) {
+      // Dispatch failed — editor was likely destroyed during a note switch.
+      // The result is already in _pendingResults; it will be injected by
+      // applyPendingDescriptions when the note is reloaded.
+      console.warn("[VisualTranslate] dispatch skipped, result stays pending")
+    }
+  } catch (err: any) {
+    // Only reached if the API call (describeImage) itself failed.
+    // Clean up the pending entry — there's no result to persist.
+    console.error("[VisualTranslate] generation failed:", err)
+    _generatingImages.delete(imageId)
+    _pendingResults.delete(imageId)
+    try {
+      const toast = document.createElement("div")
+      toast.style.cssText = "position:fixed;bottom:20px;right:20px;background:#dc2626;color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;z-index:99999;max-width:400px"
+      toast.textContent = err?.message || "Visual Translate failed. Check Settings → Visual Model."
+      document.body.appendChild(toast)
+      setTimeout(() => toast.remove(), 5000)
+    } catch { /* ignore */ }
+  } finally {
+    _generatingImages.delete(imageId)
+    // Remove generating state from the tracked container AND force-show
+    // the description on it. This guarantees the description is visible
+    // even if the ProseMirror dispatch/update cycle didn't apply it.
+    try {
+      const c = _vtContainers.get(imageId)
+      if (c) {
+        c.classList.remove("image-generating")
+        c.style.pointerEvents = ""
+        // Force-show description on the current container
+        if (_desc) {
+          const da = c.querySelector(".image-visual-desc") as HTMLElement | null
+          const dt = c.querySelector(".image-visual-desc-text") as HTMLElement | null
+          if (da && dt) {
+            dt.textContent = _desc
+            da.style.display = "block"
+          }
+        }
+      }
+      _vtContainers.delete(imageId)
+    } catch { /* best-effort */ }
+    container.style.pointerEvents = ""
+    container.classList.remove("image-generating")
+  }
+}
+
+function _isImageGenerating(imageId: string): boolean {
+  return _generatingImages.has(imageId)
+}
+
+/**
+ * Inject pending AI descriptions into Markdown content before it is loaded
+ * into the editor. Called by the React layer whenever note content is set.
+ *
+ * Scans for <img> tags with a known data-image-id that have a pending
+ * description, and adds data-visual-desc so the editor picks it up.
+ */
+export function applyPendingDescriptions(markdown: string): string {
+  if (_pendingResults.size === 0) return markdown
+
+  let changed = false
+  let result = markdown
+
+  for (const [imageId, description] of _pendingResults) {
+    const needle = `data-image-id="${imageId}"`
+    if (!result.includes(needle)) continue
+
+    const encodedDesc = encodeURIComponent(description)
+    const descAttr = `data-visual-desc=`
+
+    // Find the <img> tag that contains this imageId
+    const needleIdx = result.indexOf(needle)
+    const imgTagStart = result.lastIndexOf('<img', needleIdx)
+    const imgTagEnd = result.indexOf('>', needleIdx)
+    if (imgTagStart < 0 || imgTagEnd <= imgTagStart) continue
+
+    const oldImg = result.substring(imgTagStart, imgTagEnd + 1)
+    let newImg: string
+    if (oldImg.includes(descAttr)) {
+      // Already has a description — replace it (re-generation case)
+      newImg = oldImg.replace(/data-visual-desc="[^"]*"/, `data-visual-desc="${encodedDesc}"`)
+    } else {
+      // No existing description — inject after needle
+      newImg = oldImg.replace(needle, `${needle} data-visual-desc="${encodedDesc}"`)
+    }
+    result = result.replace(oldImg, newImg)
+    changed = true
+    _pendingResults.delete(imageId)
+  }
+
+  return changed ? result : markdown
+}
+
+// ──────────────────────────────────────────────
 // Custom Resizable Image Extension
 // ──────────────────────────────────────────────
-const ResizableImage = Node.create({
+function createResizableImageExtension(
+  onVisualTranslate?: (imageUrl: string) => Promise<string>
+) {
+  _setVTCallback(onVisualTranslate)
+  return Node.create({
   name: "image",
   group: "block",
   draggable: true,
@@ -201,7 +393,33 @@ const ResizableImage = Node.create({
           "data-align": attrs.alignment || "center",
         }),
       },
+      visualDescription: {
+        default: null,
+        parseHTML: (element: HTMLElement) => {
+          const desc = element.getAttribute("data-visual-desc")
+          return desc ? decodeURIComponent(desc) : null
+        },
+        renderHTML: (attrs: any) => {
+          if (attrs.visualDescription) {
+            return { "data-visual-desc": encodeURIComponent(attrs.visualDescription) }
+          }
+          return {}
+        },
+      },
+      imageId: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute("data-image-id") || null,
+        renderHTML: (attrs: any) => {
+          if (attrs.imageId) return { "data-image-id": attrs.imageId }
+          return {}
+        },
+      },
     }
+  },
+
+  // Auto-generate imageId on creation
+  addOptions() {
+    return { inline: false }
   },
 
   parseHTML() {
@@ -235,8 +453,15 @@ const ResizableImage = Node.create({
           if (title) attrs.push(`title="${title}"`)
           if (width && /^\d+%$/.test(width) && width !== "55%") attrs.push(`data-width="${width}" style="width: ${width}"`)
           if (alignment && alignment !== "center") attrs.push(`data-align="${alignment}"`)
+          if (node.attrs.imageId) {
+            attrs.push(`data-image-id="${node.attrs.imageId}"`)
+          }
+          if (node.attrs.visualDescription) {
+            attrs.push(`data-visual-desc="${encodeURIComponent(node.attrs.visualDescription)}"`)
+          }
 
           state.write(`<img ${attrs.join(" ")} />`)
+          state.closeBlock(node)
         },
       },
     }
@@ -255,24 +480,44 @@ const ResizableImage = Node.create({
       const rawWidth = node.attrs.width
       const hasPct = typeof rawWidth === "string" && /^\d+%$/.test(rawWidth)
       const applyLayout = () => {
-        let marginLeft = "0"
-        let marginRight = "0"
-        if (align === "center") {
-          marginLeft = "auto"
-          marginRight = "auto"
-        } else if (align === "right") {
-          marginLeft = "auto"
-          marginRight = "0"
-        }
+        let ml = "0", mr = "0"
+        if (align === "center") { ml = "auto"; mr = "auto" }
+        else if (align === "right") { ml = "auto" }
+        // Container always 100% — description area below fills full editor width.
         container.style.cssText = `
           position: relative;
           display: block;
+          width: 100%;
+          max-width: 100%;
+          margin: 8px 0;
+        `
+        // imgWrapper constrained to image width with alignment.
+        imgWrapper.style.cssText = `
+          position: relative;
+          display: block;
+          line-height: 0;
           width: ${hasPct ? rawWidth : "auto"};
           max-width: 100%;
-          margin: 8px ${marginRight} 8px ${marginLeft};
+          margin-left: ${ml};
+          margin-right: ${mr};
+        `
+        // captionEl matches imgWrapper width/alignment so caption stays with image.
+        captionEl.style.cssText = `
+          font-size: 13px;
+          color: #666;
+          text-align: center;
+          margin-top: 8px;
+          font-style: italic;
+          cursor: text;
+          min-height: 20px;
+          width: ${hasPct ? rawWidth : "auto"};
+          max-width: 100%;
+          margin-left: ${ml};
+          margin-right: ${mr};
         `
       }
-      applyLayout()
+      // ── Image wrapper — keeps resize handle pinned to image regardless of caption/description height ──
+      const imgWrapper = document.createElement("div")
 
       const img = document.createElement("img")
       img.src = node.attrs.src
@@ -291,6 +536,22 @@ const ResizableImage = Node.create({
         img.style.maxWidth = "100%"
       }
 
+      // ── Stable imageId for async generation tracking ──
+      const imageId = node.attrs.imageId || crypto.randomUUID()
+      if (!node.attrs.imageId) {
+        setTimeout(() => {
+          const pos = typeof getPos === "function" ? getPos() : undefined
+          if (pos !== undefined && pos !== null) {
+            const { tr } = editor.state
+            const n = editor.state.doc.nodeAt(pos)
+            if (n && n.type.name === "image") {
+              tr.setNodeMarkup(pos, undefined, { ...n.attrs, imageId })
+              editor.view.dispatch(tr)
+            }
+          }
+        }, 0)
+      }
+
       // Caption element — always present in the container, created once.
       // Its text is kept in sync via update() and setCaption() helper.
       const captionEl = document.createElement("div")
@@ -304,10 +565,204 @@ const ResizableImage = Node.create({
         cursor: text;
         min-height: 20px;
       `
-      captionEl.textContent = node.attrs.alt || ""
       const setCaption = (text: string) => {
         captionEl.textContent = text || ""
+        // Collapse caption when empty so there's no dead space between
+        // the image and the description.
+        if (text) {
+          captionEl.style.display = ""
+          captionEl.style.marginTop = "8px"
+        } else {
+          captionEl.style.display = "none"
+        }
       }
+
+      // Visual Description area — shows AI-generated description below caption.
+      // Always present in DOM (hidden when no description), styled with emerald glow.
+      const descArea = document.createElement("div")
+      descArea.className = "image-visual-desc"
+      descArea.style.cssText = `
+        display: none;
+        font-size: 12px;
+        color: #6b7280;
+        font-style: italic;
+        text-align: left;
+        margin-top: 6px;
+        padding: 8px 12px;
+        border-radius: 6px;
+        background: transparent;
+        border: 1px solid rgba(4, 120, 87, 0.45);
+        box-shadow:
+          0 0 10px rgba(4, 120, 87, 0.35),
+          0 0 25px rgba(4, 120, 87, 0.15);
+        line-height: 1.5;
+        position: relative;
+      `
+      const descTextEl = document.createElement("span")
+      descTextEl.className = "image-visual-desc-text"
+      descArea.appendChild(descTextEl)
+
+      // Edit / Delete buttons — appear on hover over description area
+      const descActions = document.createElement("div")
+      descActions.className = "image-visual-desc-actions"
+      descActions.style.cssText = `
+        display: none;
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        gap: 4px;
+      `
+      // Edit button
+      const editBtn = document.createElement("button")
+      editBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`
+      editBtn.title = "Edit description"
+      editBtn.style.cssText = `
+        padding: 2px 4px;
+        border: none;
+        background: rgba(0,0,0,0.06);
+        border-radius: 3px;
+        cursor: pointer;
+        color: #666;
+        display: flex;
+        align-items: center;
+      `
+      // Delete button
+      const deleteBtn = document.createElement("button")
+      deleteBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5 4V3a1 1 0 011-1h4a1 1 0 011 1v1M6 7v5M10 7v5M3 4l1 9a1 1 0 001 1h6a1 1 0 001-1l1-9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      deleteBtn.title = "Remove description"
+      deleteBtn.style.cssText = `
+        padding: 2px 4px;
+        border: none;
+        background: rgba(0,0,0,0.06);
+        border-radius: 3px;
+        cursor: pointer;
+        color: #666;
+        display: flex;
+        align-items: center;
+      `
+
+      descActions.appendChild(editBtn)
+      descActions.appendChild(deleteBtn)
+      descArea.appendChild(descActions)
+
+      // Show actions on hover
+      descArea.addEventListener("mouseenter", () => { descActions.style.display = "flex" })
+      descArea.addEventListener("mouseleave", () => { descActions.style.display = "none" })
+
+      // Helper: update description content and visibility
+      const setDescription = (desc: string | null) => {
+        if (desc) {
+          descTextEl.textContent = desc
+          descArea.style.display = "block"
+          container.classList.add("image-has-description")
+        } else {
+          descTextEl.textContent = ""
+          descArea.style.display = "none"
+          container.classList.remove("image-has-description")
+        }
+      }
+      setDescription(node.attrs.visualDescription || null)
+
+      // If this image is currently being generated (user switched away and
+      // back mid-generation), re-apply the generating lock and animation.
+      if (imageId && _isImageGenerating(imageId)) {
+        container.style.pointerEvents = "none"
+        container.classList.add("image-generating")
+        // Update the tracked container so the finally block in
+        // _runVisualTranslate can clean up the correct DOM element.
+        _vtContainers.set(imageId, container)
+      }
+
+      // Persist description to node attrs
+      const commitDescription = (val: string | null) => {
+        setDescription(val)
+        if (typeof getPos === "function") {
+          const pos = getPos()
+          if (pos !== undefined && pos !== null) {
+            const { tr } = editor.state
+            const nodeAtPos = editor.state.doc.nodeAt(pos)
+            if (nodeAtPos) {
+              tr.setNodeMarkup(pos, undefined, {
+                ...nodeAtPos.attrs,
+                visualDescription: val,
+              })
+              editor.view.dispatch(tr)
+            }
+          }
+        }
+      }
+
+      // Edit: overlay a position:fixed textarea on document.body so
+      // typing doesn't cause ProseMirror DOM re-layout / scroll-to-top.
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation()
+        const currentDesc = descTextEl.textContent || ""
+        // Position the textarea exactly over the descArea
+        const dr = descArea.getBoundingClientRect()
+        const textarea = document.createElement("textarea")
+        textarea.value = currentDesc
+        textarea.style.cssText = `
+          position: fixed;
+          left: ${dr.left}px;
+          top: ${dr.top}px;
+          width: ${dr.width}px;
+          height: ${dr.height}px;
+          min-height: 40px;
+          font-size: 12px;
+          font-style: italic;
+          color: #374151;
+          background: rgba(255,255,255,0.95);
+          border: 1px solid #3b82f6;
+          border-radius: 4px;
+          padding: 6px 8px;
+          resize: vertical;
+          outline: none;
+          box-sizing: border-box;
+          line-height: 1.5;
+          z-index: 10002;
+        `
+        document.body.appendChild(textarea)
+        // Track resize and scroll to reposition the textarea
+        const reposition = () => {
+          const r = descArea.getBoundingClientRect()
+          textarea.style.left = `${r.left}px`
+          textarea.style.top = `${r.top}px`
+          textarea.style.width = `${r.width}px`
+        }
+        window.addEventListener("scroll", reposition, true)
+        window.addEventListener("resize", reposition)
+        textarea.focus()
+
+        const cleanup = () => {
+          textarea.remove()
+          window.removeEventListener("scroll", reposition, true)
+          window.removeEventListener("resize", reposition)
+        }
+        const save = () => {
+          const val = textarea.value.trim() || null
+          cleanup()
+          descTextEl.style.display = ""
+          commitDescription(val)
+        }
+        // Don't save on blur — scrolling would trigger blur and close
+        // the editor. Instead, save when clicking outside the textarea.
+        const descClickOutside = (me: MouseEvent) => {
+          if (me.target === textarea || textarea.contains(me.target as any)) return
+          save()
+          document.removeEventListener("mousedown", descClickOutside, true)
+        }
+        setTimeout(() => document.addEventListener("mousedown", descClickOutside, true), 0)
+        textarea.addEventListener("keydown", (ke: KeyboardEvent) => {
+          if (ke.key === "Enter" && ke.metaKey) { ke.preventDefault(); save() }
+          if (ke.key === "Escape") { textarea.value = currentDesc; cleanup(); descTextEl.style.display = "" }
+        })
+      })
+
+      // Delete: remove description
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation()
+        commitDescription(null)
+      })
 
       // Inline caption editor — mounted on document.body, positioned over
       // the caption area. Kept completely outside ProseMirror's DOM so no
@@ -315,7 +770,18 @@ const ResizableImage = Node.create({
       let inlineEditor: HTMLInputElement | null = null
       const showInlineEditor = (currentAlt: string) => {
         if (inlineEditor) inlineEditor.remove()
-        const r = captionEl.getBoundingClientRect()
+        // Use imgWrapper for horizontal positioning and width (follows image
+        // alignment), captionEl for vertical position. When caption is empty
+        // and hidden, captionEl.getBoundingClientRect returns 0-height, so
+        // use imgWrapper's bottom as the top position instead.
+        const iw = imgWrapper.getBoundingClientRect()
+        const cr = captionEl.getBoundingClientRect()
+        const r = {
+          left: iw.left,
+          top: cr.height > 0 ? cr.top : iw.bottom + 8,
+          width: iw.width,
+          height: cr.height > 0 ? cr.height : 20,
+        }
         inlineEditor = document.createElement("input")
         inlineEditor.type = "text"
         inlineEditor.value = currentAlt
@@ -377,11 +843,12 @@ const ResizableImage = Node.create({
       // Reposition inline editor on scroll/resize
       const repositionEditor = () => {
         if (!inlineEditor) return
-        const r = captionEl.getBoundingClientRect()
-        inlineEditor.style.left = `${r.left}px`
-        inlineEditor.style.top = `${r.top}px`
-        inlineEditor.style.width = `${r.width}px`
-        inlineEditor.style.height = `${r.height}px`
+        const iw = imgWrapper.getBoundingClientRect()
+        const cr = captionEl.getBoundingClientRect()
+        inlineEditor.style.left = `${iw.left}px`
+        inlineEditor.style.top = `${cr.height > 0 ? cr.top : iw.bottom + 8}px`
+        inlineEditor.style.width = `${iw.width}px`
+        inlineEditor.style.height = `${cr.height > 0 ? cr.height : 20}px`
       }
       window.addEventListener("scroll", repositionEditor, true)
       window.addEventListener("resize", repositionEditor)
@@ -413,23 +880,28 @@ const ResizableImage = Node.create({
         // Diagonal resize arrows SVG - two arrows pointing from corners
         handle.innerHTML = `
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M14 2L18 6M18 6H14M18 6V2" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M6 18L2 14M2 14H6M2 14V18" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle cx="10" cy="10" r="2" fill="#3b82f6"/>
+            <path d="M14 2L18 6M18 6H14M18 6V2" stroke="#047857" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M6 18L2 14M2 14H6M2 14V18" stroke="#047857" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="10" cy="10" r="2" fill="#047857"/>
           </svg>
         `
         return handle
       }
 
       resizeHandle = createResizeHandle()
-      container.appendChild(img)
+      imgWrapper.appendChild(img)
+      imgWrapper.appendChild(resizeHandle)
+      // Apply layout now that imgWrapper and captionEl exist (referenced by applyLayout)
+      applyLayout()
+      setCaption(node.attrs.alt || "")
+      container.appendChild(imgWrapper)
       container.appendChild(captionEl)
-      container.appendChild(resizeHandle)
+      container.appendChild(descArea)
 
       // Show/hide resize handle on hover
       container.addEventListener("mouseenter", () => {
         if (resizeHandle) resizeHandle.style.opacity = "1"
-        img.style.boxShadow = "0 0 0 2px #3b82f6"
+        img.style.boxShadow = "0 0 0 2px #047857"
       })
 
       container.addEventListener("mouseleave", () => {
@@ -454,7 +926,14 @@ const ResizableImage = Node.create({
             const val = inlineEditor?.value.trim() ?? ""
             commitCaption(val)
           }
-          inlineEditor.addEventListener("blur", () => setTimeout(save, 100))
+          // Don't save on blur — scrolling would trigger blur and close
+          // the editor. Instead, save when clicking outside the input.
+          const captionClickOutside = (me: MouseEvent) => {
+            if (!inlineEditor || inlineEditor.contains(me.target as any)) return
+            save()
+            document.removeEventListener("mousedown", captionClickOutside, true)
+          }
+          setTimeout(() => document.addEventListener("mousedown", captionClickOutside, true), 0)
           inlineEditor.addEventListener("keydown", (ke: KeyboardEvent) => {
             if (ke.key === "Enter") { ke.preventDefault(); save() }
             if (ke.key === "Escape") { saved = true; hideInlineEditor() }
@@ -476,22 +955,26 @@ const ResizableImage = Node.create({
         // Always read the current visual width of the container — never
         // trust the closure `width` variable, which is stale after external
         // updates (e.g. switching notes changes `width` in attrs).
-        const containerStyle = container.style.width || ""
+        // Read the imgWrapper width (which follows the image percentage),
+        // not the container (which is always 100% for full-width description).
+        const imgStyle: string = imgWrapper.style.width || String(imgWrapper.offsetWidth) + "px"
         const contentWidth = getEditorContentWidth()
-        if (containerStyle && containerStyle.endsWith("%")) {
-          const pct = parseFloat(containerStyle)
+        if (imgStyle && imgStyle.endsWith("%")) {
+          const pct = parseFloat(imgStyle)
           startWidth = (pct / 100) * contentWidth
         } else {
-          startWidth = container.offsetWidth || img.offsetWidth
+          startWidth = imgWrapper.offsetWidth || img.offsetWidth
         }
-        // Switch to pixel-based during drag for smooth resizing
-        container.style.width = `${startWidth}px`
+        // Resize imgWrapper + captionEl during drag (not container).
+        imgWrapper.style.width = `${startWidth}px`
+        captionEl.style.width = `${startWidth}px`
 
         const onMouseMove = (e: MouseEvent) => {
           if (!isResizing) return
           const diff = e.clientX - startX
           const newWidth = Math.max(50, startWidth + diff)
-          container.style.width = `${newWidth}px`
+          imgWrapper.style.width = `${newWidth}px`
+          captionEl.style.width = `${newWidth}px`
         }
 
         const onMouseUp = () => {
@@ -501,7 +984,7 @@ const ResizableImage = Node.create({
 
           // Compute percentage relative to editor content width
           const contentW = getEditorContentWidth()
-          const pct = Math.round((container.offsetWidth / contentW) * 100)
+          const pct = Math.round((imgWrapper.offsetWidth / contentW) * 100)
           const newPctWidth = `${pct}%`
 
           // Persist as percentage in node attributes
@@ -520,8 +1003,13 @@ const ResizableImage = Node.create({
             }
           }
 
-          // Restore percentage-based layout
-          container.style.width = newPctWidth
+          // Restore percentage-based layout on imgWrapper + captionEl,
+          // NOT on container (which stays 100% for full-width description).
+          imgWrapper.style.width = newPctWidth
+          captionEl.style.width = newPctWidth
+          container.style.width = "100%"
+          captionEl.style.marginLeft = ""
+          captionEl.style.marginRight = ""
 
           document.removeEventListener("mousemove", onMouseMove)
           document.removeEventListener("mouseup", onMouseUp)
@@ -555,23 +1043,45 @@ const ResizableImage = Node.create({
             // Apply layout visually immediately
             const w = merged.width
             const hasPct = typeof w === "string" && /^\d+%$/.test(w)
-            const align = merged.alignment || "center"
+            const a = merged.alignment || "center"
             let ml = "0", mr = "0"
-            if (align === "center") { ml = "auto"; mr = "auto" }
-            else if (align === "right") { ml = "auto" }
+            if (a === "center") { ml = "auto"; mr = "auto" }
+            else if (a === "right") { ml = "auto" }
             container.style.cssText = `
               position: relative;
               display: block;
+              width: 100%;
+              max-width: 100%;
+              margin: 8px 0;
+            `
+            imgWrapper.style.cssText = `
+              position: relative;
+              display: block;
+              line-height: 0;
               width: ${hasPct ? w : "auto"};
               max-width: 100%;
-              margin: 8px ${mr} 8px ${ml};
+              margin-left: ${ml};
+              margin-right: ${mr};
+            `
+            captionEl.style.cssText = `
+              font-size: 13px;
+              color: #666;
+              text-align: center;
+              margin-top: 8px;
+              font-style: italic;
+              cursor: text;
+              min-height: 20px;
+              width: ${hasPct ? w : "auto"};
+              max-width: 100%;
+              margin-left: ${ml};
+              margin-right: ${mr};
             `
 
             // Persist to ProseMirror node
             const { tr } = editor.state
             tr.setNodeMarkup(freshPos, undefined, merged)
             editor.view.dispatch(tr)
-          })
+          }, onVisualTranslate, editor, imageId)
         }
       })
 
@@ -588,23 +1098,65 @@ const ResizableImage = Node.create({
           let ml = "0", mr = "0"
           if (a === "center") { ml = "auto"; mr = "auto" }
           else if (a === "right") { ml = "auto" }
-          container.style.cssText = `
-            position: relative;
-            display: block;
-            width: ${hasPctW ? w : "auto"};
-            max-width: 100%;
-            margin: 8px ${mr} 8px ${ml};
-          `
-          // Refresh caption — ensure captionEl stays in sync even if
-          // commitCaption() already updated it before ProseMirror's update() cycle.
-          setCaption(updatedNode.attrs.alt || "")
+          // Container always 100% — description fills full editor width.
+        container.style.cssText = `
+          position: relative;
+          display: block;
+          width: 100%;
+          max-width: 100%;
+          margin: 8px 0;
+        `
+        // imgWrapper constrained to image width with alignment.
+        imgWrapper.style.cssText = `
+          position: relative;
+          display: block;
+          line-height: 0;
+          width: ${hasPctW ? w : "auto"};
+          max-width: 100%;
+          margin-left: ${ml};
+          margin-right: ${mr};
+        `
+        // captionEl matches image width/alignment.
+        captionEl.style.cssText = `
+          font-size: 13px;
+          color: #666;
+          text-align: center;
+          margin-top: 8px;
+          font-style: italic;
+          cursor: text;
+          min-height: 20px;
+          width: ${hasPctW ? w : "auto"};
+          max-width: 100%;
+          margin-left: ${ml};
+          margin-right: ${mr};
+        `
+        // Refresh caption — ensure captionEl stays in sync even if
+        // commitCaption() already updated it before ProseMirror's update() cycle.
+        setCaption(updatedNode.attrs.alt || "")
+          // Refresh visual description
+          setDescription(updatedNode.attrs.visualDescription || null)
+          // Sync generating lock state
+          const genId = updatedNode.attrs.imageId
+          if (genId && _isImageGenerating(genId)) {
+            container.style.pointerEvents = "none"
+            container.classList.add("image-generating")
+          } else {
+            container.style.pointerEvents = ""
+            container.classList.remove("image-generating")
+          }
           return true
         },
-        ignoreMutation: () => true,
+        ignoreMutation: () => {
+          // Block mutations during generation to keep the node stable
+          const genId = node.attrs.imageId
+          if (genId && _isImageGenerating(genId)) return true
+          return true
+        },
       }
     }
   },
-})
+  })
+}  // end createResizableImageExtension
 
 // ──────────────────────────────────────────────
 // Image Floating Menu
@@ -612,7 +1164,10 @@ const ResizableImage = Node.create({
 function showImageFloatingMenu(
   container: HTMLElement,
   attrs: any,
-  onUpdate: (attrs: any) => void
+  onUpdate: (attrs: any) => void,
+  onVisualTranslate?: (imageUrl: string) => Promise<string>,
+  editor?: any,
+  imageId?: string,
 ) {
   // Remove existing menu
   const existingMenu = document.getElementById("image-floating-menu")
@@ -725,6 +1280,62 @@ function showImageFloatingMenu(
     container.dispatchEvent(ev)
   })
   menu.appendChild(captionBtn)
+
+  // ── Visual Translate button ──
+  if (onVisualTranslate) {
+    const visualDivider = document.createElement("div")
+    visualDivider.style.cssText = `width: 1px; background: rgba(255,255,255,0.2); margin: 4px 2px;`
+    menu.appendChild(visualDivider)
+
+    const hasDesc = !!attrs.visualDescription
+
+    // ── AI sparkle icon (two overlapping 4-point stars) ──
+    const AI_ICON = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M8 1l1.2 3.6L12.5 6l-3.3 1.4L8 11l-1.2-3.6L3.5 6l3.3-1.4L8 1z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+      <path d="M4 10l.7 2L6.5 13l-1.8.8L4 16l-.7-2.2L1.5 13l1.8-.8L4 10z" stroke="currentColor" stroke-width="0.8" stroke-linejoin="round" opacity="0.7"/>
+      <path d="M12 3l.5 1.5L14 5l-1.5.6L12 8l-.5-1.4L10 5l1.5-.6L12 3z" stroke="currentColor" stroke-width="0.8" stroke-linejoin="round" opacity="0.7"/>
+    </svg>`
+
+    const LOADING_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-dasharray="30 70" stroke-linecap="round">
+        <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+      </circle>
+    </svg>`
+
+    const visualBtn = document.createElement("button")
+    visualBtn.innerHTML = AI_ICON
+    visualBtn.title = hasDesc ? "Re-generate description" : "Visual Translate — generate AI description"
+    visualBtn.style.cssText = `
+      padding: 6px 8px;
+      border: none;
+      background: transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      color: ${hasDesc ? "#6ee7b7" : "white"};
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+    `
+    visualBtn.addEventListener("mouseenter", () => { visualBtn.style.background = "rgba(255,255,255,0.15)" })
+    visualBtn.addEventListener("mouseleave", () => { visualBtn.style.background = "transparent" })
+
+    visualBtn.addEventListener("click", (e) => {
+      e.stopPropagation()
+      const imgId = attrs.imageId || imageId || ""
+      if (!imgId || !editor) return
+      if (_isImageGenerating(imgId)) return // already generating
+
+      visualBtn.style.cursor = "wait"
+      visualBtn.style.opacity = "0.6"
+      visualBtn.innerHTML = LOADING_ICON
+
+      _runVisualTranslate(attrs.src, imgId, editor, container)
+      menu.remove()
+    })
+
+    menu.appendChild(visualBtn)
+  }
 
   container.style.position = "relative"
   container.appendChild(menu)
@@ -1836,6 +2447,14 @@ export function preprocessDistillBlocks(markdown: string): {
     }
   )
 
+  // Ensure blank line after self-closing <img /> tags.
+  // Without it, markdown-it treats <img> as an HTML block and consumes the
+  // following line (e.g. ## Heading) as raw text instead of parsing it.
+  decodedMarkdown = decodedMarkdown.replace(
+    /(<img [^>]*\/>)(\n?)(?!\n)/g,
+    '$1\n\n'
+  )
+
   const processed = decodedMarkdown.replace(
     /:::distill-block(\{[^}]+\})\n([\s\S]*?)\n:::\n?/g,
     (match, jsonAttrs, body) => {
@@ -1892,6 +2511,8 @@ interface MarkdownEditorProps {
   onEditorReady?: (editor: any) => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
+  /** Called when user clicks Visual Translate on an image. Receives image URL, returns description string. */
+  onVisualTranslate?: (imageUrl: string) => Promise<string>
 }
 
 // ──────────────────────────────────────────────
@@ -2260,7 +2881,7 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
-  showToolbar = true,
+  showToolbar = true, onVisualTranslate,
 }: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
@@ -2269,6 +2890,7 @@ export function TiptapEditor({
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
   const SlashCmd = useRef(createSlashCommandExtension(onDistill, onImageUpload)).current
+  const ResizableImage = useRef(createResizableImageExtension(onVisualTranslate)).current
 
   // Markdown Hover Extension
   const MarkdownHoverExt = useRef(Extension.create({
@@ -2353,11 +2975,30 @@ export function TiptapEditor({
 
   useEffect(() => {
     if (!editor) return
-    if (value === lastEmitted.current) return
+    // Apply any pending AI descriptions to the content before loading.
+    // This catches descriptions that completed while viewing a different note.
+    const enriched = applyPendingDescriptions(value)
+    const shouldReload = enriched !== value || value !== lastEmitted.current
+    if (!shouldReload) return
     externalUpdateRef.current = true
-    const { processed } = preprocessDistillBlocks(value)
+    const { processed } = preprocessDistillBlocks(enriched)
     editor.commands.setContent(processed)
-    lastEmitted.current = value
+    // Use enriched as lastEmitted so the next render cycle sees that the
+    // injected content is already applied and doesn't re-trigger setContent.
+    lastEmitted.current = enriched
+    // setContent triggers onUpdate, but onUpdate skips onChange while
+    // externalUpdateRef is true. We must call onChange manually so that:
+    // 1. React state (content) is updated with the enriched markdown
+    // 2. handleContentChange schedules auto-save to persist to server
+    // Without this, the injected description only lives in the editor DOM
+    // and is lost on the next note switch.
+    if (enriched !== value) {
+      onChange?.(enriched)
+      // Also immediately flush the save to server — don't wait for the
+      // 800ms auto-save timer, because the user might switch notes before
+      // it fires. This mirrors how distill blocks flush-save before async ops.
+      try { _flushSaveBeforeGenerate?.() } catch { /* best-effort */ }
+    }
     requestAnimationFrame(() => { externalUpdateRef.current = false })
   }, [value, editor])
 

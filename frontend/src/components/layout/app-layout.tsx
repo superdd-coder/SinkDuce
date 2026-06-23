@@ -116,7 +116,7 @@ export function AppLayout() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-hidden flex flex-col">
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden animate-tab-in" key={sidebarView}>
             <View />
           </div>
           <LogViewer open={logPanelOpen} onClose={toggleLogPanel} />

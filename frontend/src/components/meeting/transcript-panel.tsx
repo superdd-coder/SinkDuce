@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react"
 import { ChevronRight, ChevronLeft, Clock, Pencil, Check, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Tabs, TabsList, TabsTrigger, TabsIndicator, TabsContent } from "@/components/ui/tabs"
 import type { TranscriptSegment } from "@/api/client"
 
 interface TranscriptPanelProps {
@@ -14,8 +15,6 @@ interface TranscriptPanelProps {
   isRealtime?: boolean
 }
 
-type Tab = "transcript" | "speakers"
-
 export function TranscriptPanel({
   open,
   onToggle,
@@ -26,7 +25,7 @@ export function TranscriptPanel({
   onUpdateSpeakerName,
   isRealtime = false,
 }: TranscriptPanelProps) {
-  const [tab, setTab] = useState<Tab>("transcript")
+  const [tab, setTab] = useState("transcript")
 
   return (
     <div
@@ -58,40 +57,30 @@ export function TranscriptPanel({
       {open && (
         <>
           {/* Tab bar */}
-          <div className="flex gap-1 shrink-0 px-1">
-            {(["transcript", "speakers"] as Tab[]).map((t) => (
-              <button
-                key={t}
-                className={cn(
-                  "flex-1 py-1.5 text-xs font-light uppercase tracking-wider rounded-md transition-colors",
-                  tab === t
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-                onClick={() => setTab(t)}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+          <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
+            <TabsList className="relative w-full px-1" variant="line">
+              <TabsIndicator renderBeforeHydration />
+              <TabsTrigger value="transcript" className="flex-1 font-light uppercase tracking-wider after:!opacity-0">TRANSCRIPT</TabsTrigger>
+              <TabsTrigger value="speakers" className="flex-1 font-light uppercase tracking-wider after:!opacity-0">SPEAKER</TabsTrigger>
+            </TabsList>
 
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {tab === "transcript" ? (
+            <TabsContent key={`transcript-${tab}`} value="transcript" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
               <TranscriptTab
                 segments={segments}
                 partialText={partialText}
                 onSegmentClick={onSegmentClick}
                 speakerNames={speakerNames}
               />
-            ) : (
+            </TabsContent>
+            <TabsContent key={`speakers-${tab}`} value="speakers" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
               <SpeakersTab
                 segments={segments}
                 speakerNames={speakerNames}
                 onUpdateSpeakerName={onUpdateSpeakerName}
                 onSegmentClick={onSegmentClick}
               />
-            )}
-          </div>
+            </TabsContent>
+          </Tabs>
         </>
       )}
     </div>

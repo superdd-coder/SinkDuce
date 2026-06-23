@@ -26,6 +26,7 @@ class LLMProviderConfig(BaseModel):
     is_default: bool = False
     selected_models: list[str] = []
     default_model: str = ""
+    visual_model_ids: list[str] = []
 
 
 class LLMConfig(BaseModel):
@@ -173,6 +174,7 @@ class AppConfig(BaseModel):
     server: ServerConfig = ServerConfig()
     transcription: TranscriptionConfig = TranscriptionConfig()
     mineru: MinerUConfig = MinerUConfig()
+    visual_model_id: str | None = None
 
 
 def _resolve_config_path(path: str | Path | None = None) -> Path:

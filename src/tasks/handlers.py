@@ -423,7 +423,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                     )
 
             t_chunk = time.time()
-            extra_meta: dict = {"file_type": doc.file_type}
+            extra_meta: dict = {"file_type": doc.file_type, "ingested_at": time.time()}
             if doc.position_map:
                 extra_meta["position_map"] = doc.position_map
             if meeting_id:

@@ -80,9 +80,25 @@ def list_provider_types():
     }
 
 
+# Top-level AppConfig fields that can be updated individually
+_TOP_LEVEL_FIELDS = {"visual_model_id"}
+
+
 @router.put("/config")
 async def update_config(req: ConfigUpdateRequest):
     config = get_config()
+
+    # Handle top-level AppConfig fields
+    if req.section in _TOP_LEVEL_FIELDS:
+        for key, value in req.data.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+        save_config(config)
+        reload_config()
+        from src.services import services
+        services.config = get_config()
+        return {"message": f"Config '{req.section}' updated"}
+
     section_data = getattr(config, req.section, None)
     if section_data is None:
         return {"error": f"Unknown config section: {req.section}"}

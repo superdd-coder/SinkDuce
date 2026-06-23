@@ -1,13 +1,17 @@
 import { Loader2 } from "lucide-react"
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import {
   getNotes,
   createNote,
   updateNote,
+  deleteNote,
   type NoteListItem,
 } from "@/api/client"
+import { useAppStore } from "@/stores/app-store"
 import { NoteEditorDialog } from "./note-editor-dialog"
 import { cn } from "@/lib/utils"
 
@@ -19,6 +23,7 @@ export function NotesCard({ collection }: NotesCardProps) {
   const [notes, setNotes] = useState<NoteListItem[]>([])
   const [loading, setLoading] = useState(false)
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null)
 
   const fetchNotes = useCallback(async () => {
     if (!collection) return
@@ -36,6 +41,15 @@ export function NotesCard({ collection }: NotesCardProps) {
   useEffect(() => {
     fetchNotes()
   }, [fetchNotes])
+
+  // Listen for external note-open requests (e.g. from file detail dialog "GO TO THE NOTE")
+  const { pendingOpenNote, setPendingOpenNote } = useAppStore()
+  useEffect(() => {
+    if (pendingOpenNote) {
+      setActiveNoteId(pendingOpenNote)
+      setPendingOpenNote(null)
+    }
+  }, [pendingOpenNote, setPendingOpenNote])
 
   const handleCreate = async () => {
     const title = new Date().toLocaleString(undefined, {
@@ -72,6 +86,24 @@ export function NotesCard({ collection }: NotesCardProps) {
     }
   }
 
+  const handleDeleteClick = (e: React.MouseEvent, noteId: string, noteTitle: string) => {
+    e.stopPropagation()
+    setDeleteTarget({ id: noteId, title: noteTitle })
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return
+    try {
+      await deleteNote(collection, deleteTarget.id)
+      toast.success(`Deleted "${deleteTarget.title}"`)
+      if (activeNoteId === deleteTarget.id) setActiveNoteId(null)
+      setDeleteTarget(null)
+      await fetchNotes()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete note")
+    }
+  }
+
   const formatDate = (dateStr: string) => {
     try {
       const date = new Date(dateStr)
@@ -95,9 +127,9 @@ export function NotesCard({ collection }: NotesCardProps) {
   const extracted = notes.filter((n) => n.is_extracted)
 
   const renderNoteRow = (note: NoteListItem) => (
-    <button
+    <div
       key={note.id}
-      className="w-full text-left flex items-center justify-between py-2.5 border-b cursor-pointer transition-colors hover:opacity-80 border-b border-dashed border-border text-foreground"
+      className="w-full text-left flex items-center justify-between py-2.5 border-b cursor-pointer transition-colors border-b border-dashed border-border text-foreground group"
       style={{
         background: "none",
         borderLeft: "none",
@@ -105,15 +137,26 @@ export function NotesCard({ collection }: NotesCardProps) {
         borderTop: "none",
       }}
       onClick={() => setActiveNoteId(note.id)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter") setActiveNoteId(note.id) }}
     >
       <div className="flex items-center gap-2 flex-1 min-w-0">
-        <span className="text-xs truncate">{note.title}</span>
+        <span className="text-[12px] truncate">{note.title}</span>
         {note.is_extracted && (
           <span
             className="text-[9px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 shrink-0 text-primary"
             style={{ background: "rgba(26,94,61,0.08)", borderRadius: "2px" }}
           >
             extracted
+          </span>
+        )}
+        {note.is_ingested && (
+          <span
+            className="text-[9px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 shrink-0 text-primary"
+            style={{ background: "rgba(26,94,61,0.08)", borderRadius: "2px" }}
+          >
+            ingested
           </span>
         )}
       </div>
@@ -124,8 +167,16 @@ export function NotesCard({ collection }: NotesCardProps) {
         <span className="text-[10px] text-muted-foreground">
           {formatDate(note.updated_at)}
         </span>
+        <button
+          type="button"
+          className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
+          style={{ background: "none", border: "none" }}
+          onClick={(e) => handleDeleteClick(e, note.id, note.title)}
+        >
+          Delete
+        </button>
       </div>
-    </button>
+    </div>
   )
 
   return (
@@ -134,7 +185,7 @@ export function NotesCard({ collection }: NotesCardProps) {
         {/* Header */}
         <div className="flex items-center justify-between mb-2.5">
           <div
-            className="text-[9px] font-semibold uppercase tracking-[0.2em] text-muted-foreground"
+            className="text-[12px] font-semibold uppercase tracking-[0.2em] text-muted-foreground"
           >
             Notes · {notes.length}
           </div>
@@ -208,19 +259,17 @@ export function NotesCard({ collection }: NotesCardProps) {
         )}
       </div>
 
-      {activeNoteId && (
-        <NoteEditorDialog
-          collection={collection}
-          noteId={activeNoteId}
-          open={!!activeNoteId}
-          onOpenChange={(v) => {
-            if (!v) {
-              setActiveNoteId(null)
-              fetchNotes() // refresh list after closing editor
-            }
-          }}
-        />
-      )}
+      <NoteEditorDialog
+        collection={collection}
+        noteId={activeNoteId || ""}
+        open={!!activeNoteId}
+        onOpenChange={(v) => {
+          if (!v) {
+            setActiveNoteId(null)
+            fetchNotes() // refresh list after closing editor
+          }
+        }}
+      />
 
       <input
         ref={fileInputRef}
@@ -229,6 +278,37 @@ export function NotesCard({ collection }: NotesCardProps) {
         className="hidden"
         onChange={handleImportFile}
       />
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null) }}>
+        <DialogContent className="max-w-sm !gap-3">
+          <DialogHeader className="!gap-1">
+            <DialogTitle className="text-sm font-light uppercase tracking-[0.15em]" style={{ fontFamily: "var(--font-serif)" }}>
+              Delete Note
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-[13px] leading-relaxed text-muted-foreground">
+            Are you sure you want to delete <span className="font-medium text-foreground">"{deleteTarget?.title}"</span>? This cannot be undone.
+          </p>
+          <DialogFooter className="!border-t-0 !bg-transparent !-mx-0 !-mb-0 !p-0 !rounded-none gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-[11px] font-light uppercase tracking-[0.1em]"
+              onClick={handleDeleteConfirm}
+            >
+              Delete
+            </Button>
+            <Button
+              size="sm"
+              className="text-[11px] font-light uppercase tracking-[0.1em]"
+              onClick={() => setDeleteTarget(null)}
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

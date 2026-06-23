@@ -21,10 +21,14 @@ interface MarkdownEditorProps {
   onNoteLinkClick?: (noteId: string) => void
   /** Called when user triggers distill action from slash command. */
   onDistill?: () => void
+  /** Called when user clicks a distilled block to navigate to source note. */
+  onDistillNavigate?: (noteId: string) => void
   /** Called when the Tiptap editor instance is ready. */
   onEditorReady?: (editor: any) => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
+  /** Called when user clicks Visual Translate on an image. Receives image URL, returns description string. */
+  onVisualTranslate?: (imageUrl: string) => Promise<string>
 }
 
 // ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
@@ -40,8 +44,10 @@ function TyporaEditor({
   onImageUpload,
   onNoteLinkClick,
   onDistill,
+  onDistillNavigate,
   onEditorReady,
   showToolbar,
+  onVisualTranslate,
 }: Omit<MarkdownEditorProps, "variant">) {
   return (
     <TiptapEditor
@@ -54,8 +60,10 @@ function TyporaEditor({
       onImageUpload={onImageUpload}
       onNoteLinkClick={onNoteLinkClick}
       onDistill={onDistill}
+      onDistillNavigate={onDistillNavigate}
       onEditorReady={onEditorReady}
       showToolbar={showToolbar}
+      onVisualTranslate={onVisualTranslate}
     />
   )
 }

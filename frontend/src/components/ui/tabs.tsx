@@ -77,4 +77,21 @@ function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
   )
 }
 
-export { Tabs, TabsList, TabsTrigger, TabsContent, tabsListVariants }
+function TabsIndicator({ className, ...props }: TabsPrimitive.Indicator.Props) {
+  return (
+    <TabsPrimitive.Indicator
+      data-slot="tabs-indicator"
+      className={cn(
+        "absolute bottom-0 h-0.5 bg-primary transition-all duration-300 ease-out",
+        className
+      )}
+      style={{
+        left: "var(--active-tab-left)",
+        width: "var(--active-tab-width)",
+      }}
+      {...props}
+    />
+  )
+}
+
+export { Tabs, TabsList, TabsTrigger, TabsIndicator, TabsContent, tabsListVariants }

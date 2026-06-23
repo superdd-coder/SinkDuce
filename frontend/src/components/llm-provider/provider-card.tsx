@@ -90,18 +90,24 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
       <div className="mt-1 min-h-[1.25rem]">
         {provider.selected_models && provider.selected_models.length > 0 ? (
           <div className="flex flex-wrap gap-1">
-            {provider.selected_models.map((m) => (
-              <span
-                key={m}
-                className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                  m === provider.default_model
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground"
-                }`}
-              >
-                {m}
-              </span>
-            ))}
+            {provider.selected_models.map((m) => {
+              const isVisual = provider.visual_model_ids?.includes(m)
+              return (
+                <span
+                  key={m}
+                  className={`text-[10px] px-1.5 py-0.5 rounded font-mono inline-flex items-center gap-0.5 ${
+                    m === provider.default_model
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {isVisual && (
+                    <span className="text-[8px] opacity-70" title="Visual enabled">👁</span>
+                  )}
+                  {m}
+                </span>
+              )
+            })}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">{provider.model || ""}</p>

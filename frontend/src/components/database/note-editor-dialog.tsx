@@ -1,22 +1,28 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Loader2, Pencil, Check, X, ChevronLeft, ArrowDownToLine, ArrowLeft, ArrowRight, Upload, FileUp } from "lucide-react"
+import { Loader2, Pencil, Check, X, ChevronLeft, ArrowDownToLine, ArrowLeft, ArrowRight, Upload, Database, FileUp, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import {
   getNote,
   getNotes,
   createNote,
   updateNote,
+  deleteNote,
   distillNote,
   triggerPropagation,
   uploadNoteImage,
+  describeImage,
+  getConfig,
+  ingestNote,
+  removeNoteIngestion,
   type NoteDetail,
   type NoteListItem,
 } from "@/api/client"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { preprocessDistillBlocks, EditorToolbar } from "@/components/ui/tiptap-editor"
+import { preprocessDistillBlocks, EditorToolbar, _setFlushSaveBeforeGenerate } from "@/components/ui/tiptap-editor"
+import { _triggerFilesRefresh } from "@/components/database/database-view"
 import { NoteSidebarLeft } from "./note-sidebar-left"
 import { NoteSidebarRight } from "./note-sidebar-right"
 
@@ -29,6 +35,7 @@ interface NoteEditorDialogProps {
 
 // Module-level — survives component unmount (dialog close/reopen)
 const _perNoteState = new Map<string, { userEdited: boolean; propagateDismissed: boolean }>()
+const _ingestingNoteIds = new Set<string>()
 
 export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: NoteEditorDialogProps) {
   // Notes list — only fetched on open, never reordered during session
@@ -52,6 +59,10 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   // Propagation — button-based, not auto-popup
   const [propagating, setPropagating] = useState(false)
   const [propagateDismissed, setPropagateDismissed] = useState(false) // User clicked "Ignore this time"
+
+  // Ingestion
+  const [ingesting, setIngesting] = useState(false)
+  const [ingested, setIngested] = useState(false)
   const [propagateDialogOpen, setPropagateDialogOpen] = useState(false)
   const [propagatePreview, setPropagatePreview] = useState<{ links: { source_title: string; target_title: string }[]; total_affected: number } | null>(null)
   const [userEdited, setUserEdited] = useState(false) // Track if user actually edited content
@@ -201,6 +212,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setCurrentNote(note)
       setContent(content)
       setSavedContent(content)
+      setIngested(note.is_ingested ?? false)
+      setIngesting(_ingestingNoteIds.has(note.id))
       // Bug 4 fix: reset scroll position to top on note switch
       scrollContainerRef.current?.scrollTo(0, 0)
       // Initialize prevBlockIdsRef for Backspace/Delete removal detection
@@ -222,7 +235,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   }, [collection])
 
   useEffect(() => {
-    if (open) fetchNote(activeNoteId)
+    if (open && activeNoteId) fetchNote(activeNoteId)
   }, [open, activeNoteId, fetchNote])
 
   // ── Auto-save ─────────────────────────────────────────
@@ -376,6 +389,83 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     const result = await uploadNoteImage(collection, activeNoteId, file)
     return result.url
   }, [collection, activeNoteId])
+
+  // ── Visual Translate ──────────────────────────────────
+
+  // Wire module-level flush-save so _runVisualTranslate can persist image data
+  // (including imageId) to the server BEFORE the async generation call.
+  // Mirrors the distill-block pattern: flush → async op → replace on return.
+  useEffect(() => {
+    _setFlushSaveBeforeGenerate(async () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      const cur = latestContentRef.current
+      if (cur !== savedContent) {
+        try {
+          await updateNote(collection, activeNoteIdRef.current, { content: cur })
+          setSavedContent(cur)
+        } catch { /* non-critical — imageId may already be on server */ }
+      }
+    })
+    return () => { _setFlushSaveBeforeGenerate(undefined) }
+  }, [collection])
+
+
+
+  const handleVisualTranslate = useCallback(async (imageUrl: string): Promise<string> => {
+    // Pre-check: is a visual model configured?
+    const config = await getConfig()
+    const visualModelId = (config as Record<string, unknown>).visual_model_id
+    if (!visualModelId || typeof visualModelId !== "string" || !visualModelId.trim()) {
+      toast.error("No Visual Model configured. Go to Settings → Visual Model to select one.")
+      throw new Error("No visual model configured")
+    }
+    const result = await describeImage(imageUrl)
+    if (result.error) throw new Error(result.error)
+    return result.description
+  }, [])
+
+  // ── Delete current note ────────────────────────────────
+
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+
+  const handleDeleteNote = () => {
+    setDeleteConfirmOpen(true)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!currentNote) return
+    try {
+      await deleteNote(collection, currentNote.id)
+      toast.success(`Deleted "${currentNote.title}"`)
+
+      // Refresh the notes list
+      const notesRes = await getNotes(collection)
+      const updatedList = notesRes.notes ?? []
+      setNotesList(updatedList)
+
+      setDeleteConfirmOpen(false)
+
+      // Find the deleted note's position in the list
+      const deletedIndex = updatedList.findIndex(n => n.id === currentNote.id)
+      // Pick the note before it, or the first available note if at position 0
+      const nextIndex = deletedIndex > 0 ? deletedIndex - 1 : 0
+      const nextNote = updatedList[nextIndex]
+
+      if (nextNote) {
+        // Navigate to the neighbor note without pushing to history
+        // (the deleted note is gone, so its entry in history should be removed too)
+        setActiveNoteId(nextNote.id)
+      } else {
+        // No notes left — close the editor
+        onOpenChange(false)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete note")
+    }
+  }
 
   // ── Download note as .md file ─────────────────────────
 
@@ -625,6 +715,64 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     if (droppedNoteId) handleDrop(droppedNoteId, { x: e.clientX, y: e.clientY })
   }, [handleDrop])
 
+  // ── Ingestion ──────────────────────────────────────────
+
+  const handleIngestClick = async () => {
+    if (!currentNote) return
+    // Pre-check: don't ingest empty notes
+    if (!content.trim()) {
+      toast.error("Cannot ingest an empty note", {
+        description: "Add some content to this note before ingesting.",
+      })
+      return
+    }
+    const noteId = currentNote.id
+    _ingestingNoteIds.add(noteId)
+    setIngesting(true)
+    try {
+      await ingestNote(collection, noteId)
+      toast.success("Ingestion started")
+      // Poll until ingested flag is true (background task may take a moment)
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        try {
+          const note = await getNote(collection, noteId)
+          if (note.is_ingested) {
+            _ingestingNoteIds.delete(noteId)
+            // Only update UI if user is still viewing this note
+            if (currentNote?.id === noteId) {
+              setIngesting(false)
+              setIngested(true)
+            }
+            _triggerFilesRefresh()
+            toast.success(`"${note.title}" ingestion complete`)
+            break
+          }
+        } catch { /* retry */ }
+      }
+    } catch (err) {
+      _ingestingNoteIds.delete(noteId)
+      if (currentNote?.id === noteId) setIngesting(false)
+      toast.error(err instanceof Error ? err.message : "Ingestion failed")
+    }
+  }
+
+  const handleRemoveIngestionClick = async () => {
+    if (!currentNote) return
+    const noteId = currentNote.id
+    setIngesting(true)
+    try {
+      await removeNoteIngestion(collection, noteId)
+      _ingestingNoteIds.delete(noteId)
+      setIngested(false)
+      setIngesting(false)
+      toast.success("Ingestion removed")
+    } catch (err) {
+      setIngesting(false)
+      toast.error(err instanceof Error ? err.message : "Failed to remove ingestion")
+    }
+  }
+
   // ── Propagation ───────────────────────────────────────
 
   const showPropagateButton = currentNote?.is_extracted && userEdited && !propagateDismissed
@@ -792,7 +940,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
             </div>
           ) : (
             <div className="flex items-center gap-2 flex-1 min-w-0">
-              <span className="font-semibold text-sm truncate">{currentNote?.title}</span>
+              <span className="font-light text-sm truncate">{currentNote?.title}</span>
               <Button
                 variant="ghost"
                 size="sm"
@@ -807,18 +955,60 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs gap-1 shrink-0 text-muted-foreground hover:text-primary"
+                className="h-7 px-2 text-[10px] gap-1 shrink-0 font-light uppercase tracking-[0.08em] leading-none text-muted-foreground hover:text-destructive inline-flex items-center"
+                onClick={handleDeleteNote}
+                title="Delete note"
+              >
+                <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                Delete
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-[10px] gap-1 shrink-0 font-light uppercase tracking-[0.08em] leading-none text-muted-foreground hover:text-primary inline-flex items-center"
                 onClick={handleDownload}
                 title="Export as .md"
               >
-                <FileUp className="h-3.5 w-3.5" />
+                <FileUp className="h-3.5 w-3.5 shrink-0" />
                 Export
               </Button>
             </div>
           )}
 
-          {/* Right side: distilling indicator + propagate button */}
+          {/* Right side: ingestion + distilling indicator + propagate button */}
           <div className="flex items-center gap-2 shrink-0 pr-8">
+            {/* Ingestion status tag */}
+            {ingested && (
+              <span
+                className="text-[9px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 shrink-0 text-primary"
+                style={{
+                  background: "rgba(26,94,61,0.08)",
+                  borderRadius: "2px",
+                }}
+              >
+                Ingested
+              </span>
+            )}
+
+            {/* Ingest / Remove Ingestion button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-[9px] font-light uppercase tracking-[0.12em] text-muted-foreground hover:text-primary"
+              onClick={ingested ? handleRemoveIngestionClick : handleIngestClick}
+              disabled={ingesting}
+            >
+              {ingesting ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <Database className="h-3.5 w-3.5 mr-1" />
+              )}
+              {ingesting
+                ? (ingested ? "REMOVING..." : "INGESTING...")
+                : (ingested ? "REMOVE INGESTION" : "INGEST")
+              }
+            </Button>
+
             {distilling && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -879,6 +1069,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                     onEditorReady={(editor) => { tiptapEditorRef.current = editor; setEditorInstance(editor) }}
                     onChange={handleContentChange}
                     onImageUpload={handleImageUpload}
+                    onVisualTranslate={handleVisualTranslate}
                     onNoteLinkClick={(id) => {
                       flushSave()
                       navigateToNote(id)
@@ -976,6 +1167,37 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
             </Button>
           </div>
         </div>
+      </DialogContent>
+    </Dialog>
+
+    {/* Delete confirmation dialog */}
+    <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+      <DialogContent className="max-w-sm !gap-3">
+        <DialogHeader className="!gap-1">
+          <DialogTitle className="text-sm font-light uppercase tracking-[0.15em]" style={{ fontFamily: "var(--font-serif)" }}>
+            Delete Note
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-[13px] leading-relaxed text-muted-foreground">
+          Are you sure you want to delete <span className="font-medium text-foreground">"{currentNote?.title}"</span>? This cannot be undone.
+        </p>
+        <DialogFooter className="!border-t-0 !bg-transparent !-mx-0 !-mb-0 !p-0 !rounded-none gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-[11px] font-light uppercase tracking-[0.1em]"
+            onClick={handleDeleteConfirm}
+          >
+            Delete
+          </Button>
+          <Button
+            size="sm"
+            className="text-[11px] font-light uppercase tracking-[0.1em]"
+            onClick={() => setDeleteConfirmOpen(false)}
+          >
+            Cancel
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
     </>

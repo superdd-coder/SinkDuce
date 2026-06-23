@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Combobox } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw } from "lucide-react"
+import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw, Sparkles } from "lucide-react"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { useAppStore } from "@/stores/app-store"
 import {
@@ -457,6 +457,9 @@ export function LLMProviderView() {
   // Local model device
   const [localDevice, setLocalDevice] = useState<string>("cpu")
 
+  // Visual Model selection
+  const [visualModelId, setVisualModelId] = useState<string>("")
+
   // MinerU cloud parsing settings
   const [mineruEnabled, setMineruEnabled] = useState(false)
   const [mineruToken, setMineruToken] = useState("")
@@ -581,7 +584,9 @@ export function LLMProviderView() {
     fetchRtTransProviders()
     refreshModelDownloaded()
     getConfig().then((c) => {
-      setLocalDevice(typeof c.transcription?.local_device === "string" ? c.transcription.local_device : "cpu")
+      setLocalDevice(typeof c.transcription?.local_device === "string" ? c.transcription.local_device as string : "cpu")
+      // Load Visual Model config
+      if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
       // Load MinerU config
       if (c.mineru) {
         setMineruEnabled(!!c.mineru.enabled)
@@ -717,6 +722,63 @@ export function LLMProviderView() {
               <ProviderCard key={p.id} provider={p} onEdit={handleEdit} onRefresh={fetchProviders} />
             ))}
           </div>
+        </section>
+
+        {/* ── Visual Model ── */}
+        <section className="border-b border-border pb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-light tracking-tight uppercase">Visual Model</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Select a vision-capable model for image description (Visual Translate). Enable Visual support in LLM settings per model.
+              </p>
+            </div>
+          </div>
+          {(() => {
+            const visualModels = providers.flatMap((p) =>
+              (p.visual_model_ids || []).map((m) => ({
+                model: m,
+                providerName: p.name || p.id,
+                providerId: p.id,
+              }))
+            )
+            if (visualModels.length === 0) {
+              return (
+                <div className="border border-dashed border-muted-foreground/30 rounded-lg p-6 text-center">
+                  <Sparkles className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
+                  <p className="text-sm text-muted-foreground">
+                    No visual-capable models configured. Enable Visual support for models in the LLM settings above.
+                  </p>
+                </div>
+              )
+            }
+            return (
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-light uppercase tracking-wider whitespace-nowrap">Model</span>
+                <div className="flex-1 max-w-md">
+                  <DropdownSelect
+                    value={visualModelId}
+                    onChange={async (v) => {
+                      setVisualModelId(v)
+                      try {
+                        await updateConfig("visual_model_id", { visual_model_id: v || null })
+                        toast.success("Visual model updated")
+                      } catch {
+                        toast.error("Failed to update visual model")
+                      }
+                    }}
+                    options={[
+                      { value: "", label: "None (disabled)" },
+                      ...visualModels.map((vm) => ({
+                        value: vm.model,
+                        label: `${vm.providerName} / ${vm.model}`,
+                      })),
+                    ]}
+                  />
+                </div>
+              </div>
+            )
+          })()}
         </section>
 
         {/* ── Embedding Providers ── */}

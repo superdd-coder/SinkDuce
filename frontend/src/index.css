@@ -437,6 +437,64 @@ input[type="checkbox"] {
   border-radius: 0.375rem;
 }
 
+/* ── Visual Translate: aurora border for images with AI descriptions ── */
+
+/* Generating state: flowing gradient ring with strong outward glow.
+   Slower animation (1.5s), blue-green colors, radiating feel. */
+.image-container.image-generating > div:first-child::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: 6px;
+  background: linear-gradient(
+    135deg,
+    #06b6d4,
+    #22c55e,
+    #3b82f6,
+    #06b6d4,
+    #22c55e
+  );
+  background-size: 300% 300%;
+  z-index: 0;
+  pointer-events: none;
+  animation: aurora-flow 1.5s linear infinite;
+  /* Strong outward glow */
+  box-shadow:
+    0 0 6px rgba(6, 182, 212, 0.7),
+    0 0 18px rgba(34, 197, 94, 0.5),
+    0 0 35px rgba(139, 92, 246, 0.35),
+    0 0 55px rgba(6, 182, 212, 0.2);
+}
+
+/* Ensure img sits above ::before during generation */
+.image-container.image-generating > div:first-child img {
+  position: relative;
+  z-index: 2;
+}
+
+@keyframes aurora-flow {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ═══ After generation: no image border. Only the description area glows. ═══ */
+
+/* Visual description area — green glowing border like chat input card.
+   No shading background, stronger outward glow. */
+.image-visual-desc {
+  border: 1px solid rgba(4, 120, 87, 0.45) !important;
+  box-shadow:
+    0 0 10px rgba(4, 120, 87, 0.35),
+    0 0 25px rgba(4, 120, 87, 0.15) !important;
+  background: transparent !important;
+}
+
+/* Visual description area hover actions */
+.image-visual-desc-actions button:hover {
+  background: rgba(0, 0, 0, 0.12) !important;
+}
+
 /* Compact prose variant — used in chat/dense UIs */
 .prose-sm {
   font-size: 0.875rem;
@@ -567,4 +625,22 @@ input[type="checkbox"] {
   border-radius: 9999px;
   background: var(--muted);
   height: 4px;
+}
+
+/* ── Tab content fade-in ── */
+@keyframes tab-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-tab-in {
+  animation: tab-fade-in 0.25s ease-out;
+}
+
+/* ── Toast styling ── */
+[data-sonner-toast] [data-title] {
+  font-family: var(--font-serif) !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.04em;
 }

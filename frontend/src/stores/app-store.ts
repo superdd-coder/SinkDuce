@@ -58,6 +58,7 @@ export interface LLMProvider {
   is_default: boolean
   selected_models?: string[]
   default_model?: string
+  visual_model_ids?: string[]
   status?: "ready" | "error" | "unknown"
 }
 
@@ -85,6 +86,8 @@ interface AppState {
   setPendingCreateCollection: (v: boolean) => void
   pendingOpenFile: string | null
   setPendingOpenFile: (source: string | null) => void
+  pendingOpenNote: string | null
+  setPendingOpenNote: (noteId: string | null) => void
 
   // Meeting ingest progress (persists across dialog open/close)
   ingestMeetingId: string | null
@@ -157,6 +160,8 @@ export const useAppStore = create<AppState>((set) => ({
   setPendingCreateCollection: (v) => set({ pendingCreateCollection: v }),
   pendingOpenFile: null,
   setPendingOpenFile: (source) => set({ pendingOpenFile: source }),
+  pendingOpenNote: null,
+  setPendingOpenNote: (noteId) => set({ pendingOpenNote: noteId }),
 
   ingestMeetingId: null,
   ingestProgress: {},

@@ -13,8 +13,83 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
+from urllib.parse import unquote
 
 from src.rag.chunker import Chunk, _annotate_position, _estimate_tokens, _split_sentences
+
+
+# ── Note Content Preprocessing ──────────────────────────────────
+# Notes contain two special constructs that need preprocessing before
+# chunking so they survive as intact semantic blocks:
+#
+# 1. :::distill-block{"id":"…","source":"…","source-title":"…"}
+#    →  ::: Distilled Content from {source-title} :
+#
+# 2. <img … data-visual-desc="%20…" … />
+#    →  ::: Image Content {Image Caption: {alt}}
+#       Image Description: {URL-decoded description}
+#       :::
+
+_DISTILL_OPEN_RE = re.compile(r'^:::distill-block\{(.+)\}\s*$')
+_DISTILL_TITLE_RE = re.compile(r'"source-title"\s*:\s*"([^"]*)"')
+
+_IMG_DESC_RE = re.compile(
+    r'<img\s[^>]*?\bdata-visual-desc="([^"]*)"[^>]*/?>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _preprocess_distill_blocks(text: str) -> str:
+    """Transform :::distill-block{…} … ::: into clean fenced-div blocks."""
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        m = _DISTILL_OPEN_RE.match(stripped)
+        if m:
+            title_m = _DISTILL_TITLE_RE.search(stripped)
+            source_title = title_m.group(1) if title_m else "Unknown Source"
+            result.append(f"::: Distilled Content from {source_title} :")
+            i += 1
+            # Collect body lines until the closing :::
+            while i < len(lines):
+                if lines[i].strip() == ":::":
+                    break
+                result.append(lines[i])
+                i += 1
+            result.append(":::")
+        else:
+            result.append(lines[i])
+        i += 1
+    return "\n".join(result)
+
+
+def _preprocess_image_blocks(text: str) -> str:
+    """Transform <img data-visual-desc="…"> into ::: Image Content blocks."""
+    def _repl(m: re.Match) -> str:
+        encoded_desc = m.group(1)
+        full_tag = m.group(0)
+        alt_m = re.search(r'\balt="([^"]*)"', full_tag, re.IGNORECASE)
+        alt_text = alt_m.group(1) if alt_m else ""
+        decoded = unquote(encoded_desc)
+        return (
+            f"::: Image Content {{Image Caption: {alt_text}}}\n\n"
+            f"Image Description: {decoded}\n\n"
+            f":::"
+        )
+    return _IMG_DESC_RE.sub(_repl, text)
+
+
+def _preprocess_note_content(text: str) -> str:
+    """Preprocess Note content: distill-blocks first, then image blocks.
+
+    Idempotent: calling it on already-preprocessed text is a no-op because
+    neither :::distill-block nor <img data-visual-desc> survive the first pass.
+    """
+    text = _preprocess_distill_blocks(text)
+    text = _preprocess_image_blocks(text)
+    return text
 
 
 # ── Block Types ──────────────────────────────────────────────
@@ -40,6 +115,7 @@ _HTML_TABLE_CLOSE_RE = re.compile(r"</table>\s*$", re.IGNORECASE)
 _LIST_RE = re.compile(r"^(\s*[-*+]|\s*\d+\.)\s", re.MULTILINE)
 _BLOCKQUOTE_RE = re.compile(r"^>\s?", re.MULTILINE)
 _HR_RE = re.compile(r"^[-*_]{3,}\s*$", re.MULTILINE)
+_FENCED_DIV_CLOSE_RE = re.compile(r"^:::\s*$")
 
 
 def _parse_blocks(text: str) -> list[MarkdownBlock]:
@@ -58,6 +134,7 @@ def _parse_blocks(text: str) -> list[MarkdownBlock]:
     current_start = 0
     in_fence = False
     fence_marker = ""
+    in_fenced_div = False
 
     def flush(offset: int) -> None:
         nonlocal current_lines, current_type, current_start
@@ -92,6 +169,17 @@ def _parse_blocks(text: str) -> list[MarkdownBlock]:
             continue
 
         stripped = line.strip()
+
+        # ── Inside a fenced div — collect ALL lines first ──
+        # (Must run before list/blockquote/table checks so content lines
+        #  like "- bullet" aren't stolen by those handlers.)
+        if in_fenced_div:
+            current_lines.append(line)
+            if _FENCED_DIV_CLOSE_RE.match(stripped):
+                flush(char_offset)
+                in_fenced_div = False
+            char_offset += line_len
+            continue
 
         # Empty line — flush current block
         if not stripped:
@@ -155,6 +243,21 @@ def _parse_blocks(text: str) -> list[MarkdownBlock]:
                 current_type = "table"
                 current_start = char_offset
             current_lines.append(line)
+            char_offset += line_len
+            continue
+
+        # Fenced div opening (:::) — placed before list/blockquote so
+        # "::: Distilled Content from ..." is never misidentified.
+        if stripped.startswith(":::"):
+            flush(char_offset)
+            in_fenced_div = True
+            current_type = "fenced_div"
+            current_lines = [line]
+            current_start = char_offset
+            if _FENCED_DIV_CLOSE_RE.match(stripped):
+                # Bare ::: is both opening and closing
+                flush(char_offset)
+                in_fenced_div = False
             char_offset += line_len
             continue
 
@@ -661,6 +764,66 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     return parts if parts else [block]
 
 
+def _split_fenced_div_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
+    """Split an oversized fenced-div block, preserving the ::: fences.
+
+    Splits on paragraph boundaries (double newlines) inside the body so that
+    each sub-block remains a valid fenced div.  When no paragraph boundaries
+    exist, the block is returned intact.
+    """
+    lines = block.content.split("\n")
+    if len(lines) < 3:
+        return [block]
+
+    opening = lines[0]
+    last_stripped = lines[-1].strip()
+    has_closing = bool(_FENCED_DIV_CLOSE_RE.match(last_stripped))
+    body_lines = lines[1:-1] if has_closing else lines[1:]
+    if not body_lines:
+        return [block]
+
+    body_text = "\n".join(body_lines)
+    paragraphs = re.split(r"\n\s*\n", body_text)
+    paragraphs = [p.strip() for p in paragraphs if p.strip()]
+    if len(paragraphs) <= 1:
+        return [block]
+
+    parts: list[MarkdownBlock] = []
+    current_paras: list[str] = []
+    overhead = _estimate_tokens(opening + "\n" + ("\n" + lines[-1] if has_closing else ""))
+    current_tokens = overhead
+
+    for para in paragraphs:
+        para_tokens = _estimate_tokens(para)
+        if current_paras and current_tokens + para_tokens > max_tokens:
+            part_content = opening + "\n" + "\n\n".join(current_paras)
+            if has_closing:
+                part_content += "\n" + lines[-1]
+            parts.append(MarkdownBlock(
+                block_type="fenced_div", content=part_content,
+                start_offset=block.start_offset,
+                end_offset=block.end_offset,
+                heading_path=list(block.heading_path),
+            ))
+            current_paras = []
+            current_tokens = overhead
+        current_paras.append(para)
+        current_tokens += para_tokens
+
+    if current_paras:
+        part_content = opening + "\n" + "\n\n".join(current_paras)
+        if has_closing:
+            part_content += "\n" + lines[-1]
+        parts.append(MarkdownBlock(
+            block_type="fenced_div", content=part_content,
+            start_offset=block.start_offset,
+            end_offset=block.end_offset,
+            heading_path=list(block.heading_path),
+        ))
+
+    return parts if parts else [block]
+
+
 def _split_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
     """Split an oversized block using type-appropriate strategy."""
     if block.block_type == "table":
@@ -671,6 +834,8 @@ def _split_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
         return _split_code_block(block, max_tokens)
     elif block.block_type == "list":
         return _split_list_block(block, max_tokens)
+    elif block.block_type == "fenced_div":
+        return _split_fenced_div_block(block, max_tokens)
     elif block.block_type == "paragraph":
         return _split_paragraph_block(block, max_tokens)
     else:
@@ -694,8 +859,15 @@ class MarkdownChunker:
         self.hard_limit = int(self.max_tokens * (1 + self.buffer_ratio))
         self.chunk_overlap = max(chunk_overlap, 0)
 
-    def chunk(self, text: str) -> list[str]:
-        """Chunk Markdown text, returning list of chunk strings."""
+    def chunk(self, text: str, is_note: bool = False) -> list[str]:
+        """Chunk Markdown text, returning list of chunk strings.
+
+        When *is_note* is True the text is preprocessed first: distill-blocks
+        and image-description blocks are transformed into ``:::`` fenced-div
+        blocks so they survive chunking as intact semantic units.
+        """
+        if is_note:
+            text = _preprocess_note_content(text)
         blocks = _parse_blocks(text)
         if not blocks:
             return []
@@ -736,12 +908,19 @@ class MarkdownChunker:
     def chunk_with_metadata(
         self, text: str, source: str = "", extra_metadata: dict | None = None
     ) -> list[Chunk]:
-        """Chunk Markdown text with metadata, matching ParagraphChunker interface."""
+        """Chunk Markdown text with metadata, matching ParagraphChunker interface.
+
+        When ``extra_metadata["file_type"]`` is ``"note"`` the text is
+        preprocessed first (distill-blocks + image-description blocks → ::: fenced
+        divs) so those constructs survive chunking as intact semantic blocks.
+        """
+        extra = {**(extra_metadata or {})}
+        if extra.get("file_type") == "note":
+            text = _preprocess_note_content(text)
         blocks = _parse_blocks(text)
         if not blocks:
             return []
 
-        extra = {**(extra_metadata or {})}
         position_map = extra.pop("position_map", [])
         meta = {"source": source, **extra}
 
@@ -892,12 +1071,20 @@ class MarkdownParentChildChunker:
     def chunk_with_metadata(
         self, text: str, source: str = "", extra_metadata: dict | None = None
     ) -> list[Chunk]:
-        """Returns both parent and child chunks."""
+        """Returns both parent and child chunks.
+
+        When ``extra_metadata["file_type"]`` is ``"note"`` the text is
+        preprocessed first (distill-blocks + image-description blocks → ::: fenced
+        divs).  Preprocessing is idempotent so the child-chunker call below
+        (which also checks ``file_type``) is harmless.
+        """
+        extra = {**(extra_metadata or {})}
+        if extra.get("file_type") == "note":
+            text = _preprocess_note_content(text)
         blocks = _parse_blocks(text)
         if not blocks:
             return []
 
-        extra = {**(extra_metadata or {})}
         position_map = extra.pop("position_map", [])
         meta = {"source": source, **extra}
 

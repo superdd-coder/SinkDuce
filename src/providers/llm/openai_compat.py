@@ -77,6 +77,44 @@ class OpenAICompatLLM(LLMProvider):
             return ""
         return _strip_think(response.choices[0].message.content or "")
 
+    def describe_image(self, image_base64: str, image_mime: str = "image/png") -> str:
+        """Generate a text description of an image using Vision API.
+
+        Args:
+            image_base64: Base64-encoded image data (without data URI prefix)
+            image_mime: MIME type of the image (default image/png)
+
+        Returns:
+            Generated description string (without the [Image Description]: prefix)
+        """
+        logger.info("LLM describe_image: model=%s mime=%s", self._model, image_mime)
+        data_uri = f"data:{image_mime};base64,{image_base64}"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Describe this image concisely in 2-4 sentences. Cover: what is shown, key elements, and any visible text. Be brief and objective. Match the language of visible text, or use English if none.",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_uri},
+                    },
+                ],
+            }
+        ]
+        with _get_llm_semaphore():
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=1024,
+            )
+        if not response.choices:
+            return ""
+        return _strip_think(response.choices[0].message.content or "")
+
     def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None) -> Generator[str, None, None]:
         messages = []
         if system:

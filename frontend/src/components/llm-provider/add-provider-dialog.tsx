@@ -27,6 +27,7 @@ const defaultForm = {
   is_default: false,
   selected_models: [] as string[],
   default_model: "",
+  visual_model_ids: [] as string[],
 }
 
 export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: AddProviderDialogProps) {
@@ -51,6 +52,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         is_default: provider.is_default,
         selected_models: provider.selected_models || (provider.model ? [provider.model] : []),
         default_model: provider.default_model || provider.model || "",
+        visual_model_ids: provider.visual_model_ids || [],
       })
     } else {
       setForm(defaultForm)
@@ -108,6 +110,15 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
     setForm((prev) => ({ ...prev, default_model: model }))
   }
 
+  const toggleVisualModel = (model: string) => {
+    setForm((prev) => {
+      const visual = prev.visual_model_ids.includes(model)
+        ? prev.visual_model_ids.filter((m) => m !== model)
+        : [...prev.visual_model_ids, model]
+      return { ...prev, visual_model_ids: visual }
+    })
+  }
+
   const handleSave = async () => {
     if (!form.name.trim()) {
       toast.error("Name is required")
@@ -126,6 +137,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         is_default: form.is_default,
         selected_models: form.selected_models,
         default_model: form.default_model || form.selected_models[0],
+        visual_model_ids: form.visual_model_ids,
       }
       if (provider) {
         await updateLLMProvider(provider.id, data)
@@ -224,6 +236,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
               <div className="border rounded-md p-2 max-h-40 overflow-y-auto space-y-0.5">
                 {availableModels.map((model) => {
                   const selected = form.selected_models.includes(model)
+                  const isVisual = form.visual_model_ids.includes(model)
                   return (
                     <label key={model} onClick={() => toggleModelSelection(model)} className="flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded hover:bg-accent transition-colors min-w-0">
                       <span className={cn(
@@ -232,20 +245,39 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                       )} />
                       <span className="flex-1 truncate font-mono text-xs min-w-0">{model}</span>
                       {selected && (
-                        <button
-                          type="button"
-                          className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap ${
-                            form.default_model === model
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted text-muted-foreground hover:bg-accent"
-                          }`}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setDefaultModel(model)
-                          }}
-                        >
-                          {form.default_model === model ? "default" : "set default"}
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap ${
+                              form.default_model === model
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:bg-accent"
+                            }`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setDefaultModel(model)
+                            }}
+                          >
+                            {form.default_model === model ? "default" : "set default"}
+                          </button>
+                          <button
+                            type="button"
+                            className={cn(
+                              "text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap transition-colors",
+                              isVisual
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                : "bg-muted text-muted-foreground hover:bg-accent",
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleVisualModel(model)
+                            }}
+                            title={isVisual ? "Visual enabled" : "Enable for Visual Translate"}
+                          >
+                            <Eye className="h-3 w-3 inline mr-0.5" />
+                            {isVisual ? "visual" : "visual"}
+                          </button>
+                        </>
                       )}
                     </label>
                   )
@@ -257,6 +289,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
               <div className="border rounded-md p-2 space-y-0.5">
                 {form.selected_models.map((model) => {
                   const selected = form.selected_models.includes(model)
+                  const isVisual = form.visual_model_ids.includes(model)
                   return (
                     <label key={model} onClick={() => toggleModelSelection(model)} className="flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded hover:bg-accent transition-colors min-w-0">
                       <span className={cn(
@@ -277,6 +310,23 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                         }}
                       >
                         {form.default_model === model ? "default" : "set default"}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          "text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap transition-colors",
+                          isVisual
+                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                            : "bg-muted text-muted-foreground hover:bg-accent",
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleVisualModel(model)
+                        }}
+                        title={isVisual ? "Visual enabled" : "Enable for Visual Translate"}
+                      >
+                        <Eye className="h-3 w-3 inline mr-0.5" />
+                        {isVisual ? "visual" : "visual"}
                       </button>
                     </label>
                   )

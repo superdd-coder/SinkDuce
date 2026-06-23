@@ -120,6 +120,7 @@ from src.api.routes.info import router as info_router
 from src.meeting.routes import router as meeting_router
 from src.hot_words.routes import router as hot_words_router
 from src.notes.routes import router as notes_router
+from src.api.routes.visual import router as visual_router
 
 app.include_router(query_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
@@ -130,6 +131,7 @@ app.include_router(logs_router, prefix="/api")
 app.include_router(info_router, prefix="/api")
 app.include_router(meeting_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
+app.include_router(visual_router, prefix="/api")
 app.include_router(hot_words_router)
 
 

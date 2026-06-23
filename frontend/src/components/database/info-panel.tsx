@@ -42,6 +42,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
   const [meetings, setMeetings] = useState<MeetingLogItem[]>([])
   const [meetingsLoading, setMeetingsLoading] = useState(false)
   const [notesCount, setNotesCount] = useState(0)
+  const [ingestedNotesCount, setIngestedNotesCount] = useState(0)
   const [docCount, setDocCount] = useState(0)
 
   const { setSidebarView, setActiveMeeting, setPendingOpenFile } = useAppStore()
@@ -128,7 +129,10 @@ export function InfoPanel({ collection }: InfoPanelProps) {
     // Fetch stats
     if (collection) {
       import("@/api/client").then(({ getNotes, getFiles }) => {
-        getNotes(collection).then(r => setNotesCount(r.notes?.length ?? 0)).catch(() => setNotesCount(0))
+        getNotes(collection).then(r => {
+          setNotesCount(r.notes?.length ?? 0)
+          setIngestedNotesCount(r.notes?.filter(n => n.is_ingested).length ?? 0)
+        }).catch(() => { setNotesCount(0); setIngestedNotesCount(0) })
         getFiles(collection).then(r => setDocCount(r.files?.length ?? 0)).catch(() => setDocCount(0))
       })
     }
@@ -215,8 +219,12 @@ export function InfoPanel({ collection }: InfoPanelProps) {
           <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground mt-1.5">Recordings</span>
         </div>
         <div className="flex flex-col">
-          <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{notesCount}</span>
-          <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground mt-1.5">Notes</span>
+          <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>
+            {notesCount > 0 ? `${ingestedNotesCount}/${notesCount}` : "—"}
+          </span>
+          <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground mt-1.5">
+            Notes{ingestedNotesCount > 0 ? ` · ${ingestedNotesCount} ingested` : ""}
+          </span>
         </div>
         <div className="flex flex-col">
           <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{conflicts.length}</span>
