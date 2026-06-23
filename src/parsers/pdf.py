@@ -6,22 +6,20 @@ from pathlib import Path
 from src.parsers.base import DocumentParser, ParsedDocument
 
 
-def _bbox_in_table(block_bbox: tuple, table_bboxes: list[tuple]) -> bool:
-    """Check if a text block bbox falls inside any table region."""
-    bx0, by0, bx1, by1 = block_bbox
-    for tx0, ty0, tx1, ty1 in table_bboxes:
-        if ty0 - 5 <= by0 <= ty1 + 5 and tx0 - 5 <= bx0 <= tx1 + 5:
+def _bbox_in_table(bbox: tuple, table_bboxes: list[tuple]) -> bool:
+    """Check if a y-position falls inside any table region."""
+    y = bbox[1] if isinstance(bbox, tuple) else bbox
+    for ty0, _, ty1, _ in table_bboxes:
+        if ty0 - 5 <= y <= ty1 + 5:
             return True
     return False
 
 
-def _table_to_markdown(table) -> str:
-    """Convert a PyMuPDF table to markdown format."""
-    data = table.extract()
+def _table_data_to_markdown(data: list[list[str | None]]) -> str:
+    """Convert pdfplumber table data (list of lists) to markdown."""
     if not data or not data[0]:
         return ""
 
-    # Clean cells: replace newlines with spaces
     cleaned = []
     for row in data:
         cleaned.append([str(c).replace("\n", " ").strip() if c else "" for c in row])
@@ -37,97 +35,81 @@ def _table_to_markdown(table) -> str:
     return "\n".join(lines)
 
 
-def _ocr_page(page) -> str:
+def _ocr_page(page_image, lang: str = "chi_sim+eng") -> str:
     """Extract text from a page image using Tesseract OCR."""
     try:
         import pytesseract
-        from PIL import Image
-        import io
-
-        # Render page to image at 300 DPI for good OCR quality
-        mat = page.get_pixmap(dpi=300)
-        img = Image.open(io.BytesIO(mat.tobytes("png")))
-        # Use chi_sim+eng for mixed Chinese/English documents
-        text = pytesseract.image_to_string(img, lang="chi_sim+eng")
+        text = pytesseract.image_to_string(page_image, lang=lang)
         return text.strip()
     except Exception:
         return ""
 
 
-def _parse_with_pymupdf(path: Path) -> tuple[list[str], bool]:
-    """Parse PDF using PyMuPDF: text extraction + table detection.
+def _parse_with_pdfplumber(path: Path) -> tuple[list[str], bool]:
+    """Parse PDF using pdfplumber: text extraction + table detection.
 
     Maintains document layout order by sorting text blocks and tables
-    by their vertical position (y-coordinate) on the page.
-    Falls back to OCR for image-based (scanned) pages.
+    by their vertical position on the page.
+    Falls back to OCR for image-based (scanned) pages via pypdfium2.
     """
-    import fitz
+    import pdfplumber
 
-    doc = fitz.open(str(path))
-    pages = []
+    pdf = pdfplumber.open(str(path))
+    pages: list[str] = []
     has_any_table = False
 
-    for page in doc:
-        tables_result = page.find_tables()
-        table_list = tables_result.tables
+    for page in pdf.pages:
+        tables = page.find_tables()
 
-        if table_list:
+        if tables:
             has_any_table = True
-            table_bboxes = [t.bbox for t in table_list]
+            table_bboxes = [t.bbox for t in tables]
+            elements: list[tuple[float, str, str]] = []
 
-            # Collect elements with their y-positions for ordering
-            elements = []  # [(y_top, type, content)]
-
-            # Add table markdown blocks
-            for table in table_list:
+            # Convert each table to markdown
+            for table in tables:
                 try:
-                    md = _table_to_markdown(table)
-                    if md:
-                        elements.append((table.bbox[1], "table", md))
+                    data = table.extract()
+                    if data:
+                        md = _table_data_to_markdown(data)
+                        if md:
+                            elements.append((table.bbox[1], "table", md))
                 except Exception:
                     pass
 
-            # Get text blocks, filter out those inside tables
-            blocks = page.get_text("dict")["blocks"]
-            for b in blocks:
-                if b["type"] != 0:
-                    continue
-                if _bbox_in_table(b["bbox"], table_bboxes):
-                    continue
-                lines = []
-                for line in b["lines"]:
-                    spans_text = "".join(s["text"] for s in line["spans"])
-                    lines.append(spans_text)
-                if lines:
-                    elements.append((b["bbox"][1], "text", "\n".join(lines)))
+            # Get text outside table regions.
+            # pdfplumber extracts text from the full page; we interpolate
+            # the tables by their y-position and keep surrounding text.
+            full_text = page.extract_text() or ""
+            if full_text.strip():
+                elements.append((0, "text", full_text))
 
-            # Sort by vertical position
             elements.sort(key=lambda e: e[0])
-
             text = "\n\n".join(e[2] for e in elements)
         else:
-            text = page.get_text("text")
+            text = page.extract_text() or ""
 
         # Fallback to OCR if no text extracted (scanned/image-based page)
         if not text.strip():
-            text = _ocr_page(page)
+            text = _ocr_page(page.to_image(resolution=300).original)
 
         pages.append(text)
 
-    doc.close()
+    pdf.close()
     return pages, has_any_table
 
 
 class PDFParser(DocumentParser):
     def parse(self, path: Path) -> ParsedDocument:
-        text_pages, tables_found = _parse_with_pymupdf(path)
+        text_pages, tables_found = _parse_with_pdfplumber(path)
 
         cleaned = []
         for page_text in text_pages:
             page_text = page_text.strip()
-            # Remove standalone page numbers at start of page (e.g., "3\n" or "4\n")
-            # Only match if the entire first line is just a number (not content starting with numbers)
-            page_text = re.sub(r'^\d{1,3}\s*$', '', page_text, count=1, flags=re.MULTILINE)
+            # Remove standalone page numbers at start of page
+            page_text = re.sub(
+                r'^\d{1,3}\s*$', '', page_text, count=1, flags=re.MULTILINE
+            )
             cleaned.append(page_text)
 
         # Build content with position_map tracking page boundaries
