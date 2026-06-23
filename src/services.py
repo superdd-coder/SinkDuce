@@ -238,10 +238,15 @@ def init_services():
 
     # Auto-create default collection only on first run
     default_col = config.qdrant.default_collection
-    if services.embedding and services.embedding.dimensions > 0 and not services.db.collection_exists(default_col):
-        existing = services.db.list_collections()
-        if not existing:
-            services.db.create_collection(default_col, vector_size=services.embedding.dimensions)
+    if services.embedding and services.embedding.dimensions > 0:
+        try:
+            if not services.db.collection_exists(default_col):
+                existing = services.db.list_collections()
+                if not existing:
+                    services.db.create_collection(default_col, vector_size=services.embedding.dimensions)
+        except Exception:
+            # Race condition or transient Qdrant error — ignore, collection likely exists
+            pass
 
     services.chunker = ParagraphChunker(
         max_tokens=config.parsing.default_chunk_size,
