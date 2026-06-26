@@ -40,11 +40,11 @@ mcp.add_tool(get_task_status)
 
 # ── Search & Query ───────────────────────────────────────────
 from src.mcp.tools.search import (
-    rag_query,
+    search_knowledge_base,
     search_chunks,
     get_query_history,
 )
-mcp.add_tool(rag_query)
+mcp.add_tool(search_knowledge_base)
 mcp.add_tool(search_chunks)
 mcp.add_tool(get_query_history)
 

@@ -19,8 +19,9 @@ function _genKey(collection: string, source: string) {
 }
 
 function _markGenerating(key: string) {
-  _generating.set(key, Date.now())
-  try { localStorage.setItem(`wk:gen:${key}`, "1") } catch { /* ignore */ }
+  const now = Date.now()
+  _generating.set(key, now)
+  try { localStorage.setItem(`wk:gen:${key}`, String(now)) } catch { /* ignore */ }
 }
 
 function _unmarkGenerating(key: string) {
@@ -30,11 +31,17 @@ function _unmarkGenerating(key: string) {
 
 function _isMarked(key: string): boolean {
   if (_generating.has(key)) return true
-  // Recover from localStorage on page refresh
+  // Recover from localStorage on page refresh, with 5-min TTL
   try {
-    if (localStorage.getItem(`wk:gen:${key}`) === "1") {
-      _generating.set(key, Date.now())
-      return true
+    const raw = localStorage.getItem(`wk:gen:${key}`)
+    if (raw) {
+      const ts = Number(raw)
+      if (Date.now() - ts < 300_000) {  // < 5 min
+        _generating.set(key, ts)
+        return true
+      }
+      // Expired — clean up
+      localStorage.removeItem(`wk:gen:${key}`)
     }
   } catch { /* ignore */ }
   return false
@@ -80,7 +87,7 @@ export function FileDetailDialog({ collection, source, displayName, chunks, chun
     setActiveTab("source")
   }, [source])
 
-  // Poll while generating (recovers on mount if module-level flag is set)
+  // Poll while generating
   useEffect(() => {
     if (!isGenerating || !collection || !source) return
     const key = genKey!
@@ -380,7 +387,6 @@ export function FileDetailDialog({ collection, source, displayName, chunks, chun
                                 const key = _genKey(collection, source)
                                 _markGenerating(key)
                                 setRenderTick(k => k + 1)
-                                setDocSummary(null)
                                 setActiveTab("summary")
                                 try {
                                   await generateDocSummary(collection, source)

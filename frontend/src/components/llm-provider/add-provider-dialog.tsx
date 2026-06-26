@@ -22,8 +22,6 @@ const defaultForm = {
   model: "",
   base_url: "",
   api_key: "",
-  max_tokens: "4096",
-  max_concurrent_requests: "10",
   is_default: false,
   selected_models: [] as string[],
   default_model: "",
@@ -47,8 +45,6 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         model: provider.model || "",
         base_url: provider.base_url || "",
         api_key: provider.api_key || "",
-        max_tokens: String(provider.max_tokens ?? 4096),
-        max_concurrent_requests: String(provider.max_concurrent_requests ?? 10),
         is_default: provider.is_default,
         selected_models: provider.selected_models || (provider.model ? [provider.model] : []),
         default_model: provider.default_model || provider.model || "",
@@ -132,8 +128,6 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         model: form.default_model || form.selected_models[0],
         base_url: form.base_url,
         api_key: form.api_key || undefined,
-        max_tokens: parseInt(form.max_tokens) || 4096,
-        max_concurrent_requests: parseInt(form.max_concurrent_requests) || 10,
         is_default: form.is_default,
         selected_models: form.selected_models,
         default_model: form.default_model || form.selected_models[0],
@@ -198,17 +192,6 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
               >
                 {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-[120px_1fr] gap-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-light uppercase tracking-wider">Max Tokens</label>
-              <Input value={form.max_tokens} onChange={(e) => set("max_tokens", e.target.value)} placeholder="4096" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-light uppercase tracking-wider whitespace-nowrap">Max Concurrent Requests</label>
-              <Input value={form.max_concurrent_requests} onChange={(e) => set("max_concurrent_requests", e.target.value)} placeholder="10" />
             </div>
           </div>
 

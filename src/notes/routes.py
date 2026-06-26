@@ -21,9 +21,7 @@ from src.rag.markdown_chunker import MarkdownChunker, MarkdownParentChildChunker
 from src.rag.collection_utils import get_collection_embedding
 from src.tasks.handlers import (
     _enrich_lock,
-    _embed_lock,
     _do_enrich,
-    _do_embed,
     _build_enriched_text,
 )
 
@@ -131,13 +129,11 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
         finally:
             _enrich_lock.release()
 
-    # ── Stage 3: Embedding (serialized) ──
+    # ── Stage 3: Embedding ──
     t_emb = time.time()
-    _embed_lock.acquire()
-    try:
-        embeddings = _do_embed(chunks, config, collection)
-    finally:
-        _embed_lock.release()
+    embedding = get_collection_embedding(config, collection)
+    texts = [_build_enriched_text(c) for c in chunks]
+    embeddings = embedding.embed_texts(texts)
     logger.info("[INGEST] Note %s: embedding done (%.1fs)",
                 note_id, time.time() - t_emb)
 

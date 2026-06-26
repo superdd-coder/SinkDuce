@@ -208,3 +208,66 @@ def update_collection_config(collection_id: str, req: CollectionConfigUpdateRequ
         return result
 
     return {"message": f"Collection config updated", "config": result}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Catalog endpoints
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/collections/{collection_id}/catalog")
+def get_catalog_entry(collection_id: str):
+    """Get catalog entry (name, definition, coverage, tags) for a collection."""
+    meta = collections_store.get_collection_meta(collection_id)
+    if not meta:
+        return {"error": f"Collection '{collection_id}' not found"}
+
+    config = services.db.get_collection_config(collection_id)
+    # Read definition from consolidation result first
+    definition = ""
+    try:
+        from src.rag.summary_manager import SummaryManager
+        desc = SummaryManager(services.db).get_project_description(collection_id)
+        if desc and desc.get("content"):
+            import re
+            definition = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', desc["content"])
+    except Exception:
+        pass
+    if not definition:
+        definition = config.get("project_description", "")
+    return {
+        "id": collection_id,
+        "name": meta.get("name", collection_id),
+        "definition": definition,
+        "coverage": config.get("coverage", ""),
+        "tags": config.get("tags", []),
+    }
+
+
+@router.put("/collections/{collection_id}/tags")
+def update_collection_tags(collection_id: str, tags: list[str] = Body(...)):
+    """Update tags for a collection."""
+    if not services.catalog:
+        return {"error": "Catalog service not available"}
+
+    services.catalog.update_tags(collection_id, tags)
+    return {"message": "Tags updated", "tags": tags}
+
+
+@router.post("/collections/{collection_id}/coverage")
+def refresh_coverage(collection_id: str):
+    """Trigger a coverage refresh for a collection."""
+    if not services.catalog:
+        return {"error": "Catalog service not available"}
+
+    # Check active uploads/doc_summaries; defer if any are running
+    from src.tasks.task_manager import task_manager
+    active = len(task_manager.get_active_tasks(
+        collection=collection_id, task_types=["upload", "doc_summary"],
+    ))
+    if active > 0:
+        services.catalog.mark_dirty(collection_id)
+        return {"message": f"Coverage deferred ({active} active tasks)", "deferred": True}
+
+    services.catalog.update_coverage(collection_id)
+    config = services.db.get_collection_config(collection_id)
+    return {"message": "Coverage refreshed", "coverage": config.get("coverage", "")}

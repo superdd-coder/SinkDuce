@@ -39,6 +39,7 @@ export function DatabaseView() {
   const fetchFilesRef = useRef<() => void>(() => {})
   const [deleteFileTarget, setDeleteFileTarget] = useState<string | null>(null)
   const [allowedFileTypes, setAllowedFileTypes] = useState<string[]>([])
+  const [coverage, setCoverage] = useState<string>("")
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -128,7 +129,8 @@ export function DatabaseView() {
       getCollectionConfig(activeCollection).then((cfg) => {
         const types = cfg.allowed_file_types as string[] | undefined
         setAllowedFileTypes(types && types.length > 0 ? types : [])
-      }).catch(() => setAllowedFileTypes([]))
+        setCoverage((cfg.coverage as string) || "")
+      }).catch(() => { setAllowedFileTypes([]); setCoverage("") })
     } else {
       setAllowedFileTypes([])
     }
@@ -250,6 +252,13 @@ export function DatabaseView() {
 
               <TabsContent key={`files-${activeTab}`} value="files" className="flex-1 mt-2 overflow-hidden animate-tab-in">
                 <div className="h-full flex flex-col gap-4">
+                  {coverage && (
+                    <div className="text-[11px] leading-relaxed px-3 py-2 border border-dashed border-border bg-muted/30"
+                         style={{ fontFamily: "var(--font-sans)" }}>
+                      <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground/70">Coverage · </span>
+                      <span className="text-muted-foreground">{coverage}</span>
+                    </div>
+                  )}
                   <UploadSection
                     hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
                     tasks={tasks}

@@ -1,3 +1,5 @@
+"""Query endpoints — direct and agentic retrieval with streaming support."""
+
 from __future__ import annotations
 
 import json
@@ -10,15 +12,8 @@ from fastapi.responses import StreamingResponse
 
 from src.api.schemas import QueryRequest, QueryResponse, SourceItem
 from src.config import get_config
-from src.rag.agent import AgenticRAG, AgentResult
 from src.services import services
-from src.rag.collection_utils import (
-    build_context,
-    get_embedding_overrides,
-    retrieve_parent_child_multi,
-    retrieve_standard,
-)
-from src.rag.agent import AgenticRAG, AgentResult
+from src.rag.collection_utils import get_embedding_overrides
 from src.collections import store as collections_store
 
 logger = logging.getLogger(__name__)
@@ -29,7 +24,6 @@ HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _col_display_name(col_id: str) -> str:
-    """Resolve a collection ID to its display name. Falls back to ID if not found."""
     meta = collections_store.get_collection_meta(col_id)
     if meta:
         return meta.get("name", col_id)
@@ -37,7 +31,6 @@ def _col_display_name(col_id: str) -> str:
 
 
 def _multi_collection_note(sources: list) -> str:
-    """Return a warning note if sources span multiple collections, empty string otherwise."""
     cols: set[str] = set()
     for s in sources:
         meta = s.get("metadata", {}) if isinstance(s, dict) else getattr(s, "metadata", {})
@@ -67,49 +60,42 @@ def _save_history(question: str, answer: str, collection: str, sources: list):
 
 
 def _resolve_params(req: QueryRequest, col_config: dict) -> dict:
-    """Resolve all query parameters from request + collection config + global config."""
-    agent_enabled = req.use_agent and col_config.get("agent_enabled", col_config.get("self_rag_enabled", True))
-    # Agentic RAG requires reranker — force enable when agent is on
-    use_reranker = req.use_reranker if req.use_reranker is not None else True
-    if agent_enabled:
+    """Resolve query parameters from request + collection config + global config."""
+    if req.use_agent:
+        cfg = services.config.rag
+    else:
+        cfg = services.config.direct_rag
+
+    use_reranker = req.use_reranker if req.use_reranker is not None else (
+        True if req.use_agent else getattr(services.config.direct_rag, "use_reranker", True)
+    )
+    if req.use_agent:
         use_reranker = True
     return {
-        "top_k": req.top_k or col_config.get("top_k", services.config.rag.top_k),
-        "rerank_top_k": req.rerank_top_k or col_config.get("rerank_top_k", services.config.rag.rerank_top_k),
-        "agent_enabled": agent_enabled,
-        "search_mode": req.search_mode or col_config.get("search_mode", "dense"),
-        "min_score": req.min_score if req.min_score is not None else 0.0,
+        "top_k": req.top_k or cfg.top_k,
+        "rerank_top_k": req.rerank_top_k or cfg.rerank_top_k,
+        "use_agent": req.use_agent,
+        "search_mode": req.search_mode or cfg.default_search_mode,
+        "min_score": req.min_score if req.min_score is not None else cfg.min_score,
         "use_reranker": use_reranker,
-        "max_iterations": req.max_iterations if req.max_iterations is not None else col_config.get("agent_max_iterations", col_config.get("self_rag_max_iterations", 3)),
-        "sparse_llm_tokenize": _resolve_sparse_llm_tokenize(req, col_config, agent_enabled),
+        "max_iterations": req.max_iterations if req.max_iterations is not None else cfg.max_iterations,
+        "sparse_llm_tokenize": _resolve_sparse_llm_tokenize(req, col_config),
     }
 
 
-def _resolve_sparse_llm_tokenize(req: QueryRequest, col_config: dict, agent_enabled: bool) -> bool:
-    """Resolve whether to use LLM keyword extraction for sparse encoding.
-
-    Agentic RAG → always True (LLM is already in the loop).
-    Non-agentic Hybrid → per-query override or collection config (default True).
-    Dense mode → False (sparse encoding not used).
-    """
-    search_mode = req.search_mode or col_config.get("search_mode", "dense")
+def _resolve_sparse_llm_tokenize(req: QueryRequest, col_config: dict) -> bool:
+    search_mode = req.search_mode or col_config.get("search_mode", services.config.rag.default_search_mode)
     if search_mode != "hybrid":
         return False
-    if agent_enabled:
-        return True
-    # Per-query override takes precedence over collection config
     if req.sparse_llm_tokenize is not None:
         return req.sparse_llm_tokenize
     return col_config.get("sparse_llm_tokenize", True)
 
 
 def _resolve_llm(req: QueryRequest) -> tuple:
-    """Resolve LLM and provider info for streaming (supports per-request provider switching)."""
     from src.providers.llm import create_llm_for_provider
-
     provider_info = {"name": "", "model": ""}
     config = get_config()
-
     if req.provider_id:
         for p in config.llm.providers:
             if p.id == req.provider_id:
@@ -117,21 +103,71 @@ def _resolve_llm(req: QueryRequest) -> tuple:
                 provider_info["name"] = p.name
                 provider_info["model"] = req.model or p.default_model or p.model
                 return llm, provider_info, req.temperature
-
     if config.llm.providers:
         default_p = next((p for p in config.llm.providers if p.is_default), config.llm.providers[0])
         llm = create_llm_for_provider(default_p)
         provider_info["name"] = default_p.name
         provider_info["model"] = default_p.default_model or default_p.model
         return llm, provider_info, req.temperature
-
     return services.llm, provider_info, req.temperature
 
+
+def _run_direct(query_text: str, target_collections: list[str], params: dict,
+                embedding_overrides: dict, reranker, llm, temperature) -> dict:
+    """Direct retrieval → build_context → LLM generate."""
+    if not services.direct_query:
+        raise HTTPException(status_code=503, detail="Direct query module not available")
+
+    result = services.direct_query.retrieve(
+        query_text, target_collections, top_k=params["top_k"],
+        search_mode=params["search_mode"],
+        rerank_enabled=params["use_reranker"],
+        rerank_top_k=params["rerank_top_k"],
+        min_score=params["min_score"],
+        sparse_llm_tokenize=params["sparse_llm_tokenize"],
+        embedding_overrides=embedding_overrides,
+        llm_for_sparse=llm if params["sparse_llm_tokenize"] else None,
+        generate_answer=True,
+    )
+    sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in result.chunks]
+    return {"answer": result.answer or "", "sources": sources, "query_used": query_text}
+
+
+def _run_agentic(query_text: str, target_collections: list[str], params: dict,
+                llm, temperature) -> dict:
+    """Agentic RAG via AgenticQueryService."""
+    if not services.agentic_query:
+        raise HTTPException(status_code=503, detail="Agentic query service not available")
+
+    result = services.agentic_query.run(
+        query_text, collections=target_collections, generate_answer=True,
+        top_k=params["top_k"],
+        rerank_enabled=True,  # agentic always reranks
+        rerank_top_k=params["rerank_top_k"],
+        search_mode=params["search_mode"],
+        min_score=params["min_score"],
+        max_iterations=params["max_iterations"],
+        sparse_llm_tokenize=params["sparse_llm_tokenize"],
+    )
+    sources = [
+        {"text": c.text, "score": c.score, "metadata": c.metadata}
+        for c in (result.all_chunks or [])
+    ]
+    return {
+        "answer": result.answer or "",
+        "sources": sources,
+        "iterations": max((t.get("sub_queries", [{}])[0].get("iterations", 0) if t.get("sub_queries") else 0) for t in (result.tasks or [{}])),
+        "query_used": query_text,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# POST /query
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest):
     try:
-        # Resolve collection: try as ID first, fall back to name (for legacy)
         def resolve_collection(cid: str) -> str:
             meta = collections_store.get_collection_meta(cid)
             return meta["id"] if meta else cid
@@ -149,74 +185,36 @@ def query(req: QueryRequest):
         params = _resolve_params(req, col_config)
         llm, provider_info, temperature = _resolve_llm(req)
         embedding_overrides = get_embedding_overrides(target_collections)
-        col_embedding = embedding_overrides.get(collection) or next(iter(embedding_overrides.values()))
 
-        logger.info("Query: collections=%s, min_score=%.2f, search_mode=%s, sparse_llm_tokenize=%s",
-                     target_collections, params["min_score"], params["search_mode"], params["sparse_llm_tokenize"])
+        logger.info("[Query] collections=%s use_agent=%s", target_collections, params["use_agent"])
 
-        is_parent_child = col_config.get("chunk_mode") == "parent_child"
-        reranker = services.reranker if (params["use_reranker"] and services.reranker and services.reranker.provider) else None
-
-        if is_parent_child and not params["agent_enabled"]:
-            chunks = retrieve_parent_child_multi(
-                req.question, target_collections, params["top_k"],
-                embedding_overrides=embedding_overrides,
-                min_score=params["min_score"],
-                reranker=reranker,
-                rerank_top_k=params["rerank_top_k"],
-                retriever=services.retriever,
-                search_mode=params["search_mode"],
-                llm=llm if params["sparse_llm_tokenize"] else None,
-            )
-            context = build_context(chunks)
-            sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
-            answer = llm.generate(f"Answer based on context:\n{context}\n\nQuestion: {req.question}", temperature=temperature)
-            result = AgentResult(answer=answer, sources=sources, iterations=1, query_used=req.question)
-        elif params["agent_enabled"]:
-            agent = AgenticRAG(
-                llm=llm,
-                retriever=services.retriever,
-                reranker=reranker,
-                rerank_top_k=params["rerank_top_k"],
-                max_iterations=params["max_iterations"],
-                embedding_overrides=embedding_overrides,
-                search_mode=params["search_mode"],
-                min_score=params["min_score"],
-                db=services.db,
-                temperature=temperature,
-            )
-            result = agent.run(query=req.question, collections=target_collections, top_k=params["top_k"])
+        if params["use_agent"]:
+            r = _run_agentic(req.question, target_collections, params, llm, temperature)
         else:
-            chunks = retrieve_standard(
-                req.question, target_collections, params["top_k"],
-                embedding_overrides=embedding_overrides,
-                search_mode=params["search_mode"],
-                min_score=params["min_score"],
-                reranker=reranker,
-                rerank_top_k=params["rerank_top_k"],
-                llm=llm if params["sparse_llm_tokenize"] else None,
-            )
-            context = build_context(chunks)
-            sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
-            answer = llm.generate(f"Answer based on context:\n{context}\n\nQuestion: {req.question}", temperature=temperature)
-            result = AgentResult(answer=answer, sources=sources, iterations=1, query_used=req.question)
+            r = _run_direct(req.question, target_collections, params,
+                            embedding_overrides, None, llm, temperature)
 
-        # Append multi-collection note if applicable
-        note = _multi_collection_note(result.sources)
+        note = _multi_collection_note(r["sources"])
         if note:
-            result.answer += note
+            r["answer"] += note
 
-        sources = [SourceItem(**s) for s in result.sources]
-        _save_history(req.question, result.answer, req.collection, result.sources)
+        sources = [SourceItem(**s) for s in r["sources"]]
+        _save_history(req.question, r["answer"], req.collection, r["sources"])
         return QueryResponse(
-            answer=result.answer, sources=sources,
-            iterations=result.iterations, query_used=result.query_used,
+            answer=r["answer"], sources=sources,
+            iterations=r.get("iterations", 1), query_used=r.get("query_used", req.question),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# POST /query/stream
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.post("/query/stream")
 async def query_stream(req: QueryRequest):
@@ -224,7 +222,6 @@ async def query_stream(req: QueryRequest):
 
     def generate():
         try:
-            # Resolve collection: try as ID first, fall back to name (for legacy)
             def resolve_collection(cid: str) -> str:
                 meta = collections_store.get_collection_meta(cid)
                 return meta["id"] if meta else cid
@@ -240,125 +237,79 @@ async def query_stream(req: QueryRequest):
             params = _resolve_params(req, col_config)
             llm, provider_info, temperature = _resolve_llm(req)
             embedding_overrides = get_embedding_overrides(target_collections)
-            col_embedding = embedding_overrides.get(collection) or next(iter(embedding_overrides.values()))
 
-            logger.info("Query stream: collections=%s, min_score=%.2f, search_mode=%s, sparse_llm_tokenize=%s",
-                         target_collections, params["min_score"], params["search_mode"], params["sparse_llm_tokenize"])
+            logger.info("Query stream: collections=%s use_agent=%s", target_collections, params["use_agent"])
 
-            is_parent_child = col_config.get("chunk_mode") == "parent_child"
-            reranker = services.reranker if (params["use_reranker"] and services.reranker and services.reranker.provider) else None
+            if params["use_agent"]:
+                # Agentic mode — use AgenticQueryService.run_stream style
+                if not services.agentic_query:
+                    yield f"data: {json.dumps({'type': 'error', 'content': 'Agentic query service not available'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    return
 
-            if is_parent_child and not params["agent_enabled"]:
-                chunks = retrieve_parent_child_multi(
-                    req.question, target_collections, params["top_k"],
-                    embedding_overrides=embedding_overrides,
-                    min_score=params["min_score"],
-                    reranker=reranker,
+                result = services.agentic_query.run(
+                    req.question, collections=target_collections, generate_answer=True,
+                    top_k=params["top_k"],
+                    rerank_enabled=True,
                     rerank_top_k=params["rerank_top_k"],
-                    retriever=services.retriever,
                     search_mode=params["search_mode"],
-                    llm=llm if params["sparse_llm_tokenize"] else None,
-                )
-                context = build_context(chunks)
-                sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
-                meta = {
-                    "type": "meta", "sources": sources, "iterations": 1,
-                    "query_used": req.question, "mode": "parent-child", "agent_active": False,
-                    "provider": provider_info["name"], "model": provider_info["model"],
-                    "search_mode": params["search_mode"],
-                }
-                yield f"data: {json.dumps(meta)}\n\n"
-                answer_parts = []
-                for token in llm.generate_stream(f"Answer based on context:\n{context}\n\nQuestion: {req.question}", temperature=temperature):
-                    answer_parts.append(token)
-                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-                note = _multi_collection_note(sources)
-                if note:
-                    answer_parts.append(note)
-                    yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
-                _save_history(req.question, "".join(answer_parts), req.collection, sources)
-
-            elif params["agent_enabled"]:
-                agent = AgenticRAG(
-                    llm=llm, retriever=services.retriever,
-                    reranker=reranker,
-                    rerank_top_k=params["rerank_top_k"],
+                    min_score=params["min_score"],
                     max_iterations=params["max_iterations"],
-                    embedding_overrides=embedding_overrides,
-                    search_mode=params["search_mode"],
-                    min_score=params["min_score"],
-                    db=services.db,
-                    temperature=temperature,
+                    sparse_llm_tokenize=params["sparse_llm_tokenize"],
                 )
-                # Send provider info upfront for the thinking steps UI
-                info = {
-                    "type": "info",
-                    "provider": provider_info["name"],
-                    "model": provider_info["model"],
-                    "search_mode": params["search_mode"],
-                    "mode": "agentic",
-                    "max_iterations": params["max_iterations"],
-                }
-                yield f"data: {json.dumps(info)}\n\n"
-
-                gen = agent.run_stream(query=req.question, collections=target_collections, top_k=params["top_k"])
-                for first, second in gen:
-                    if isinstance(first, dict):
-                        yield f"data: {json.dumps(first)}\n\n"
-                        continue
-                    result = first
-                    stream = second
-                    meta = {
-                        "type": "meta", "sources": result.sources, "iterations": result.iterations,
-                        "query_used": result.query_used, "mode": "agentic", "agent_active": True,
-                        "provider": provider_info["name"], "model": provider_info["model"],
-                        "search_mode": params["search_mode"],
-                    }
-                    yield f"data: {json.dumps(meta)}\n\n"
-                    if result.answer:
-                        note = _multi_collection_note(result.sources)
-                        answer_text = result.answer + note
-                        yield f"data: {json.dumps({'type': 'token', 'content': answer_text})}\n\n"
-                        _save_history(req.question, answer_text, req.collection, result.sources)
-                    else:
-                        answer_parts = []
-                        for token in stream:
-                            answer_parts.append(token)
-                            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-                        note = _multi_collection_note(result.sources)
-                        if note:
-                            answer_parts.append(note)
-                            yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
-                        _save_history(req.question, "".join(answer_parts), req.collection, result.sources)
-
-            else:
-                chunks = retrieve_standard(
-                    req.question, target_collections, params["top_k"],
-                    embedding_overrides=embedding_overrides,
-                    search_mode=params["search_mode"],
-                    min_score=params["min_score"],
-                    reranker=reranker,
-                    rerank_top_k=params["rerank_top_k"],
-                    llm=llm if params["sparse_llm_tokenize"] else None,
-                )
-                context = build_context(chunks)
-                sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in chunks]
+                sources = [
+                    {"text": c.text, "score": c.score, "metadata": c.metadata}
+                    for c in (result.all_chunks or [])
+                ]
                 meta = {
-                    "type": "meta", "sources": sources, "iterations": 1,
-                    "query_used": req.question, "mode": "standard", "agent_active": False,
+                    "type": "meta", "sources": sources,
+                    "iterations": 0,
+                    "query_used": req.question,
+                    "mode": "agentic", "agent_active": True,
                     "provider": provider_info["name"], "model": provider_info["model"],
                     "search_mode": params["search_mode"],
                 }
                 yield f"data: {json.dumps(meta)}\n\n"
-                answer_parts = []
-                for token in llm.generate_stream(f"Answer based on context:\n{context}\n\nQuestion: {req.question}", temperature=temperature):
-                    answer_parts.append(token)
+                if result.answer:
+                    note = _multi_collection_note(sources)
+                    yield f"data: {json.dumps({'type': 'token', 'content': result.answer})}\n\n"
+                    if note:
+                        yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
+                    _save_history(req.question, result.answer + (note if note else ""), req.collection, sources)
+            else:
+                # Direct mode
+                if not services.direct_query:
+                    yield f"data: {json.dumps({'type': 'error', 'content': 'Direct query module not available'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    return
+
+                dq_result = services.direct_query.retrieve(
+                    req.question, target_collections, top_k=params["top_k"],
+                    search_mode=params["search_mode"],
+                    rerank_enabled=params["use_reranker"],
+                    rerank_top_k=params["rerank_top_k"],
+                    min_score=params["min_score"],
+                    sparse_llm_tokenize=params["sparse_llm_tokenize"],
+                    embedding_overrides=embedding_overrides,
+                    llm_for_sparse=llm if params["sparse_llm_tokenize"] else None,
+                    generate_answer=True,
+                )
+                sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in dq_result.chunks]
+                meta = {
+                    "type": "meta", "sources": sources, "iterations": 1,
+                    "query_used": req.question, "mode": "direct", "agent_active": False,
+                    "provider": provider_info["name"], "model": provider_info["model"],
+                    "search_mode": params["search_mode"],
+                }
+                yield f"data: {json.dumps(meta)}\n\n"
+                answer = dq_result.answer or ""
+                # Stream pre-generated answer token by token
+                for token in answer:
                     yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
                 note = _multi_collection_note(sources)
                 if note:
-                    answer_parts.append(note)
                     yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
-                _save_history(req.question, "".join(answer_parts), req.collection, sources)
+                _save_history(req.question, answer, req.collection, sources)
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
@@ -366,6 +317,10 @@ async def query_stream(req: QueryRequest):
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# GET /history
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.get("/history")
 def get_history(limit: int = 50):

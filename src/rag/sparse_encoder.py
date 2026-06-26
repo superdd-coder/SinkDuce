@@ -68,6 +68,7 @@ def preprocess_query_for_sparse(
             PREPROCESS_SPARSE_QUERY_USER.format(query=query),
             system=PREPROCESS_SPARSE_QUERY_SYSTEM,
             temperature=temperature if temperature is not None else 0.0,
+            max_tokens=512, thinking=False,
         ).strip()
 
         result = json.loads(raw)

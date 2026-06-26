@@ -73,109 +73,30 @@ GRADE_PART2_USER = """\
 # ══════════════════════════════════════════════════════════════════════════
 
 REWRITE_SYSTEM = """\
-You are a search query optimizer for a vector database. Given the original user question,
-an analysis of what information is still missing, a summary of what we already know,
-and a list of previously tried queries that did NOT return sufficient results,
-generate a brand new search query.
+You are a search query optimizer. Given the original question, the broader task context,
+what we already know, what is still missing, and previously tried queries that returned
+nothing useful, write a new search query targeting the missing information.
 
-Guidelines:
-1. Target the missing information identified in the gap analysis
-2. Use completely different keywords and perspectives than all previous queries
-3. Be specific and searchable — include key terms, avoid vague language
-4. Output a single search query, NOT a full question
+- Use the task context to understand the broader goal when rewriting.
+- Write a complete, grammatical sentence or question — not a list of keywords.
+- Use different wording and perspective than all previous queries.
+- If the gap mentions specific missing details, include them naturally in the query.
 
-Respond with ONLY a JSON object (no markdown fences, no extra text):
-{
-  "new_query": "your new search query here"
-}"""
+Respond with ONLY a JSON object:
+{"new_query": "your new query here"}"""
 
 REWRITE_USER = """\
-【Original Question】: {original_query}
+Original question: {original_query}
+Task context: {task_query}
 
-【Information Already Known】: {retained_info}
+Already known: {retained_info}
 
-【Information Still Missing】: {gap_analysis}
+Still missing: {gap_analysis}
 
-【Previously Tried Queries (all failed)】:
-{history_queries}
+Previously tried (all failed): {history_queries}
 
-Generate a new search query targeting the missing information:"""
-
-# ══════════════════════════════════════════════════════════════════════════
-# Node 4: Decompose Query — break into sub-questions
-# ══════════════════════════════════════════════════════════════════════════
-
-DECOMPOSE_SYSTEM = """\
-You are a query decomposition expert. Given a complex question, a summary of what we
-already know, and an analysis of what information is still missing, break the question
-into 2-3 focused sub-questions.
-
-Each sub-question should:
-- Be self-contained and answerable independently through document retrieval
-- Target a specific aspect or gap in the current information
-- Together cover the missing aspects of the original question
-
-Respond with ONLY a JSON array of strings (no markdown fences, no extra text):
-["sub-question 1", "sub-question 2", "sub-question 3"]"""
-
-DECOMPOSE_USER = """\
-【Original Question】: {original_query}
-
-【Information Already Known】: {retained_info}
-
-【Missing Information Analysis】: {gap_analysis}
-
-Break down into focused sub-questions:"""
+New search query:"""
 
 # ══════════════════════════════════════════════════════════════════════════
-# Node 5: Sub-query Grade — lighter evaluation per sub-question (no split)
+# Deprecated prompts removed — decompose now lives in src/rag/decomposer.py
 # ══════════════════════════════════════════════════════════════════════════
-
-SUB_GRADE_SYSTEM = """\
-You are evaluating search results for a specific sub-question. Determine which chunks
-are helpful for answering the sub-question in service of the overall question.
-
-A chunk is helpful if it provides concrete, specific information relevant to the sub-question.
-Do NOT mark chunks as relevant just because they share a topic — they must contain useful details.
-
-Respond with ONLY a JSON object (no markdown fences, no extra text):
-{
-  "reasoning": "brief analysis of which chunks help and why",
-  "relevant_indices": [0, 2]
-}"""
-
-SUB_GRADE_USER = """\
-【Overall Question】: {original_query}
-
-【Sub-question to Answer】: {sub_query}
-
-【Candidate Chunks】:
-{chunks_text}"""
-
-# ══════════════════════════════════════════════════════════════════════════
-# Node 6: Generate Answer — synthesize final response
-# ══════════════════════════════════════════════════════════════════════════
-
-GENERATE_SYSTEM = """\
-You are a rigorous intelligent assistant that answers questions based ONLY on an internal knowledge base.
-
-【Rules】
-1. Answer ONLY using the provided context — never use your training data to fabricate answers
-2. If the context only covers part of the question, answer what you can, then clearly state: "However, about [missing part], the knowledge base does not contain relevant information."
-3. If the context is unrelated to the question, state that you cannot answer
-4. Be concise, accurate, and cite specific information from the context
-5. When the context contains source metadata, mention which document/source provided the key information
-6. When chunks originate from DIFFERENT collections (databases), information may overlap or
-   conflict across collection boundaries. Synthesize carefully and note which collection key
-   facts come from. If a chunk's header shows a different collection, treat it as a separate
-   information source that may not be consistent with others."""
-
-GENERATE_USER = """\
-【Information Summary】
-{retained_info}
-
-【Detailed Context from Documents】
-{context}
-
-【Original Question】
-{question}"""

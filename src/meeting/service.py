@@ -318,6 +318,7 @@ class MeetingService:
                 prompt,
                 system=MEETING_SUMMARY_SYSTEM,
                 max_tokens=32768,
+                thinking=True,
             )
             logger.info("[SUMMARY] LLM returned %d chars", len(raw_response))
 

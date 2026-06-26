@@ -11,7 +11,12 @@ from src.providers.reranker import create_reranker_provider
 from src.providers.cache import get_or_create as cached_provider
 from src.rag.retriever import Retriever
 from src.rag.reranker import Reranker
-from src.rag.agent import AgenticRAG
+from src.rag.direct_query import DirectQueryModule
+from src.rag.catalog import CollectionCatalog
+from src.rag.rewrite_loop import RewriteLoop
+from src.rag.decomposer import Decomposer
+from src.rag.aggregator import Aggregator
+from src.rag.agentic_query import AgenticQueryService
 from src.rag.contextual import ContextualRetrieval
 from src.rag.chunker import TextChunker, ParagraphChunker
 
@@ -164,7 +169,12 @@ class Services:
     reranker_provider = None
     retriever: Retriever = None
     reranker: Reranker = None
-    agentic_rag: AgenticRAG = None
+    direct_query: DirectQueryModule = None
+    rewrite_loop: RewriteLoop = None
+    catalog: CollectionCatalog = None
+    decomposer: Decomposer = None
+    aggregator: Aggregator = None
+    agentic_query: AgenticQueryService = None
     contextual: ContextualRetrieval = None
     chunker: TextChunker = None
 
@@ -224,8 +234,8 @@ def init_services():
     # Reranker provider — only from user config
     rerank_cfg = config.rerank.default
     if rerank_cfg:
-        logger.info("Reranker config found: name=%s, provider=%s, is_default=%s",
-                     rerank_cfg.name, rerank_cfg.provider, rerank_cfg.is_default)
+        logger.info("Reranker config found: name=%s, provider=%s, model=%s, is_default=%s",
+                     rerank_cfg.name, rerank_cfg.provider, rerank_cfg.model, rerank_cfg.is_default)
     else:
         logger.warning("No default reranker provider in config (providers=%d)",
                        len(config.rerank.providers))
@@ -258,18 +268,42 @@ def init_services():
 
     # LLM + embedding dependent services
     if services.llm and services.retriever:
-        services.agentic_rag = AgenticRAG(
-            llm=services.llm,
+        services.direct_query = DirectQueryModule(
             retriever=services.retriever,
+            db=services.db,
             reranker=services.reranker,
-            max_iterations=3,
+            llm=services.llm,
+        )
+        services.rewrite_loop = RewriteLoop(
+            direct_module=services.direct_query,
+            llm=services.llm,
+            reranker=services.reranker,
+        )
+        services.catalog = CollectionCatalog(
+            db=services.db,
+            llm=services.llm,
+        )
+        services.decomposer = Decomposer(llm=services.llm)
+        services.aggregator = Aggregator(llm=services.llm)
+        services.agentic_query = AgenticQueryService(
+            direct_module=services.direct_query,
+            rewrite_loop=services.rewrite_loop,
+            catalog=services.catalog,
+            decomposer=services.decomposer,
+            aggregator=services.aggregator,
+            llm=services.llm,
         )
         services.contextual = ContextualRetrieval(
             llm=services.llm,
             context_window=1,
         )
     else:
-        services.agentic_rag = None
+        services.direct_query = None
+        services.rewrite_loop = None
+        services.catalog = None
+        services.decomposer = None
+        services.aggregator = None
+        services.agentic_query = None
         services.contextual = None
 
     # Clean up inactive transcription providers from cache

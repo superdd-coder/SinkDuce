@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 
-from src.tasks.task_manager import Task
+from src.tasks.task_manager import Task, task_manager
 from src.services import services
 from src.parsers import parse_file
 from src.parsers.mineru_parser import parse_with_mineru, MINERU_SUPPORTED_EXTENSIONS, MinerUError
@@ -26,49 +26,226 @@ logger = logging.getLogger(__name__)
 # but different files can be at different stages concurrently.
 # Use threading.Lock for reliable cross-thread synchronization.
 _enrich_lock = threading.Lock()
-_embed_lock = threading.Lock()
-
-# Separate thread pool for CPU-intensive operations (embedding, parsing)
-# This prevents embedding tasks from blocking the main async event loop
+_embed_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="embed-worker")
 _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker")
 
 
+class _EmbedBatcher:
+    """Collects ready chunks, assembles enriched text, and submits batches to the
+    shared embedding executor as soon as 10 chunks accumulate.  Chunks that arrive
+    before the summary is available are queued and flushed once ``set_summary()``
+    is called.
+    """
+
+    def __init__(self, embedding, *, total_chunks: int = 0, on_progress=None):
+        self._embedding = embedding
+        self._lock = threading.Lock()
+        self._buffer: list[str] = []
+        self._all_texts: list[str] = []
+        self._futures: list[tuple] = []          # (future, batch_texts, indices) for retry
+        self._summary: str | None = None
+        self._pending: list[tuple] = []          # (chunk, context) waiting for summary
+        self._assembled = 0
+        self._total = total_chunks
+        self._on_progress = on_progress
+
+    def set_summary(self, summary: str):
+        with self._lock:
+            self._summary = summary
+            for chunk, ctx in self._pending:
+                self._assemble_and_buffer(chunk, ctx)
+            self._pending.clear()
+
+    def on_ready(self, chunk, context: str):
+        # Parent chunks are never searched — skip embedding
+        if chunk.chunk_type == "parent":
+            return
+        with self._lock:
+            if self._summary is None:
+                self._pending.append((chunk, context))
+                return
+            self._assemble_and_buffer(chunk, context)
+
+    def _assemble_and_buffer(self, chunk, context: str):
+        idx = chunk.metadata.get("_embed_idx", 0)
+        text = _build_enriched_text(chunk)
+        self._buffer.append((idx, text))
+        self._all_texts.append(text)
+        self._assembled += 1
+        if self._on_progress and self._total:
+            self._on_progress(self._assembled, self._total)
+        if len(self._buffer) >= 10:
+            self._submit_batch()
+
+    def _submit_batch(self):
+        from src.tasks.task_manager import check_cancelled
+        check_cancelled()
+        batch_items = self._buffer[:10]
+        self._buffer = self._buffer[10:]
+        indices = [i for i, _t in batch_items]
+        batch_texts = [t for _i, t in batch_items]
+        logger.info("[EmbedBatcher] submitting batch of %d (assembled=%d/%d)",
+                    len(batch_texts), self._assembled, self._total)
+        f = _embed_executor.submit(self._embedding.embed_texts, batch_texts)
+        self._futures.append((f, batch_texts, indices))
+
+    def flush(self):
+        """Submit any remaining <10 chunk batch."""
+        with self._lock:
+            if self._buffer:
+                self._submit_batch()
+
+    def get_all_texts(self) -> list[str]:
+        """Return snapshot of all assembled texts for sparse encoding."""
+        with self._lock:
+            return list(self._all_texts)
+
+    def wait_all(self, chunks: list = None) -> list[list[float]]:
+        """Wait for all submitted batches, retrying up to 3 times with 5s delay.
+
+        Returns flat list of embeddings matching *chunks* order.  Parent chunks
+        are filled with zero vectors since they're never searched directly.
+        """
+        import time as _time
+        from src.tasks.task_manager import check_cancelled
+        dims = self._embedding.dimensions
+        zero = [0.0] * dims
+        # Collect (idx, embedding) pairs from all batches
+        pairs: dict[int, list[float]] = {}
+        for i, (f, batch, indices) in enumerate(self._futures):
+            check_cancelled()
+            try:
+                embs = f.result()
+            except Exception:
+                logger.warning("[EmbedBatcher] batch %d failed, retrying (%d texts)", i, len(batch))
+                for attempt in range(3):
+                    _time.sleep(5)
+                    try:
+                        embs = self._embedding.embed_texts(batch)
+                        logger.info("[EmbedBatcher] batch %d retry %d ok", i, attempt + 1)
+                        break
+                    except Exception:
+                        logger.warning("[EmbedBatcher] batch %d retry %d/%d failed", i, attempt + 1, 3)
+                else:
+                    logger.error("[EmbedBatcher] batch %d permanently failed (%d texts), "
+                                 "using zero vectors", i, len(batch))
+                    embs = [zero] * len(batch)
+            for j, emb in enumerate(embs):
+                pairs[indices[j]] = emb
+        # Build result matching chunk list order
+        if chunks:
+            return [pairs.get(c.metadata.get("_embed_idx", 0), zero) for c in chunks]
+        # Fallback: sort by index
+        return [emb for _idx, emb in sorted(pairs.items())]
+
+
 def _get_enriching_llm(config: dict):
-    """Get LLM for contextual enrichment. Uses per-collection config if set, else global."""
+    """Get LLM for contextual enrichment.
+
+    Resolution: per-collection override → global Settings default → system default LLM.
+    """
     from src.providers.llm import create_llm_for_provider
     from src.config import get_config
+    cfg = get_config()
+
+    # 1. Per-collection override (collection-config.tsx)
     provider_id = config.get("enriching_llm_provider")
     if provider_id:
-        for p in get_config().llm.providers:
+        for p in cfg.llm.providers:
             if p.id == provider_id:
                 model = config.get("enriching_llm_model")
                 return create_llm_for_provider(p, model=model)
-    # Fall back to default provider from config
-    cfg = get_config()
+
+    # 2. Global enrichment model (Settings → Advanced → Enrichment → Model)
+    enrich_model = cfg.enrichment.enrichment_model
+    if enrich_model:
+        for p in cfg.llm.providers:
+            if p.id == enrich_model:
+                return create_llm_for_provider(p)
+
+    # 3. System default LLM
     if cfg.llm.providers:
         default_p = next((p for p in cfg.llm.providers if p.is_default), cfg.llm.providers[0])
         return create_llm_for_provider(default_p)
     return services.llm
 
 
-def _do_enrich(chunks, doc, config):
+def _do_enrich(chunks, doc, config, collection_id: str = "", *,
+                on_summary=None, on_chunk_ready=None):
     """Run contextual enrichment (blocking). Must be called with _enrich_lock held."""
     enriching_llm = _get_enriching_llm(config)
     ctx_window = config.get("contextual_window", 1)
     from src.rag.contextual import ContextualRetrieval
     contextual = ContextualRetrieval(llm=enriching_llm, context_window=ctx_window)
+    kwargs = dict(on_summary=on_summary, on_chunk_ready=on_chunk_ready)
     if config.get("chunk_mode") == "parent_child":
         parent_chunks = [c for c in chunks if c.chunk_type == "parent"]
         child_chunks = [c for c in chunks if c.chunk_type == "child"]
-        if len(parent_chunks) <= 200:
-            parent_chunks = contextual.add_context(parent_chunks, full_document=doc.content)
-        if len(child_chunks) <= 500:
-            child_chunks = contextual.add_context(child_chunks, full_document=doc.content)
-        return parent_chunks + child_chunks
+        # Children first — generates summary in parallel with contexts
+        child_chunks = contextual.add_context(child_chunks, full_document=doc.content,
+                                               on_summary=on_summary,
+                                               on_chunk_ready=on_chunk_ready)
+        # Parents reuse children's summary if available, else generate their own
+        shared_summary = (child_chunks[0].metadata.get("summary", "") if child_chunks else "")
+        shared_structured = (child_chunks[0].metadata.get("_structured_summary", "") if child_chunks else "")
+        parent_chunks = contextual.add_context(parent_chunks, full_document=doc.content,
+                                                summary=shared_summary,
+                                                structured_summary=shared_structured,
+                                                on_chunk_ready=on_chunk_ready)
+        enriched = parent_chunks + child_chunks
     else:
-        if len(chunks) <= 200:
-            return contextual.add_context(chunks, full_document=doc.content)
-        return chunks
+        enriched = contextual.add_context(chunks, full_document=doc.content, **kwargs)
+
+    # Store structured summary if enrichment produced one
+    _store_structured_summary(enriched, doc, config, collection_id)
+    return enriched
+
+
+def _store_structured_summary(enriched_chunks, doc, config, collection_id: str):
+    """If enrichment produced a structured summary, store it via SummaryManager.
+
+    Reads ``_structured_summary`` from chunk metadata (set by add_context),
+    parses it, stores it with *include_in_summary=False*, then cleans up
+    the temporary metadata field so it doesn't leak into Qdrant.
+    """
+    structured_raw = None
+    for c in enriched_chunks:
+        s = c.metadata.pop("_structured_summary", None)
+        if s:
+            structured_raw = s
+            break
+
+    if not structured_raw:
+        logger.info("[ENRICH] No structured summary in chunks — LLM may have returned empty")
+        return
+
+    try:
+        from src.rag.contextual import _parse_structured_summary
+        from src.api.routes.info import _get_summary_manager
+
+        parsed = _parse_structured_summary(structured_raw)
+        data = parsed.get("data", [])
+        facts = parsed.get("facts", [])
+        insights = parsed.get("insights", [])
+
+        if not data and not facts and not insights:
+            logger.info("[ENRICH] Structured summary parsed but all categories empty, skipping store")
+            return
+
+        # Always use chunk metadata "source" — it's the sanitized filename.
+        # doc.source (if it exists) may be a full path, which breaks
+        # doc_summary_handler's file lookup.
+        source = (
+            enriched_chunks[0].metadata.get("source", "") if enriched_chunks else ""
+        )
+
+        sm = _get_summary_manager()
+        sm.ensure_collection()
+        sm.store_doc_summary(collection_id, source, data, facts, insights, include_in_summary=False)
+        logger.info("[ENRICH] Stored structured summary col=%r src=%r (data=%d, facts=%d, insights=%d)",
+                    collection_id, source, len(data), len(facts), len(insights))
+    except Exception:
+        logger.exception("[ENRICH] Failed to store structured summary")
 
 
 def _build_enriched_text(chunk) -> str:
@@ -89,11 +266,22 @@ def _build_enriched_text(chunk) -> str:
     return "\n".join(parts)
 
 
-def _do_embed(chunks, config, collection):
-    """Run embedding (blocking). Must be called with _embed_lock held."""
-    embedding = get_collection_embedding(config, collection)
-    texts = [_build_enriched_text(c) for c in chunks]
-    return embedding.embed_texts(texts)
+def _do_sparse(texts: list[str], collection: str):
+    """Run sparse encoding on assembled chunk texts. Returns sparse vectors or None."""
+    if not texts:
+        return None
+    try:
+        from src.rag.sparse_encoder import SparseEncoder
+        encoder = SparseEncoder()
+        vocab_path = Path("data") / collection / "sparse_vocab.json"
+        if vocab_path.exists():
+            encoder.load(str(vocab_path))
+        sparse_vectors = encoder.encode(texts)
+        encoder.save(str(vocab_path))
+        return sparse_vectors
+    except Exception:
+        logger.warning("[Sparse] encoding failed for collection=%s", collection, exc_info=True)
+        return None
 
 
 # ── Consolidation ──────────────────────────────────────────
@@ -245,7 +433,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     enriching_llm = _get_enriching_llm(config)
     loop = asyncio.get_running_loop()
     raw = await loop.run_in_executor(
-        None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text))
+        None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, thinking=True)
     )
     logger.info("[CONSOLIDATE] LLM returned %d chars", len(raw))
     collection_summary, conflicts = parse_consolidation_response(raw)
@@ -293,6 +481,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
 
 async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None) -> dict[str, Any]:
     """处理文件上传任务 - 使用流水线队列控制并发"""
+    from src.tasks.task_manager import set_current_task, clear_current_task, check_cancelled
 
     def update(progress: float, msg: str):
         task.progress = progress
@@ -301,6 +490,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
     loop = asyncio.get_running_loop()
 
     try:
+        set_current_task(task.id)
         t_start = time.time()
         path = Path(file_path)
         if not path.is_file():
@@ -423,40 +613,58 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         # Use separate CPU thread pool for parsing/chunking
         doc, chunks, config = await loop.run_in_executor(_cpu_executor, _parse_and_chunk)
 
-        # ── Stage 2: Enriching (serialized via _enrich_lock) ──
+        # ── Stage 2+3: Enriching + Embedding (pipelined) ──
         t_ctx = time.time()
         contextual_enabled = config.get("contextual_enabled", True)
         if contextual_enabled:
-            update(50, "Waiting for enriching slot...")
+            embedding = get_collection_embedding(config, collection)
+            # Only count non-parent chunks for progress (parents skip embed)
+            embed_count = len([c for c in chunks if c.chunk_type != "parent"])
+            batcher = _EmbedBatcher(embedding, total_chunks=embed_count,
+                                    on_progress=lambda done, total:
+                                        update(50 + int(30 * done / total),
+                                               f"Enrich+Embed {done}/{total} chunks"))
 
-            def _enrich_with_lock():
+            # Pre-number chunks so embeddings map back to list position
+            for i, c in enumerate(chunks):
+                c.metadata["_embed_idx"] = i
+
+            def _enrich_and_embed():
                 _enrich_lock.acquire()
                 try:
-                    update(50, "Enriching with context...")
-                    return _do_enrich(chunks, doc, config)
+                    update(50, f"Enriching with context ({len(chunks)} chunks)...")
+                    return _do_enrich(chunks, doc, config, collection,
+                                      on_summary=batcher.set_summary,
+                                      on_chunk_ready=batcher.on_ready)
                 finally:
                     _enrich_lock.release()
 
-            # Use separate CPU thread pool for enriching
-            chunks = await loop.run_in_executor(_cpu_executor, _enrich_with_lock)
+            chunks = await loop.run_in_executor(_cpu_executor, _enrich_and_embed)
 
-        logger.info("[%s] Enrichment done in %.1fs (%d chunks)",
-                    filename_param, time.time() - t_ctx, len(chunks))
+            # Flush remaining embed batches; start sparse in parallel
+            batcher.flush()
+            if batcher._futures:
+                sparse_future = _cpu_executor.submit(_do_sparse, batcher.get_all_texts(), collection)
+                embeddings = batcher.wait_all(chunks)
+                sparse_vectors = sparse_future.result()
+            else:
+                # Enrichment skipped (e.g. >200 chunks) — embed all at once
+                logger.info("[%s] enrichment skipped, embedding all %d chunks inline",
+                            filename_param, len(chunks))
+                texts = [_build_enriched_text(c) for c in chunks]
+                embeddings = embedding.embed_texts(texts)
+                sparse_vectors = _do_sparse(texts, collection)
 
-        # ── Stage 3: Embedding (serialized via _embed_lock) ──
+        else:
+            # No enrichment — embed + sparse inline
+            embedding = get_collection_embedding(config, collection)
+            texts = [_build_enriched_text(c) for c in chunks]
+            embeddings = embedding.embed_texts(texts)
+            sparse_vectors = _do_sparse(texts, collection)
+
         t_emb = time.time()
-        update(70, "Waiting for embedding slot...")
-
-        def _embed_with_lock():
-            _embed_lock.acquire()
-            try:
-                update(70, "Generating embeddings...")
-                return _do_embed(chunks, config, collection)
-            finally:
-                _embed_lock.release()
-
-        # Use separate CPU thread pool for embedding
-        embeddings = await loop.run_in_executor(_cpu_executor, _embed_with_lock)
+        logger.info("[%s] Enrich+Embed done in %.1fs (%d chunks)",
+                    filename_param, t_emb - t_ctx, len(chunks))
 
         # ── Stage 4: Storage ──
         def _do_store():
@@ -481,55 +689,6 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 payloads.append(payload)
             logger.info("[%s] Embedding done in %.1fs", filename_param, time.time() - t_emb)
 
-            # ── Sparse encoding ──
-            sparse_vectors = None
-            try:
-                from src.rag.sparse_encoder import SparseEncoder
-                encoder = SparseEncoder()
-                vocab_path = Path("data") / collection / "sparse_vocab.json"
-                if vocab_path.exists():
-                    fsize = vocab_path.stat().st_size
-                    encoder.load(str(vocab_path))
-                    logger.info(
-                        "[HYBRID-VERIFY] _do_store: loaded existing vocab file=%s size=%d "
-                        "terms=%d docs=%d",
-                        vocab_path, fsize, len(encoder.term_to_id), encoder._doc_count,
-                    )
-                else:
-                    logger.info(
-                        "[HYBRID-VERIFY] _do_store: no vocab yet, building from scratch "
-                        "file=%s",
-                        vocab_path,
-                    )
-                texts = [_build_enriched_text(c) for c in chunks]
-                t0 = time.time()
-                sparse_vectors = encoder.encode(texts)
-                t_sparse = time.time() - t0
-                # Log a sample of the first chunk's top BM25 terms
-                sample_info = ""
-                if sparse_vectors and sparse_vectors[0]:
-                    # Get term names for top-5 weighted term IDs
-                    id_to_term = {v: k for k, v in encoder.term_to_id.items()}
-                    top5 = sorted(sparse_vectors[0].items(), key=lambda x: x[1], reverse=True)[:5]
-                    top_terms = [f"{id_to_term.get(tid, '?')}({w:.2f})" for tid, w in top5]
-                    sample_info = f" top_terms=[{', '.join(top_terms)}]"
-                encoder.save(str(vocab_path))
-                # Show enriched text prefix for the first chunk
-                enriched_preview = texts[0][:200].replace("\n", "\\n") if texts else "N/A"
-                logger.info(
-                    "[HYBRID-VERIFY] _do_store: encoded %d vectors in %.2fs "
-                    "total_terms=%d vocab_size=%d avg_sparse_dim=%d%s "
-                    "enriched_text=%.200s",
-                    len(sparse_vectors), t_sparse,
-                    len(encoder.term_to_id),
-                    vocab_path.stat().st_size,
-                    sum(len(v) for v in sparse_vectors) // max(len(sparse_vectors), 1),
-                    sample_info,
-                    enriched_preview,
-                )
-            except Exception:
-                logger.warning("[%s] Sparse encoding failed, storing dense-only", filename_param, exc_info=True)
-
             t_store = time.time()
             services.db.upsert_points(
                 collection=collection, ids=ids, vectors=embeddings,
@@ -547,9 +706,27 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         await loop.run_in_executor(None, _do_store)
 
         update(100, f"Indexed {len(chunks)} chunks")
+
+        # ── Catalog coverage refresh ──────────────────────────────────
+        try:
+            if services.catalog:
+                remaining = len(task_manager.get_active_tasks(
+                    collection=collection, task_types=["upload", "doc_summary"],
+                )) - 1  # exclude self
+                if remaining <= 0:
+                    logger.info("[Coverage] TRIGGER by %r (last task for %s)", filename_param, collection)
+                    services.catalog.update_coverage(collection)
+                else:
+                    logger.info("[Coverage] SKIP by %r (%d other upload task(s) remain for %s)",
+                                filename_param, remaining, collection)
+        except Exception:
+            logger.exception("[Coverage] trigger failed for %r", filename_param)
+
+        clear_current_task()
         return {"message": "Done", "filename": filename_param, "chunks_count": len(chunks), "collection": collection}
 
     except Exception as e:
+        clear_current_task()
         raise Exception(f"Failed to process {filename_param}: {e}")
 
 
@@ -603,18 +780,31 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
             if f.name == source:
                 file_path = f
                 break
+
+    # Fall back to .parsed.txt if original file was deleted
+    if not file_path.exists():
+        parsed_path = upload_dir / (source + ".parsed.txt")
+        if parsed_path.exists():
+            file_path = parsed_path
+            logger.info("[DOC_SUMMARY] Using parsed text fallback: %s", parsed_path)
     if not file_path.exists():
         raise FileNotFoundError(f"Source file '{source}' not found in uploads")
 
     loop = asyncio.get_running_loop()
-    doc = await loop.run_in_executor(None, parse_file, file_path)
-    if not doc.content or not doc.content.strip():
+    # If using parsed text, read it directly instead of re-parsing
+    if file_path.suffix == ".txt" and file_path.name.endswith(".parsed.txt"):
+        doc_content = await loop.run_in_executor(None, file_path.read_text, "utf-8")
+        doc_content = doc_content.strip()
+    else:
+        doc = await loop.run_in_executor(None, parse_file, file_path)
+        doc_content = (doc.content or "").strip()
+    if not doc_content:
         raise ValueError("File has no extractable text content")
 
     config = services.db.get_collection_config(collection)
     enriching_llm = _get_enriching_llm(config)
     doc_summary = await loop.run_in_executor(
-        None, lambda: generate_structured_summary(enriching_llm, doc.content)
+        None, lambda: generate_structured_summary(enriching_llm, doc_content)
     )
     logger.info("[DOC_SUMMARY] Generated: data=%d, facts=%d, insights=%d",
                 len(doc_summary.get("data", [])), len(doc_summary.get("facts", [])), len(doc_summary.get("insights", [])))
@@ -634,5 +824,21 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     if counter >= config.get("summary_consolidate_threshold", 10):
         from src.tasks import task_manager as _tm
         _tm.create_task(filename=f"consolidate:{collection}", task_type="consolidate", collection=collection)
+
+    # ── Catalog coverage refresh ──────────────────────────────────
+    try:
+        if services.catalog:
+            from src.tasks.task_manager import task_manager as _tman
+            remaining = len(_tman.get_active_tasks(
+                collection=collection, task_types=["upload", "doc_summary"],
+            )) - 1  # exclude self
+            if remaining <= 0:
+                logger.info("[Coverage] TRIGGER by doc_summary %r (last task for %s)", source, collection)
+                services.catalog.update_coverage(collection)
+            else:
+                logger.info("[Coverage] DEFER doc_summary %r (%d remaining tasks, marking dirty)", source, remaining)
+                services.catalog.mark_dirty(collection)
+    except Exception:
+        logger.warning("[Coverage] refresh failed for %s", collection, exc_info=True)
 
     return {"message": "Summary generated", "source": source}

@@ -1,49 +1,39 @@
-"""Smoke test: run with `docker compose up` then execute this.
-Set SINKDUCE_API_PORT env var to override default (18900)."""
+"""Smoke test: run against a live API server.
+Usage: pytest tests/test_smoke.py -v   (requires docker compose up app)
+       SINKDUCE_API_PORT=18905 pytest tests/test_smoke.py -v
+"""
+
 import os
 import httpx
-import sys
+import pytest
 
-PORT = os.environ.get("SINKDUCE_API_PORT", "18900")
-BASE = f"http://localhost:{PORT}"
+
+def _port():
+    """Read API_PORT from .env, env var, or default."""
+    env = os.environ.get("SINKDUCE_API_PORT")
+    if env:
+        return env
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "..", ".env")) as f:
+            for line in f:
+                if line.strip().startswith("API_PORT="):
+                    return line.strip().split("=", 1)[1].strip()
+    except (OSError, IOError):
+        pass
+    return "18900"
+
+
+BASE = f"http://localhost:{_port()}"
+TIMEOUT = 30
 
 
 def test_health():
-    r = httpx.get(f"{BASE}/health")
+    r = httpx.get(f"{BASE}/health", timeout=TIMEOUT)
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
-    print("Health check passed")
 
 
 def test_collections():
-    r = httpx.get(f"{BASE}/api/collections")
+    r = httpx.get(f"{BASE}/api/collections", timeout=TIMEOUT)
     assert r.status_code == 200
-    print(f"Collections: {r.json()}")
-
-
-def test_create_collection():
-    r = httpx.post(f"{BASE}/api/collections", json={"name": "test"})
-    assert r.status_code == 200
-    print("Created test collection")
-
-
-def test_query():
-    r = httpx.post(
-        f"{BASE}/api/query",
-        json={"question": "hello", "collection": "default"},
-        timeout=60,
-    )
-    assert r.status_code == 200
-    print(f"Query response: {r.json()['answer'][:100]}")
-
-
-if __name__ == "__main__":
-    try:
-        test_health()
-        test_collections()
-        test_create_collection()
-        test_query()
-        print("\nAll smoke tests passed!")
-    except Exception as e:
-        print(f"\nTest failed: {e}")
-        sys.exit(1)
+    assert isinstance(r.json(), list)

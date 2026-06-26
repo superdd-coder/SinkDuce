@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -11,6 +12,28 @@ from typing import Any, Callable, Coroutine
 from datetime import datetime
 
 logger = logging.getLogger("task_manager")
+
+# Per-task cancellation events — checked by cooperative long-running operations
+_cancel_events: dict[str, threading.Event] = {}
+_current_task = threading.local()
+
+
+def set_current_task(task_id: str):
+    """Bind *task_id* to the calling thread so long-running ops can check cancellation."""
+    _current_task.value = task_id
+
+
+def clear_current_task():
+    _current_task.value = ""
+
+
+def check_cancelled():
+    """Raise if the current thread's task has been cancelled."""
+    tid = getattr(_current_task, "value", "")
+    if tid:
+        ev = _cancel_events.get(tid)
+        if ev and ev.is_set():
+            raise RuntimeError(f"Task {tid} cancelled")
 
 
 class TaskStatus(str, Enum):
@@ -56,40 +79,53 @@ class Task:
 
 
 class TaskManager:
-    """管理异步任务队列"""
+    """Async task queue with separate channels for upload and light tasks.
+
+    Uploads get a dedicated queue capped at 2-3 concurrent so parsing
+    runs in parallel while ``_enrich_lock`` serializes only enrichment.
+    Lightweight tasks share an unbounded concurrent general queue.
+    """
+
+    _UPLOAD_TYPES = {"upload"}
 
     def __init__(self, max_concurrent: int = 5, timeout: int = 3600):
         self.tasks: dict[str, Task] = {}
         self._task_args: dict[str, tuple[str, dict]] = {}  # task_id -> (task_type, kwargs)
         self._async_tasks: dict[str, asyncio.Task] = {}  # task_id -> asyncio.Task
-        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        self._upload_queue: asyncio.Queue = asyncio.Queue()   # serial, 1 at a time
+        self._general_queue: asyncio.Queue = asyncio.Queue()  # concurrent, up to max
         self.max_concurrent = max_concurrent
         self.timeout = timeout
-        self._running = 0
-        self._processor_task: asyncio.Task | None = None
+        self._general_running = 0
+        self._upload_running = 0
+        self._processors: list[asyncio.Task] = []
         self._handlers: dict[str, Callable[..., Coroutine]] = {}
 
     def register_handler(self, task_type: str, handler: Callable[..., Coroutine]):
-        """注册任务处理器"""
+        """Register a task handler."""
         self._handlers[task_type] = handler
 
     async def start(self):
-        """启动任务处理器"""
-        if self._processor_task is None:
-            self._processor_task = asyncio.create_task(self._process_queue())
+        """Start queue processors."""
+        if not self._processors:
+            self._processors = [
+                asyncio.create_task(self._process_upload_queue()),
+                asyncio.create_task(self._process_general_queue()),
+            ]
 
     async def stop(self):
-        """停止任务处理器"""
-        if self._processor_task:
-            self._processor_task.cancel()
+        """Stop all queue processors."""
+        for p in self._processors:
+            p.cancel()
+        for p in self._processors:
             try:
-                await self._processor_task
+                await p
             except asyncio.CancelledError:
                 pass
-            self._processor_task = None
+        self._processors.clear()
 
     def create_task(self, filename: str, task_type: str = "upload", collection: str = "default", **kwargs) -> Task:
-        """创建新任务"""
+        """Create and enqueue a new task."""
         task_id = str(uuid.uuid4())
         task = Task(
             id=task_id,
@@ -103,12 +139,20 @@ class TaskManager:
         return task
 
     def cancel_task(self, task_id: str) -> bool:
-        """取消正在运行或等待中的任务"""
+        """Cancel a pending or processing task.
+
+        Sets a cancellation event that long-running operations
+        (enrichment, embedding) check cooperatively.
+        """
         task = self.tasks.get(task_id)
         if not task:
             return False
         if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
             return False
+        # Signal cooperative cancellation
+        ev = _cancel_events.get(task_id)
+        if ev:
+            ev.set()
         atask = self._async_tasks.get(task_id)
         if atask and not atask.done():
             atask.cancel()
@@ -119,14 +163,14 @@ class TaskManager:
         return True
 
     def clear_completed_tasks(self) -> None:
-        """删除所有已完成或失败的任务"""
+        """Remove all completed or failed tasks."""
         to_remove = [tid for tid, t in self.tasks.items() if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED)]
         for tid in to_remove:
             del self.tasks[tid]
             self._task_args.pop(tid, None)
 
     def retry_task(self, task_id: str) -> Task | None:
-        """重新排队失败的任务"""
+        """Re-enqueue a failed task."""
         task = self.tasks.get(task_id)
         if not task or task.status != TaskStatus.FAILED:
             return None
@@ -134,7 +178,6 @@ class TaskManager:
         if not args:
             return None
         task_type, kwargs = args
-        # Reset task state
         task.status = TaskStatus.PENDING
         task.progress = 0.0
         task.message = "Re-queued"
@@ -146,45 +189,97 @@ class TaskManager:
         return task
 
     async def _enqueue_task(self, task_id: str, task_type: str, kwargs: dict):
-        """将任务加入队列"""
-        await self.queue.put((task_id, task_type, kwargs))
+        """Route task to the appropriate queue."""
+        if task_type in self._UPLOAD_TYPES:
+            await self._upload_queue.put((task_id, task_type, kwargs))
+        else:
+            await self._general_queue.put((task_id, task_type, kwargs))
 
-    async def _process_queue(self):
-        """处理任务队列"""
-        logger.info("Task queue processor started")
+    # ── Upload queue (limited concurrent) ──────────────────────────────
+
+    async def _process_upload_queue(self):
+        """Process uploads with limited concurrency.
+
+        Parsing overlaps across uploads; ``_enrich_lock`` serializes the
+        actual enrichment step so thread pools don't stack up.
+        """
+        logger.info("Upload queue processor started (max %d concurrent)", self.max_concurrent)
         while True:
             try:
-                # 等待任务
-                task_id, task_type, kwargs = await self.queue.get()
-                logger.info("Dequeued task %s type=%s", task_id, task_type)
+                task_id, task_type, kwargs = await self._upload_queue.get()
+                logger.info("Dequeued upload task %s", task_id)
 
-                # 检查并发限制
-                while self._running >= self.max_concurrent:
+                while self._upload_running >= self.max_concurrent:
                     await asyncio.sleep(0.1)
 
-                # 处理任务
-                self._running += 1
-                logger.info("Executing task %s (running=%d)", task_id, self._running)
-                atask = asyncio.create_task(self._execute_task(task_id, task_type, kwargs))
+                self._upload_running += 1
+                atask = asyncio.create_task(
+                    self._execute_upload_task(task_id, task_type, kwargs))
                 self._async_tasks[task_id] = atask
 
             except asyncio.CancelledError:
-                logger.info("Task queue processor cancelled")
+                logger.info("Upload queue processor cancelled")
                 break
             except Exception as e:
-                logger.error("Queue processor error: %s", e, exc_info=True)
+                logger.error("Upload queue processor error: %s", e, exc_info=True)
+
+    async def _execute_upload_task(self, task_id: str, task_type: str, kwargs: dict):
+        """Execute an upload, decrementing the upload counter on completion."""
+        try:
+            await self._execute_task(task_id, task_type, kwargs)
+        finally:
+            self._upload_running -= 1
+
+    # ── General queue (concurrent) ─────────────────────────────────────
+
+    async def _process_general_queue(self):
+        """Concurrent processor: up to max_concurrent tasks in parallel."""
+        logger.info("General queue processor started")
+        while True:
+            try:
+                task_id, task_type, kwargs = await self._general_queue.get()
+                logger.info("Dequeued general task %s type=%s", task_id, task_type)
+
+                while self._general_running >= self.max_concurrent:
+                    await asyncio.sleep(0.1)
+
+                self._general_running += 1
+                logger.info("Executing general task %s type=%s (running=%d)",
+                            task_id, task_type, self._general_running)
+                atask = asyncio.create_task(
+                    self._execute_general_task(task_id, task_type, kwargs))
+                self._async_tasks[task_id] = atask
+
+            except asyncio.CancelledError:
+                logger.info("General queue processor cancelled")
+                break
+            except Exception as e:
+                logger.error("General queue processor error: %s", e, exc_info=True)
+
+    async def _execute_general_task(self, task_id: str, task_type: str, kwargs: dict):
+        """Execute a general-queue task, tracking _general_running."""
+        try:
+            await self._execute_task(task_id, task_type, kwargs)
+        finally:
+            self._general_running -= 1
+
+    # ── Task execution ─────────────────────────────────────────────────
 
     async def _execute_task(self, task_id: str, task_type: str, kwargs: dict):
-        """执行单个任务（带超时）"""
+        """Execute a single task with timeout."""
         task = self.tasks.get(task_id)
         if not task:
-            self._running -= 1
             return
 
         task.status = TaskStatus.PROCESSING
         task.started_at = datetime.now()
         task.message = "Processing..."
-        logger.info("[TASK %s] Starting execution: type=%s kwargs=%s", task_id, task_type, {k: v for k, v in kwargs.items() if k != "file_path"})
+        # Create cancellation event for cooperative cancellation
+        cancel_event = threading.Event()
+        _cancel_events[task_id] = cancel_event
+        logger.info("[TASK %s] Starting execution: type=%s kwargs=%s",
+                    task_id, task_type,
+                    {k: v for k, v in kwargs.items() if k != "file_path"})
 
         try:
             handler = self._handlers.get(task_type)
@@ -224,7 +319,7 @@ class TaskManager:
 
         finally:
             self._async_tasks.pop(task_id, None)
-            self._running -= 1
+            _cancel_events.pop(task_id, None)
 
     def get_task(self, task_id: str) -> Task | None:
         """获取任务状态"""
@@ -251,8 +346,12 @@ class TaskManager:
             tasks = [t for t in tasks if t.collection == collection]
         return tasks
 
-    def get_active_tasks(self, collection: str | None = None, task_type: str | None = None) -> list[dict]:
-        """Get active (pending/processing) tasks with type info, optionally filtered by collection and type."""
+    def get_active_tasks(self, collection: str | None = None, task_type: str | None = None,
+                         task_types: list[str] | None = None) -> list[dict]:
+        """Get active (pending/processing) tasks, optionally filtered by collection and type(s).
+
+        Use ``task_types`` to match multiple types in one atomic scan.
+        """
         result = []
         for task_id, task in self.tasks.items():
             if task.status not in (TaskStatus.PENDING, TaskStatus.PROCESSING):
@@ -260,7 +359,10 @@ class TaskManager:
             if collection and task.collection != collection:
                 continue
             ttype, _ = self._task_args.get(task_id, ("unknown", {}))
-            if task_type and ttype != task_type:
+            if task_types:
+                if ttype not in task_types:
+                    continue
+            elif task_type and ttype != task_type:
                 continue
             result.append(task.to_dict_with_type(ttype))
         return result

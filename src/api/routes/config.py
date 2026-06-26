@@ -105,7 +105,7 @@ async def update_config(req: ConfigUpdateRequest):
 
     # Only allow setting declared Pydantic model fields
     allowed_keys = set(getattr(type(section_data), "model_fields", {}).keys())
-    _int_fields = {"dimensions", "batch_size", "top_k"}
+    _int_fields = {"dimensions", "batch_size", "top_k", "rerank_top_k", "max_parallel_queries", "max_parallel_context", "batch_poll_interval"}
     for key, value in req.data.items():
         if key not in allowed_keys:
             continue
@@ -367,7 +367,7 @@ async def add_llm_provider(provider: LLMProviderConfig):
 @router.put("/llm/providers/{provider_id}")
 async def update_llm_provider(provider_id: str, update: dict = Body()):
     config = get_config()
-    _int_fields = {"max_tokens", "max_concurrent_requests"}
+    _int_fields: set[str] = set()
     _bool_fields = {"is_default"}
     for i, p in enumerate(config.llm.providers):
         if p.id == provider_id:

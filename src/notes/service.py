@@ -90,7 +90,7 @@ def distill_note(collection: str, source_note_id: str, target_note_id: str) -> s
     logger.info("Generating distillation for %s (%d chars)", source_note_id, len(source_content))
     llm = get_llm()
     system_prompt, user_prompt = get_distillation_prompt(source_content)
-    result = llm.generate(user_prompt, system=system_prompt, max_tokens=4096)
+    result = llm.generate(user_prompt, system=system_prompt, max_tokens=4096, thinking=False)
 
     # Strip any preamble the LLM might add despite instructions
     result = result.strip()

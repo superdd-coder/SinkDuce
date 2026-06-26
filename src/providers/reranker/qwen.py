@@ -19,7 +19,7 @@ class QwenReranker(RerankerProvider):
         self._base_url = (config.base_url or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
 
     def rerank(self, query: str, documents: list[str], top_k: int = 5) -> list[tuple[int, float]]:
-        logger.info("Qwen rerank: %d docs, top_k=%d", len(documents), top_k)
+        logger.info("Qwen rerank: %d docs, top_k=%d, model=%s", len(documents), top_k, self._model)
         url = f"{self._base_url}/services/rerank/text-rerank/text-rerank"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -36,8 +36,13 @@ class QwenReranker(RerankerProvider):
             },
         }
         resp = httpx.post(url, json=payload, headers=headers, timeout=30)
-        resp.raise_for_status()
+        if not resp.is_success:
+            logger.error("Qwen rerank HTTP %d: %s", resp.status_code, resp.text[:500])
+            resp.raise_for_status()
         data = resp.json()
 
         results = data.get("output", {}).get("results", [])
+        if not results:
+            logger.warning("Qwen rerank returned 0 results, raw response: %s",
+                          json.dumps(data, ensure_ascii=False)[:500])
         return [(r["index"], r["relevance_score"]) for r in results]

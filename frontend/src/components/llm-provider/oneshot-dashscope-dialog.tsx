@@ -69,8 +69,6 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           model: llmModel.trim(),
           base_url: DASHSCOPE_BASE_URL,
           api_key: apiKey.trim(),
-          max_tokens: 4096,
-          max_concurrent_requests: 10,
           is_default: true,
           selected_models: selectedModels,
           default_model: llmModel.trim(),
