@@ -2,6 +2,7 @@
 **/*.pyc
 .git
 .gitignore
+.gitattributes
 *.md
 !README.md
 data/
@@ -13,3 +14,23 @@ frontend/.vite
 dist/
 build/
 tests/
+
+# Secrets
+.env
+.env.template
+
+# macOS junk
+**/.DS_Store
+
+# Dev tooling (not needed at runtime)
+.agents/
+.claude/
+.playwright-mcp/
+.github/
+DEVELOPMENT_DOC/
+skills-lock.json
+
+
+# Docker / CI files
+Dockerfile
+docker-compose*.yml
