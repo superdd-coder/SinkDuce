@@ -21,12 +21,11 @@ class LLMProviderConfig(BaseModel):
     model: str = "deepseek-chat"
     base_url: str = ""
     api_key: str = ""
-    max_tokens: int = 4096
-    max_concurrent_requests: int = 10
     is_default: bool = False
     selected_models: list[str] = []
     default_model: str = ""
     visual_model_ids: list[str] = []
+    supports_functions: bool = False
 
 
 class LLMConfig(BaseModel):
@@ -77,8 +76,29 @@ class ParsingConfig(BaseModel):
 
 
 class RAGConfig(BaseModel):
-    top_k: int = 10
+    """Agentic RAG defaults."""
+    top_k: int = 20
     rerank_top_k: int = 5
+    max_parallel_queries: int = 10
+    max_iterations: int = 8
+    default_search_mode: str = "hybrid"  # "dense" or "hybrid"
+    min_score: float = 0.0  # dense mode similarity threshold
+
+
+class DirectRAGConfig(BaseModel):
+    """Direct RAG defaults — used when Agentic is not enabled."""
+    top_k: int = 20
+    rerank_top_k: int = 5
+    default_search_mode: str = "hybrid"
+    use_reranker: bool = True
+    min_score: float = 0.0  # dense mode similarity threshold
+
+
+class EnrichmentConfig(BaseModel):
+    use_batch: bool = False
+    batch_poll_interval: int = 30
+    max_parallel_context: int = 50
+    enrichment_model: str = ""  # provider id for enrichment LLM; "" = use default LLM
 
 
 class QdrantConfig(BaseModel):
@@ -169,12 +189,15 @@ class AppConfig(BaseModel):
     embedding: EmbeddingConfig = EmbeddingConfig()
     rerank: RerankConfig = RerankConfig()
     rag: RAGConfig = RAGConfig()
+    direct_rag: DirectRAGConfig = DirectRAGConfig()
     parsing: ParsingConfig = ParsingConfig()
     qdrant: QdrantConfig = QdrantConfig()
     server: ServerConfig = ServerConfig()
     transcription: TranscriptionConfig = TranscriptionConfig()
     mineru: MinerUConfig = MinerUConfig()
+    enrichment: EnrichmentConfig = EnrichmentConfig()
     visual_model_id: str | None = None
+    default_chat_model: str | None = None
 
 
 def _resolve_config_path(path: str | Path | None = None) -> Path:
@@ -243,8 +266,6 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             model=llm_raw.get("model", "deepseek-chat"),
             base_url=llm_raw.get("base_url", ""),
             api_key=llm_raw.get("api_key", ""),
-            max_tokens=llm_raw.get("max_tokens", 4096),
-            max_concurrent_requests=llm_raw.get("max_concurrent_requests", 10),
             is_default=True,
         )
         raw["llm"] = {"providers": [provider.model_dump()]}

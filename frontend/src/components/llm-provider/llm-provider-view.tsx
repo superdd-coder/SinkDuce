@@ -489,6 +489,11 @@ export function LLMProviderView() {
     { value: "devanagari", label: "Devanagari (Hindi/Marathi/Nepali)" },
   ]
 
+  const [ragTopK,setRagTopK]=useState(20);const [ragRerankTopK,setRagRerankTopK]=useState(5);const [ragMaxParallel,setRagMaxParallel]=useState(10);const [ragMaxIter,setRagMaxIter]=useState(8);const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState(0)
+  const [dirTopK,setDirTopK]=useState(20);const [dirRerankTopK,setDirRerankTopK]=useState(5);const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState(0)
+  const [enrichMaxParallel,setEnrichMaxParallel]=useState(50);const [enrichModel,setEnrichModel]=useState("")
+  const [showAdvanced,setShowAdvanced]=useState(false)
+  const enrichModelBtnRef=useRef<HTMLButtonElement>(null);const enrichModelMenuRef=useRef<HTMLDivElement>(null);const [showEnrichModelDropdown,setShowEnrichModelDropdown]=useState(false);const [enrichModelPos,setEnrichModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
   // MinerU cloud parsing settings
   const [mineruEnabled, setMineruEnabled] = useState(false)
   const [mineruToken, setMineruToken] = useState("")
@@ -565,7 +570,6 @@ export function LLMProviderView() {
       window.removeEventListener("resize", updateAll)
     }
   }, [showVisualModelDropdown, showMineruModelDropdown, showMineruLanguageDropdown, updateMineruPositions])
-  const [savingMineru, setSavingMineru] = useState(false)
 
   // Runtime load states from backend
   const [loadStates, setLoadStates] = useState<Record<string, string>>({})
@@ -683,6 +687,9 @@ export function LLMProviderView() {
       setLocalDevice(typeof c.transcription?.local_device === "string" ? c.transcription.local_device as string : "cpu")
       // Load Visual Model config
       if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
+      if(c.rag){if(typeof c.rag.top_k==="number")setRagTopK(c.rag.top_k);if(typeof c.rag.rerank_top_k==="number")setRagRerankTopK(c.rag.rerank_top_k);if(typeof c.rag.max_parallel_queries==="number")setRagMaxParallel(c.rag.max_parallel_queries);if(typeof c.rag.max_iterations==="number")setRagMaxIter(c.rag.max_iterations);if(typeof c.rag.default_search_mode==="string")setRagSearchMode(c.rag.default_search_mode);if(typeof c.rag.min_score==="number")setRagMinScore(c.rag.min_score)}
+      if(c.direct_rag){if(typeof c.direct_rag.top_k==="number")setDirTopK(c.direct_rag.top_k);if(typeof c.direct_rag.rerank_top_k==="number")setDirRerankTopK(c.direct_rag.rerank_top_k);if(typeof c.direct_rag.default_search_mode==="string")setDirSearchMode(c.direct_rag.default_search_mode);setDirRerankEnabled(c.direct_rag.use_reranker!==false);if(typeof c.direct_rag.min_score==="number")setDirMinScore(c.direct_rag.min_score)}
+      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(c.enrichment.max_parallel_context);if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model)}
       // Load MinerU config
       if (c.mineru) {
         setMineruEnabled(!!c.mineru.enabled)
@@ -1012,27 +1019,6 @@ export function LLMProviderView() {
             </div>
           </div>
 
-          {/* Local Transcription Model Settings */}
-          <div>
-            <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">LOCAL MODEL SETTINGS</h3>
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-light uppercase tracking-wider">Device</span>
-              {(["cpu", "auto", "cuda", "mps"] as const).map((d) => (
-                <Button key={d} variant={localDevice === d ? "default" : "outline"} size="sm" className="font-light uppercase"
-                  onClick={() => {
-                    updateConfig("transcription", { local_device: d })
-                      .then(() => { toast.success(`Device set to ${d}`); setLocalDevice(d) })
-                      .catch(() => toast.error("Failed to update device"))
-                  }}>
-                  {d.toUpperCase()}
-                </Button>
-              ))}
-              <div className="flex-1" />
-              <Button variant="default" onClick={() => setModelDownloadOpen(true)} className="font-light uppercase">
-                <Download className="h-4 w-4 mr-2" />Download Models
-              </Button>
-            </div>
-          </div>
         </section>
 
         {/* ── Hot Words Management ── */}
@@ -1247,37 +1233,96 @@ export function LLMProviderView() {
                 </div>
               </div>
 
-              <div className="flex justify-end pt-4">
-                <Button
-                  disabled={savingMineru}
-                  className="font-light uppercase"
-                  onClick={async () => {
-                    setSavingMineru(true)
-                    try {
-                      await updateConfig("mineru", {
-                        enabled: mineruEnabled,
-                        api_token: mineruToken,
-                        base_url: "https://mineru.net/api/v4",
-                        model_version: mineruModel,
-                        is_ocr: mineruOcr,
-                        enable_formula: mineruFormula,
-                        enable_table: mineruTable,
-                        language: mineruLanguage,
-                      })
-                      toast.success("MinerU settings saved")
-                    } catch {
-                      toast.error("Failed to save MinerU settings")
-                    } finally {
-                      setSavingMineru(false)
-                    }
-                  }}
-                >
-                  {savingMineru ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  Save Settings
-                </Button>
-              </div>
           </div>
         </section>
+
+        {/* Advanced */}
+        <div className="border-b border-border pb-6">
+          <h2 onClick={()=>{setShowAdvanced(!showAdvanced);if(!showAdvanced)setTimeout(()=>document.getElementById("advanced-content")?.scrollIntoView({behavior:"smooth",block:"start"}),100)}} className="text-[18px] font-[350] tracking-tight uppercase cursor-pointer hover:text-primary transition-colors">ADVANCED</h2>
+          <div id="advanced-content" className={`transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] overflow-hidden ${showAdvanced?"max-h-[4000px] opacity-100":"max-h-0 opacity-0"}`}>
+          <div className="space-y-8 pt-4">
+
+            {/* Enrichment */}
+            <div className="pb-6">
+              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">ENRICHMENT</h3>
+              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Context generation for each chunk during document ingestion.</p>
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
+                <div className="flex-1 max-w-md relative" ref={enrichModelMenuRef}>
+                  <button type="button" ref={enrichModelBtnRef} onClick={()=>{const r=enrichModelMenuRef.current?.getBoundingClientRect();if(r)setEnrichModelPos({top:r.bottom+4,left:r.left,width:enrichModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowEnrichModelDropdown(!showEnrichModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showEnrichModelDropdown?"var(--color-primary-foreground)":enrichModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
+                    <span className="relative z-10 whitespace-nowrap">{enrichModel?(()=>{const p=providers.find(x=>x.id===enrichModel);return p?p.name+" / "+p.model:enrichModel})():"Same as default LLM"}</span>
+                    <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{transform:showEnrichModelDropdown?"scaleX(1)":"scaleX(0)",transformOrigin:showEnrichModelDropdown?"right":"left"}}/>
+                  </button>
+                  <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showEnrichModelDropdown?"opacity-100 visible translate-y-0 pointer-events-auto":"opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{width:enrichModelPos.width,top:enrichModelPos.top,left:enrichModelPos.left}}>
+                    {[{value:"",label:"Same as default LLM"},...providers.map(p=>({value:p.id,label:`${p.name} / ${p.model}`}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setEnrichModel(opt.value);setShowEnrichModelDropdown(false);try{await updateConfig("enrichment",{enrichment_model:opt.value,max_parallel_context:enrichMaxParallel,batch_poll_interval:30});toast.success("Enrichment model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{enrichModel===opt.value||(!enrichModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={enrichMaxParallel} onChange={(e)=>{const r=e.target.value;if(r===""){setEnrichMaxParallel(50);return}const v=parseInt(r);if(!isNaN(v))setEnrichMaxParallel(Math.max(1,Math.min(100,v)))}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+              </div>
+            </div>
+
+            {/* Agentic RAG */}
+            <div className="pb-6">
+              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">AGENTIC RAG DEFAULTS</h3>
+              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Applies to decompose, rewrite loop, and aggregate.</p>
+              <div className="flex items-center gap-4 mb-3">
+                <button type="button" onClick={()=>{const m=ragSearchMode==="hybrid"?"dense":"hybrid";setRagSearchMode(m);updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:m,min_score:ragMinScore}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:ragSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{ragSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${ragSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={ragTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setRagTopK(20);return}const v=parseInt(r);if(!isNaN(v)){setRagTopK(Math.max(1,Math.min(100,v)));updateConfig("rag",{top_k:v,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={ragRerankTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setRagRerankTopK(5);return}const v=parseInt(r);if(!isNaN(v)){setRagRerankTopK(Math.max(1,Math.min(50,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:v,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={ragMaxParallel} onChange={(e)=>{const r=e.target.value;if(r===""){setRagMaxParallel(10);return}const v=parseInt(r);if(!isNaN(v)){setRagMaxParallel(Math.max(1,Math.min(32,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:v,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Iter</label><input type="text" inputMode="numeric" value={ragMaxIter} onChange={(e)=>{const r=e.target.value;if(r===""){setRagMaxIter(8);return}const v=parseInt(r);if(!isNaN(v)){setRagMaxIter(Math.max(1,Math.min(20,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:v,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                {ragSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score %</label><input type="text" inputMode="numeric" value={ragMinScore} onChange={(e)=>{const r=e.target.value;if(r===""){setRagMinScore(0);return}const v=parseFloat(r);if(!isNaN(v)){setRagMinScore(Math.max(0,Math.min(1,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:v}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+              </div>
+            </div>
+
+            {/* Direct RAG */}
+            <div className="pb-6">
+              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">DIRECT RAG DEFAULTS</h3>
+              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Used when Agentic mode is disabled. Direct retrieval with optional rerank.</p>
+              <div className="flex items-center gap-4 mb-3">
+                <button type="button" onClick={()=>{const n=!dirRerankEnabled;setDirRerankEnabled(n);const tk=n?20:10;setDirTopK(tk);updateConfig("direct_rag",{use_reranker:n,top_k:tk,rerank_top_k:dirRerankTopK,default_search_mode:dirSearchMode,min_score:dirMinScore}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirRerankEnabled?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirRerankEnabled?"RERANK ON":"RERANK OFF"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirRerankEnabled?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+                <button type="button" onClick={()=>{const m=dirSearchMode==="hybrid"?"dense":"hybrid";setDirSearchMode(m);updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:m,min_score:dirMinScore}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={dirTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setDirTopK(dirRerankEnabled?20:10);return}const v=parseInt(r);if(!isNaN(v)){setDirTopK(Math.max(1,Math.min(100,v)));updateConfig("direct_rag",{top_k:v,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:dirMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                {dirRerankEnabled&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={dirRerankTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setDirRerankTopK(5);return}const v=parseInt(r);if(!isNaN(v)){setDirRerankTopK(Math.max(1,Math.min(50,v)));updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:v,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:dirMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+                {dirSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score %</label><input type="text" inputMode="numeric" value={dirMinScore} onChange={(e)=>{const r=e.target.value;if(r===""){setDirMinScore(0);return}const v=parseFloat(r);if(!isNaN(v)){setDirMinScore(Math.max(0,Math.min(1,v)));updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:v}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+              </div>
+            </div>
+
+            {/* Local Model Settings */}
+            <div className="pb-6">
+              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">LOCAL MODEL SETTINGS</h3>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-light uppercase tracking-wider">Device</span>
+                {(["cpu", "auto", "cuda", "mps"] as const).map((d) => (
+                  <Button key={d} variant={localDevice === d ? "default" : "outline"} size="sm" className="font-light uppercase"
+                    onClick={() => {
+                      updateConfig("transcription", { local_device: d })
+                        .then(() => { toast.success(`Device set to ${d}`); setLocalDevice(d) })
+                        .catch(() => toast.error("Failed to update device"))
+                    }}>
+                    {d.toUpperCase()}
+                  </Button>
+                ))}
+                <div className="flex-1" />
+                <Button variant="default" onClick={() => setModelDownloadOpen(true)} className="font-light uppercase">
+                  <Download className="h-4 w-4 mr-2" />Download Models
+                </Button>
+              </div>
+            </div>
+
+          </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end pt-4 pb-6">
+          <Button className="font-light uppercase" onClick={async()=>{try{await Promise.all([updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}),updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:dirMinScore}),updateConfig("enrichment",{max_parallel_context:enrichMaxParallel,batch_poll_interval:30,enrichment_model:enrichModel}),updateConfig("mineru",{enabled:mineruEnabled,api_token:mineruToken,base_url:"https://mineru.net/api/v4",model_version:mineruModel,is_ocr:mineruOcr,enable_formula:mineruFormula,enable_table:mineruTable,language:mineruLanguage})]);toast.success("Settings saved")}catch{toast.error("Failed to save")}}}>Save Settings</Button>
+        </div>
 
         {/* ── Dialogs ── */}
         <AddProviderDialog open={dialogOpen} provider={editingProvider} onOpenChange={setDialogOpen} onSaved={handleSaved} />

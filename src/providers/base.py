@@ -24,10 +24,21 @@ class RerankerProvider(ABC):
 
 class LLMProvider(ABC):
     @abstractmethod
-    def generate(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None) -> str: ...
+    def generate(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None) -> str: ...
 
     @abstractmethod
-    def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None): ...
+    def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None): ...
+
+    def batch_submit(self, requests: list[dict]) -> str:
+        """Submit a batch of generation requests. Returns a batch_id for polling.
+
+        Each request dict: {"prompt": str, "system": str, "temperature": float | None, "max_tokens": int | None}
+        """
+        raise NotImplementedError("This LLM provider does not support batch generation")
+
+    def batch_poll(self, batch_id: str) -> list[str] | None:
+        """Poll batch status by batch_id. Returns list of generated texts when complete, None if still running."""
+        raise NotImplementedError("This LLM provider does not support batch generation")
 
     def describe_image(self, image_base64: str, image_mime: str = "image/png", prompt: str = "") -> str:
         """Generate a text description of an image using Vision API.

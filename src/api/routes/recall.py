@@ -25,9 +25,8 @@ from src.api.schemas import (
 )
 from src.rag.collection_utils import (
     get_embedding_overrides,
-    retrieve_standard,
-    retrieve_parent_child_multi,
 )
+# retrieve_standard / retrieve_parent_child_multi migrated to DirectQueryModule
 from src.rag.retriever import RetrievedChunk
 from src.services import services
 from src.collections import store as collections_store
@@ -76,16 +75,16 @@ def _resolve_reranker(rerank_provider_id: str | None = None):
             provider = create_reranker_provider(provider_cfg)
             if provider:
                 top_k = provider_cfg.top_k if provider_cfg.top_k > 0 else services.config.rag.rerank_top_k
-                logger.info("Using reranker from request: provider=%s", provider_cfg.name)
+                logger.info("[Recall] reranker from request: provider=%s", provider_cfg.name)
                 return Reranker(provider=provider, top_k=top_k)
 
     # Fall back to global default
     if services.reranker and services.reranker.provider:
-        logger.info("Using global reranker: provider=%s",
+        logger.info("[Recall] global reranker: provider=%s",
                      getattr(services.reranker.provider, '__class__', type(services.reranker.provider)).__name__)
         return services.reranker
     logger.warning(
-        "No reranker configured — rerank skipped. "
+        "[Recall] no reranker configured — rerank skipped. "
         "reranker=%s, reranker.provider=%s, config.rerank.providers=%d",
         services.reranker, getattr(services.reranker, 'provider', 'N/A'),
         len(services.config.rerank.providers) if services.config else 0,
@@ -98,30 +97,26 @@ def _resolve_recall_params(req: RecallSearchRequest, col_config: dict) -> dict:
 
     Mirrors chat's _resolve_params so recall evaluates the same pipeline chat uses.
     """
-    agent_enabled = req.use_agent and col_config.get("agent_enabled", col_config.get("self_rag_enabled", True))
-    # Agentic RAG requires reranker — force enable when agent is on
-    use_reranker = req.use_reranker if req.use_reranker is not None else True
-    if agent_enabled:
-        use_reranker = True
+    use_agent = bool(req.use_agent)
+    dr = services.config.direct_rag
+    use_reranker = req.use_reranker if req.use_reranker is not None else dr.use_reranker
     return {
-        "top_k": req.top_k or col_config.get("top_k", services.config.rag.top_k),
-        "rerank_top_k": req.rerank_top_k or col_config.get("rerank_top_k", services.config.rag.rerank_top_k),
-        "agent_enabled": agent_enabled,
-        "search_mode": req.search_mode or col_config.get("search_mode", "dense"),
-        "min_score": req.min_score if req.min_score is not None else 0.0,
+        "top_k": req.top_k or dr.top_k,
+        "rerank_top_k": req.rerank_top_k or dr.rerank_top_k,
+        "agent_enabled": use_agent,
+        "search_mode": req.search_mode or dr.default_search_mode,
+        "min_score": req.min_score if req.min_score is not None else dr.min_score,
         "use_reranker": use_reranker,
-        "max_iterations": req.max_iterations if req.max_iterations is not None else col_config.get("agent_max_iterations", col_config.get("self_rag_max_iterations", 3)),
-        "sparse_llm_tokenize": _resolve_recall_sparse_llm_tokenize(req, col_config, agent_enabled),
+        "max_iterations": req.max_iterations if req.max_iterations is not None else services.config.rag.max_iterations,
+        "sparse_llm_tokenize": _resolve_recall_sparse_llm_tokenize(req, col_config),
     }
 
 
-def _resolve_recall_sparse_llm_tokenize(req: RecallSearchRequest, col_config: dict, agent_enabled: bool) -> bool:
+def _resolve_recall_sparse_llm_tokenize(req: RecallSearchRequest, col_config: dict) -> bool:
     """Resolve LLM keyword extraction for sparse encoding in recall mode."""
-    search_mode = req.search_mode or col_config.get("search_mode", "dense")
+    search_mode = req.search_mode or col_config.get("search_mode", services.config.rag.default_search_mode)
     if search_mode != "hybrid":
         return False
-    if agent_enabled:
-        return True
     if req.sparse_llm_tokenize is not None:
         return req.sparse_llm_tokenize
     return col_config.get("sparse_llm_tokenize", True)
@@ -235,90 +230,64 @@ def recall_search(req: RecallSearchRequest):
 
     col_config = services.db.get_collection_config(valid_collections[0])
     params = _resolve_recall_params(req, col_config)
-    logger.info("Recall search: collections=%s, valid=%s, min_score=%.2f, search_mode=%s, sparse_llm_tokenize=%s",
-                req.collections, valid_collections, req.min_score, req.search_mode, params["sparse_llm_tokenize"])
+    search_params = {
+        "search_mode": params["search_mode"],
+        "top_k": params["top_k"],
+        "rerank_top_k": params["rerank_top_k"],
+        "use_reranker": params["use_reranker"],
+        "use_agent": params["agent_enabled"],
+    }
+    logger.info("[Recall] search: cols=%s valid=%s mode=%s min_score=%.2f sparse_llm=%s",
+                req.collections, valid_collections, req.search_mode, req.min_score, params["sparse_llm_tokenize"])
     embedding_overrides = get_embedding_overrides(valid_collections)
 
     # ── Agentic branch ─────────────────────────────────────────────────
     if params["agent_enabled"]:
-        from src.rag.agent import AgenticRAG
-        reranker = _resolve_reranker(req.rerank_provider_id)
-        agent = AgenticRAG(
-            llm=services.llm, retriever=services.retriever,
-            reranker=reranker if reranker and reranker.provider else None,
+        if not services.agentic_query:
+            raise HTTPException(status_code=503, detail="Agentic query service not available")
+        aq_result = services.agentic_query.run(
+            req.query, collections=valid_collections, generate_answer=False,
+            top_k=params["top_k"],
+            rerank_enabled=True,
             rerank_top_k=params["rerank_top_k"],
-            max_iterations=params["max_iterations"],
-            embedding_overrides=embedding_overrides,
             search_mode=params["search_mode"],
             min_score=params["min_score"],
-            db=services.db,
+            max_iterations=params["max_iterations"],
+            sparse_llm_tokenize=params["sparse_llm_tokenize"],
         )
-        result = agent.run(query=req.query, collections=valid_collections, top_k=params["top_k"])
         elapsed = int((time.time() - t0) * 1000)
         results = [
             RecallResult(
-                id=s.get("metadata", {}).get("id", ""), text=s["text"], score=s["score"],
-                source=s.get("metadata", {}).get("source", ""),
-                collection=s.get("metadata", {}).get("collection", valid_collections[0]),
-                chunk_index=s.get("metadata", {}).get("chunk_index", 0),
-                chunk_type=s.get("metadata", {}).get("chunk_type", "normal"),
-                context=s.get("metadata", {}).get("context"),
-            ) for s in result.sources
+                id=c.metadata.get("id", ""), text=c.text, score=c.score,
+                source=c.metadata.get("source", ""),
+                collection=c.metadata.get("collection", valid_collections[0] if valid_collections else ""),
+                chunk_index=c.metadata.get("chunk_index", 0),
+                chunk_type=c.metadata.get("chunk_type", "normal"),
+                context=c.metadata.get("context"),
+            ) for c in (aq_result.all_chunks or [])
         ]
-        return RecallSearchResponse(
-            results=results, time_ms=elapsed, total=len(results),
-            query_used=result.query_used or req.query, agent_iterations=result.iterations,
-        )
+        context = getattr(aq_result, "context", "")
+        return RecallSearchResponse(results=results, time_ms=elapsed, total=len(results),
+                                    query_used=req.query, search_params=search_params,
+                                    context=context)
 
     # ── Non-agentic branch ─────────────────────────────────────────────
-    reranker = None
-    if params["use_reranker"]:
-        reranker = _resolve_reranker(req.rerank_provider_id)
+    if not services.direct_query:
+        raise HTTPException(status_code=503, detail="Direct query module not available")
 
     recall_llm = services.llm if params["sparse_llm_tokenize"] else None
-
-    pc_collections = [c for c in valid_collections if services.db.get_collection_config(c).get("chunk_mode") == "parent_child"]
-    normal_collections = [c for c in valid_collections if c not in pc_collections]
-
-    child_groups_map: dict[str, list[dict]] = {}
-    chunks: list[RetrievedChunk] = []
-
-    # Parent-child collections (defer rerank to after merge)
-    if pc_collections:
-        pc_chunks, child_groups_list = retrieve_parent_child_multi(
-            req.query, pc_collections, params["top_k"],
-            embedding_overrides=embedding_overrides,
-            min_score=params["min_score"],
-            reranker=None,  # defer to post-merge rerank
-            return_child_groups=True,
-            retriever=services.retriever,
-            search_mode=params["search_mode"],
-            llm=recall_llm,
-        )
-        chunks.extend(pc_chunks)
-        for group in child_groups_list:
-            child_groups_map[group["parent_id"]] = group["children"]
-
-    # Normal collections (defer rerank to after merge)
-    if normal_collections:
-        chunks.extend(retrieve_standard(
-            req.query, normal_collections, params["top_k"],
-            embedding_overrides=embedding_overrides,
-            search_mode=params["search_mode"],
-            min_score=params["min_score"],
-            reranker=None,  # defer to post-merge rerank
-            llm=recall_llm,
-        ))
-
-    # Post-merge: sort, truncate, rerank
-    chunks.sort(key=lambda c: c.score, reverse=True)
-    chunks = chunks[:params["top_k"]]
-
-    if reranker and chunks:
-        try:
-            chunks = reranker.rerank(req.query, chunks, top_k=params["rerank_top_k"])
-        except Exception as e:
-            logger.warning("Reranker failed: %s", e)
+    dq_result = services.direct_query.retrieve(
+        req.query, valid_collections, top_k=params["top_k"],
+        embedding_overrides=embedding_overrides,
+        min_score=params["min_score"],
+        search_mode=params["search_mode"],
+        rerank_enabled=params["use_reranker"],
+        rerank_top_k=params["rerank_top_k"],
+        sparse_llm_tokenize=params["sparse_llm_tokenize"],
+        llm_for_sparse=recall_llm,
+    )
+    chunks = dq_result.chunks
+    child_groups_map: dict[str, list[dict]] = dict(dq_result.child_groups)
 
     elapsed = int((time.time() - t0) * 1000)
     results = []
@@ -328,7 +297,11 @@ def recall_search(req: RecallSearchRequest):
             result.children = [RecallResult(**child) for child in child_groups_map[result.id]]
         results.append(result)
 
-    return RecallSearchResponse(results=results, time_ms=elapsed, total=len(results), query_used=req.query)
+    from src.rag.context_builder import build_context as _bc
+    direct_context = _bc(chunks) if chunks else ""
+    return RecallSearchResponse(results=results, time_ms=elapsed, total=len(results),
+                                query_used=req.query, search_params=search_params,
+                                context=direct_context)
 
 
 @router.post("/recall/benchmark", response_model=BenchmarkResult)

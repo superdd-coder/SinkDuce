@@ -312,8 +312,7 @@ export interface LLMProvider {
   model: string
   base_url: string
   api_key: string
-  max_tokens: number
-  max_concurrent_requests: number
+
   is_default: boolean
   selected_models?: string[]
   default_model?: string
@@ -546,7 +545,7 @@ export const recallSearch = (params: {
   sparse_llm_tokenize?: boolean
   rerank_provider_id?: string
 }) =>
-  request<{ results: RecallResult[]; time_ms: number }>("/recall/search", {
+  request<{ results: RecallResult[]; time_ms: number; total: number; search_params?: Record<string, unknown>; context?: string }>("/recall/search", {
     method: "POST",
     body: JSON.stringify(params),
   })

@@ -266,6 +266,28 @@ async def delete_document(collection: str, doc_source: str):
     except Exception as e:
         logger.warning("[DELETE] Counter update failed (non-fatal): %s", e)
 
+    # Trigger coverage refresh after deletion.
+    # If upload tasks are running, skip — the last upload will trigger
+    # coverage with the correct (post-delete) file list.
+    if services.catalog:
+        def _trigger():
+            try:
+                from src.tasks.task_manager import task_manager
+                active = len(task_manager.get_active_tasks(
+                    collection=collection_id, task_types=["upload", "doc_summary"],
+                ))
+                if active > 0:
+                    logger.info("[Coverage] SKIP delete %r (%d active tasks → last one will trigger)",
+                                doc_source, active)
+                    services.catalog.mark_dirty(collection_id)
+                else:
+                    services.catalog.update_coverage(collection_id)
+            except Exception:
+                logger.exception("[Coverage] delete trigger failed for %s", doc_source)
+
+        import threading
+        threading.Thread(target=_trigger, daemon=True).start()
+
     return {"message": f"Deleted chunks from {doc_source} in {collection_id}"}
 
 

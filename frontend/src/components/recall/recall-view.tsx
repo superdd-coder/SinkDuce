@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import remarkBreaks from "remark-breaks"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -34,6 +37,9 @@ function SearchTab() {
   const [minScore, setMinScore] = useState(0)
   const [results, setResults] = useState<RecallResult[]>([])
   const [timeMs, setTimeMs] = useState(0)
+  const [searchParams, setSearchParams] = useState<Record<string, unknown>>({})
+  const [searchContext, setSearchContext] = useState("")
+  const [showContext, setShowContext] = useState(false)
   const [searching, setSearching] = useState(false)
   const [showCollections, setShowCollections] = useState(false)
   const collectionMenuRef = useRef<HTMLDivElement>(null)
@@ -87,6 +93,8 @@ function SearchTab() {
       })
       setResults(res.results)
       setTimeMs(res.time_ms)
+      setSearchParams(res.search_params || {})
+      setSearchContext(res.context || "")
     } catch (err) {
       toast.error(`Search failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -314,11 +322,27 @@ function SearchTab() {
             <div className="flex items-center gap-3 text-sm text-muted-foreground mb-3">
               <span>{results.length} results</span>
               <span>in {timeMs}ms</span>
-              <Badge variant="outline">{searchMode}</Badge>
-              {useReranker && <Badge variant="secondary">Reranked</Badge>}
-              {useAgent && <Badge variant="secondary">Agentic</Badge>}
+              <Badge variant="outline">{String(searchParams.search_mode || searchMode)}</Badge>
+              {!!searchParams.use_reranker && <Badge variant="secondary">Reranked</Badge>}
+              {!!searchParams.use_agent && <Badge variant="secondary">Agentic</Badge>}
+              {searchContext && (
+                <button
+                  type="button"
+                  onClick={() => setShowContext(!showContext)}
+                  className={`cursor-pointer border-none font-sans transition-all ${showContext ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
+                  style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: showContext ? "3px 8px" : "0", borderRadius: "2px" }}
+                >
+                  VIEW CONTEXT
+                </button>
+              )}
             </div>
-            <ResultList results={results} />
+            {showContext && searchContext ? (
+              <div className="text-xs text-muted-foreground bg-muted/30 p-4 rounded-lg max-h-[600px] overflow-auto prose prose-sm prose-neutral dark:prose-invert max-w-none [&_h2]:text-sm [&_h3]:text-xs [&_p]:text-xs [&_pre]:text-[11px] [&_code]:text-[11px] [&_li]:text-xs">
+                <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{searchContext}</ReactMarkdown>
+              </div>
+            ) : (
+              <ResultList results={results} />
+            )}
           </div>
         </div>
       </div>

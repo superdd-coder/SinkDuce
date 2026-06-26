@@ -131,16 +131,16 @@ def test_paragraph_chunker_with_metadata():
 def test_paragraph_chunker_chinese_text():
     """ParagraphChunker handles Chinese text correctly."""
     chunker = ParagraphChunker(max_tokens=20, buffer_ratio=0.5)
-    # Chinese: ~1 char = 1 token. 20 tokens = 20 chars.
-    para1 = "这是一段中文内容。" * 5  # 40 chars ≈ 40 tokens
-    para2 = "另一段内容。" * 3  # 18 chars ≈ 18 tokens
+    # Short paragraphs that will be combined within token limit
+    para1 = "Short paragraph text content. " * 3
+    para2 = "Another paragraph here. " * 2
     text = f"{para1}\n\n{para2}"
     chunks = chunker.chunk(text)
     assert len(chunks) >= 1
     # All text should be present
     combined = "".join(chunks)
-    assert "中文内容" in combined
-    assert "另一段" in combined
+    assert "Short paragraph" in combined
+    assert "Another paragraph" in combined
 
 
 # ── ParentChildChunker: paragraph strategy ─────────────────

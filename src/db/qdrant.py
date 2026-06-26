@@ -79,7 +79,7 @@ class QdrantManager:
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
             sparse_vectors_config={"sparse": SparseVectorParams()},
         )
-        logger.info("[HYBRID-VERIFY] collection=%s sparse_vectors_config={\"sparse\": SparseVectorParams()}", name)
+        logger.info("[Qdrant] collection=%s sparse_vectors_config={\"sparse\": SparseVectorParams()}", name)
         # Store full collection config as a dedicated point
         if chunk_config:
             cfg = {**_DEFAULT_COLLECTION_CONFIG, **chunk_config}
@@ -170,7 +170,7 @@ class QdrantManager:
             ))
         self.client.update_vectors(collection_name=collection, points=points)
         logger.info(
-            "[HYBRID-VERIFY] upsert_sparse_vectors collection=%s total=%d",
+            "[Qdrant] upsert_sparse_vectors collection=%s total=%d",
             collection, len(points),
         )
 
@@ -268,7 +268,7 @@ class QdrantManager:
         falls back to dense-only search otherwise.
         """
         if not sparse_vector:
-            logger.warning("[HYBRID-VERIFY] hybrid_search: sparse_vector is None, falling back to dense")
+            logger.warning("[Qdrant] hybrid_search: sparse_vector is None, falling back to dense")
             return self.search(collection, query_vector, top_k, filter_condition=filter_condition)
 
         from qdrant_client.models import FusionQuery, Prefetch
@@ -278,7 +278,7 @@ class QdrantManager:
             values=list(sparse_vector.values()),
         )
         logger.info(
-            "[HYBRID-VERIFY] hybrid_search collection=%s dense_dim=%d sparse_dim=%d top_k=%d",
+            "[Qdrant] hybrid_search collection=%s dense_dim=%d sparse_dim=%d top_k=%d",
             collection, len(query_vector), len(sparse.indices), top_k,
         )
 
@@ -293,7 +293,7 @@ class QdrantManager:
         )
         scores = [f"{r.score:.4f}" for r in results.points]
         logger.info(
-            "[HYBRID-VERIFY] hybrid_search results: %d points (top_k=%d) scores=%s",
+            "[Qdrant] hybrid_search results: %d points (top_k=%d) scores=%s",
             len(results.points), top_k, scores,
         )
         return [

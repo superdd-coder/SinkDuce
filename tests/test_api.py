@@ -1,14 +1,29 @@
 """Backend API integration test script.
 
 Run: python3 tests/test_api.py
-Requires: API server running on http://localhost:18900 (set SINKDUCE_API_PORT to override)
+Requires: API server running (docker compose up app).
+Port is read from .env, SINKDUCE_API_PORT env var, or defaults to 18900.
 """
 
 import os
 import sys
 import httpx
 
-TEST_PORT = os.environ.get("SINKDUCE_API_PORT", "18900")
+def _read_port():
+    env = os.environ.get("SINKDUCE_API_PORT")
+    if env:
+        return env
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "..", ".env")) as f:
+            for line in f:
+                if line.strip().startswith("API_PORT="):
+                    return line.strip().split("=", 1)[1].strip()
+    except (OSError, IOError):
+        pass
+    return "18900"
+
+
+TEST_PORT = _read_port()
 BASE = f"http://127.0.0.1:{TEST_PORT}/api"
 TIMEOUT = 30
 PASS = 0
@@ -255,10 +270,10 @@ def test_query_stream():
             fail("POST /query/stream", str(e))
 
 
-# ── Query (Self-RAG) ────────────────────────────────
+# ── Query (Agentic) ──────────────────────────────────
 
-def test_query_self_rag():
-    with test("Query (Self-RAG)"):
+def test_query_agentic():
+    with test("Query (Agentic)"):
         r = httpx.post(
             f"{BASE}/query",
             json={"question": "what is python?", "collection": "default", "use_agent": True},
@@ -267,11 +282,11 @@ def test_query_self_rag():
         if r.status_code == 200:
             data = r.json()
             if "answer" in data and "iterations" in data:
-                ok(f"POST /query self_rag (iterations={data['iterations']})")
+                ok(f"POST /query agentic (iterations={data['iterations']})")
             else:
-                fail("POST /query self_rag", "missing fields")
+                fail("POST /query agentic", "missing fields")
         else:
-            fail("POST /query self_rag", f"status={r.status_code}")
+            fail("POST /query agentic", f"status={r.status_code}")
 
 
 # ── History ──────────────────────────────────────────
@@ -306,7 +321,7 @@ def main():
     test_upload()
     test_query()
     test_query_stream()
-    test_query_self_rag()
+    test_query_agentic()
     test_history()
 
     print("\n" + "=" * 50)

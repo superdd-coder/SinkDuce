@@ -111,30 +111,62 @@ If no conflicts, use an empty array: "conflicts": []"""
 # ═══════════════════════════════════════════════════════════════════════
 
 # SUMMARY_PROMPT
-#   Purpose: Step 1 of contextual enrichment — generates a 1-2 sentence summary
-#            of an entire document. This summary is later referenced by CONTEXT_PROMPT.
-#   Role: user (single message)
-#   Called by: src/rag/contextual.py → ContextualRetrieval._generate_summary()
+#   Purpose: Step 1 of contextual enrichment — generates BOTH a structured summary
+#            (data/facts/insights) AND a short 1-2 sentence summary in one LLM call.
+#            The structured part uses the same format as STRUCTURED_SUMMARY_PROMPT.
 #   Template vars: {document} — full document text
-SUMMARY_PROMPT = """Write a brief 1-2 sentence summary of this document. Focus on: what is this document about, who is it for, and what is its purpose. Keep it concise and readable.
+SUMMARY_PROMPT = """Analyze the following document and produce two outputs:
 
 Document:
-{document}"""
+{document}
+
+---
+
+## Output 1 — Structured Summary
+Analyze the following document and extract key information. Be extremely conservative — only extract facts that are EXPLICITLY stated in the document. Do NOT infer, assume, or generalize.
+
+Output in this exact format:
+
+===DATA===
+(Numerical data that is EXPLICITLY stated in the document with clear context)
+- Example: The contract value for Project Alpha is 5 million USD
+- Example: The system design capacity is 3,000 m3/day
+
+===FACTS===
+(Factual statements that are EXPLICITLY stated — not inferred)
+- Example: Company X is the contractor for Project Alpha
+- Example: The project uses Dow BW30-400 RO membranes
+
+===INSIGHTS===
+(Only include if there is STRONG direct evidence in the document. If uncertain, write "- None identified")
+- Example: Based on the 3-month delay mentioned by the project manager, the Q3 deadline appears at risk
+
+Rules:
+- MAX 10 items per category. Quality over quantity.
+- ONLY extract what is explicitly written. Do NOT generalize from examples or discussions.
+- If a number or fact is mentioned in a hypothetical, example, or "what-if" scenario, do NOT treat it as a real data point.
+- If you are not sure whether something is a fact or an assumption, do NOT include it.
+- Each item MUST clearly state what it refers to. Do not use vague references like "the project" — name the specific project/entity.
+- If a category has nothing that meets these criteria, write "- None identified"
+- Do NOT use square brackets [] around words. Write plain sentences.
+- Pay attention to context: if someone says "let's model a 1000 m3/day project", that is a discussion about modeling, NOT a statement about an actual project's capacity.
+
+## Output 2 — Short Summary
+Write a brief 1-2 sentence summary of this document. Focus on: what is this document about, who is it for, and what is its purpose. Keep it concise and readable.
+
+## Output Format
+Respond with ONLY a JSON object (no markdown fences, no extra text):
+{{"structured_summary": "===DATA===\\n- ...\\n===FACTS===\\n- ...\\n===INSIGHTS===\\n- ...", "short_summary": "1-2 sentence summary"}}"""
 
 # CONTEXT_PROMPT
-#   Purpose: Step 2 of contextual enrichment — for each chunk, generates background
-#            context that a reader cannot infer from the chunk text alone.
-#            Takes the document summary (from SUMMARY_PROMPT) + current chunk +
-#            surrounding chunks as input. The generated context is stored in the
-#            Qdrant chunk payload's `context` field and served to the LLM at query time.
+#   Purpose: For each chunk, generates background context that a reader cannot
+#            infer from the chunk text alone, using surrounding chunks.
+#            The document summary is generated in parallel and stored separately.
 #   Role: user (single message)
 #   Called by: src/rag/contextual.py → ContextualRetrieval._generate_context()
-#   Template vars: {summary}            — output of SUMMARY_PROMPT
-#                  {chunk}              — current chunk text
+#   Template vars: {chunk}              — current chunk text
 #                  {surrounding_section} — neighboring chunk text (may be empty)
-CONTEXT_PROMPT = """You are helping build a search index. Given a document summary, a chunk from that document, and its surrounding chunks, write 1-2 sentences of background context that a reader would need to understand this chunk but CANNOT figure out from the chunk text alone.
-
-Document summary: {summary}
+CONTEXT_PROMPT = """You are helping build a search index. Given a chunk from a document and its surrounding chunks, write 1-2 sentences of background context that a reader would need to understand this chunk but CANNOT figure out from the chunk text alone.
 
 {surrounding_section}Chunk text: {chunk}
 

@@ -153,6 +153,8 @@ class RecallSearchResponse(BaseModel):
     total: int
     query_used: str
     agent_iterations: int = 0
+    search_params: dict = {}
+    context: str = ""
 
 
 class RecallBenchmarkRequest(BaseModel):

@@ -53,8 +53,7 @@ export interface LLMProvider {
   model: string
   base_url: string
   api_key: string
-  max_tokens: number
-  max_concurrent_requests: number
+
   is_default: boolean
   selected_models?: string[]
   default_model?: string
