@@ -1161,6 +1161,7 @@ function createResizableImageExtension(
 // ──────────────────────────────────────────────
 // Image Floating Menu
 // ──────────────────────────────────────────────
+let _isPreviewMode = false
 function showImageFloatingMenu(
   container: HTMLElement,
   attrs: any,
@@ -1169,6 +1170,7 @@ function showImageFloatingMenu(
   editor?: any,
   imageId?: string,
 ) {
+  if (_isPreviewMode) return  // Don't show menus in preview
   // Remove existing menu
   const existingMenu = document.getElementById("image-floating-menu")
   if (existingMenu) existingMenu.remove()
@@ -1359,8 +1361,8 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
     name: "distillBlock",
     group: "block",
     atom: true,
-    draggable: true,
-    selectable: true,
+    draggable: false,
+    selectable: false,
     defining: true,
     isolating: true,
 
@@ -1978,6 +1980,7 @@ function showSlashMenu(
 // Table Context Menu
 // ──────────────────────────────────────────────
 function showTableContextMenu(event: MouseEvent, editor: any) {
+  if (_isPreviewMode) return
   const existingMenu = document.getElementById("table-context-menu")
   if (existingMenu) existingMenu.remove()
 
@@ -2039,6 +2042,7 @@ function showTableContextMenu(event: MouseEvent, editor: any) {
 // Table Floating Menu (bubble menu)
 // ──────────────────────────────────────────────
 function showTableFloatingMenu(table: HTMLElement, editor: any) {
+  if (_isPreviewMode) return
   const existing = document.getElementById("table-floating-menu")
   if (existing) existing.remove()
 
@@ -2886,6 +2890,8 @@ export function TiptapEditor({
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
   const editorRef = useRef<any>(null)
+  const _readonlyRef = useRef(readonly)
+  _readonlyRef.current = readonly
 
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
@@ -2905,9 +2911,58 @@ export function TiptapEditor({
     name: "tableEnhancement",
   })).current
 
+  // Prevent deletion of distill blocks and images in readonly mode
+  const ReadonlyProtectExt = useRef(Extension.create({
+    name: "readonlyProtect",
+    addProseMirrorPlugins() {
+      return [new Plugin({
+        key: new PluginKey("readonlyProtect"),
+        filterTransaction: (tr) => {
+          if (!_readonlyRef.current) return true
+          for (const step of tr.steps) {
+            const map = (step as any).getMap?.()
+            if (!map) continue
+            // Check if any deleted range contains a distill-block or image
+            const from = (step as any).from
+            const to = (step as any).to
+            if (from == null || to == null) continue
+            tr.doc.nodesBetween(from, Math.min(to, tr.doc.nodeSize - 1), (node) => {
+              if (node.type.name === "distillBlock" || node.type.name === "resizableImage") {
+                throw new Error("BLOCKED")
+              }
+            })
+            try {
+              tr.before.nodesBetween(from, Math.min(to, (tr as any).before.nodeSize - 1), (node: any) => {
+                if (node.type.name === "distillBlock" || node.type.name === "resizableImage") {
+                  throw new Error("CHECK_DELETED")
+                }
+              })
+            } catch (e: any) {
+              if (e.message === "CHECK_DELETED") {
+                // Node existed before but exists now too — check if it's being deleted
+                const beforeCount = countNodes(tr.before, "distillBlock") + countNodes(tr.before, "resizableImage")
+                const afterCount = countNodes(tr.doc, "distillBlock") + countNodes(tr.doc, "resizableImage")
+                if (afterCount < beforeCount) return false
+              }
+            }
+          }
+          return true
+        },
+      })]
+    },
+  })).current
+
+  function countNodes(doc: any, typeName: string): number {
+    let count = 0
+    doc.nodesBetween(0, doc.nodeSize, (node: any) => {
+      if (node.type.name === typeName) count++
+    })
+    return count
+  }
+
   const editor = useEditor({
     extensions: [
-      StarterKit, DistillBlock, Callout, ResizableImage, MarkdownHoverExt, TableEnhancementExt,
+      StarterKit, DistillBlock, Callout, ResizableImage, ReadonlyProtectExt, MarkdownHoverExt, TableEnhancementExt,
       Table.configure({ resizable: true }), TableRow, TableCell, TableHeader,
       TaskList, TaskItem.configure({ nested: true }),
       Placeholder.configure({ placeholder: placeholder || 'Type "/" for commands...' }),
@@ -2944,6 +2999,20 @@ export function TiptapEditor({
             event.preventDefault()
             showTableContextMenu(event, editorRef.current)
             return true
+          }
+          return false
+        },
+        keydown: (_view, event) => {
+          if (!_readonlyRef.current) return false
+          if (event.key === "Backspace" || event.key === "Delete") {
+            const target = event.target as HTMLElement
+            if (target.closest("[data-type='distill-block']") ||
+                target.closest(".image-visual-desc") ||
+                target.closest("img[data-visual]")) {
+              event.preventDefault()
+              event.stopPropagation()
+              return true
+            }
           }
           return false
         },
@@ -3002,7 +3071,17 @@ export function TiptapEditor({
     requestAnimationFrame(() => { externalUpdateRef.current = false })
   }, [value, editor])
 
-  useEffect(() => { if (editor) editor.setEditable(!readonly) }, [readonly, editor])
+  useEffect(() => {
+    if (!editor) return
+    editor.setEditable(!readonly)
+    _isPreviewMode = readonly
+    const el = editor.view.dom as HTMLElement
+    if (readonly) {
+      el.classList.add("tiptap-readonly")
+    } else {
+      el.classList.remove("tiptap-readonly")
+    }
+  }, [readonly, editor])
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {

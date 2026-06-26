@@ -1,10 +1,10 @@
 """File-based storage for Notes.
 
-Directory layout (mirrors meeting/store.py convention):
-    data/notes/{collection}/{note_id}/
-        meta.json           – Note metadata
+Directory layout (flat — notes are globally unique by UUID):
+    data/notes/{note_id}/
+        meta.json           – Note metadata (includes collection field)
         content.md          – User-authored markdown
-        distillation.md     – Cached LLM distillation (single copy, source-content-keyed)
+        distillation.md     – Cached LLM distillation
         distillation.hash   – Source content hash at cache time
         references.json     – List of injection-block references in this note
         referenced_by.json  – List of notes that reference this note (backlinks)
@@ -20,18 +20,15 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .models import Note, InjectionBlock
+from .models import Note
 
 logger = logging.getLogger("notes.store")
 NOTES_DIR = Path("data").resolve() / "notes"
 
 
-def _note_dir(collection: str, note_id: str) -> Path:
-    return NOTES_DIR / collection / note_id
-
-
-def _collection_dir(collection: str) -> Path:
-    return NOTES_DIR / collection
+def _note_dir(note_id: str) -> Path:
+    """Return the directory for a note. Note IDs are globally unique UUIDs."""
+    return NOTES_DIR / note_id
 
 
 def _write_json(path: Path, data) -> None:
@@ -60,6 +57,22 @@ def _dict_to_note(data: dict) -> Note:
     return Note(**data)
 
 
+def _find_note_dir(note_id: str) -> Path | None:
+    """Find a note directory, trying both flat and legacy paths."""
+    # Flat path (current)
+    ndir = NOTES_DIR / note_id
+    if ndir.is_dir():
+        return ndir
+    # Legacy: search collection subdirectories
+    if NOTES_DIR.is_dir():
+        for col_dir in NOTES_DIR.iterdir():
+            if col_dir.is_dir():
+                candidate = col_dir / note_id
+                if candidate.is_dir():
+                    return candidate
+    return None
+
+
 # ── CRUD ───────────────────────────────────────────────────────
 
 
@@ -73,7 +86,7 @@ def create_note(collection: str, title: str) -> Note:
         created_at=now,
         updated_at=now,
     )
-    ndir = _note_dir(collection, note_id)
+    ndir = _note_dir(note_id)
     ndir.mkdir(parents=True, exist_ok=True)
     _write_json(ndir / "meta.json", _note_to_dict(note))
     (ndir / "content.md").write_text("", encoding="utf-8")
@@ -81,47 +94,56 @@ def create_note(collection: str, title: str) -> Note:
     return note
 
 
-def get_note(collection: str, note_id: str) -> Note | None:
-    data = _read_json(_note_dir(collection, note_id) / "meta.json")
+def get_note(note_id: str) -> Note | None:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        return None
+    data = _read_json(ndir / "meta.json")
     if data is None:
         return None
     return _dict_to_note(data)
 
 
-def list_notes(collection: str) -> list[Note]:
-    cdir = _collection_dir(collection)
-    if not cdir.exists():
+def list_notes(collection: str | None = None) -> list[Note]:
+    """List notes, optionally filtered by collection."""
+    if not NOTES_DIR.exists():
         return []
     notes: list[Note] = []
-    for entry in cdir.iterdir():
+    for entry in NOTES_DIR.iterdir():
         if not entry.is_dir():
             continue
         data = _read_json(entry / "meta.json")
         if data is not None:
-            notes.append(_dict_to_note(data))
+            note = _dict_to_note(data)
+            if collection is None or note.collection == collection:
+                notes.append(note)
     notes.sort(key=lambda n: n.updated_at, reverse=True)
     return notes
 
 
-def update_note(collection: str, note_id: str, **fields) -> Note:
-    note = get_note(collection, note_id)
-    if note is None:
-        raise FileNotFoundError(f"Note {note_id} not found in collection '{collection}'")
+def update_note(note_id: str, **fields) -> Note:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        raise FileNotFoundError(f"Note {note_id} not found")
+    data = _read_json(ndir / "meta.json")
+    if data is None:
+        raise FileNotFoundError(f"Note {note_id} has no meta.json")
+    note = _dict_to_note(data)
     for key, value in fields.items():
         setattr(note, key, value)
     note.updated_at = datetime.now()
-    _write_json(_note_dir(collection, note_id) / "meta.json", _note_to_dict(note))
+    _write_json(ndir / "meta.json", _note_to_dict(note))
     return note
 
 
-def delete_note(collection: str, note_id: str) -> bool:
-    ndir = _note_dir(collection, note_id)
-    if not ndir.exists():
+def delete_note(note_id: str) -> bool:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
         return False
     # Clean up references from other notes that reference this one
-    refs = get_referenced_by(collection, note_id)
+    refs = get_referenced_by(note_id)
     for ref_note_id in refs:
-        _remove_reference(collection, ref_note_id, note_id)
+        _remove_reference(ref_note_id, note_id)
     shutil.rmtree(ndir)
     return True
 
@@ -129,66 +151,58 @@ def delete_note(collection: str, note_id: str) -> bool:
 # ── Content ────────────────────────────────────────────────────
 
 
-def get_content(collection: str, note_id: str) -> str | None:
-    ndir = _note_dir(collection, note_id)
+def get_content(note_id: str) -> str | None:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        return None
     content_path = ndir / "content.md"
     if not content_path.exists():
         return None
     return content_path.read_text(encoding="utf-8")
 
 
-def save_content(collection: str, note_id: str, content: str) -> str:
-    ndir = _note_dir(collection, note_id)
-    note = get_note(collection, note_id)
-    if note is None:
+def save_content(note_id: str, content: str) -> str:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
         raise FileNotFoundError(f"Note {note_id} not found")
     content_path = ndir / "content.md"
     content_path.write_text(content, encoding="utf-8")
-    update_note(collection, note_id)
+    update_note(note_id)
     logger.info("Saved content for note %s (%d chars)", note_id, len(content))
     return str(content_path)
 
 
 # ── Distillation caching ───────────────────────────────────────
-# Single-key cache: one .md file per source note (not per target).
-# The distillation result depends only on the source note content,
-# so it can be shared across all targets that reference this source.
-#
-# Layout:
-#   data/notes/{collection}/{note_id}/distillation.md    – Cached content
-#   data/notes/{collection}/{note_id}/distillation.hash  – Content hash at cache time
 
 
-def get_distillation(collection: str, source_note_id: str) -> str | None:
-    """Get cached distillation for a source note.
-
-    Cache validity is determined by whether the source note still has
-    references (distill blocks) in other notes — NOT by content hash.
-    Hash-based invalidation only happens in cleanup_distillations_if_unused()
-    when ALL references are removed."""
-    ndir = _note_dir(collection, source_note_id)
+def get_distillation(source_note_id: str) -> str | None:
+    ndir = _find_note_dir(source_note_id)
+    if ndir is None:
+        return None
     dist_path = ndir / "distillation.md"
     if not dist_path.exists():
         return None
     return dist_path.read_text(encoding="utf-8")
 
 
-def save_distillation(collection: str, source_note_id: str, content: str) -> None:
-    """Cache a distillation result with a content hash of the source note."""
-    ndir = _note_dir(collection, source_note_id)
+def save_distillation(source_note_id: str, content: str) -> None:
+    ndir = _find_note_dir(source_note_id)
+    if ndir is None:
+        raise FileNotFoundError(f"Note {source_note_id} not found")
     ndir.mkdir(parents=True, exist_ok=True)
     dist_path = ndir / "distillation.md"
     hash_path = ndir / "distillation.hash"
     dist_path.write_text(content, encoding="utf-8")
-    source_content = get_content(collection, source_note_id) or ""
+    source_content = get_content(source_note_id) or ""
     content_hash = hashlib.sha256(source_content.encode("utf-8")).hexdigest()
     hash_path.write_text(content_hash, encoding="utf-8")
     logger.info("Saved distillation for %s (%d chars)", source_note_id, len(content))
 
 
-def delete_distillation(collection: str, source_note_id: str) -> bool:
-    """Delete the cached distillation for a source note."""
-    ndir = _note_dir(collection, source_note_id)
+def delete_distillation(source_note_id: str) -> bool:
+    ndir = _find_note_dir(source_note_id)
+    if ndir is None:
+        return False
     dist_path = ndir / "distillation.md"
     hash_path = ndir / "distillation.hash"
     deleted = False
@@ -202,100 +216,95 @@ def delete_distillation(collection: str, source_note_id: str) -> bool:
     return deleted
 
 
-def source_content_changed(collection: str, source_note_id: str) -> bool:
-    """Check if the source note's content has changed since distillation was cached."""
-    ndir = _note_dir(collection, source_note_id)
+def source_content_changed(source_note_id: str) -> bool:
+    ndir = _find_note_dir(source_note_id)
+    if ndir is None:
+        return True
     hash_path = ndir / "distillation.hash"
     if not hash_path.exists():
-        return True  # No cache at all → treat as "changed"
-    current_content = get_content(collection, source_note_id) or ""
+        return True
+    current_content = get_content(source_note_id) or ""
     current_hash = hashlib.sha256(current_content.encode("utf-8")).hexdigest()
     stored_hash = hash_path.read_text(encoding="utf-8").strip()
     return stored_hash != current_hash
 
 
-def cleanup_distillations_if_unused(collection: str, source_note_id: str) -> None:
-    """If a source note no longer has any referencers, decide whether to keep
-    or delete its distillation cache.
-
-    - Content unchanged since caching → keep (can be reused later)
-    - Content changed → delete (stale)
-    """
-    refs = get_referenced_by(collection, source_note_id)
-    if refs:  # Still has referencers — don't clean up
+def cleanup_distillations_if_unused(source_note_id: str) -> None:
+    refs = get_referenced_by(source_note_id)
+    if refs:
         return
-
-    ndir = _note_dir(collection, source_note_id)
+    ndir = _find_note_dir(source_note_id)
+    if ndir is None:
+        return
     dist_path = ndir / "distillation.md"
     if not dist_path.exists():
         return
-
-    if source_content_changed(collection, source_note_id):
-        delete_distillation(collection, source_note_id)
-        logger.info(
-            "Cleared stale distillation for %s (content changed after last reference removed)",
-            source_note_id,
-        )
+    if source_content_changed(source_note_id):
+        delete_distillation(source_note_id)
+        logger.info("Cleared stale distillation for %s", source_note_id)
     else:
-        logger.info(
-            "Preserved distillation for %s (content unchanged, cache may be reused)",
-            source_note_id,
-        )
+        logger.info("Preserved distillation for %s", source_note_id)
 
 
-# ── References (injection blocks within a note) ────────────────
+# ── References ─────────────────────────────────────────────────
 
 
-def get_references(collection: str, note_id: str) -> list[dict]:
-    """Get the list of injection block references in this note.
-    Each ref: {block_id, source_note_id, source_title}"""
-    refs = _read_json(_note_dir(collection, note_id) / "references.json")
+def get_references(note_id: str) -> list[dict]:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        return []
+    refs = _read_json(ndir / "references.json")
     return refs if isinstance(refs, list) else []
 
 
-def save_references(collection: str, note_id: str, refs: list[dict]) -> None:
-    _write_json(_note_dir(collection, note_id) / "references.json", refs)
+def save_references(note_id: str, refs: list[dict]) -> None:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        raise FileNotFoundError(f"Note {note_id} not found")
+    _write_json(ndir / "references.json", refs)
 
 
-# ── Referenced By (which notes reference this note) ────────────
+# ── Referenced By ──────────────────────────────────────────────
 
 
-def get_referenced_by(collection: str, note_id: str) -> list[str]:
-    """Get list of note IDs that contain injection blocks from this note."""
-    refs = _read_json(_note_dir(collection, note_id) / "referenced_by.json")
+def get_referenced_by(note_id: str) -> list[str]:
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        return []
+    refs = _read_json(ndir / "referenced_by.json")
     return refs if isinstance(refs, list) else []
 
 
-def _add_referenced_by(collection: str, source_note_id: str, target_note_id: str) -> None:
-    refs = get_referenced_by(collection, source_note_id)
+def _add_referenced_by(source_note_id: str, target_note_id: str) -> None:
+    refs = get_referenced_by(source_note_id)
     if target_note_id not in refs:
         refs.append(target_note_id)
-        _write_json(_note_dir(collection, source_note_id) / "referenced_by.json", refs)
+        ndir = _find_note_dir(source_note_id)
+        if ndir:
+            _write_json(ndir / "referenced_by.json", refs)
 
 
-def _remove_referenced_by(collection: str, source_note_id: str, target_note_id: str) -> None:
-    refs = get_referenced_by(collection, source_note_id)
+def _remove_referenced_by(source_note_id: str, target_note_id: str) -> None:
+    refs = get_referenced_by(source_note_id)
     if target_note_id in refs:
         refs.remove(target_note_id)
-        _write_json(_note_dir(collection, source_note_id) / "referenced_by.json", refs)
-        # If no more referencers, clean up stale distillation cache
-        if not refs:
-            cleanup_distillations_if_unused(collection, source_note_id)
+        ndir = _find_note_dir(source_note_id)
+        if ndir:
+            _write_json(ndir / "referenced_by.json", refs)
+            if not refs:
+                cleanup_distillations_if_unused(source_note_id)
 
 
-def _remove_reference(collection: str, note_id: str, source_note_id: str) -> None:
-    """Remove all injection blocks in note_id that reference source_note_id."""
-    refs = get_references(collection, note_id)
+def _remove_reference(note_id: str, source_note_id: str) -> None:
+    refs = get_references(note_id)
     refs = [r for r in refs if r.get("source_note_id") != source_note_id]
-    save_references(collection, note_id, refs)
+    save_references(note_id, refs)
 
 
-# ── Propagation chain detection ────────────────────────────────
+# ── Propagation ────────────────────────────────────────────────
 
 
-def build_propagation_chain(collection: str, note_id: str, visited: set[str] | None = None) -> list[dict]:
-    """Recursively build the propagation chain starting from note_id.
-    Returns a list of {source_id, source_title, target_id, target_title} links."""
+def build_propagation_chain(note_id: str, visited: set[str] | None = None) -> list[dict]:
     if visited is None:
         visited = set()
     if note_id in visited:
@@ -303,14 +312,14 @@ def build_propagation_chain(collection: str, note_id: str, visited: set[str] | N
     visited.add(note_id)
 
     links = []
-    referenced_by = get_referenced_by(collection, note_id)
-    note = get_note(collection, note_id)
+    referenced_by = get_referenced_by(note_id)
+    note = get_note(note_id)
     source_title = note.title if note else note_id
 
     for target_id in referenced_by:
         if target_id in visited:
             continue
-        target = get_note(collection, target_id)
+        target = get_note(target_id)
         target_title = target.title if target else target_id
         links.append({
             "source_id": note_id,
@@ -318,8 +327,7 @@ def build_propagation_chain(collection: str, note_id: str, visited: set[str] | N
             "target_id": target_id,
             "target_title": target_title,
         })
-        # Recurse — chain propagation
-        sub_links = build_propagation_chain(collection, target_id, visited)
+        sub_links = build_propagation_chain(target_id, visited)
         links.extend(sub_links)
 
     return links

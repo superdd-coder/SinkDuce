@@ -51,7 +51,9 @@ _DEFAULT_COLLECTION_CONFIG = {
     "sparse_llm_tokenize": True,
     "summary_change_counter": 0,
     "summary_consolidate_threshold": 10,
-    "cloud_parsing": False,
+    "sparse_recalc_threshold": 5000,
+    "sparse_recalc_counter": 0,
+    "sparse_lock": False,
 }
 
 # Fields that cannot be changed after collection creation
@@ -195,13 +197,23 @@ class QdrantManager:
     def delete_points(self, collection: str, ids: list[str]) -> None:
         self.client.delete(collection_name=collection, points_selector=ids)
 
-    def delete_by_filter(self, collection: str, key: str, value: Any) -> None:
+    def delete_by_filter(self, collection: str, key: str, value: Any) -> int:
+        """Delete points matching a filter. Returns the number of deleted points."""
+        filter_condition = Filter(
+            must=[FieldCondition(key=key, match=MatchValue(value=value))]
+        )
+        try:
+            count = self.client.count(
+                collection_name=collection,
+                count_filter=filter_condition,
+            ).count
+        except Exception:
+            count = 0
         self.client.delete(
             collection_name=collection,
-            points_selector=Filter(
-                must=[FieldCondition(key=key, match=MatchValue(value=value))]
-            ),
+            points_selector=filter_condition,
         )
+        return count
 
     def count_points(self, collection: str) -> int:
         return self.client.count(collection_name=collection).count

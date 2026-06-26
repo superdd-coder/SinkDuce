@@ -12,6 +12,7 @@ from src.api.schemas import (
 )
 from src.collections import store as collections_store
 from src.services import services
+from src.tasks.task_manager import task_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -210,6 +211,21 @@ def update_collection_config(collection_id: str, req: CollectionConfigUpdateRequ
     return {"message": f"Collection config updated", "config": result}
 
 
+@router.post("/collections/{collection_id}/sparse-recalc")
+def trigger_sparse_recalc(collection_id: str):
+    """Trigger a full sparse vocabulary recalculation for this collection."""
+    meta = collections_store.get_collection_meta(collection_id)
+    if not meta:
+        return {"error": f"Collection '{collection_id}' not found"}
+
+    task = task_manager.create_task(
+        filename=f"recalc:{collection_id}",
+        task_type="sparse_recalc",
+        collection=collection_id,
+    )
+    return {"message": "Sparse recalculation triggered", "task_id": task.id, "task_type": "sparse_recalc"}
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Catalog endpoints
 # ══════════════════════════════════════════════════════════════════════════
@@ -260,7 +276,6 @@ def refresh_coverage(collection_id: str):
         return {"error": "Catalog service not available"}
 
     # Check active uploads/doc_summaries; defer if any are running
-    from src.tasks.task_manager import task_manager
     active = len(task_manager.get_active_tasks(
         collection=collection_id, task_types=["upload", "doc_summary"],
     ))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -38,8 +39,10 @@ def _detect_embedding_dim() -> int:
             dim = 1024
     return dim if dim > 0 else 1024
 
-UPLOAD_DIR = Path("data/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+COLLECTIONS_DIR = Path("data").resolve() / "collections"
+
+def _files_dir(collection_id: str) -> Path:
+    return COLLECTIONS_DIR / collection_id / "files"
 
 # ---------------------------------------------------------------------------
 # Task handler for file transcription
@@ -389,11 +392,12 @@ class MeetingService:
 
         combined = "\n\n---\n\n".join(content_parts)
 
-        # 3. Save to uploads directory using meeting title as filename
-        safe_title = _re.sub(r'[^\w一-鿿\s-]', '', meeting.title).strip()
-        safe_title = _re.sub(r'\s+', '_', safe_title)[:80] or f"meeting_{meeting_id}"
-        filename = f"{safe_title}.md"
-        file_path = UPLOAD_DIR / filename
+        # 3. Save meeting content with section-based identity
+        section_source = f"__meeting__:{meeting_id}_0"
+        alloc_file_id = uuid.uuid4().hex
+        file_dir = _files_dir(collection) / alloc_file_id
+        file_dir.mkdir(parents=True, exist_ok=True)
+        file_path = file_dir / "meeting.md"
         file_path.write_text(combined, encoding="utf-8")
 
         # 4. Call upload pipeline directly
@@ -401,19 +405,20 @@ class MeetingService:
 
         upload_task = Task(
             id=str(uuid.uuid4()),
-            filename=filename,
+            filename=f"meeting_{meeting_id}",
             collection=collection,
             status=TaskStatus.PROCESSING,
             created_at=datetime.now(),
         )
 
-        result = await upload_handler(upload_task, str(file_path), collection, filename)
+        result = await upload_handler(upload_task, str(file_path), collection, section_source,
+                                      source_label=f"Meeting: {meeting.title}", file_id=alloc_file_id)
 
         # 5. Track allocation in meeting metadata
         store.update_meeting(
             meeting_id,
             allocated_collections=[collection],
-            allocated_file_ids=[filename],
+            allocated_file_ids=[alloc_file_id],
         )
 
         updated = store.get_meeting(meeting_id)
@@ -434,16 +439,27 @@ class MeetingService:
 
     @staticmethod
     def _delete_allocation(collection: str, file_id: str) -> None:
-        """Delete an allocation's chunks from a collection."""
+        """Delete an allocation's chunks and file snapshot from a collection."""
         try:
-            services.db.delete_by_filter(
-                collection=collection,
-                key="source",
-                value=file_id,
-            )
-            logger.info("Deleted allocation '%s' from collection '%s'", file_id, collection)
+            from src.collections.file_index import load as load_file_index, remove as remove_file_index
+
+            # Look up source from file index
+            idx = load_file_index(collection)
+            entry = idx.get(file_id, {})
+            source = entry.get("source", "")
+            if source:
+                services.db.delete_by_filter(collection=collection, key="source", value=source)
+
+            # Delete file snapshot
+            file_dir = _files_dir(collection) / file_id
+            if file_dir.exists():
+                shutil.rmtree(file_dir)
+
+            # Remove from index
+            remove_file_index(collection, file_id)
+            logger.info("Deleted allocation file_id=%s source=%s from collection '%s'", file_id, source, collection)
         except Exception as exc:
-            logger.warning("Failed to delete allocation '%s': %s", file_id, exc)
+            logger.warning("Failed to delete allocation file_id=%s: %s", file_id, exc)
 
     async def delete_all_allocations(self, meeting_id: str) -> None:
         """Delete all meeting allocations from all collections and clear meeting allocation fields."""
@@ -651,22 +667,16 @@ class MeetingService:
         allocated_collections: list[str] = []
         allocated_file_ids: list[str] = []
 
-        for alloc in allocations:
+        for section_idx, alloc in enumerate(allocations):
             collection = alloc["collection"]
             content = alloc["content"]
-            project_name = alloc.get("project_name", "")
 
-            # Filename: "{meeting_title} - {project_name}.md"
-            safe_title = _re.sub(r'[^\w一-鿿\s-]', '', meeting.title).strip()
-            safe_title = _re.sub(r'\s+', '_', safe_title)[:40] or f"meeting_{meeting_id}"
-            if project_name:
-                safe_proj = _re.sub(r'[^\w一-鿿\s-]', '', project_name).strip()
-                safe_proj = _re.sub(r'\s+', '_', safe_proj)[:30]
-                filename = f"{safe_title}_-_{safe_proj}.md"
-            else:
-                safe_col = _re.sub(r'[^\w-]', '_', collection)[:20]
-                filename = f"{safe_title}_{safe_col}.md"
-            file_path = UPLOAD_DIR / filename
+            # Each section gets a unique source and file_id
+            section_source = f"__meeting__:{meeting_id}_{section_idx}"
+            alloc_file_id = uuid.uuid4().hex
+            file_dir = _files_dir(collection) / alloc_file_id
+            file_dir.mkdir(parents=True, exist_ok=True)
+            file_path = file_dir / "meeting.md"
             file_path.write_text(content, encoding="utf-8")
 
             # Call upload pipeline
@@ -674,15 +684,18 @@ class MeetingService:
 
             upload_task = Task(
                 id=str(uuid.uuid4()),
-                filename=filename,
+                filename=f"meeting_{meeting_id}",
                 collection=collection,
                 status=TaskStatus.PROCESSING,
                 created_at=datetime.now(),
             )
-            result = await upload_handler(upload_task, str(file_path), collection, filename, meeting_id=meeting_id)
+            result = await upload_handler(upload_task, str(file_path), collection, section_source,
+                                          meeting_id=meeting_id,
+                                          source_label=f"Meeting: {meeting.title}",
+                                          file_id=alloc_file_id)
 
             allocated_collections.append(collection)
-            allocated_file_ids.append(filename)
+            allocated_file_ids.append(alloc_file_id)
 
             results.append({
                 "collection": collection,

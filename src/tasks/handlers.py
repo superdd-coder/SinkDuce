@@ -273,15 +273,34 @@ def _do_sparse(texts: list[str], collection: str):
     try:
         from src.rag.sparse_encoder import SparseEncoder
         encoder = SparseEncoder()
-        vocab_path = Path("data") / collection / "sparse_vocab.json"
-        if vocab_path.exists():
-            encoder.load(str(vocab_path))
+        encoder.load(services.db, collection)
         sparse_vectors = encoder.encode(texts)
-        encoder.save(str(vocab_path))
+        encoder.save(services.db, collection)
         return sparse_vectors
     except Exception:
         logger.warning("[Sparse] encoding failed for collection=%s", collection, exc_info=True)
         return None
+
+
+def _bump_sparse_recalc_counter(collection: str, delta: int) -> None:
+    """Increment the sparse recalc counter and trigger a rebuild if the threshold is crossed."""
+    config = services.db.get_collection_config(collection)
+    threshold = config.get("sparse_recalc_threshold", 5000)
+    counter = config.get("sparse_recalc_counter", 0) + delta
+    services.db.update_collection_config(collection, {"sparse_recalc_counter": counter})
+
+    logger.info("[SparseRecalc] counter col=%s delta=%+d counter=%d threshold=%d",
+                collection, delta, counter, threshold)
+
+    if counter >= threshold:
+        from src.tasks import task_manager as _tman
+        _tman.create_task(
+            filename=f"recalc:{collection}",
+            task_type="sparse_recalc",
+            collection=collection,
+        )
+        logger.info("[SparseRecalc] triggered for %s (counter=%d >= threshold=%d)",
+                    collection, counter, threshold)
 
 
 # ── Consolidation ──────────────────────────────────────────
@@ -479,7 +498,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     return {"message": "Consolidation done", "conflicts_count": len(conflicts)}
 
 
-async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None) -> dict[str, Any]:
+async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None, source_label: str | None = None, file_id: str | None = None) -> dict[str, Any]:
     """处理文件上传任务 - 使用流水线队列控制并发"""
     from src.tasks.task_manager import set_current_task, clear_current_task, check_cancelled
 
@@ -543,12 +562,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
             # Save parsed text for preview (same text the chunker uses)
             try:
-                import json as _json
-                parsed_path = path.with_suffix(path.suffix + ".parsed.txt")
+                file_dir = path.parent
+                parsed_path = file_dir / "parsed.txt"
                 parsed_path.write_text(doc.content, encoding="utf-8")
-                # Save file_type metadata so the frontend knows how to render
-                meta_path = path.with_suffix(path.suffix + ".parsed.meta.json")
-                meta_path.write_text(_json.dumps({"file_type": doc.file_type}), encoding="utf-8")
             except Exception as e:
                 logger.warning("[%s] Failed to save parsed text: %s", filename_param, e)
 
@@ -596,6 +612,10 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 extra_meta["position_map"] = doc.position_map
             if meeting_id:
                 extra_meta["meeting_id"] = meeting_id
+            if file_id:
+                extra_meta["file_id"] = file_id
+            # Human-readable label for search results display
+            extra_meta["source_label"] = source_label if source_label else filename_param
             chunks = chunker.chunk_with_metadata(
                 doc.content, source=filename_param, extra_metadata=extra_meta
             )
@@ -699,6 +719,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 services.db.upsert_sparse_vectors(
                     collection=collection, ids=ids, sparse_vectors=sparse_vectors,
                 )
+            # Track chunk changes for sparse vocab drift detection
+            non_parent_count = len([c for c in chunks if c.chunk_type != "parent"])
+            _bump_sparse_recalc_counter(collection, non_parent_count)
             logger.info("[%s] Store done in %.1fs. Total: %.1fs",
                         filename_param, time.time() - t_store, time.time() - t_start)
 
@@ -721,6 +744,19 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                                 filename_param, remaining, collection)
         except Exception:
             logger.exception("[Coverage] trigger failed for %r", filename_param)
+
+        # Update file index
+        if file_id:
+            try:
+                from src.collections.file_index import add as add_file_index
+                # Preserve original extension for PDF/office files
+                original_ext = Path(file_path).suffix.lower().lstrip(".")
+                add_file_index(collection, file_id, filename_param,
+                              source_label or filename_param,
+                              doc.file_type, len(chunks),
+                              original_ext if original_ext else None)
+            except Exception:
+                logger.warning("[%s] Failed to update files.json", filename_param, exc_info=True)
 
         clear_current_task()
         return {"message": "Done", "filename": filename_param, "chunks_count": len(chunks), "collection": collection}
@@ -773,26 +809,31 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
 
     logger.info("[DOC_SUMMARY] Starting for collection=%s source=%s", collection, source)
 
-    upload_dir = _Path("data").resolve() / "uploads"
-    file_path = upload_dir / source
-    if not file_path.exists():
-        for f in upload_dir.iterdir():
-            if f.name == source:
-                file_path = f
-                break
+    # Resolve file path via file index
+    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import COLLECTIONS_DIR as _COL_DIR
 
-    # Fall back to .parsed.txt if original file was deleted
-    if not file_path.exists():
-        parsed_path = upload_dir / (source + ".parsed.txt")
-        if parsed_path.exists():
-            file_path = parsed_path
-            logger.info("[DOC_SUMMARY] Using parsed text fallback: %s", parsed_path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"Source file '{source}' not found in uploads")
+    file_path = None
+    idx = load_file_index(collection)
+    for fid, entry in idx.items():
+        if entry.get("source") == source:
+            fd = _COL_DIR / collection / "files" / fid
+            if (fd / "parsed.txt").is_file():
+                file_path = fd / "parsed.txt"
+            else:
+                for f in sorted(fd.iterdir()):
+                    if f.is_file() and f.name != "parsed.txt":
+                        file_path = f
+                        break
+            logger.info("[DOC_SUMMARY] Resolved source=%s -> file_id=%s path=%s", source, fid, file_path)
+            break
+
+    if not file_path:
+        raise FileNotFoundError(f"Source file '{source}' not found in files index for collection '{collection}'")
 
     loop = asyncio.get_running_loop()
     # If using parsed text, read it directly instead of re-parsing
-    if file_path.suffix == ".txt" and file_path.name.endswith(".parsed.txt"):
+    if file_path.name == "parsed.txt":
         doc_content = await loop.run_in_executor(None, file_path.read_text, "utf-8")
         doc_content = doc_content.strip()
     else:
@@ -842,3 +883,20 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
         logger.warning("[Coverage] refresh failed for %s", collection, exc_info=True)
 
     return {"message": "Summary generated", "source": source}
+
+
+# ── Sparse Recalc ──────────────────────────────────────────
+
+
+async def sparse_recalc_handler(task, collection: str) -> dict:
+    """Rebuild sparse vocabulary and vectors from scratch for a collection."""
+    del task  # unused
+    from src.rag.sparse_recalc import run_sparse_recalc
+
+    logger.info("[SparseRecalc] Starting recalc for collection=%s", collection)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, run_sparse_recalc, services.db, collection)
+    if result is None:
+        raise RuntimeError(f"Sparse recalc failed for collection={collection}")
+    logger.info("[SparseRecalc] Completed: %s", result)
+    return result

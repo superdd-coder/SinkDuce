@@ -218,7 +218,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
         </div>
         <div className="flex flex-col">
           <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{meetings.length > 0 || meetingsLoading ? meetings.length : "—"}</span>
-          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Recordings</span>
+          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Meetings</span>
         </div>
         <div className="flex flex-col">
           <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>
@@ -329,7 +329,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
       {/* Meeting Log */}
       {meetings.length > 0 && (
         <div>
-          <SectionLabel>Recording Log · {meetings.length}</SectionLabel>
+          <SectionLabel>Meeting Log · {meetings.length}</SectionLabel>
           {meetingsLoading ? (
             <div className="flex items-center gap-2 py-4 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />

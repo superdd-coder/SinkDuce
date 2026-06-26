@@ -100,6 +100,12 @@ export const updateCollectionConfig = (collectionId: string, config: Record<stri
     }
   )
 
+export const triggerSparseRecalc = (collectionId: string) =>
+  request<{ message?: string; task_id?: string; error?: string }>(
+    `/collections/${collectionId}/sparse-recalc`,
+    { method: "POST" }
+  )
+
 // ── Documents ──
 
 export const uploadFiles = async (files: FileList | File[], collection: string) => {
@@ -164,6 +170,7 @@ export interface FileListItem {
   source: string
   chunk_count: number
   file_type?: string
+  original_ext?: string
   note_title?: string
   has_meeting?: boolean
   display_name?: string

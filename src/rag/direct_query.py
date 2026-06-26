@@ -151,10 +151,11 @@ class DirectQueryModule:
         # ── Optional rerank ────────────────────────────────────────────
         do_rerank = rerank_enabled and self.reranker and all_chunks
         if do_rerank:
+            n_before = len(all_chunks)
             try:
                 k = rerank_top_k if rerank_top_k else None
                 all_chunks = self.reranker.rerank(query, all_chunks, top_k=k)
-                logger.info("[Direct] reranked: %d chunks → top_k=%s", len(all_chunks), k or "default")
+                logger.info("[Direct] rerank: %d → %d chunks", n_before, len(all_chunks))
             except Exception:
                 logger.exception("[Direct] rerank failed, using un-reranked results")
                 do_rerank = False
@@ -175,8 +176,12 @@ class DirectQueryModule:
         }
 
         total_children = sum(len(v) for v in filtered_groups.values())
-        logger.info("[Direct] done: %d parents, %d children, %d collections",
-                    len(all_chunks), total_children, len(collections))
+        if total_children:
+            logger.info("[Direct] done: %d parents, %d children, %d collections",
+                        len(all_chunks), total_children, len(collections))
+        else:
+            logger.info("[Direct] done: %d chunks, %d collections",
+                        len(all_chunks), len(collections))
 
         # emit: step="retrieve_done", chunks, collections
         _emit("retrieve_done", f"{len(all_chunks)} chunks", chunks=len(all_chunks), collections=len(collections))

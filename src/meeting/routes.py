@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -83,26 +84,27 @@ async def delete_meeting(meeting_id: str):
     if meeting and meeting.allocated_collections and meeting.allocated_file_ids:
         try:
             from src.services import services
-            from qdrant_client import models
+            from src.collections.file_index import load as load_file_index
 
             for col, fid in zip(meeting.allocated_collections, meeting.allocated_file_ids):
                 try:
-                    services.db.client.delete(
-                        collection_name=col,
-                        points_selector=models.FilterSelector(
-                            filter=models.Filter(
-                                must=[
-                                    models.FieldCondition(
-                                        key="source",
-                                        match=models.MatchValue(
-                                            value=fid
-                                        ),
-                                    )
-                                ]
-                            )
-                        ),
-                    )
-                    logger.info("[DELETE] Cleaned Qdrant points for %s in %s", meeting_id, col)
+                    # Look up source from files.json (fid is file_id UUID, source is __meeting__:{id}_N)
+                    idx = load_file_index(col)
+                    entry = idx.get(fid, {})
+                    source = entry.get("source", "")
+                    if source:
+                        services.db.delete_by_filter(col, key="source", value=source)
+                        # Also clean up file snapshot + files.json
+                        from src.collections.file_index import remove as remove_file_index
+                        import shutil as _shutil
+                        from src.collections.file_index import COLLECTIONS_DIR as _CDIR
+                        snap_dir = _CDIR / col / "files" / fid
+                        if snap_dir.exists():
+                            _shutil.rmtree(snap_dir)
+                        remove_file_index(col, fid)
+                        logger.info("[DELETE] Cleaned Qdrant points for %s/%s in %s", meeting_id, fid, col)
+                    else:
+                        logger.warning("[DELETE] No source found for file_id=%s in %s", fid, col)
                 except Exception as exc:
                     logger.warning("[DELETE] Failed to clean Qdrant points in %s: %s", col, exc)
         except Exception as exc:

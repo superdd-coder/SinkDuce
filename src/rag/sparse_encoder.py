@@ -15,8 +15,6 @@ import logging
 import math
 import re
 from collections import Counter
-from pathlib import Path
-
 logger = logging.getLogger(__name__)
 
 # ── LLM prompt for sparse query preprocessing ──────────────────────────
@@ -135,34 +133,37 @@ class SparseEncoder:
         self.avg_dl: float = 0.0
         self._doc_count: int = 0
 
-    def save(self, path: str) -> None:
-        """Persist vocabulary state to disk so queries can reuse the same encoding."""
+    def save(self, db, collection: str) -> None:
+        """Persist vocabulary state to Qdrant collection config."""
         data = {
             "term_to_id": self.term_to_id,
             "doc_freqs": self.doc_freqs,
             "avg_dl": self.avg_dl,
             "doc_count": self._doc_count,
         }
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        logger.info(
-            "[HYBRID-VERIFY] SparseEncoder.save path=%s terms=%d docs=%d avg_dl=%.1f",
-            path, len(self.term_to_id), self._doc_count, self.avg_dl,
-        )
+        try:
+            db.update_collection_config(collection, {"sparse_vocab": data})
+            logger.info("[Sparse] vocab saved to Qdrant collection=%s terms=%d docs=%d avg_dl=%.1f",
+                        collection, len(self.term_to_id), self._doc_count, self.avg_dl)
+        except Exception:
+            logger.warning("[Sparse] failed to save vocab to Qdrant for %s", collection, exc_info=True)
 
-    def load(self, path: str) -> None:
-        """Restore vocabulary state from disk."""
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    def load(self, db, collection: str) -> None:
+        """Restore vocabulary state from Qdrant collection config."""
+        try:
+            config = db.get_collection_config(collection)
+            data = config.get("sparse_vocab")
+        except Exception:
+            data = None
+        if not data:
+            logger.info("[Sparse] no vocab found in Qdrant for collection=%s", collection)
+            return
         self.term_to_id = data["term_to_id"]
         self.doc_freqs = {int(k): v for k, v in data["doc_freqs"].items()}
         self.avg_dl = float(data["avg_dl"])
         self._doc_count = int(data["doc_count"])
-        logger.info(
-            "[HYBRID-VERIFY] SparseEncoder.load path=%s terms=%d docs=%d avg_dl=%.1f",
-            path, len(self.term_to_id), self._doc_count, self.avg_dl,
-        )
+        logger.info("[Sparse] vocab loaded from Qdrant collection=%s terms=%d docs=%d avg_dl=%.1f",
+                    collection, len(self.term_to_id), self._doc_count, self.avg_dl)
 
     def build_vocab(self, texts: list[str]) -> None:
         """Build vocabulary and document frequencies from a corpus."""
@@ -177,9 +178,12 @@ class SparseEncoder:
                 tid = self.term_to_id[t]
                 self.doc_freqs[tid] = self.doc_freqs.get(tid, 0) + 1
 
-        self._doc_count += len(texts)
-        total_len = sum(len(_tokenize(t)) for t in texts)
-        self.avg_dl = total_len / self._doc_count if self._doc_count else 1.0
+        # Preserve old total token length before updating doc_count
+        old_total_len = self.avg_dl * self._doc_count
+        new_count = len(texts)
+        new_total_len = sum(len(_tokenize(t)) for t in texts)
+        self._doc_count += new_count
+        self.avg_dl = (old_total_len + new_total_len) / self._doc_count if self._doc_count else 1.0
 
     def encode(self, texts: list[str]) -> list[dict[int, float]]:
         """Encode texts into BM25 sparse vectors. Builds vocabulary on first call."""
@@ -229,3 +233,42 @@ class SparseEncoder:
             denominator = count + self.k1 * (1 - self.b + self.b * dl / max(self.avg_dl, 1))
             vec[tid] = idf * numerator / denominator
         return vec
+
+    @classmethod
+    def rebuild_from_texts(cls, texts: list[str]) -> tuple["SparseEncoder", list[dict[int, float]]]:
+        """Build vocabulary and BM25 vectors from scratch for all texts.
+
+        Unlike :meth:`encode` (which incrementally extends an existing encoder),
+        this creates a fresh encoder, builds the complete vocabulary from *all*
+        texts, and computes every vector against the final statistics.  No
+        `load`/`save` round-trip — the caller is responsible for persistence.
+
+        Returns ``(encoder, vectors)`` where *vectors[i]* corresponds to
+        *texts[i]*.
+        """
+        encoder = cls()
+        if not texts:
+            return encoder, []
+
+        total_len = 0
+        # Phase 1: build vocabulary and document frequencies
+        for text in texts:
+            tokens = _tokenize(text)
+            total_len += len(tokens)
+            for t in set(tokens):
+                if t not in encoder.term_to_id:
+                    encoder.term_to_id[t] = len(encoder.term_to_id)
+                tid = encoder.term_to_id[t]
+                encoder.doc_freqs[tid] = encoder.doc_freqs.get(tid, 0) + 1
+
+        encoder._doc_count = len(texts)
+        encoder.avg_dl = total_len / encoder._doc_count
+
+        # Phase 2: compute BM25 vectors using the complete vocabulary
+        vectors = [encoder._compute_bm25(_tokenize(t)) for t in texts]
+
+        logger.info(
+            "[Sparse] rebuild_from_texts: %d docs, %d terms, avg_dl=%.1f",
+            encoder._doc_count, len(encoder.term_to_id), encoder.avg_dl,
+        )
+        return encoder, vectors

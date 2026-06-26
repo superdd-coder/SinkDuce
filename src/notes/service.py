@@ -11,7 +11,7 @@ from src.notes import store
 logger = logging.getLogger("notes.service")
 
 
-def expand_distill_blocks(collection: str, content: str, depth: int = 0, max_depth: int = 3) -> str:
+def expand_distill_blocks(content: str, depth: int = 0, max_depth: int = 3) -> str:
     """Recursively expand distill blocks to include their content.
     Prevents infinite loops with max_depth."""
     if depth >= max_depth:
@@ -28,10 +28,10 @@ def expand_distill_blocks(collection: str, content: str, depth: int = 0, max_dep
             block_content = match.group(2).strip()
 
             # Get source note content
-            source_content = store.get_content(collection, source_id)
+            source_content = store.get_content(source_id)
             if source_content:
                 # Recursively expand nested blocks
-                expanded_source = expand_distill_blocks(collection, source_content, depth + 1, max_depth)
+                expanded_source = expand_distill_blocks(source_content, depth + 1, max_depth)
                 return f"[Source: {source_title}]\n{expanded_source}"
             else:
                 return f"[Source: {source_title}]\n{block_content}"
@@ -62,29 +62,29 @@ def get_llm():
     return services.llm
 
 
-def distill_note(collection: str, source_note_id: str, target_note_id: str) -> str:
+def distill_note(source_note_id: str, target_note_id: str) -> str:
     """Distill source note content for embedding into target note.
-    Uses cache if available. Cache is keyed by (collection, source_note_id) —
+    Uses cache if available. Cache is keyed by source_note_id —
     distillation result depends only on the source, not the target.
     Returns the distilled markdown.
 
     NOTE: This function is synchronous (calls LLM via blocking generate()).
     Callers in async contexts must wrap with asyncio.to_thread()."""
     # Check cache (single-key: collection + source_note_id)
-    cached = store.get_distillation(collection, source_note_id)
+    cached = store.get_distillation(source_note_id)
     if cached is not None:
         logger.info("Using cached distillation for %s", source_note_id)
         return cached
 
     # Get source content and expand nested distill blocks
-    source_content = store.get_content(collection, source_note_id)
+    source_content = store.get_content(source_note_id)
     if not source_content or not source_content.strip():
-        source_note = store.get_note(collection, source_note_id)
+        source_note = store.get_note(source_note_id)
         title = source_note.title if source_note else source_note_id
         return f"*Note '{title}' is empty.*"
 
     # Expand nested distill blocks so their content is included
-    source_content = expand_distill_blocks(collection, source_content)
+    source_content = expand_distill_blocks(source_content)
 
     # Call LLM
     logger.info("Generating distillation for %s (%d chars)", source_note_id, len(source_content))
@@ -102,62 +102,62 @@ def distill_note(collection: str, source_note_id: str, target_note_id: str) -> s
                 result = result[nl + 1:].strip()
 
     # Cache the result (single-key)
-    store.save_distillation(collection, source_note_id, result)
+    store.save_distillation(source_note_id, result)
     return result
 
 
-def propagate_forward(collection: str, source_note_id: str, auto: bool = False) -> list[str]:
+def propagate_forward(source_note_id: str, auto: bool = False) -> list[str]:
     """Re-distill source note content into all notes that reference it.
     If auto=True, also recursively propagate downstream (chain propagation).
     Returns list of updated note IDs."""
     updated = []
-    referenced_by = store.get_referenced_by(collection, source_note_id)
-    source_note = store.get_note(collection, source_note_id)
+    referenced_by = store.get_referenced_by(source_note_id)
+    source_note = store.get_note(source_note_id)
     if not source_note:
         return updated
 
     # Delete existing distillation so it gets regenerated
-    store.delete_distillation(collection, source_note_id)
+    store.delete_distillation(source_note_id)
 
     # Set loading=true on downstream notes' distill blocks before distillation
     for target_id in referenced_by:
-        target_content = store.get_content(collection, target_id)
+        target_content = store.get_content(target_id)
         if target_content is None:
             continue
         loading_content = _set_loading_flag(target_content, source_note_id, True)
         if loading_content != target_content:
-            store.save_content(collection, target_id, loading_content)
+            store.save_content(target_id, loading_content)
 
     for target_id in referenced_by:
-        target_content = store.get_content(collection, target_id)
+        target_content = store.get_content(target_id)
         if target_content is None:
             continue
 
         # Generate new distillation
-        new_distilled = distill_note(collection, source_note_id, target_id)
+        new_distilled = distill_note(source_note_id, target_id)
 
         # Replace the injection block in target's content
         # Re-read content (may have loading flag set above)
-        current_content = store.get_content(collection, target_id) or target_content
+        current_content = store.get_content(target_id) or target_content
         new_content = replace_injection_block(current_content, source_note_id, new_distilled, source_note.title)
         if new_content != target_content:
-            store.save_content(collection, target_id, new_content)
+            store.save_content(target_id, new_content)
             updated.append(target_id)
             logger.info("Updated injection in %s from source %s", target_id, source_note_id)
 
         # Chain propagation — if this target is also referenced by others
         if auto:
-            sub_updated = propagate_forward(collection, target_id, auto=True)
+            sub_updated = propagate_forward(target_id, auto=True)
             updated.extend(sub_updated)
 
     # Touch the source note's updated_at so the frontend can detect completion
     if updated:
-        note = store.get_note(collection, source_note_id)
+        note = store.get_note(source_note_id)
         if note:
             # Save content to update updated_at without changing the actual content
-            current_content = store.get_content(collection, source_note_id)
+            current_content = store.get_content(source_note_id)
             if current_content is not None:
-                store.save_content(collection, source_note_id, current_content)
+                store.save_content(source_note_id, current_content)
 
     return updated
 

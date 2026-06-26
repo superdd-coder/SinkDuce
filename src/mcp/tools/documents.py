@@ -4,20 +4,24 @@ import asyncio
 import json
 import logging
 import shutil
+import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-UPLOAD_DIR = Path("data/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+COLLECTIONS_DIR = Path("data").resolve() / "collections"
+
+def _files_dir(collection_id: str) -> Path:
+    return COLLECTIONS_DIR / collection_id / "files"
 
 # Ensure task handlers are registered (idempotent — safe even if HTTP routes also register them)
 from src.tasks import task_manager
-from src.tasks.handlers import consolidate_handler, doc_summary_handler, upload_handler
+from src.tasks.handlers import consolidate_handler, doc_summary_handler, sparse_recalc_handler, upload_handler
 
 task_manager.register_handler("upload", upload_handler)
 task_manager.register_handler("consolidate", consolidate_handler)
 task_manager.register_handler("doc_summary", doc_summary_handler)
+task_manager.register_handler("sparse_recalc", sparse_recalc_handler)
 
 
 async def list_documents(collection: str) -> str:
@@ -86,7 +90,11 @@ async def upload_document(file_path: str, collection: str = "default") -> str:
                     return {"error": f"File type '.{ext}' not allowed. Allowed: {', '.join(allowed)}"}
 
         safe_name = path.name
-        save_path = UPLOAD_DIR / safe_name
+        file_id = uuid.uuid4().hex
+        file_source = f"__file__:{file_id}"
+        file_dir = _files_dir(collection) / file_id
+        file_dir.mkdir(parents=True, exist_ok=True)
+        save_path = file_dir / safe_name
         shutil.copy2(path, save_path)
 
         task = task_manager.create_task(
@@ -94,7 +102,9 @@ async def upload_document(file_path: str, collection: str = "default") -> str:
             task_type="upload",
             file_path=str(save_path),
             collection=collection,
-            filename_param=safe_name,
+            filename_param=file_source,
+            source_label=safe_name,
+            file_id=file_id,
         )
         return {"message": "File queued for processing", "task_id": task.id, "filename": safe_name}
 
@@ -149,17 +159,47 @@ async def delete_document(collection: str, source: str) -> str:
         if not services.db.collection_exists(collection):
             return {"error": f"Collection '{collection}' does not exist"}
 
-        services.db.delete_by_filter(collection, key="source", value=source)
+        deleted_count = services.db.delete_by_filter(collection, key="source", value=source)
 
-        source_path = UPLOAD_DIR / source
-        if source_path.exists():
-            source_path.unlink()
+        # Delete file directory via file index
+        try:
+            from src.collections.file_index import load as load_file_index, remove_by_source as remove_file_index
+            idx = load_file_index(collection)
+            for fid, entry in idx.items():
+                if entry.get("source") == source:
+                    file_dir = _files_dir(collection) / fid
+                    if file_dir.exists():
+                        shutil.rmtree(file_dir)
+                    remove_file_index(collection, source)
+                    break
+        except Exception as e:
+            logger.warning("File index cleanup failed (non-fatal): %s", e)
 
         try:
             sm = SummaryManager(db=services.db)
             sm.delete_doc_summary(collection, source)
         except Exception as e:
             logger.warning("Doc summary cleanup failed (non-fatal): %s", e)
+
+        # ── Sparse recalc counter (vocab drift tracking) ──
+        if deleted_count > 0:
+            try:
+                col_config = services.db.get_collection_config(collection)
+                sc = col_config.get("sparse_recalc_counter", 0) + deleted_count
+                threshold = col_config.get("sparse_recalc_threshold", 5000)
+                services.db.update_collection_config(collection, {"sparse_recalc_counter": sc})
+                logger.info("[SparseRecalc] counter col=%s delta=+%d counter=%d threshold=%d",
+                            collection, deleted_count, sc, threshold)
+                if sc >= threshold:
+                    task_manager.create_task(
+                        filename=f"recalc:{collection}",
+                        task_type="sparse_recalc",
+                        collection=collection,
+                    )
+                    logger.info("[SparseRecalc] triggered for %s (counter=%d >= threshold=%d)",
+                                collection, sc, threshold)
+            except Exception as e:
+                logger.warning("[SparseRecalc] counter update failed (non-fatal): %s", e)
 
         try:
             col_config = services.db.get_collection_config(collection)

@@ -110,6 +110,9 @@ class CollectionConfigUpdateRequest(BaseModel):
     rerank_top_k: int | None = None
     allowed_file_types: list[str] | None = None
     cloud_parsing: bool | None = None
+    sparse_recalc_threshold: int | None = None
+    sparse_recalc_counter: int | None = None
+    sparse_lock: bool | None = None
 
 
 class ConfigUpdateRequest(BaseModel):

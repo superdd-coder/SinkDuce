@@ -644,3 +644,24 @@ input[type="checkbox"] {
   font-size: 11px !important;
   letter-spacing: 0.04em;
 }
+
+/* ── TipTap readonly mode ── */
+.tiptap-readonly .image-visual-desc,
+.tiptap-readonly .image-visual-desc-text,
+.tiptap-readonly .image-visual-desc-actions {
+  user-select: none !important;
+  pointer-events: none !important;
+}
+.tiptap-readonly [data-type="distill-block"] {
+  user-select: none !important;
+}
+.tiptap-readonly [data-type="distill-block"] * {
+  pointer-events: none !important;
+}
+.tiptap-readonly [data-type="distill-block"] button,
+.tiptap-readonly [data-type="distill-block"] [data-action="expand"],
+.tiptap-readonly [data-type="distill-block"] [class*="expand"],
+.tiptap-readonly [data-type="distill-block"] [class*="show-more"] {
+  pointer-events: auto !important;
+  user-select: auto !important;
+}

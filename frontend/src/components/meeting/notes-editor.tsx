@@ -174,7 +174,7 @@ export function NotesEditor({
               value={draft}
               onChange={handleDraftChange}
               minHeight="250px"
-              placeholder="Write your recording notes here (Markdown supported)..."
+              placeholder="Write your meeting notes here (Markdown supported)..."
             />
           </div>
         </TabsContent>

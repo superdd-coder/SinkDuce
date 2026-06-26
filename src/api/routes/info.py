@@ -124,15 +124,13 @@ async def generate_doc_summary(collection: str, source: str):
     from pathlib import Path as _Path
 
     # Validate source file exists
-    upload_dir = _Path("data").resolve() / "uploads"
-    file_path = upload_dir / source
+    files_dir = _Path("data").resolve() / "files"
+    file_dir = files_dir / source
+    file_path = file_dir / "original"
     if not file_path.exists():
-        for f in upload_dir.iterdir():
-            if f.name == source:
-                file_path = f
-                break
+        file_path = file_dir / "parsed.txt"
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail=f"Source file '{source}' not found in uploads")
+        raise HTTPException(status_code=404, detail=f"Source file '{source}' not found in files/{source}")
 
     task = _tm.create_task(
         filename=f"doc_summary:{collection_id}:{source}",
@@ -213,7 +211,7 @@ def get_meeting_log(collection: str):
                 allocated = [data["allocated_collection"]]
 
             if collection_id in allocated:
-                # Verify chunks actually exist
+                # Verify chunks actually exist (file_id field on chunk)
                 file_ids = data.get("allocated_file_ids", [])
                 if not file_ids and data.get("allocated_file_id"):
                     file_ids = [data["allocated_file_id"]]
@@ -223,10 +221,10 @@ def get_meeting_log(collection: str):
                         results, _ = services.db.scroll_points(
                             collection=collection_id,
                             scroll_filter=QFilter(must=[
-                                FieldCondition(key="source", match=MatchValue(value=fid)),
+                                FieldCondition(key="file_id", match=MatchValue(value=fid)),
                             ]),
                             limit=1,
-                            with_payload=["source"],
+                            with_payload=["source", "source_label"],
                             with_vectors=False,
                         )
                         if results:
@@ -267,15 +265,28 @@ def get_meeting_log(collection: str):
                 alloc_collections = data.get("allocated_collections", [])
                 alloc_file_ids = data.get("allocated_file_ids", [])
                 file_ids_for_collection = []
-                for col, fid in zip(alloc_collections, alloc_file_ids):
-                    if col == collection_id:
-                        file_ids_for_collection.append(fid)
+                file_labels: dict[str, str] = {}
+                # Try to get display labels from files.json
+                try:
+                    from src.collections.file_index import load as load_file_index
+                    idx = load_file_index(collection_id)
+                    for col, fid in zip(alloc_collections, alloc_file_ids):
+                        if col == collection_id:
+                            file_ids_for_collection.append(fid)
+                            entry = idx.get(fid, {})
+                            label = entry.get("source_label", fid[:8])
+                            file_labels[fid] = label
+                except Exception:
+                    for col, fid in zip(alloc_collections, alloc_file_ids):
+                        if col == collection_id:
+                            file_ids_for_collection.append(fid)
                 meetings.append({
                     "id": data.get("id", mid),
                     "title": data.get("title", ""),
                     "created_at": data.get("created_at"),
                     "updated_at": data.get("updated_at"),
                     "file_ids": file_ids_for_collection,
+                    "file_labels": file_labels,
                 })
             except (json.JSONDecodeError, OSError):
                 meetings.append({"id": mid, "title": mid, "created_at": None, "updated_at": None, "file_ids": []})

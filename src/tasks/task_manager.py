@@ -100,6 +100,7 @@ class TaskManager:
         self._upload_running = 0
         self._processors: list[asyncio.Task] = []
         self._handlers: dict[str, Callable[..., Coroutine]] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def register_handler(self, task_type: str, handler: Callable[..., Coroutine]):
         """Register a task handler."""
@@ -107,6 +108,7 @@ class TaskManager:
 
     async def start(self):
         """Start queue processors."""
+        self._loop = asyncio.get_running_loop()
         if not self._processors:
             self._processors = [
                 asyncio.create_task(self._process_upload_queue()),
@@ -125,7 +127,7 @@ class TaskManager:
         self._processors.clear()
 
     def create_task(self, filename: str, task_type: str = "upload", collection: str = "default", **kwargs) -> Task:
-        """Create and enqueue a new task."""
+        """Create and enqueue a new task.  Thread-safe: can be called from any thread."""
         task_id = str(uuid.uuid4())
         task = Task(
             id=task_id,
@@ -135,7 +137,12 @@ class TaskManager:
         )
         self.tasks[task_id] = task
         self._task_args[task_id] = (task_type, kwargs)
-        asyncio.create_task(self._enqueue_task(task_id, task_type, kwargs))
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._enqueue_task(task_id, task_type, kwargs), self._loop
+            )
+        else:
+            asyncio.create_task(self._enqueue_task(task_id, task_type, kwargs))
         return task
 
     def cancel_task(self, task_id: str) -> bool:

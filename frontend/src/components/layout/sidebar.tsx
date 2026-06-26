@@ -17,7 +17,7 @@ const navItems: Array<{ view: SidebarView; label: string }> = [
   { view: "chat", label: "Chat" },
   { view: "database", label: "Collection" },
   { view: "recall", label: "Recall" },
-  { view: "meeting", label: "Recording" },
+  { view: "meeting", label: "Meeting" },
   { view: "llm_provider", label: "Settings" },
 ]
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import threading
 import time
 import uuid
@@ -79,12 +80,23 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
 
     # ── Stage 1: Chunking ──
     source = f"__note__:{note_id}"
+    file_id = uuid.uuid4().hex
     extra_meta = {
         "file_type": "note",
         "note_id": note_id,
         "note_title": note_title,
+        "file_id": file_id,
         "ingested_at": time.time(),
+        "source_label": f"Note: {note_title}",
     }
+
+    # Write snapshot to collections/{id}/files/{file_id}/
+    from src.collections.file_index import ensure_files_dir
+    import re as _re
+    safe_title = _re.sub(r'[^\w一-鿿\s-]', '', note_title).strip()[:80] or note_id
+    safe_title = _re.sub(r'\s+', '_', safe_title)
+    snapshot_dir = ensure_files_dir(collection, file_id)
+    (snapshot_dir / f"{safe_title}.md").write_text(content, encoding="utf-8")
 
     if config.get("chunk_mode") == "parent_child":
         chunker = MarkdownParentChildChunker(
@@ -173,20 +185,40 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
     try:
         from src.rag.sparse_encoder import SparseEncoder
         encoder = SparseEncoder()
-        vocab_path = Path("data") / collection / "sparse_vocab.json"
-        if vocab_path.exists():
-            encoder.load(str(vocab_path))
+        encoder.load(services.db, collection)
         texts = [_build_enriched_text(c) for c in chunks]
         sparse_vectors = encoder.encode(texts)
-        encoder.save(str(vocab_path))
+        encoder.save(services.db, collection)
         services.db.upsert_sparse_vectors(
             collection=collection, ids=ids, sparse_vectors=sparse_vectors,
         )
     except Exception:
         logger.warning("[INGEST] Note %s: sparse encoding failed", note_id, exc_info=True)
 
+    # Update file index
+    try:
+        from src.collections.file_index import add as add_file_index
+        add_file_index(collection, file_id, source, f"Note: {note_title}", "note", len(chunks))
+    except Exception:
+        logger.warning("[INGEST] Note %s: failed to update files.json", note_id, exc_info=True)
+
     logger.info("[INGEST] Note %s: store done in %.1fs. Total: %.1fs",
                 note_id, time.time() - t_store, time.time() - t_start)
+
+    # Clean up old re-ingest snapshots (remove all except current file_id for this source)
+    try:
+        from src.collections.file_index import load as load_file_index, save as save_file_index
+        idx = load_file_index(collection)
+        for fid, entry in list(idx.items()):
+            if entry.get("source") == source and fid != file_id:
+                old_dir = snapshot_dir.parent / fid
+                if old_dir.exists():
+                    shutil.rmtree(old_dir)
+                del idx[fid]
+        if any(entry.get("source") == source and fid != file_id for fid, entry in idx.items()):
+            save_file_index(collection, idx)
+    except Exception:
+        pass
 
 
 # ── Notes CRUD ─────────────────────────────────────────────────
@@ -199,7 +231,7 @@ async def list_notes(collection: str):
     ingested_ids = _get_ingested_note_ids(collection)
     items = []
     for note in notes:
-        referenced_by = store.get_referenced_by(collection, note.id)
+        referenced_by = store.get_referenced_by(note.id)
         items.append({
             "id": note.id,
             "title": note.title,
@@ -231,12 +263,12 @@ async def create_note(collection: str, body: dict = Body()):
 @router.get("/notes/{collection}/{note_id}")
 async def get_note(collection: str, note_id: str):
     """Get note metadata, content, and references."""
-    note = store.get_note(collection, note_id)
+    note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
-    content = store.get_content(collection, note_id) or ""
-    references = store.get_references(collection, note_id)
-    referenced_by = store.get_referenced_by(collection, note_id)
+    content = store.get_content(note_id) or ""
+    references = store.get_references(note_id)
+    referenced_by = store.get_referenced_by(note_id)
 
     # Check if this note is ingested into Qdrant
     is_ingested = False
@@ -251,7 +283,7 @@ async def get_note(collection: str, note_id: str):
 
     # Enrich references with source titles
     for ref in references:
-        source = store.get_note(collection, ref.get("source_note_id", ""))
+        source = store.get_note(ref.get("source_note_id", ""))
         ref["source_title"] = source.title if source else ref.get("source_note_id", "")
     return {
         "id": note.id,
@@ -270,13 +302,13 @@ async def get_note(collection: str, note_id: str):
 @router.put("/notes/{collection}/{note_id}")
 async def update_note(collection: str, note_id: str, body: dict = Body()):
     """Update note content and/or title. Auto-syncs injection block references."""
-    note = store.get_note(collection, note_id)
+    note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
 
     # Update title if provided
     if "title" in body:
-        store.update_note(collection, note_id, title=body["title"])
+        store.update_note(note_id, title=body["title"])
 
     # Update content if provided
     if "content" in body:
@@ -284,7 +316,7 @@ async def update_note(collection: str, note_id: str, body: dict = Body()):
 
         # Sync references — re-parse injection blocks from content
         # IMPORTANT: get old refs BEFORE saving new content
-        old_refs = store.get_references(collection, note_id)
+        old_refs = store.get_references(note_id)
         old_source_ids = {r["source_note_id"] for r in old_refs}
 
         blocks = parse_injection_blocks(content)
@@ -293,7 +325,7 @@ async def update_note(collection: str, note_id: str, body: dict = Body()):
         for block in blocks:
             source_id = block["source_note_id"]
             new_source_ids.add(source_id)
-            source = store.get_note(collection, source_id)
+            source = store.get_note(source_id)
             refs.append({
                 "block_id": block["block_id"],
                 "source_note_id": source_id,
@@ -301,14 +333,14 @@ async def update_note(collection: str, note_id: str, body: dict = Body()):
             })
 
         # Save the content and references
-        store.save_content(collection, note_id, content)
-        store.save_references(collection, note_id, refs)
+        store.save_content(note_id, content)
+        store.save_references(note_id, refs)
 
         # Update referenced_by: diff old vs new sources
         for removed_source_id in old_source_ids - new_source_ids:
-            store._remove_referenced_by(collection, removed_source_id, note_id)
+            store._remove_referenced_by(removed_source_id, note_id)
         for added_source_id in new_source_ids - old_source_ids:
-            store._add_referenced_by(collection, added_source_id, note_id)
+            store._add_referenced_by(added_source_id, note_id)
 
     return {"message": "Note updated", "id": note_id}
 
@@ -327,7 +359,7 @@ async def delete_note(collection: str, note_id: str):
     except Exception as e:
         logger.warning("Failed to clean up ingested chunks for deleted note %s: %s", note_id, e)
 
-    deleted = store.delete_note(collection, note_id)
+    deleted = store.delete_note(note_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
     return {"message": "Note deleted"}
@@ -344,11 +376,11 @@ async def distill_into_note(collection: str, note_id: str, body: dict = Body()):
     if not source_note_id:
         raise HTTPException(status_code=400, detail="source_note_id is required")
 
-    source = store.get_note(collection, source_note_id)
+    source = store.get_note(source_note_id)
     if not source:
         raise HTTPException(status_code=404, detail=f"Source note {source_note_id} not found")
 
-    target = store.get_note(collection, note_id)
+    target = store.get_note(note_id)
     if not target:
         raise HTTPException(status_code=404, detail=f"Target note {note_id} not found")
 
@@ -357,7 +389,7 @@ async def distill_into_note(collection: str, note_id: str, body: dict = Body()):
     # Generate distilled content (uses cache if available).
     # Run in thread pool — the LLM call is synchronous and blocks the
     # event loop, causing all other requests (getNote etc.) to queue.
-    distilled = await asyncio.to_thread(distill_note, collection, source_note_id, note_id)
+    distilled = await asyncio.to_thread(distill_note, source_note_id, note_id)
 
     block_id = uuid.uuid4().hex[:12]
 
@@ -376,11 +408,11 @@ async def distill_into_note(collection: str, note_id: str, body: dict = Body()):
 @router.get("/notes/{collection}/{note_id}/propagation-preview")
 async def get_propagation_preview(collection: str, note_id: str):
     """Preview the full propagation chain if this note's content changes."""
-    note = store.get_note(collection, note_id)
+    note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
 
-    links = store.build_propagation_chain(collection, note_id)
+    links = store.build_propagation_chain(note_id)
     return {
         "origin_id": note_id,
         "origin_title": note.title,
@@ -394,14 +426,14 @@ async def trigger_propagation(collection: str, note_id: str, background_tasks: B
     """Trigger backward propagation: re-distill this note into all notes that reference it.
     Chain propagation (downstream) is automatic and doesn't require user confirmation.
     Runs in background to avoid blocking."""
-    note = store.get_note(collection, note_id)
+    note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
 
     # Run propagation in background to avoid blocking the response
     def run_propagation():
         logger.info("[PROPAGATE] Starting propagation from note %s in '%s'", note_id, collection)
-        updated = propagate_forward(collection, note_id, auto=True)
+        updated = propagate_forward(note_id, auto=True)
         logger.info("[PROPAGATE] Updated %d notes: %s", len(updated), updated)
 
     background_tasks.add_task(run_propagation)
@@ -419,11 +451,11 @@ async def trigger_propagation(collection: str, note_id: str, background_tasks: B
 async def ingest_note(collection: str, note_id: str, background_tasks: BackgroundTasks):
     """Ingest a note's markdown content into the Qdrant vector store
     so it becomes searchable via RAG."""
-    note = store.get_note(collection, note_id)
+    note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
 
-    content = store.get_content(collection, note_id) or ""
+    content = store.get_content(note_id) or ""
     if not content.strip():
         raise HTTPException(status_code=400, detail="Note content is empty")
 
@@ -451,17 +483,30 @@ async def ingest_note(collection: str, note_id: str, background_tasks: Backgroun
 @router.delete("/notes/{collection}/{note_id}/ingest")
 async def remove_note_ingestion(collection: str, note_id: str):
     """Remove all ingested chunks for a note from Qdrant."""
-    note = store.get_note(collection, note_id)
+    note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
 
     source = f"__note__:{note_id}"
+    logger.info("[INGEST] Removing ingestion for note %s source=%s from collection '%s'", note_id, source, collection)
+
+    if not services.db.collection_exists(collection):
+        logger.warning("[INGEST] Collection '%s' does not exist, nothing to remove", collection)
+        return {"message": "Collection not found, nothing to remove", "is_ingested": False}
+
     try:
         services.db.delete_by_filter(collection, key="source", value=source)
         logger.info("[INGEST] Removed ingestion for note %s from collection '%s'", note_id, collection)
     except Exception as e:
         logger.error("[INGEST] Failed to remove note %s: %s", note_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to remove ingestion: {e}")
+
+    # Update file index
+    try:
+        from src.collections.file_index import remove_by_source as remove_file_index
+        remove_file_index(collection, source)
+    except Exception:
+        pass
 
     return {"message": "Ingestion removed", "is_ingested": False}
 
@@ -474,7 +519,7 @@ IMAGES_DIR = Path("data").resolve() / "notes"
 @router.post("/notes/{collection}/{note_id}/images")
 async def upload_note_image(collection: str, note_id: str, file: UploadFile = File(...)):
     """Upload an image for a note. Returns the URL path to use in markdown."""
-    note = store.get_note(collection, note_id)
+    note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
 

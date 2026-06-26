@@ -38,6 +38,7 @@ export function DatabaseView() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fetchFilesRef = useRef<() => void>(() => {})
   const [deleteFileTarget, setDeleteFileTarget] = useState<string | null>(null)
+  const deleteFileDisplay = files.find(f => f.source === deleteFileTarget)?.display_name || deleteFileTarget
   const [allowedFileTypes, setAllowedFileTypes] = useState<string[]>([])
   const [coverage, setCoverage] = useState<string>("")
 
@@ -306,7 +307,7 @@ export function DatabaseView() {
                                       borderRadius: "2px",
                                     }}
                                   >
-                                    Recording
+                                    Meeting
                                   </span>
                                 )}
                               </span>
@@ -365,6 +366,8 @@ export function DatabaseView() {
         collection={activeCollection}
         source={selectedFile}
         displayName={files.find(f => f.source === selectedFile)?.display_name}
+        fileType={files.find(f => f.source === selectedFile)?.file_type}
+        originalExt={files.find(f => f.source === selectedFile)?.original_ext}
         openKey={dialogKey}
         chunks={chunks}
         chunksTotal={chunksTotal}
@@ -379,7 +382,7 @@ export function DatabaseView() {
             <DialogTitle>Delete File</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Are you sure you want to delete <span className="font-mono font-medium text-foreground">{deleteFileTarget}</span>?
+            Are you sure you want to delete <span className="font-medium text-foreground truncate max-w-[200px] inline-block align-bottom">{deleteFileDisplay}</span>?
             This will remove all its chunks from the database.
           </p>
           <div className="flex justify-end gap-2 pt-2">

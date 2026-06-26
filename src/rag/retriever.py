@@ -77,14 +77,12 @@ class Retriever:
         Dense encoding always uses the original query_vector.
         """
         try:
-            vocab_path = Path("data") / collection / "sparse_vocab.json"
-            if not vocab_path.exists():
-                raise FileNotFoundError(
-                    f"No sparse vocabulary for collection {collection} at {vocab_path}"
-                )
-
             encoder = self._get_sparse_encoder()
-            encoder.load(str(vocab_path))
+            encoder.load(self.db, collection)
+            if not encoder.term_to_id:
+                raise FileNotFoundError(
+                    f"No sparse vocabulary for collection {collection}"
+                )
 
             # LLM-powered query preprocessing for sparse encoding
             from src.rag.sparse_encoder import preprocess_query_for_sparse

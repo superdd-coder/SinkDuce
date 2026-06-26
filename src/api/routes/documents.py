@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, UploadFile, HTTPException
@@ -10,7 +12,7 @@ from fastapi.responses import Response
 from src.services import services
 from src.parsers import parse_directory
 from src.tasks import task_manager
-from src.tasks.handlers import consolidate_handler, doc_summary_handler, upload_handler
+from src.tasks.handlers import consolidate_handler, doc_summary_handler, sparse_recalc_handler, upload_handler
 from src.rag.summary_manager import SummaryManager
 from src.collections import store as collection_store
 
@@ -18,13 +20,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-UPLOAD_DIR = Path("data/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+COLLECTIONS_DIR = Path("data").resolve() / "collections"
+
+def _files_dir(collection_id: str) -> Path:
+    return COLLECTIONS_DIR / collection_id / "files"
 
 # 注册任务处理器
 task_manager.register_handler("upload", upload_handler)
 task_manager.register_handler("consolidate", consolidate_handler)
 task_manager.register_handler("doc_summary", doc_summary_handler)
+task_manager.register_handler("sparse_recalc", sparse_recalc_handler)
 
 
 def _get_summary_manager() -> SummaryManager:
@@ -59,11 +64,15 @@ async def upload_document(
     tasks = []
 
     for file in files:
-        # 保存文件 — sanitize filename to prevent path traversal
+        # 保存文件 — 用 file_id 做目录，防同名冲突
         safe_name = Path(file.filename).name
         if not safe_name:
             raise HTTPException(status_code=400, detail="Invalid filename")
-        save_path = UPLOAD_DIR / safe_name
+        file_id = uuid.uuid4().hex
+        file_source = f"__file__:{file_id}"
+        file_dir = _files_dir(collection_id) / file_id
+        file_dir.mkdir(parents=True, exist_ok=True)
+        save_path = file_dir / safe_name
         save_path.write_bytes(await file.read())
 
         # 创建异步任务
@@ -72,7 +81,9 @@ async def upload_document(
             task_type="upload",
             file_path=str(save_path),
             collection=collection_id,
-            filename_param=safe_name,
+            filename_param=file_source,
+            source_label=safe_name,
+            file_id=file_id,
         )
         tasks.append(task.to_dict())
 
@@ -180,14 +191,42 @@ async def delete_document(collection: str, doc_source: str):
     collection_id = col_meta["id"] if col_meta else collection
 
     logger.info("[DELETE] Deleting document '%s' from collection='%s'", doc_source, collection_id)
-    services.db.delete_by_filter(collection_id, key="source", value=doc_source)
-    logger.info("[DELETE] Chunks deleted from Qdrant")
+    deleted_count = services.db.delete_by_filter(collection_id, key="source", value=doc_source)
+    logger.info("[DELETE] %d chunks deleted from Qdrant", deleted_count)
 
-    # Delete the source file from uploads
-    source_path = UPLOAD_DIR / doc_source
-    if source_path.exists():
-        source_path.unlink()
-        logger.info("[DELETE] Source file deleted: %s", doc_source)
+    # Bump sparse recalc counter
+    if deleted_count > 0:
+        try:
+            col_config = services.db.get_collection_config(collection_id)
+            sc = col_config.get("sparse_recalc_counter", 0) + deleted_count
+            threshold = col_config.get("sparse_recalc_threshold", 5000)
+            services.db.update_collection_config(collection_id, {"sparse_recalc_counter": sc})
+            logger.info("[SparseRecalc] counter col=%s delta=+%d counter=%d", collection_id, deleted_count, sc)
+            if sc >= threshold:
+                task_manager.create_task(
+                    filename=f"recalc:{collection_id}",
+                    task_type="sparse_recalc",
+                    collection=collection_id,
+                )
+                logger.info("[SparseRecalc] triggered for %s", collection_id)
+        except Exception as e:
+            logger.warning("[SparseRecalc] counter update failed (non-fatal): %s", e)
+
+    # Delete the source file directory via file index lookup
+    try:
+        from src.collections.file_index import load as load_file_index, remove_by_source as remove_file_index
+        idx = load_file_index(collection_id)
+        # Find file_id by source
+        for fid, entry in idx.items():
+            if entry.get("source") == doc_source:
+                file_dir = _files_dir(collection_id) / fid
+                if file_dir.exists():
+                    shutil.rmtree(file_dir)
+                remove_file_index(collection_id, doc_source)
+                logger.info("[DELETE] Source file deleted: %s -> %s", doc_source, file_dir)
+                break
+    except Exception as e:
+        logger.warning("[DELETE] File index cleanup failed (non-fatal): %s", e)
 
     # Clean up doc summary for this document (non-blocking, best effort)
     try:
@@ -291,11 +330,99 @@ async def delete_document(collection: str, doc_source: str):
     return {"message": f"Deleted chunks from {doc_source} in {collection_id}"}
 
 
+def _find_file_path(source: str, collection_id: str | None = None) -> Path | None:
+    """Find the preview file for a source identifier."""
+    from src.collections.file_index import load as load_file_index
+    from pathlib import Path as _Path
+
+    def _first_file(d: Path) -> Path | None:
+        """Return the best preview file: PDFs → original, others → parsed.txt."""
+        # If original is PDF, return it for iframe rendering
+        for f in sorted(d.iterdir()):
+            if f.is_file() and f.suffix.lower() == ".pdf":
+                return f
+        # Prefer parsed.txt for text-based preview
+        parsed = d / "parsed.txt"
+        if parsed.is_file():
+            return parsed
+        # Fallback: any file
+        for f in sorted(d.iterdir()):
+            if f.is_file() and f.name != "parsed.txt":
+                return f
+        return None
+
+    # If we know the collection, look up directly
+    if collection_id:
+        idx = load_file_index(collection_id)
+        for fid, entry in idx.items():
+            if entry.get("source") == source:
+                return _first_file(_files_dir(collection_id) / fid)
+
+    # Fallback: search all collections
+    if COLLECTIONS_DIR.is_dir():
+        for col_dir in COLLECTIONS_DIR.iterdir():
+            if not col_dir.is_dir():
+                continue
+            idx = load_file_index(col_dir.name)
+            for fid, entry in idx.items():
+                if entry.get("source") == source:
+                    return _first_file(_files_dir(col_dir.name) / fid)
+
+    return None
+
+
+def _read_legacy_text(source: str, collection_id: str) -> str | None:
+    """Read chunk text from Qdrant for legacy sources not in files.json."""
+    try:
+        from src.services import services as _svc
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        pts, _ = _svc.db.scroll_points(
+            collection_id, limit=1,
+            with_payload=["text"],
+            with_vectors=False,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="source", match=MatchValue(value=source))]
+            ),
+        )
+        if pts:
+            return pts[0].get("payload", {}).get("text", "")
+    except Exception:
+        pass
+    return None
+
+
 @router.get("/documents/preview/{filename:path}")
-def preview_file(filename: str):
-    # Handle full paths - extract just the filename
+def preview_file(filename: str, collection: str | None = None):
+    # Handle full paths - extract just the name part
     filename = Path(filename).name
-    file_path = UPLOAD_DIR / filename
+    file_path = _find_file_path(filename, collection)
+
+    # Legacy fallback: source not in files.json
+    if not file_path and collection:
+        legacy_text = _read_legacy_text(filename, collection)
+        if legacy_text:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+            tmp.write(legacy_text)
+            tmp.close()
+            file_path = Path(tmp.name)
+
+    # Fallback: search all collections for legacy source
+    if not file_path:
+        for col_dir in COLLECTIONS_DIR.iterdir():
+            if not col_dir.is_dir():
+                continue
+            legacy_text = _read_legacy_text(filename, col_dir.name)
+            if legacy_text:
+                import tempfile
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+                tmp.write(legacy_text)
+                tmp.close()
+                file_path = Path(tmp.name)
+                break
+
+    if not file_path:
+        raise HTTPException(status_code=404, detail="File not found")
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -330,7 +457,7 @@ def preview_file(filename: str):
         )
 
     # All other supported formats: serve stored parsed text (matches chunker offsets)
-    parsed_path = file_path.with_suffix(file_path.suffix + ".parsed.txt")
+    parsed_path = file_path.parent / "parsed.txt"
     if parsed_path.is_file():
         content = parsed_path.read_bytes()
         return Response(
@@ -380,23 +507,25 @@ def get_extracted_text(filename: str):
     Response: { "text": "...", "format": "markdown" | "text" }
     """
     filename = Path(filename).name
-    file_path = UPLOAD_DIR / filename
-    if not file_path.is_file():
+    file_path = _find_file_path(filename)
+    if not file_path:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Try to load saved file_type metadata
-    meta_path = file_path.with_suffix(file_path.suffix + ".parsed.meta.json")
+    # Get file_type from files.json index
+    from src.collections.file_index import load as load_file_index
     fmt = "text"
-    if meta_path.is_file():
-        try:
-            import json as _json
-            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-            fmt = meta.get("file_type", "text")
-        except Exception:
-            pass
+    if COLLECTIONS_DIR.is_dir():
+        for col_dir in COLLECTIONS_DIR.iterdir():
+            if not col_dir.is_dir():
+                continue
+            idx = load_file_index(col_dir.name)
+            for fid, entry in idx.items():
+                if entry.get("source") == filename:
+                    fmt = entry.get("file_type", "text")
+                    break
 
     # Try parsed text first
-    parsed_path = file_path.with_suffix(file_path.suffix + ".parsed.txt")
+    parsed_path = file_path.parent / "parsed.txt"
     if parsed_path.is_file():
         text = parsed_path.read_text(encoding="utf-8")
         return {"text": text, "format": fmt}
@@ -437,59 +566,56 @@ async def list_files(collection: str):
         return {"collection": collection, "files": []}
 
     def _fetch():
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
-        # Filter out __config__ points (collection config stored as a Qdrant point)
-        filter_cond = Filter(must_not=[FieldCondition(key="chunk_type", match=MatchValue(value="__config__"))])
+        from src.collections.file_index import load as load_file_index
 
-        all_points = []
+        idx = load_file_index(collection)
+
+        files = []
+        # New format: from files.json index
+        for fid, entry in sorted(idx.items(), key=lambda x: -(x[1].get("ingested_at", 0))):
+            src = entry.get("source", fid)
+            files.append({
+                "source": src,
+                "chunk_count": entry.get("chunks", 0),
+                "file_type": entry.get("file_type", ""),
+                "original_ext": entry.get("original_ext", ""),
+                "display_name": entry.get("source_label", src),
+                "has_meeting": src.startswith("__meeting__:"),
+                "note_title": entry.get("source_label", "") if entry.get("file_type") == "note" else "",
+            })
+
+        # Legacy: scroll Qdrant for chunks without file_id (created before file_id system)
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        filter_cond = Filter(
+            must_not=[
+                FieldCondition(key="chunk_type", match=MatchValue(value="__config__")),
+            ]
+        )
+        legacy_sources: dict[str, int] = {}
         offset = None
         while True:
             points, offset = services.db.scroll_points(
-                collection=collection,
-                limit=1000,
-                offset=offset,
-                with_payload=["source", "file_type", "note_title", "meeting_id", "ingested_at"],
-                with_vectors=False,
-                scroll_filter=filter_cond,
+                collection=collection, limit=1000, offset=offset,
+                with_payload=["source", "file_id", "source_label", "file_type"],
+                with_vectors=False, scroll_filter=filter_cond,
             )
-            all_points.extend(points)
+            for p in points:
+                pl = p.get("payload", {})
+                if not pl.get("file_id"):
+                    src = pl.get("source", "unknown")
+                    legacy_sources[src] = legacy_sources.get(src, 0) + 1
             if offset is None:
                 break
 
-        source_counts: dict[str, int] = {}
-        source_meta: dict[str, dict] = {}
-        for p in all_points:
-            payload = p.get("payload", {})
-            src = payload.get("source", "unknown")
-            source_counts[src] = source_counts.get(src, 0) + 1
-            if src not in source_meta:
-                source_meta[src] = {
-                    "file_type": payload.get("file_type", ""),
-                    "note_title": payload.get("note_title", ""),
-                    "has_meeting": bool(payload.get("meeting_id")),
-                    "ingested_at": payload.get("ingested_at", 0),
-                }
-
-        # Sort by ingestion time descending (newest first), fallback to source name
-        def _sort_key(item: tuple[str, int]) -> tuple:
-            src = item[0]
-            ingested = source_meta.get(src, {}).get("ingested_at", 0)
-            return (-(ingested if isinstance(ingested, (int, float)) else 0), src)
-
-        files = []
-        for src, count in sorted(source_counts.items(), key=_sort_key):
-            meta = source_meta.get(src, {})
-            display_name = src
-            if meta.get("note_title"):
-                display_name = meta["note_title"]
-            files.append({
-                "source": src,
-                "chunk_count": count,
-                "file_type": meta.get("file_type", ""),
-                "note_title": meta.get("note_title", ""),
-                "has_meeting": meta.get("has_meeting", False),
-                "display_name": display_name,
-            })
+        indexed_sources = {e.get("source") for e in idx.values()}
+        for src, count in sorted(legacy_sources.items(), key=lambda x: x[0]):
+            if src not in indexed_sources:
+                files.append({
+                    "source": src,
+                    "chunk_count": count,
+                    "file_type": "",
+                    "display_name": src,
+                })
 
         return {"collection": collection, "files": files}
 

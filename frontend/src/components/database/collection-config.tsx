@@ -1,10 +1,9 @@
 import { useState, useEffect } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import { Lock } from "lucide-react"
-import { getCollectionConfig, updateCollectionConfig, getConfig, getEmbeddingProviders, type EmbeddingProvider } from "@/api/client"
+import { Lock, RefreshCw } from "lucide-react"
+import { getCollectionConfig, updateCollectionConfig, triggerSparseRecalc, getConfig, getEmbeddingProviders, type EmbeddingProvider } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
 import { toast } from "sonner"
 import { TooltipLabel } from "@/components/shared/tooltip-label"
@@ -49,8 +48,13 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
   const [enrichingLlmModel, setEnrichingLlmModel] = useState("")
 
   // Cloud parsing (MinerU)
-  const [cloudParsing, setCloudParsing] = useState(false)
+  const [cloudParsing, setCloudParsing] = useState(true)
   const [mineruGloballyEnabled, setMineruGloballyEnabled] = useState(false)
+
+  // Sparse vocabulary
+  const [sparseRecalcThreshold, setSparseRecalcThreshold] = useState("5000")
+  const [sparseRecalcCounter, setSparseRecalcCounter] = useState(0)
+  const [recalcRunning, setRecalcRunning] = useState(false)
 
   const readyProviders = providers.filter((p) => p.status === "ready" || !p.status)
   const enrichingProvider = enrichingLlmProvider
@@ -107,7 +111,11 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         setEnrichingLlmModel(String(cfg.enriching_llm_model ?? ""))
 
         // Cloud parsing
-        setCloudParsing(Boolean(cfg.cloud_parsing ?? false))
+        setCloudParsing(Boolean(cfg.cloud_parsing ?? true))
+
+        // Sparse vocabulary
+        setSparseRecalcThreshold(String(cfg.sparse_recalc_threshold ?? "5000"))
+        setSparseRecalcCounter(Number(cfg.sparse_recalc_counter ?? 0))
       } catch {
         // ignore
       }
@@ -145,6 +153,9 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
       // Cloud parsing
       config.cloud_parsing = cloudParsing
 
+      // Sparse vocabulary
+      if (sparseRecalcThreshold) config.sparse_recalc_threshold = parseInt(sparseRecalcThreshold)
+
       const res = await updateCollectionConfig(collection, config)
       if (res.error) toast.error(res.error)
       else toast.success(res.message || "Config updated")
@@ -156,230 +167,221 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
   }
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Dimensions & Mode</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <TooltipLabel label="Dimensions" tooltip="Vector dimensions for embeddings. This is locked at creation time and cannot be changed." />
-              <div className="flex items-center gap-2">
-                <Input value={embeddingDimensions} disabled className="flex-1" />
-                <Lock className="h-4 w-4 text-muted-foreground" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <TooltipLabel label="Chunk Mode" tooltip="Locked at creation time. Cannot be changed after." />
-              <div className="flex items-center gap-2">
-                <Input value={chunkMode === "parent_child" ? "Parent-Child" : "Normal"} disabled className="flex-1" />
-                <Lock className="h-4 w-4 text-muted-foreground" />
-              </div>
+    <div className="space-y-6">
+      {/* ── Dimensions & Mode ── */}
+      <div className="space-y-3">
+        <h3 className="text-base font-semibold">Dimensions & Mode</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <TooltipLabel label="Dimensions" tooltip="Vector dimensions for embeddings. Locked at creation time." />
+            <div className="flex items-center gap-2">
+              <Input value={embeddingDimensions} disabled className="flex-1" />
+              <Lock className="h-4 w-4 text-muted-foreground" />
             </div>
           </div>
-        </CardContent>
-      </Card>
+          <div className="space-y-1.5">
+            <TooltipLabel label="Chunk Mode" tooltip="Locked at creation time." />
+            <div className="flex items-center gap-2">
+              <Input value={chunkMode === "parent_child" ? "Parent-Child" : "Normal"} disabled className="flex-1" />
+              <Lock className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Chunking</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <Separator />
+
+      {/* ── Chunking ── */}
+      <div className="space-y-3">
+        <h3 className="text-base font-semibold">Chunking</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <TooltipLabel label="Buffer Ratio" tooltip="Controls how aggressively paragraphs are merged. 0.5 = merge until 50% of max_tokens." />
+            <Input value={bufferRatio} onChange={(e) => setBufferRatio(e.target.value)} placeholder="0.5" />
+          </div>
+          {chunkMode === "parent_child" && (
+            <div className="space-y-1.5">
+              <TooltipLabel label="Parent Strategy" tooltip="How parent chunks are created." />
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={parentStrategy}
+                onChange={(e) => setParentStrategy(e.target.value)}
+              >
+                <option value="paragraph">Paragraph</option>
+                <option value="fixed_token">Fixed Token</option>
+                <option value="heading">Heading</option>
+              </select>
+            </div>
+          )}
+        </div>
+        {chunkMode === "normal" ? (
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <TooltipLabel label="Buffer Ratio" tooltip="Controls how aggressively paragraphs are merged. 0.5 = merge until 50% of max_tokens." />
-              <Input value={bufferRatio} onChange={(e) => setBufferRatio(e.target.value)} placeholder="0.5" />
+              <TooltipLabel label="Chunk Size" tooltip="Tokens per chunk." />
+              <Input value={chunkSize} onChange={(e) => setChunkSize(e.target.value)} placeholder="512" />
             </div>
-            {chunkMode === "parent_child" && (
-              <div className="space-y-1.5">
-                <TooltipLabel label="Parent Strategy" tooltip="How parent chunks are created: paragraph (by paragraphs), fixed_token (by token count), heading (by markdown headings)." />
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  value={parentStrategy}
-                  onChange={(e) => setParentStrategy(e.target.value)}
-                >
-                  <option value="paragraph">Paragraph</option>
-                  <option value="fixed_token">Fixed Token</option>
-                  <option value="heading">Heading</option>
-                </select>
-              </div>
-            )}
+            <div className="space-y-1.5">
+              <TooltipLabel label="Chunk Overlap" tooltip="Overlapping tokens between adjacent chunks." />
+              <Input value={chunkOverlap} onChange={(e) => setChunkOverlap(e.target.value)} placeholder="64" />
+            </div>
           </div>
-          {chunkMode === "normal" ? (
+        ) : (
+          <>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <TooltipLabel label="Chunk Size" tooltip="Number of tokens per chunk. Larger = more context per chunk, fewer chunks. Smaller = more precise retrieval." />
-                <Input value={chunkSize} onChange={(e) => setChunkSize(e.target.value)} placeholder="512" />
+                <TooltipLabel label="Parent Chunk Size" tooltip="Size of parent chunks." />
+                <Input value={parentChunkSize} onChange={(e) => setParentChunkSize(e.target.value)} placeholder="1024" />
               </div>
               <div className="space-y-1.5">
-                <TooltipLabel label="Chunk Overlap" tooltip="Number of overlapping tokens between adjacent chunks. Helps maintain context across chunk boundaries." />
-                <Input value={chunkOverlap} onChange={(e) => setChunkOverlap(e.target.value)} placeholder="64" />
+                <TooltipLabel label="Parent Chunk Overlap" tooltip="Overlap between parent chunks." />
+                <Input value={parentChunkOverlap} onChange={(e) => setParentChunkOverlap(e.target.value)} placeholder="128" />
               </div>
             </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <TooltipLabel label="Parent Chunk Size" tooltip="Size of parent chunks in parent-child mode. Parent chunks provide context for child chunks." />
-                  <Input value={parentChunkSize} onChange={(e) => setParentChunkSize(e.target.value)} placeholder="1024" />
-                </div>
-                <div className="space-y-1.5">
-                  <TooltipLabel label="Parent Chunk Overlap" tooltip="Overlap between parent chunks for context continuity." />
-                  <Input value={parentChunkOverlap} onChange={(e) => setParentChunkOverlap(e.target.value)} placeholder="128" />
-                </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <TooltipLabel label="Child Chunk Size" tooltip="Size of child chunks used for matching." />
+                <Input value={childChunkSize} onChange={(e) => setChildChunkSize(e.target.value)} placeholder="128" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <TooltipLabel label="Child Chunk Size" tooltip="Size of child chunks used for matching. Smaller = more precise matching." />
-                  <Input value={childChunkSize} onChange={(e) => setChildChunkSize(e.target.value)} placeholder="128" />
-                </div>
-                <div className="space-y-1.5">
-                  <TooltipLabel label="Child Chunk Overlap" tooltip="Overlap between child chunks for context continuity." />
-                  <Input value={childChunkOverlap} onChange={(e) => setChildChunkOverlap(e.target.value)} placeholder="32" />
-                </div>
+              <div className="space-y-1.5">
+                <TooltipLabel label="Child Chunk Overlap" tooltip="Overlap between child chunks." />
+                <Input value={childChunkOverlap} onChange={(e) => setChildChunkOverlap(e.target.value)} placeholder="32" />
               </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+            </div>
+          </>
+        )}
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Embedding Model</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <Separator />
+
+      {/* ── Embedding Model ── */}
+      <div className="space-y-3">
+        <h3 className="text-base font-semibold">Embedding Model</h3>
+        <div className="space-y-1.5">
+          <TooltipLabel label="Provider" tooltip="Select embedding provider for this collection." />
+          <select
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            value={embeddingProviderId}
+            onChange={(e) => setEmbeddingProviderId(e.target.value)}
+          >
+            <option value="">Global default{globalEmbModel ? ` (${globalEmbModel})` : ""}</option>
+            {embeddingProviders.map((p) => (
+              <option key={p.id} value={p.id}>{p.name || p.model}</option>
+            ))}
+          </select>
+        </div>
+        {embeddingModel && (
           <div className="space-y-1.5">
-            <TooltipLabel label="Provider" tooltip="Select an embedding provider for this collection. Configured in Settings > Embedding Models." />
+            <TooltipLabel label="Model (legacy)" tooltip="Legacy field." />
+            <Input value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} placeholder="text-embedding-3-small" />
+          </div>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* ── Allowed File Types ── */}
+      <div className="space-y-3">
+        <h3 className="text-base font-semibold">Allowed File Types</h3>
+        <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">Restrict which file types can be uploaded. Leave empty to allow all.</p>
+        <div className="flex flex-wrap gap-2">
+          {FILE_TYPES.map((ft) => (
+            <label
+              key={ft.ext}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs cursor-pointer transition-colors ${
+                allowedTypes.includes(ft.ext) ? "bg-primary text-primary-foreground border-primary" : "bg-background border-input hover:bg-accent"
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="sr-only"
+                checked={allowedTypes.includes(ft.ext)}
+                onChange={() =>
+                  setAllowedTypes((prev) =>
+                    prev.includes(ft.ext) ? prev.filter((t) => t !== ft.ext) : [...prev, ft.ext]
+                  )
+                }
+              />
+              {ft.label}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* ── Contextual Enrichment ── */}
+      <div className="space-y-3">
+        <h3 className="text-base font-semibold">Contextual Enrichment</h3>
+        <label className="flex items-center gap-2 text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground cursor-pointer">
+          <input type="checkbox" checked={contextualEnabled} onChange={(e) => setContextualEnabled(e.target.checked)} className="rounded" />
+          Enable Contextual Enrichment
+        </label>
+        {contextualEnabled && (
+          <>
+            <div className="space-y-1.5">
+              <TooltipLabel label="Context Window" tooltip="Surrounding chunks on each side used for context." />
+              <Input value={contextualWindow} onChange={(e) => setContextualWindow(e.target.value)} placeholder="1" />
+            </div>
+            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+              Contextual enrichment uses an LLM to generate background information for each chunk, improving retrieval quality.
+            </p>
+          </>
+        )}
+      </div>
+
+      <Separator />
+
+      {/* ── Enriching LLM ── */}
+      <div className="space-y-3">
+        <h3 className="text-base font-semibold">Enriching LLM</h3>
+        <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+          LLM used for contextual enrichment during document ingestion. Leave empty to use the global default.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Provider</label>
             <select
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={embeddingProviderId}
-              onChange={(e) => setEmbeddingProviderId(e.target.value)}
+              value={enrichingLlmProvider}
+              onChange={(e) => {
+                setEnrichingLlmProvider(e.target.value)
+                const prov = readyProviders.find((p) => p.id === e.target.value)
+                const defaultM = prov?.default_model || prov?.selected_models?.[0] || prov?.model || ""
+                setEnrichingLlmModel(defaultM)
+              }}
             >
-              <option value="">Global default{globalEmbModel ? ` (${globalEmbModel})` : ""}</option>
-              {embeddingProviders.map((p) => (
+              <option value="">Global default</option>
+              {readyProviders.map((p) => (
                 <option key={p.id} value={p.id}>{p.name || p.model}</option>
               ))}
             </select>
           </div>
-          {embeddingModel && (
-            <div className="space-y-1.5">
-              <TooltipLabel label="Model (legacy)" tooltip="Legacy field. Prefer using the Provider selector above." />
-              <Input value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} placeholder="text-embedding-3-small" />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Allowed File Types</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">Restrict which file types can be uploaded. Leave empty to allow all.</p>
-          <div className="flex flex-wrap gap-2">
-            {FILE_TYPES.map((ft) => (
-              <label
-                key={ft.ext}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs cursor-pointer transition-colors ${
-                  allowedTypes.includes(ft.ext) ? "bg-primary text-primary-foreground border-primary" : "bg-background border-input hover:bg-accent"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  className="sr-only"
-                  checked={allowedTypes.includes(ft.ext)}
-                  onChange={() =>
-                    setAllowedTypes((prev) =>
-                      prev.includes(ft.ext) ? prev.filter((t) => t !== ft.ext) : [...prev, ft.ext]
-                    )
-                  }
-                />
-                {ft.label}
-              </label>
-            ))}
+          <div className="space-y-1.5">
+            <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Model</label>
+            <select
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={enrichingLlmModel}
+              onChange={(e) => setEnrichingLlmModel(e.target.value)}
+              disabled={!enrichingLlmProvider}
+            >
+              <option value="">Select model</option>
+              {enrichingModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Contextual Enrichment</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <label className="flex items-center gap-2 text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground cursor-pointer">
-            <input type="checkbox" checked={contextualEnabled} onChange={(e) => setContextualEnabled(e.target.checked)} className="rounded" />
-            Enable Contextual Enrichment
-          </label>
-          {contextualEnabled && (
-            <>
-              <div className="space-y-1.5">
-                <TooltipLabel label="Context Window" tooltip="Number of surrounding chunks on EACH SIDE used for context. 1 = previous + next chunk (2 total). 2 = 2 before + 2 after (4 total)." />
-                <Input value={contextualWindow} onChange={(e) => setContextualWindow(e.target.value)} placeholder="1" />
-              </div>
-              <Separator />
-              <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
-                Contextual enrichment generates background information for each chunk using an LLM, improving retrieval quality.
-              </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
+      <Separator />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Enriching LLM</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed mb-2">
-            LLM used for contextual enrichment during document ingestion. Leave empty to use the global default.
-          </p>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Provider</label>
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={enrichingLlmProvider}
-                onChange={(e) => {
-                  setEnrichingLlmProvider(e.target.value)
-                  const prov = readyProviders.find((p) => p.id === e.target.value)
-                  const defaultM = prov?.default_model || prov?.selected_models?.[0] || prov?.model || ""
-                  setEnrichingLlmModel(defaultM)
-                }}
-              >
-                <option value="">Global default</option>
-                {readyProviders.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name || p.model}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Model</label>
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={enrichingLlmModel}
-                onChange={(e) => setEnrichingLlmModel(e.target.value)}
-                disabled={!enrichingLlmProvider}
-              >
-                <option value="">Select model</option>
-                {enrichingModels.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
+      {/* ── Cloud Parsing (MinerU) ── */}
       {mineruGloballyEnabled && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Cloud Parsing (MinerU)</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        <>
+          <div className="space-y-3">
+            <h3 className="text-base font-semibold">Cloud Parsing (MinerU)</h3>
             <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
               Use MinerU cloud API for document parsing. Produces higher quality Markdown output with better table, formula, and layout preservation.
-              Configure MinerU API token in Settings.
             </p>
             <label className="flex items-center gap-2 text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground cursor-pointer">
               <input type="checkbox" checked={cloudParsing} onChange={(e) => setCloudParsing(e.target.checked)} className="rounded" />
@@ -387,12 +389,69 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
             </label>
             {cloudParsing && (
               <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
-                When enabled, uploaded documents will be parsed by MinerU's cloud API and chunked using a Markdown-aware strategy that preserves tables, code blocks, and heading structure.
+                When enabled, uploaded documents will be parsed by MinerU's cloud API and chunked using a Markdown-aware strategy.
               </p>
             )}
-          </CardContent>
-        </Card>
+          </div>
+          <Separator />
+        </>
       )}
+
+      {/* ── Sparse Vocabulary ── */}
+      <div className="space-y-3">
+        <h3 className="text-base font-semibold">Sparse Vocabulary (BM25)</h3>
+        <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+          BM25 statistics drift as documents are added or removed. The vocabulary is rebuilt automatically when changes reach the threshold.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <TooltipLabel label="Recalc Threshold" tooltip="Chunk changes before auto-rebuilding. 5000 ≈ 1000 files." />
+            <Input value={sparseRecalcThreshold} onChange={(e) => setSparseRecalcThreshold(e.target.value)} placeholder="5000" />
+          </div>
+          <div className="space-y-1.5">
+            <TooltipLabel label="Change Counter" tooltip="Chunk changes since last rebuild." />
+            <Input value={String(sparseRecalcCounter)} disabled />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={recalcRunning}
+            onClick={async () => {
+              setRecalcRunning(true)
+              try {
+                const res = await triggerSparseRecalc(collection)
+                if (res.error) {
+                  toast.error(res.error)
+                } else {
+                  toast.success(res.message || "Sparse recalculation triggered")
+                  setTimeout(async () => {
+                    try {
+                      const cfg = await getCollectionConfig(collection) as Record<string, unknown>
+                      if (!cfg.error) setSparseRecalcCounter(Number(cfg.sparse_recalc_counter ?? 0))
+                    } catch { /* ignore */ }
+                  }, 2000)
+                }
+              } catch (err) {
+                toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+              } finally {
+                setRecalcRunning(false)
+              }
+            }}
+          >
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${recalcRunning ? "animate-spin" : ""}`} />
+            {recalcRunning ? "Running..." : "Recalculate Now"}
+          </Button>
+          <span className="text-[12px] text-muted-foreground">
+            {sparseRecalcCounter >= parseInt(sparseRecalcThreshold || "5000")
+              ? "Threshold reached — auto-rebuild pending."
+              : `${sparseRecalcCounter} / ${sparseRecalcThreshold || "5000"} changes`}
+          </span>
+        </div>
+      </div>
+
+      <Separator />
 
       <div className="flex justify-end">
         <Button onClick={handleSave} disabled={saving}>

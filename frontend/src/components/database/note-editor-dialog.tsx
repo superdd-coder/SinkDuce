@@ -767,6 +767,8 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setIngested(false)
       setIngesting(false)
       toast.success("Ingestion removed")
+      // Trigger files list refresh
+      import("@/components/database/database-view").then(m => m._triggerFilesRefresh())
     } catch (err) {
       setIngesting(false)
       toast.error(err instanceof Error ? err.message : "Failed to remove ingestion")

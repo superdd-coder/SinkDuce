@@ -46,7 +46,7 @@ export function SourcesCard({ sources, onSelectSource, selectedSourceId }: Sourc
         <div className="overflow-hidden">
           <div>
             {[...sources].sort((a, b) => b.score - a.score).map((s, i) => {
-              const sourceName = (s.metadata?.source as string) || ""
+              const sourceName = (s.metadata?.source_label as string) || (s.metadata?.source as string) || ""
               const collection = (s.metadata?.collection as string) || ""
               const chunkId = (s.metadata?.id as string) || ""
               const isSelected = selectedSourceId === chunkId

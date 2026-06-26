@@ -51,6 +51,8 @@ interface FileDetailDialogProps {
   collection: string
   source: string | null
   displayName?: string
+  fileType?: string
+  originalExt?: string
   chunks: ChunkDetail[]
   chunksTotal: number
   loading: boolean
@@ -58,7 +60,7 @@ interface FileDetailDialogProps {
   openKey?: number
 }
 
-export function FileDetailDialog({ collection, source, displayName, chunks, chunksTotal, loading, onOpenChange, openKey }: FileDetailDialogProps) {
+export function FileDetailDialog({ collection, source, displayName, fileType, originalExt, chunks, chunksTotal, loading, onOpenChange, openKey }: FileDetailDialogProps) {
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
@@ -70,7 +72,7 @@ export function FileDetailDialog({ collection, source, displayName, chunks, chun
   const sourceContentRef = useRef<HTMLDivElement>(null)
   const sourceEditorRef = useRef<Editor | null>(null)
 
-  const isPdf = source?.toLowerCase().endsWith(".pdf")
+  const isPdf = source?.toLowerCase().endsWith(".pdf") || fileType === "pdf" || originalExt === "pdf"
 
   const genKey = collection && source ? _genKey(collection, source) : null
   const [, setRenderTick] = useState(0)
@@ -247,7 +249,7 @@ export function FileDetailDialog({ collection, source, displayName, chunks, chun
     }
   }
 
-  const goToLabel = isNoteFile ? "GO TO THE NOTE" : isRecordingFile ? "GO TO THE RECORDING" : null
+  const goToLabel = isNoteFile ? "GO TO THE NOTE" : isRecordingFile ? "GO TO THE MEETING" : null
 
   return (
     <Dialog open={!!source} onOpenChange={(v) => onOpenChange(v)}>
