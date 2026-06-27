@@ -30,16 +30,17 @@ def _rl_result():
 
 class TestAgenticQuery:
     def test_simple_query(self):
+        """Full agentic path with single AQ → direct answer generation (not aggregator)."""
         dec = MagicMock()
         dec.decompose.return_value = [AtomicQuery(query="risks of X", target_collections=["col_a"])]
         rl = MagicMock()
         rl.run.return_value = _rl_result()
-        agg = MagicMock()
-        agg.aggregate.return_value = "final answer"
-        svc = _make_service(dec=dec, rl=rl, agg=agg)
+        svc = _make_service(dec=dec, rl=rl)
+        svc.llm.generate.return_value = "direct answer"
         result = svc.run("what are the risks", generate_answer=True)
-        assert result.answer == "final answer"
+        assert result.answer == "direct answer"
         assert dec.decompose.called
+        svc.llm.generate.assert_called_once()
 
     def test_non_retrieval_returns_empty(self):
         dec = MagicMock()

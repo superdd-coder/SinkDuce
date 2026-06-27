@@ -39,11 +39,16 @@ class TestAgentNodesRemovedFunctions:
 class TestAgentNodesKeptFunctions:
     """确认保留的函数仍可 import"""
 
-    def test_node_llm_grade_importable(self):
-        from src.rag.agent_nodes import node_llm_grade
+    def test_node_combined_grade_importable(self):
+        from src.rag.agent_nodes import node_combined_grade
 
-    def test_node_update_retained_info_importable(self):
-        from src.rag.agent_nodes import node_update_retained_info
+    def test_node_update_retained_info_removed(self):
+        with pytest.raises(ImportError):
+            from src.rag.agent_nodes import node_update_retained_info
+
+    def test_node_llm_grade_removed(self):
+        with pytest.raises(ImportError):
+            from src.rag.agent_nodes import node_llm_grade
 
     def test_node_check_and_rewrite_importable(self):
         from src.rag.agent_nodes import node_check_and_rewrite
@@ -77,7 +82,7 @@ class TestAgentPromptsCleaned:
             from src.rag.agent_prompts import GENERATE_SYSTEM
 
     def test_new_prompts_exist(self):
-        from src.rag.agent_prompts import GRADE_PART1_SYSTEM, GRADE_PART2_SYSTEM, REWRITE_SYSTEM
+        from src.rag.agent_prompts import GRADE_COMBINED_SYSTEM, GRADE_COMBINED_USER, REWRITE_SYSTEM
 
 
 # ── TestCollectionUtilsCleaned ────────────────────────────────────────────

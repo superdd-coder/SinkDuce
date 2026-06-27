@@ -80,7 +80,7 @@ class RAGConfig(BaseModel):
     top_k: int = 20
     rerank_top_k: int = 5
     max_parallel_queries: int = 10
-    max_iterations: int = 8
+    max_iterations: int = 4  # most queries converge in 2-3 iterations
     default_search_mode: str = "hybrid"  # "dense" or "hybrid"
     min_score: float = 0.0  # dense mode similarity threshold
 

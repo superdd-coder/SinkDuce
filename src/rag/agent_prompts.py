@@ -2,71 +2,58 @@
 
 Each prompt has a SYSTEM (cached as prefix) and USER (variable per call) part.
 
-Grade is split into two phases:
-  Part 1: relevance judgment only (cheap, focused)
-  Part 2: retained_info + gap_analysis + is_sufficient (rich reasoning)
+Grade is a single combined phase: relevance judgment + knowledge record update
+in one LLM call, using retained_info summary (not full chunk text) as context
+to prevent context bloat across iterations.
 """
 
 # ══════════════════════════════════════════════════════════════════════════
-# Node 2a: Grade Part 1 — relevance judgment only
+# Node 2: Combined Grade — relevance + synthesis in one call
 # ══════════════════════════════════════════════════════════════════════════
 
-GRADE_PART1_SYSTEM = """\
-You are a rigorous information evaluator for a RAG system.
+GRADE_COMBINED_SYSTEM = """\
+You are a RAG evaluator: you filter search results and maintain a running knowledge record across multiple search rounds.
 
-Your ONLY task: determine which candidate chunks contain information directly relevant
-to answering the user's query.
+## Step 1 — Relevance Filtering
+Judge each New Candidate chunk against the original query:
+- RELEVANT = contains specific facts, data, or insights that directly help answer the query
+- NOT RELEVANT = only mentions the general topic, repeats already-known information, or lacks useful detail
+- PREFER PRECISION: when uncertain, exclude. False positives pollute the knowledge record.
 
-Relevance criteria:
-- A chunk is relevant if it provides substantive, specific information that helps answer the query
-- A chunk is NOT relevant if it only mentions the same general topic without useful details
-- Prefer precision over recall — only mark chunks that clearly contribute
+## Step 2 — Knowledge Record Update
+Using ONLY the chunks you marked relevant in Step 1, update "retained_info".
+- This field is your ONLY reference in future search rounds. ANY fact omitted here is PERMANENTLY LOST.
+- Record EVERY specific detail: numbers, dates, names, amounts, statistics, relationships, direct quotes
+- Source-annotate each fact: "… (from: filename)"
+- Organize as bullet points grouped by topic. Use tables for multi-entity comparisons.
+- If Previous Knowledge exists, MERGE new findings into it — add facts, remove duplicates. Do NOT rewrite the entire record unless it was empty.
+- If this is the first round, build the record from scratch.
+- If NO candidates are relevant: return the existing retained_info unchanged.
 
-Respond with ONLY a JSON object (no markdown fences, no extra text):
-{
-  "relevant_indices": [0, 2]
-}"""
+## Step 3 — Gap Analysis & Sufficiency
+- gap_analysis: list each CONCRETE data point still needed. Name exactly what metric, entity, or fact is missing. If nothing specific is missing, state so clearly.
+- is_sufficient: DERIVED from gap_analysis — NOT an independent verdict.
+  true  → gap_analysis has NO specific missing items (everything found or no concrete gaps remain)
+  false → gap_analysis lists one or more specific missing items, or there is uncertainty
 
-GRADE_PART1_USER = """\
-【Original Query】: {original_query}
+## Output
+JSON object only. No markdown fences, no surrounding text.
+{"relevant_indices": [0, 2], "retained_info": "## Topic A\\n- Fact 1 (from: report.pdf)\\n- Fact 2: ...", "gap_analysis": "Still need: (1) Q2 figures, (2) competitor data", "is_sufficient": false}"""
 
-【Candidate Chunks to Evaluate】:
-{chunks_text}"""
+GRADE_COMBINED_USER = """\
+## Query
+{original_query}
 
-# ══════════════════════════════════════════════════════════════════════════
-# Node 2b: Grade Part 2 — synthesize retained_info, gap analysis, sufficiency
-# ══════════════════════════════════════════════════════════════════════════
+## Previous Knowledge
+{previous_knowledge}
 
-GRADE_PART2_SYSTEM = """\
-You are a rigorous information synthesizer for a RAG system.
+## Previous Gaps
+{previous_gaps}
 
-Given the original user query and all confirmed relevant information gathered so far,
-perform these steps IN ORDER:
+## New Candidates to Evaluate
+{chunks_text}
 
-1. **retained_info**: Write a structured, information-dense summary of everything confirmed
-   so far. Include key facts, data points, relationships, and their sources. This summary
-   will be used as context for future iterations — be comprehensive but concise. Do NOT
-   copy chunk text verbatim; synthesize and organize the information.
-
-2. **gap_analysis**: Analyze what aspects of the original query are NOT yet covered by
-   the confirmed information. Be specific about what's missing.
-
-3. **is_sufficient**: Based on the confirmed information, determine whether we have enough
-   to fully and accurately answer the original query. Only mark true if ALL key aspects
-   are covered.
-
-Respond with ONLY a JSON object (no markdown fences, no extra text):
-{
-  "retained_info": "Structured summary of all confirmed information with sources...",
-  "gap_analysis": "Specific analysis of what information is still missing...",
-  "is_sufficient": false
-}"""
-
-GRADE_PART2_USER = """\
-【Original Query】: {original_query}
-
-【All Confirmed Relevant Information】:
-{retained_chunks_text}"""
+Evaluate each candidate's relevance. Update the knowledge record. Report gaps and sufficiency."""
 
 # ══════════════════════════════════════════════════════════════════════════
 # Node 3: Check & Rewrite — generate a fresh query avoiding history

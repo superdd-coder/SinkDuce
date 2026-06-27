@@ -11,8 +11,7 @@ from dataclasses import dataclass, field
 
 from src.rag.agent_state import AgentState
 from src.rag.agent_nodes import (
-    node_llm_grade,
-    node_update_retained_info,
+    node_combined_grade,
     node_check_and_rewrite,
     _dedup_by_id,
 )
@@ -51,8 +50,8 @@ class RewriteLoop:
         collections: list[str],
         *,
         task_query: str = "",
-        max_iterations: int = 8,
-        dry_streak_limit: int = 3,
+        max_iterations: int = 4,
+        dry_streak_limit: int = 2,
         on_step=None,
         **retrieve_kwargs,
     ) -> RewriteLoopResult:
@@ -127,9 +126,9 @@ class RewriteLoop:
             if new_chunks:
                 _emit("grading", iter_label, f"Grading {len(new_chunks)} chunks")
                 try:
-                    node_llm_grade(state, new_chunks, llm=self.llm)
+                    node_combined_grade(state, new_chunks, llm=self.llm)
                 except Exception:
-                    logger.exception(_ctx() + "[Loop] node_llm_grade raised")
+                    logger.exception(_ctx() + "[Loop] node_combined_grade raised")
                     _emit("grading", iter_label, "Grade failed, continuing")
 
             retained_after = len(state.retained_chunks)

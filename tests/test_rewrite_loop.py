@@ -43,7 +43,7 @@ def _dm_with(chunks_list):
 # ── Mock helpers for agent_nodes functions ───────────────────────────────
 
 def _mock_grade_sufficient(state, current_batch, *, llm, temperature=None):
-    """Simulate node_llm_grade: promote all chunks, set is_sufficient=True."""
+    """Simulate node_combined_grade: promote all chunks, set is_sufficient=True."""
     for c in current_batch:
         cid = c.metadata.get("id", "")
         if cid and not any(rc.metadata.get("id") == cid for rc in state.retained_chunks):
@@ -53,7 +53,7 @@ def _mock_grade_sufficient(state, current_batch, *, llm, temperature=None):
 
 
 def _mock_grade_insufficient(state, current_batch, *, llm, temperature=None):
-    """Simulate node_llm_grade: promote first chunk, set is_sufficient=False."""
+    """Simulate node_combined_grade: promote first chunk, set is_sufficient=False."""
     if current_batch:
         c = current_batch[0]
         cid = c.metadata.get("id", "")
@@ -64,7 +64,7 @@ def _mock_grade_insufficient(state, current_batch, *, llm, temperature=None):
 
 
 def _mock_grade_no_relevant(state, current_batch, *, llm, temperature=None):
-    """Simulate node_llm_grade: promote nothing, set is_sufficient=False."""
+    """Simulate node_combined_grade: promote nothing, set is_sufficient=False."""
     state.is_sufficient = False
     state.retained_info = "No relevant info."
 
@@ -83,12 +83,12 @@ class TestRewriteLoopCore:
     """核心逻辑"""
 
     def test_single_iteration_immediate_sufficient(self):
-        """第 1 轮 node_llm_grade 设 is_sufficient=True：断言 iterations=1, 立即返回"""
+        """第 1 轮 node_combined_grade 设 is_sufficient=True：断言 iterations=1, 立即返回"""
         dm = _dm_with([[_ck("A", chunk_id="1"), _ck("B", chunk_id="2")]])
         llm = MagicMock()
         rl = RewriteLoop(dm, llm)
 
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite") as mock_rewrite:
                 result = rl.run("test query", ["col_a"])
 
@@ -115,7 +115,7 @@ class TestRewriteLoopCore:
                 _mock_grade_sufficient(state, batch, llm=llm)
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=grade_alt):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=grade_alt):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test query", ["col_a"])
 
@@ -130,7 +130,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_insufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_insufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"], max_iterations=3)
 
@@ -149,7 +149,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_insufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_insufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"], max_iterations=8, dry_streak_limit=3)
 
@@ -187,14 +187,14 @@ class TestRewriteLoopCore:
         assert result.is_sufficient is False
 
     def test_dry_streak_no_relevant_indices(self):
-        """连续 3 轮 node_llm_grade 返回空 relevant_indices：断言提前退出"""
+        """连续 3 轮 node_combined_grade 返回空 relevant_indices：断言提前退出"""
         dm = _dm_with([
             [_ck(f"A{i}", chunk_id=str(i))] for i in range(5)
         ])
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_no_relevant):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_no_relevant):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"], max_iterations=8, dry_streak_limit=3)
 
@@ -214,7 +214,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_insufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_insufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"], max_iterations=8, dry_streak_limit=3)
 
@@ -241,7 +241,7 @@ class TestRewriteLoopCore:
                 _mock_grade_sufficient(state, batch, llm=llm)
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=grade_seq):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=grade_seq):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"])
 
@@ -258,7 +258,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_insufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_insufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"], max_iterations=3)
 
@@ -273,7 +273,7 @@ class TestRewriteLoopCore:
 
         # llm.generate should NOT be called by RewriteLoop itself
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             rl.run("test", ["col_a"])
 
         # RewriteLoop only uses llm through node functions, not directly for generation
@@ -286,7 +286,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             result = rl.run("test", ["col_a"])
 
         # Result should be produced without ever calling build_context
@@ -298,7 +298,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_insufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_insufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite) as mock_rw:
                 rl.run("test", ["col_a"])
 
@@ -310,7 +310,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite") as mock_rw:
                 rl.run("test", ["col_a"])
 
@@ -322,7 +322,7 @@ class TestRewriteLoopCore:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             result = rl.run("original query text", ["col_a"])
 
         # No rewrite happened, so query_used should be original
@@ -353,7 +353,7 @@ class TestRewriteLoopCore:
                     state.retained_chunks.append(batch[0])
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=grade_alt):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=grade_alt):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"])
 
@@ -372,7 +372,7 @@ class TestRewriteLoopEdgeCases:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade") as mock_grade:
+        with patch("src.rag.rewrite_loop.node_combined_grade") as mock_grade:
             # grade shouldn't be called since no new chunks
             result = rl.run("test", ["col_a"], dry_streak_limit=1)
 
@@ -386,7 +386,7 @@ class TestRewriteLoopEdgeCases:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade") as mock_grade:
+        with patch("src.rag.rewrite_loop.node_combined_grade") as mock_grade:
             with patch("src.rag.rewrite_loop.node_check_and_rewrite") as mock_rewrite:
                 result = rl.run("test", ["col_a"], max_iterations=0)
 
@@ -402,7 +402,7 @@ class TestRewriteLoopEdgeCases:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade"):
+        with patch("src.rag.rewrite_loop.node_combined_grade"):
             result = rl.run("test", ["col_a"], dry_streak_limit=1)
 
         assert result.iterations == 0  # no rewrite iterations
@@ -424,7 +424,7 @@ class TestRewriteLoopEdgeCases:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             result = rl.run(long_query, ["col_a"])
 
         assert result.is_sufficient is True
@@ -448,14 +448,14 @@ class TestRewriteLoopErrorHandling:
         assert result.is_sufficient is False
 
     def test_llm_grade_raises(self):
-        """node_llm_grade 内部 LLM 返回 malformed JSON：断言 fallback 生效（保留 score top 3，继续循环）"""
+        """node_combined_grade 内部 LLM 返回 malformed JSON：断言 fallback 生效（保留 score top 3，继续循环）"""
         dm = _dm_with([
             [_ck("A", chunk_id="1", score=0.9), _ck("B", chunk_id="2", score=0.8)],
             [_ck("C", chunk_id="3", score=0.7)],
         ])
         llm = MagicMock()
 
-        # node_llm_grade raises on first call, succeeds on second
+        # node_combined_grade raises on first call, succeeds on second
         call_count = [0]
 
         def grade_maybe_raise(state, batch, *, llm, temperature=None):
@@ -466,7 +466,7 @@ class TestRewriteLoopErrorHandling:
                 _mock_grade_sufficient(state, batch, llm=llm)
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=grade_maybe_raise):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=grade_maybe_raise):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 result = rl.run("test", ["col_a"])
 
@@ -482,7 +482,7 @@ class TestRewriteLoopErrorHandling:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_insufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_insufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite",
                        side_effect=ValueError("rewrite failed")):
                 result = rl.run("test", ["col_a"], max_iterations=3)
@@ -503,7 +503,7 @@ class TestRewriteLoopCallback:
         callback = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             rl.run("test", ["col_a"], on_step=callback)
 
         step_names = [c[0][0] for c in callback.call_args_list]
@@ -516,7 +516,7 @@ class TestRewriteLoopCallback:
         callback = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             rl.run("test", ["col_a"], on_step=callback)
 
         step_names = [c[0][0] for c in callback.call_args_list]
@@ -532,7 +532,7 @@ class TestRewriteLoopCallback:
         callback = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_insufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_insufficient):
             with patch("src.rag.rewrite_loop.node_check_and_rewrite", side_effect=_mock_rewrite):
                 rl.run("test", ["col_a"], on_step=callback)
 
@@ -546,7 +546,7 @@ class TestRewriteLoopCallback:
         callback = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             rl.run("test", ["col_a"], on_step=callback)
 
         step_names = [c[0][0] for c in callback.call_args_list]
@@ -558,7 +558,7 @@ class TestRewriteLoopCallback:
         llm = MagicMock()
 
         rl = RewriteLoop(dm, llm)
-        with patch("src.rag.rewrite_loop.node_llm_grade", side_effect=_mock_grade_sufficient):
+        with patch("src.rag.rewrite_loop.node_combined_grade", side_effect=_mock_grade_sufficient):
             result = rl.run("test", ["col_a"], on_step=None)
 
         assert isinstance(result, RewriteLoopResult)

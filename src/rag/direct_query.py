@@ -7,6 +7,8 @@ merges results by score, optionally reranks.  Does NOT perform text dedup.
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from src.rag.retriever import RetrievedChunk
@@ -98,8 +100,10 @@ class DirectQueryModule:
               query=query[:200], collections=collections, top_k=top_k, search_mode=search_mode)
 
         overrides = embedding_overrides or {}
+        _lock = threading.Lock()
 
-        for col in collections:
+        def _retrieve_one(col: str):
+            """Retrieve from a single collection, returning (chunks, child_groups_dict)."""
             try:
                 col_config = self.db.get_collection_config(col)
             except Exception:
@@ -108,10 +112,7 @@ class DirectQueryModule:
 
             chunk_mode = col_config.get("chunk_mode", "normal")
             emb_override = overrides.get(col)
-            child_fetch = max(top_k * 10, 50) if chunk_mode == "parent_child" else 0
-            logger.info("[Direct] col=%s -%s | mode=%s top_k=%d%s",
-                        col, chunk_mode, search_mode, top_k,
-                        f" child_fetch={child_fetch}" if child_fetch else "")
+            logger.info("[Direct] col=%s | mode=%s top_k=%d", col, chunk_mode, top_k)
 
             try:
                 if chunk_mode == "parent_child":
@@ -125,11 +126,7 @@ class DirectQueryModule:
                     )
                     for c in parent_chunks:
                         c.metadata["collection"] = col
-                    all_chunks.extend(parent_chunks)
-                    for pid, children in child_groups.items():
-                        if pid not in all_child_groups:
-                            all_child_groups[pid] = []
-                        all_child_groups[pid].extend(children)
+                    return parent_chunks, child_groups
                 else:
                     chunks = self._retrieve_normal(
                         query, col, top_k,
@@ -141,9 +138,27 @@ class DirectQueryModule:
                     )
                     for c in chunks:
                         c.metadata["collection"] = col
-                    all_chunks.extend(chunks)
+                    return chunks, {}
             except Exception:
                 logger.exception("[Direct] retrieval failed for col=%r, skipping", col)
+                return [], {}
+
+        if len(collections) <= 1:
+            # Single collection — no threading overhead
+            for col in collections:
+                chunks, child_groups = _retrieve_one(col)
+                all_chunks.extend(chunks)
+                for pid, children in child_groups.items():
+                    all_child_groups.setdefault(pid, []).extend(children)
+        else:
+            with ThreadPoolExecutor(max_workers=len(collections)) as executor:
+                futures = {executor.submit(_retrieve_one, col): col for col in collections}
+                for f in as_completed(futures):
+                    chunks, child_groups = f.result()
+                    with _lock:
+                        all_chunks.extend(chunks)
+                        for pid, children in child_groups.items():
+                            all_child_groups.setdefault(pid, []).extend(children)
 
         # Merge: sort by score descending, NO text dedup
         all_chunks.sort(key=lambda c: c.score, reverse=True)

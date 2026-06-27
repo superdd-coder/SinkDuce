@@ -22,12 +22,12 @@ class TestIntegration:
         ]
         rl = MagicMock()
         rl.run.return_value = _rl_result()
-        agg = MagicMock()
-        agg.aggregate.return_value = "# Result\n\n$1,000,000"
+        llm = MagicMock()
+        llm.generate.return_value = "# Result\n\n$1,000,000"
         svc = AgenticQueryService(
             direct_module=MagicMock(), rewrite_loop=rl,
-            catalog=MagicMock(), decomposer=dec, aggregator=agg,
-            llm=MagicMock(),
+            catalog=MagicMock(), decomposer=dec,
+            aggregator=MagicMock(), llm=llm,
         )
         result = svc.run("Alpha project payment", generate_answer=True)
         assert result.answer == "# Result\n\n$1,000,000"

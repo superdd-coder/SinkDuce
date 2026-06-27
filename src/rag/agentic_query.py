@@ -89,7 +89,7 @@ class AgenticQueryService:
         rerank_top_k: int = 5,
         search_mode: str = "dense",
         min_score: float = 0.0,
-        max_iterations: int = 8,
+        max_iterations: int = 4,
         sparse_llm_tokenize: bool = False,
     ) -> AgenticQueryResult:
         logger.info("[Agentic] run q=%r gen_ans=%s top_k=%d rerank=%s rerank_top_k=%s mode=%s",
@@ -137,6 +137,11 @@ class AgenticQueryService:
         # ── ② Fan-out: all AQs in parallel ─────────────────────────────
         # emit: step="retrieve", content=summary count
         _emit("retrieve", f"Running {len(aqs)} atomic queries in parallel")
+
+        # Resolve fallback collections: user-specified > all available
+        _fallback_collections = list(collections) if collections else [
+            e.id for e in catalog_entries
+        ]
         sq_results: list[SubQueryResult] = []
         seen_chunk_ids: set[str] = set()
         _lock = threading.Lock()
@@ -157,9 +162,14 @@ class AgenticQueryService:
             # emit: step="aq_start", aq_id, task, content=query text
             _emit("aq_start", aq_item.query[:120], aq_id=f"aq{aq_idx}", task=aq_item.task or "")
             try:
+                # Routing: LLM-specified > user-specified > all collections
+                _aq_collections = (
+                    aq_item.target_collections if aq_item.target_collections
+                    else _fallback_collections
+                )
                 rl = self.rewrite_loop.run(
                     aq_item.query,
-                    collections=aq_item.target_collections if aq_item.target_collections else [],
+                    collections=_aq_collections,
                     task_query=aq_item.task_query or "",
                     top_k=top_k, rerank_enabled=rerank_enabled,
                     rerank_top_k=rerank_top_k, search_mode=search_mode,
@@ -219,15 +229,37 @@ class AgenticQueryService:
                         # All AQs in this group done → aggregate now
                         if generate_answer and any(r.answer or r.retained_info for r in group_results[g]):
                             label = g or "(ungrouped)"
-                            # emit: step="synthesize_task", task, aq_count
                             _emit("synthesize_task", f"Synthesizing task: {label}",
                                   task=label, aq_count=len(group_results[g]))
-                            logger.info("[Agentic]   ↳ task %r complete (%d AQs) → aggregating", label, len(group_results[g]))
-                            # Aggregate inline (groups already parallel across threads)
-                            group_answers[g] = self.aggregator.aggregate(
-                                list(group_results[g]),
-                                original_query=raw_query if g else "",
-                            )
+                            # Single AQ, single group → skip heavy aggregator, generate directly
+                            if len(aqs) == 1 and len(group_results[g]) == 1:
+                                sqr = group_results[g][0]
+                                logger.info("[Agentic]   ↳ single AQ, direct answer generation")
+                                _emit("synthesize_task", "Single query — generating answer directly")
+                                try:
+                                    from src.rag.context_builder import build_context
+                                    ctx = build_context(sqr.retained_chunks or [])
+                                    prompt = _GENERATE_ANSWER_USER.format(
+                                        question=raw_query,
+                                        retained_info=sqr.retained_info or "",
+                                        context=ctx[:12000],
+                                    )
+                                    group_answers[g] = self.llm.generate(
+                                        prompt, system=_GENERATE_ANSWER_SYSTEM,
+                                        max_tokens=8192, thinking=True,
+                                    ).strip()
+                                except Exception:
+                                    logger.exception("[Agentic] direct answer failed, fallback to aggregator")
+                                    group_answers[g] = self.aggregator.aggregate(
+                                        list(group_results[g]),
+                                        original_query=raw_query if g else "",
+                                    )
+                            else:
+                                logger.info("[Agentic]   ↳ task %r complete (%d AQs) → aggregating", label, len(group_results[g]))
+                                group_answers[g] = self.aggregator.aggregate(
+                                    list(group_results[g]),
+                                    original_query=raw_query if g else "",
+                                )
 
         # ── ③ Final aggregate ──────────────────────────────────────────
         final_answer: str | None = None

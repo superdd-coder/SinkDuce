@@ -2,9 +2,8 @@
 
 Each node mutates AgentState in-place. Retrieval/grading helpers are module-private.
 
-Grade is split into two phases:
-  Part 1: relevance judgment (cheap, focused)
-  Part 2: retained_info synthesis + gap analysis + sufficiency
+Grade is a single combined phase: relevance judgment + knowledge record update
+in one LLM call, using retained_info summary as context across iterations.
 """
 
 from __future__ import annotations
@@ -14,10 +13,8 @@ import logging
 
 from src.rag.agent_state import AgentState
 from src.rag.agent_prompts import (
-    GRADE_PART1_SYSTEM,
-    GRADE_PART1_USER,
-    GRADE_PART2_SYSTEM,
-    GRADE_PART2_USER,
+    GRADE_COMBINED_SYSTEM,
+    GRADE_COMBINED_USER,
     REWRITE_SYSTEM,
     REWRITE_USER,
 )
@@ -55,12 +52,13 @@ def _llm_generate_json(
     temperature: float | None = None,
     max_retries: int = 2,
     thinking: bool | None = None,
+    max_tokens: int = 1024,
 ) -> dict | list:
     """Call LLM and parse JSON response. Retry with correction hint on failure."""
     last_error = None
     augmented_prompt = prompt
     for attempt in range(max_retries + 1):
-        raw = llm.generate(augmented_prompt, system=system, temperature=temperature, max_tokens=1024, thinking=thinking).strip()
+        raw = llm.generate(augmented_prompt, system=system, temperature=temperature, max_tokens=max_tokens, thinking=thinking).strip()
         try:
             return _parse_json(raw)
         except (json.JSONDecodeError, ValueError, KeyError) as e:
@@ -101,16 +99,6 @@ def _dedup_by_id(
     return new_chunks, new_ids
 
 
-def _build_retained_chunks_text(chunks: list[RetrievedChunk]) -> str:
-    """Build formatted text from retained_chunks with source info, no truncation."""
-    parts = []
-    for i, c in enumerate(chunks):
-        src = c.metadata.get("source", "unknown")
-        col = c.metadata.get("collection", "unknown")
-        parts.append(f"[{i}] (database: {col}, source: {src}) {c.text}")
-    return "\n---\n".join(parts) if parts else "None"
-
-
 # ══════════════════════════════════════════════════════════════════════════
 # Node 1: Retrieve & Rerank
 # ══════════════════════════════════════════════════════════════════════════
@@ -125,21 +113,24 @@ def _chunk_in_list(chunk: RetrievedChunk, chunks: list[RetrievedChunk]) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Node 2: LLM Grade (split into Part 1 + Part 2)
+# Node 2: Combined Grade — relevance + knowledge record in one LLM call
 # ══════════════════════════════════════════════════════════════════════════
 
-def node_llm_grade(
+def node_combined_grade(
     state: AgentState,
     current_batch: list[RetrievedChunk],
     *,
     llm: LLMProvider,
     temperature: float | None = None,
 ) -> None:
-    """Two-phase grade: Part 1 judges relevance, Part 2 synthesizes info.
+    """Combined grade: relevance judgment + knowledge record update in one LLM call.
+
+    Uses retained_info summary (not full chunk text) for previous knowledge,
+    keeping prompt size bounded across iterations.
 
     Side effects:
-    - Part 1: Moves relevant chunks from current_batch to state.retained_chunks
-    - Part 2: Updates state.retained_info, state.current_gap_analysis, state.is_sufficient
+    - Promotes relevant chunks from current_batch to state.retained_chunks
+    - Updates state.retained_info, state.current_gap_analysis, state.is_sufficient
     """
     if not current_batch:
         logger.info(_ctx() + "[Grade] skipped: empty batch")
@@ -147,25 +138,10 @@ def node_llm_grade(
         state.current_gap_analysis = "No new results found for the current query."
         return
 
-    # ── Part 1: Relevance judgment ──────────────────────────────────
-    _grade_part1(state, current_batch, llm=llm, temperature=temperature)
-
-    # ── Part 2: Synthesize retained_info + gap + sufficient ────────
-    node_update_retained_info(state, llm=llm, temperature=temperature)
-
-
-def _grade_part1(
-    state: AgentState,
-    current_batch: list[RetrievedChunk],
-    *,
-    llm: LLMProvider,
-    temperature: float | None = None,
-) -> None:
-    """Part 1: Judge relevance of candidate chunks. Promote relevant ones to retained_chunks."""
-    logger.info(_ctx() + "[Grade] relevance: judging %d chunks (%d retained so far)",
+    logger.info(_ctx() + "[Grade] combined: judging %d candidates (%d retained so far)",
                 len(current_batch), len(state.retained_chunks))
 
-    # Build candidate text with indices (no truncation)
+    # Build candidate chunks text (full text, same format as before)
     chunks_text_parts = []
     for i, c in enumerate(current_batch):
         src = c.metadata.get("source", "unknown")
@@ -173,31 +149,39 @@ def _grade_part1(
         chunks_text_parts.append(f"[{i}] (database: {col}, source: {src}) {c.text}")
     chunks_text = "\n---\n".join(chunks_text_parts)
 
-    prompt = GRADE_PART1_USER.format(
+    # Previous knowledge / gaps (retained_info summary, not full chunk text)
+    previous_knowledge = state.retained_info if state.retained_info else "(none — this is the first search round)"
+    previous_gaps = state.current_gap_analysis if state.current_gap_analysis else "(none)"
+
+    prompt = GRADE_COMBINED_USER.format(
         original_query=state.original_query,
+        previous_knowledge=previous_knowledge,
+        previous_gaps=previous_gaps,
         chunks_text=chunks_text,
     )
 
     try:
-        result = _llm_generate_json(llm, prompt, GRADE_PART1_SYSTEM, temperature=temperature, thinking=True)
+        result = _llm_generate_json(
+            llm, prompt, GRADE_COMBINED_SYSTEM,
+            temperature=temperature, thinking=True, max_tokens=3072,
+        )
     except ValueError as e:
-        logger.error(_ctx() + "[Grade] relevance: JSON parse failed — %s", e)
-        _grade_part1_fallback(state, current_batch)
+        logger.error(_ctx() + "[Grade] combined: JSON parse failed — %s", e)
+        _combined_grade_fallback(state, current_batch)
         return
 
     if not isinstance(result, dict):
-        logger.error(_ctx() + "[Grade] relevance: expected dict, got %s", type(result))
-        _grade_part1_fallback(state, current_batch)
+        logger.error(_ctx() + "[Grade] combined: expected dict, got %s", type(result))
+        _combined_grade_fallback(state, current_batch)
         return
 
-    # Extract relevant indices
+    # ── Extract relevant indices & promote chunks ───────────────────
     relevant_indices: list[int] = []
     raw_indices = result.get("relevant_indices", [])
     if isinstance(raw_indices, list):
         n = len(current_batch)
         relevant_indices = [int(i) for i in raw_indices if isinstance(i, (int, float)) and 0 <= int(i) < n]
 
-    # Promote relevant chunks to retained_chunks
     promoted = 0
     for idx in relevant_indices:
         chunk = current_batch[idx]
@@ -205,73 +189,29 @@ def _grade_part1(
             state.retained_chunks.append(chunk)
             promoted += 1
 
-    logger.info(_ctx() + "[Grade] relevance: %d/%d relevant → %d promoted",
+    logger.info(_ctx() + "[Grade] combined: %d/%d relevant → %d promoted",
                 len(relevant_indices), len(current_batch), promoted)
 
-
-def _grade_part1_fallback(state: AgentState, current_batch: list[RetrievedChunk]) -> None:
-    """Conservative fallback: assume first min(3, len) chunks are relevant."""
-    logger.warning(_ctx() + "[Grade] relevance: FALLBACK — keeping first %d chunks", min(3, len(current_batch)))
-    for c in current_batch[:3]:
-        if not _chunk_in_list(c, state.retained_chunks):
-            state.retained_chunks.append(c)
-
-
-def node_update_retained_info(
-    state: AgentState,
-    *,
-    llm: LLMProvider,
-    temperature: float | None = None,
-) -> None:
-    """Run Part 2 grade to update retained_info from current retained_chunks.
-
-    Used both within the normal grade flow and as a standalone update after
-    Phase 2 sub-query merging.
-    """
-    if not state.retained_chunks:
-        logger.info(_ctx() + "[Grade] synthesize: skipped — no retained chunks")
-        state.retained_info = "No relevant information found yet."
-        state.is_sufficient = False
-        state.current_gap_analysis = "No relevant information has been found."
-        return
-
-    logger.info(_ctx() + "[Grade] synthesize: %d retained chunks → LLM", len(state.retained_chunks))
-
-    retained_chunks_text = _build_retained_chunks_text(state.retained_chunks)
-
-    prompt = GRADE_PART2_USER.format(
-        original_query=state.original_query,
-        retained_chunks_text=retained_chunks_text,
-    )
-
-    try:
-        result = _llm_generate_json(llm, prompt, GRADE_PART2_SYSTEM, temperature=temperature, thinking=True)
-    except ValueError as e:
-        logger.error(_ctx() + "[Grade] synthesize: JSON parse failed — %s", e)
-        _grade_part2_fallback(state)
-        return
-
-    if not isinstance(result, dict):
-        logger.error(_ctx() + "[Grade] synthesize: expected dict, got %s", type(result))
-        _grade_part2_fallback(state)
-        return
-
+    # ── Update knowledge record fields ──────────────────────────────
     state.retained_info = str(result.get("retained_info", state.retained_info))
     state.current_gap_analysis = str(result.get("gap_analysis", ""))
     state.is_sufficient = bool(result.get("is_sufficient", False))
 
-    logger.info(_ctx() + "[Grade] synthesize: sufficient=%s info=%d chars gap=%r",
+    logger.info(_ctx() + "[Grade] combined: sufficient=%s info=%d chars gap=%r",
                 state.is_sufficient, len(state.retained_info),
                 state.current_gap_analysis[:80] if state.current_gap_analysis else "")
 
 
-def _grade_part2_fallback(state: AgentState) -> None:
-    """Fallback when Part 2 JSON parse fails: keep previous retained_info, mark insufficient."""
-    logger.warning(_ctx() + "[Grade] synthesize: FALLBACK — keeping previous info")
+def _combined_grade_fallback(state: AgentState, current_batch: list[RetrievedChunk]) -> None:
+    """Fallback: promote first 3 chunks, mark insufficient."""
+    logger.warning(_ctx() + "[Grade] combined: FALLBACK — keeping first %d chunks", min(3, len(current_batch)))
+    for c in current_batch[:3]:
+        if not _chunk_in_list(c, state.retained_chunks):
+            state.retained_chunks.append(c)
     if not state.retained_info:
-        state.retained_info = "Unable to synthesize information summary."
+        state.retained_info = "Unable to evaluate relevance — fallback mode."
     state.is_sufficient = False
-    state.current_gap_analysis = "Unable to evaluate — the synthesizer did not produce valid output."
+    state.current_gap_analysis = "Unable to evaluate — the grader did not produce valid output."
 
 
 # ══════════════════════════════════════════════════════════════════════════
