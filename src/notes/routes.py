@@ -9,8 +9,6 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from pathlib import Path
-
 from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from qdrant_client.models import FieldCondition, Filter, MatchValue
@@ -513,8 +511,6 @@ async def remove_note_ingestion(collection: str, note_id: str):
 
 # ── Image upload & serve ──────────────────────────────────────
 
-IMAGES_DIR = Path("data").resolve() / "notes"
-
 
 @router.post("/notes/{collection}/{note_id}/images")
 async def upload_note_image(collection: str, note_id: str, file: UploadFile = File(...)):
@@ -528,7 +524,7 @@ async def upload_note_image(collection: str, note_id: str, file: UploadFile = Fi
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
     safe_name = f"{uuid.uuid4().hex[:10]}.{ext}"
 
-    images_dir = IMAGES_DIR / collection / note_id / "images"
+    images_dir = store.NOTES_DIR / note_id / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     image_path = images_dir / safe_name
     image_path.write_bytes(content_bytes)
@@ -541,7 +537,7 @@ async def upload_note_image(collection: str, note_id: str, file: UploadFile = Fi
 @router.get("/notes/{collection}/{note_id}/images/{filename}")
 async def serve_note_image(collection: str, note_id: str, filename: str):
     """Serve an uploaded image for a note."""
-    image_path = IMAGES_DIR / collection / note_id / "images" / filename
+    image_path = store.NOTES_DIR / note_id / "images" / filename
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(str(image_path))

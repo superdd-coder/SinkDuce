@@ -121,16 +121,27 @@ async def generate_doc_summary(collection: str, source: str):
     collection_id = _resolve_collection_id(collection)
     logger.info("[INFO] Generate doc-summary for collection='%s' source='%s'", collection_id, source)
     from src.tasks import task_manager as _tm
-    from pathlib import Path as _Path
 
-    # Validate source file exists
-    files_dir = _Path("data").resolve() / "files"
-    file_dir = files_dir / source
-    file_path = file_dir / "original"
-    if not file_path.exists():
-        file_path = file_dir / "parsed.txt"
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail=f"Source file '{source}' not found in files/{source}")
+    # Validate source file exists via file index
+    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import COLLECTIONS_DIR as _COL_DIR
+
+    file_path = None
+    idx = load_file_index(collection_id)
+    for fid, entry in idx.items():
+        if entry.get("source") == source:
+            fd = _COL_DIR / collection_id / "files" / fid
+            if (fd / "parsed.txt").is_file():
+                file_path = fd / "parsed.txt"
+            else:
+                for f in sorted(fd.iterdir()):
+                    if f.is_file() and f.name != "parsed.txt":
+                        file_path = f
+                        break
+            break
+
+    if not file_path:
+        raise HTTPException(status_code=404, detail=f"Source file '{source}' not found in files index for collection '{collection}'")
 
     task = _tm.create_task(
         filename=f"doc_summary:{collection_id}:{source}",
