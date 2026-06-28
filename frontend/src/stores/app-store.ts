@@ -35,11 +35,11 @@ export interface ThinkingIteration {
 export interface AqSummary {
   aq_id: string
   query: string
-  iterations: number
-  rewritten: string[]
+  variants: string[]
+  variant_count: number
   final_chunks: number
   current_chunks: number
-  sufficient: boolean
+  has_gaps: boolean
 }
 
 export interface TaskSummary {
@@ -166,6 +166,7 @@ interface AppState {
   startTimelineTool: () => void
   setLastMessageHasToolCall: () => void
   finishLastMessage: () => void
+  flushLastMessageToThinking: () => void
   setStreaming: (v: boolean) => void
 
   isOnline: boolean
@@ -319,6 +320,18 @@ export const useAppStore = create<AppState>((set) => ({
       if (msgs.length > 0) {
         const last = msgs[msgs.length - 1]
         msgs[msgs.length - 1] = { ...last, content: last.content + token }
+      }
+      return { messages: msgs }
+    }),
+  flushLastMessageToThinking: () =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        if (last.content) {
+          const tl = [...(last.timeline || []), { type: "thinking" as const, content: last.content, isStreaming: false }]
+          msgs[msgs.length - 1] = { ...last, content: "", timeline: tl }
+        }
       }
       return { messages: msgs }
     }),

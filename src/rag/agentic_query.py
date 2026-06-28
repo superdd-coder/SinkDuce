@@ -1,4 +1,4 @@
-"""AgenticQueryService — one-layer decompose → parallel RewriteLoop → group-aware aggregate."""
+"""AgenticQueryService — one-layer decompose → parallel VariantFetcher → group-aware aggregate."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ Answer the question based on the above information."""
 
 
 class AgenticQueryService:
-    """One-layer Agentic RAG: decompose → parallel RewriteLoop → group-aware aggregate.
+    """One-layer Agentic RAG: decompose → parallel VariantFetcher → group-aware aggregate.
 
     Fires ``on_step(event)`` callbacks for progress reporting. Each event is a dict:
 
@@ -52,23 +52,23 @@ class AgenticQueryService:
 
         {
           "step": str,       # decompose | task_start | aq_start | retrieving |
-                             # grading | rewriting | aq_done | synthesize_task | synthesize_merge
+                             # grading | variant_generation | aq_done | synthesize_task | synthesize_merge
           "content": str,    # human-readable description
-          "aq_id": str,      # set on aq_start, aq_done, retrieving, grading, rewriting
-          "iteration": int,  # set on rewrite-loop events
+          "aq_id": str,      # set on aq_start, aq_done, retrieving, grading, variant_generation
+          "iteration": int,  # set on variant-fetch events (always 0)
           "task": str,       # set on task_start, aq_start, aggregate_task
           "task_query": str, # set on task_start
           "aq_count": int,   # set on task_start
           "chunks": int,     # set on aq_done
-          "sufficient": bool,# set on aq_done
+          "has_gaps": bool,  # set on aq_done (bool(gap_analysis))
         }
 
     Callers can group events by ``aq_id`` to show parallel progress per AQ.
     """
 
-    def __init__(self, direct_module, rewrite_loop, catalog, decomposer, aggregator, llm):
+    def __init__(self, direct_module, variant_fetcher, catalog, decomposer, aggregator, llm):
         self.direct_module = direct_module
-        self.rewrite_loop = rewrite_loop
+        self.variant_fetcher = variant_fetcher
         self.catalog = catalog
         self.decomposer = decomposer
         self.aggregator = aggregator
@@ -89,7 +89,6 @@ class AgenticQueryService:
         rerank_top_k: int = 5,
         search_mode: str = "dense",
         min_score: float = 0.0,
-        max_iterations: int = 3,
         sparse_llm_tokenize: bool = False,
         decompose: bool = True,
     ) -> AgenticQueryResult:
@@ -144,6 +143,14 @@ class AgenticQueryService:
                       task=t, task_query=aq.task_query, aq_count=sum(1 for x in aqs if (x.task or "") == aq.task))
 
         # ── ② Fan-out: all AQs in parallel ─────────────────────────────
+        # Pre-flight summary
+        task_counts: dict[str, int] = {}
+        for aq in aqs:
+            t = aq.task or "(none)"
+            task_counts[t] = task_counts.get(t, 0) + 1
+        logger.info("[Agentic] fan-out: %d AQs, %d tasks %s",
+                    len(aqs), len(task_counts), dict(task_counts))
+
         # emit: step="retrieve", content=summary count
         _emit("retrieve", f"Running {len(aqs)} atomic queries in parallel")
 
@@ -166,7 +173,8 @@ class AgenticQueryService:
 
         def _run_one(aq_item: AtomicQuery, aq_idx: int) -> SubQueryResult:
             from src.rag import set_log_ctx
-            ctx = f"[aq{aq_idx}]"
+            task_short = (aq_item.task or "")[:12]
+            ctx = f"[aq{aq_idx}/{task_short}]" if task_short else f"[aq{aq_idx}]"
             set_log_ctx(ctx)
             # emit: step="aq_start", aq_id, task, content=query text
             _emit("aq_start", aq_item.query[:120], aq_id=f"aq{aq_idx}", task=aq_item.task or "")
@@ -176,36 +184,38 @@ class AgenticQueryService:
                     aq_item.target_collections if aq_item.target_collections
                     else _fallback_collections
                 )
-                rl = self.rewrite_loop.run(
+                vf = self.variant_fetcher.run(
                     aq_item.query,
                     collections=_aq_collections,
                     task_query=aq_item.task_query or "",
                     top_k=top_k, rerank_enabled=rerank_enabled,
                     rerank_top_k=rerank_top_k, search_mode=search_mode,
-                    min_score=min_score, max_iterations=max_iterations,
+                    min_score=min_score,
                     sparse_llm_tokenize=sparse_llm_tokenize,
-                    # emit: step=retrieving|grading|rewriting, aq_id, iteration, content
-                    on_step=lambda step, iteration, content: _emit(
+                    # emit: step=retrieving|grading|variant_generation, aq_id, iteration, content
+                    on_step=lambda step, iteration, content, extra=None: _emit(
                         step, content, aq_id=f"aq{aq_idx}", iteration=iteration,
+                        **(extra if extra else {}),
                     ),
                 )
+                has_gaps = bool(vf.gap_analysis)
                 sqr = SubQueryResult(
-                    query=aq_item.query, retained_chunks=list(rl.chunks),
-                    retained_info=rl.retained_info, is_sufficient=rl.is_sufficient,
+                    query=aq_item.query, retained_chunks=list(vf.chunks),
+                    retained_info=vf.retained_info, gap_analysis=vf.gap_analysis,
                     task=aq_item.task or "", task_query=aq_item.task_query or "",
                 )
-                # emit: step="aq_done", aq_id, chunks, sufficient, content=summary
-                _emit("aq_done", f"{len(rl.chunks)} chunks, sufficient={rl.is_sufficient}",
-                      aq_id=f"aq{aq_idx}", chunks=len(rl.chunks), sufficient=rl.is_sufficient)
+                # emit: step="aq_done", aq_id, chunks, has_gaps, content=summary
+                _emit("aq_done", f"{len(vf.chunks)} chunks" + (", has gaps" if has_gaps else ""),
+                      aq_id=f"aq{aq_idx}", chunks=len(vf.chunks), has_gaps=has_gaps)
                 return sqr
             except Exception:
                 logger.exception("[Agentic] AQ failed: %s", aq_item.query)
                 # emit: step="aq_done", aq_id, error=True (failure case)
                 _emit("aq_done", "failed",
-                      aq_id=f"aq{aq_idx}", chunks=0, sufficient=False, error=True)
+                      aq_id=f"aq{aq_idx}", chunks=0, has_gaps=True, error=True)
                 return SubQueryResult(
                     query=aq_item.query, retained_chunks=[],
-                    retained_info="", is_sufficient=False,
+                    retained_info="", gap_analysis="AQ execution failed",
                     task=aq_item.task or "", task_query=aq_item.task_query or "",
                 )
             finally:
@@ -235,69 +245,32 @@ class AgenticQueryService:
                     group_results[g].append(sqr)
                     group_pending[g] -= 1
                     if group_pending[g] == 0:
-                        # All AQs in this group done → aggregate now
+                        # All AQs in this group done → build context (no LLM)
                         if generate_answer and any(r.answer or r.retained_info for r in group_results[g]):
                             label = g or "(ungrouped)"
-                            _emit("synthesize_task", f"Synthesizing task: {label}",
+                            _emit("synthesize_task", f"Task complete: {label}",
                                   task=label, aq_count=len(group_results[g]))
-                            # Single AQ, single group → skip heavy aggregator, generate directly
-                            if len(aqs) == 1 and len(group_results[g]) == 1:
-                                sqr = group_results[g][0]
-                                logger.info("[Agentic]   ↳ single AQ, direct answer generation")
-                                _emit("synthesize_task", "Single query — generating answer directly")
-                                try:
-                                    from src.rag.context_builder import build_context
-                                    ctx = build_context(sqr.retained_chunks or [])
-                                    prompt = _GENERATE_ANSWER_USER.format(
-                                        question=raw_query,
-                                        retained_info=sqr.retained_info or "",
-                                        context=ctx[:12000],
-                                    )
-                                    group_answers[g] = self.llm.generate(
-                                        prompt, system=_GENERATE_ANSWER_SYSTEM,
-                                        max_tokens=8192, thinking=True,
-                                    ).strip()
-                                except Exception:
-                                    logger.exception("[Agentic] direct answer failed, fallback to aggregator")
-                                    group_answers[g] = self.aggregator.aggregate(
-                                        list(group_results[g]),
-                                        original_query=raw_query if g else "",
-                                    )
-                            else:
-                                logger.info("[Agentic]   ↳ task %r complete (%d AQs) → aggregating", label, len(group_results[g]))
-                                group_answers[g] = self.aggregator.aggregate(
-                                    list(group_results[g]),
-                                    original_query=raw_query if g else "",
-                                )
+                            logger.info("[Agentic]   ↳ task %r complete (%d AQs) → building context", label, len(group_results[g]))
+                            group_answers[g] = self.aggregator.build_prompt(
+                                list(group_results[g]),
+                                original_query=raw_query if g else "",
+                            )
 
-        # ── ③ Final aggregate ──────────────────────────────────────────
+        # ── ③ Final: concat task contexts → Chat LLM synthesizes ──────
         final_answer: str | None = None
         if generate_answer and sq_results:
             if len(group_answers) == 1:
-                # Single task — pipeline already aggregated, reuse result
-                final_answer = list(group_answers.values())[0]
+                final_answer = f"<search_results>\n{list(group_answers.values())[0]}\n</search_results>"
             elif len(group_answers) > 1:
-                # Multiple tasks — pipeline already synthesized each task,
-                # just merge the pre-computed task answers
-                _emit("synthesize_merge", "Merging task results")
-                try:
-                    final_answer = self.aggregator._merge_groups(
-                        group_answers, original_query=raw_query,
-                    )
-                except Exception:
-                    logger.exception("[Agentic] merge failed")
-                    final_answer = "\n\n---\n\n".join(group_answers.values())
+                _emit("synthesize_merge", "Merging task contexts")
+                parts = "\n".join(group_answers.values())
+                final_answer = f"<search_results>\n{parts}\n</search_results>"
+                logger.info("[Agentic] merge %d task contexts → %d chars", len(group_answers), len(final_answer))
             else:
                 # Pipeline didn't run (generate_answer=False or all AQs empty)
-                try:
-                    final_answer = self.aggregator.aggregate(
-                        sq_results, original_query=raw_query,
-                    )
-                except Exception:
-                    logger.exception("[Agentic] aggregate failed")
-                    final_answer = "\n\n---\n\n".join(
-                        sq.retained_info or sq.query for sq in sq_results
-                    )
+                final_answer = self.aggregator.build_prompt(
+                    sq_results, original_query=raw_query,
+                )
 
         # ── Collect chunks (dedup by ID, sort by score desc) ───────────
         all_chunks: list[RetrievedChunk] = []
@@ -333,7 +306,7 @@ class AgenticQueryService:
                         for c in (sq.retained_chunks or [])
                     ],
                     "retained_info": sq.retained_info,
-                    "is_sufficient": sq.is_sufficient,
+                    "gap_analysis": sq.gap_analysis,
                     "answer": sq.answer,
                 }
                 for i, sq in enumerate(sq_results)

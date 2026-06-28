@@ -46,7 +46,7 @@ export function useStreamChat() {
     sessionId, initSession,
     addMessage, appendToLastMessage, setLastMessageSources,
     appendTimelineThinking, setTimelineToolSummary, startTimelineTool,
-    finishLastMessage, setStreaming, selectedCollections,
+    finishLastMessage, flushLastMessageToThinking, setStreaming, selectedCollections,
   } = useAppStore()
 
   const sendMessage = async (content: string, thinking = true) => {
@@ -116,7 +116,10 @@ export function useStreamChat() {
                 break
 
               case "tool_call_start":
-                if (active) startTimelineTool()
+                if (active) {
+                  flushLastMessageToThinking()
+                  startTimelineTool()
+                }
                 break
 
               case "thinking_summary":

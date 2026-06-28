@@ -37,7 +37,7 @@ class OpenAICompatReranker(RerankerProvider):
         if not self._use_chat_fallback:
             try:
                 result = self._rerank_via_api(query, documents, top_n)
-                logger.info("Rerank via API: %d results, top score=%.4f", len(result), result[0][1] if result else 0)
+                logger.debug("Rerank via API: %d results, top score=%.4f", len(result), result[0][1] if result else 0)
                 return result
             except Exception as e:
                 logger.info(
@@ -47,7 +47,7 @@ class OpenAICompatReranker(RerankerProvider):
                 self._use_chat_fallback = True
 
         result = self._rerank_via_chat(query, documents, top_n)
-        logger.info("Rerank via chat fallback: %d results, top score=%.4f", len(result), result[0][1] if result else 0)
+        logger.debug("Rerank via chat fallback: %d results, top score=%.4f", len(result), result[0][1] if result else 0)
         return result
 
     def _rerank_via_api(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
@@ -63,7 +63,7 @@ class OpenAICompatReranker(RerankerProvider):
         resp.raise_for_status()
         data = resp.json()
         results = data.get("results", [])
-        logger.info("Rerank API raw results: %s", [
+        logger.debug("Rerank API raw results: %s", [
             {"index": r.get("index"), "score": r.get("relevance_score")}
             for r in results[:5]
         ])
@@ -127,7 +127,7 @@ class OpenAICompatReranker(RerankerProvider):
                     temperature=0,
                 )
                 text = (resp.choices[0].message.content or "").strip().lower()
-                logger.info("Rerank chat text response: %r", text[:100])
+                logger.debug("Rerank chat text response: %r", text[:100])
                 if text.startswith("yes"):
                     scores.append(1.0)
                 elif text.startswith("no"):
@@ -146,5 +146,5 @@ class OpenAICompatReranker(RerankerProvider):
             )
 
         ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-        logger.info("Rerank chat scores: %s", [(idx, round(s, 4)) for idx, s in ranked[:5]])
+        logger.debug("Rerank chat scores: %s", [(idx, round(s, 4)) for idx, s in ranked[:5]])
         return ranked[:top_n]

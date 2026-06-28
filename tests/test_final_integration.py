@@ -5,13 +5,13 @@ from unittest.mock import MagicMock
 
 from src.rag.agentic_query import AgenticQueryService
 from src.rag.decomposer import AtomicQuery
-from src.rag.rewrite_loop import RewriteLoopResult
+from src.rag.variant_fetcher import VariantFetcherResult
 from src.rag.retriever import RetrievedChunk
 
 
-def _rl_result():
+def _vf_result():
     c = [RetrievedChunk(text="text", score=0.9, metadata={"id": "c1"})]
-    return RewriteLoopResult(chunks=c, retained_info="info", is_sufficient=True)
+    return VariantFetcherResult(chunks=c, retained_info="info", gap_analysis="")
 
 
 class TestIntegration:
@@ -20,25 +20,23 @@ class TestIntegration:
         dec.decompose.return_value = [
             AtomicQuery(query="Alpha project payment", target_collections=["col_a"]),
         ]
-        rl = MagicMock()
-        rl.run.return_value = _rl_result()
-        llm = MagicMock()
-        llm.generate.return_value = "# Result\n\n$1,000,000"
+        vf = MagicMock()
+        vf.run.return_value = _vf_result()
         svc = AgenticQueryService(
-            direct_module=MagicMock(), rewrite_loop=rl,
+            direct_module=MagicMock(), variant_fetcher=vf,
             catalog=MagicMock(), decomposer=dec,
-            aggregator=MagicMock(), llm=llm,
+            aggregator=MagicMock(), llm=MagicMock(),
         )
         result = svc.run("Alpha project payment", generate_answer=True)
-        assert result.answer == "# Result\n\n$1,000,000"
+        assert result.answer and "<search_results>" in result.answer
 
     def test_no_answer(self):
         dec = MagicMock()
         dec.decompose.return_value = [AtomicQuery(query="q")]
-        rl = MagicMock()
-        rl.run.return_value = _rl_result()
+        vf = MagicMock()
+        vf.run.return_value = _vf_result()
         svc = AgenticQueryService(
-            direct_module=MagicMock(), rewrite_loop=rl,
+            direct_module=MagicMock(), variant_fetcher=vf,
             catalog=MagicMock(), decomposer=dec,
             aggregator=MagicMock(), llm=MagicMock(),
         )
@@ -49,7 +47,7 @@ class TestIntegration:
         dec = MagicMock()
         dec.decompose.return_value = []
         svc = AgenticQueryService(
-            direct_module=MagicMock(), rewrite_loop=MagicMock(),
+            direct_module=MagicMock(), variant_fetcher=MagicMock(),
             catalog=MagicMock(), decomposer=dec,
             aggregator=MagicMock(), llm=MagicMock(),
         )

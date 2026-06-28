@@ -17,7 +17,7 @@ class SubQueryResult:
     query: str
     retained_chunks: list          # list[RetrievedChunk]
     retained_info: str
-    is_sufficient: bool
+    gap_analysis: str = ""         # what's still missing (empty = complete)
     answer: str | None = None      # None when generate_answer=False
     task: str = ""                  # decompose task label
     task_query: str = ""            # complete task description
@@ -108,37 +108,56 @@ class Aggregator:
 
     def _build_aggregate_prompt(self, results: list[SubQueryResult],
                                 original_query: str = "") -> str:
-        """Assemble the full aggregate user prompt."""
+        """Assemble the full aggregate user prompt.
+
+        Deduplicates chunks across all AQs before building a single context,
+        then shows each AQ with just a short summary (query + retained_info).
+        """
         from src.rag.context_builder import build_context
 
         task_query = results[0].task_query if results else ""
         task_label = task_query or "the user's query"
 
+        # ── Dedup chunks across all AQs, build single context ──────
+        seen: set[str] = set()
+        all_chunks: list = []
+        for r in results:
+            for c in (r.retained_chunks or []):
+                cid = c.metadata.get("id", "") if hasattr(c, "metadata") else ""
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    all_chunks.append(c)
+        all_chunks.sort(key=lambda c: c.score, reverse=True)
+
+        context_text = build_context(all_chunks) if all_chunks else "(no relevant chunks found)"
+
+        # ── Sub-query summaries (short — just query + key findings) ─
         has_incomplete = False
         sub_parts = []
         for i, r in enumerate(results):
-            if not r.is_sufficient:
+            if r.gap_analysis:
                 has_incomplete = True
             info_text = r.retained_info or "(no information found)"
-            ctx = build_context(r.retained_chunks or []) or "(no relevant chunks)"
+            gap_xml = f'\n  <gaps>{r.gap_analysis}</gaps>' if r.gap_analysis else ""
             sub_parts.append(
-                f"### Sub-query {i + 1}: {r.query}\n"
-                f"Retained info: {info_text}\n"
-                f"Relevant context:\n{ctx}"
+                f'  <sub_query index="{i + 1}">\n'
+                f"    <query>{r.query}</query>\n"
+                f"    <findings>{info_text}</findings>{gap_xml}\n"
+                f"  </sub_query>"
             )
 
-        sub_results_text = "\n\n".join(sub_parts)
-        if has_incomplete:
-            sub_results_text += (
-                "\n\n[NOTE: One or more sub-queries returned incomplete information. "
-                "The answer below may be partial — clearly indicate which parts "
-                "are based on incomplete data.]"
-            )
+        gap_note = (
+            "\n<!-- Some sub-queries have gaps. Clearly mark uncertain parts in your answer. -->"
+            if has_incomplete else ""
+        )
 
-        return _AGGREGATE_GROUP_USER.format(
-            original_query=original_query or task_query,
-            task_query=task_label,
-            sub_results=sub_results_text,
+        # ── Assemble as XML ────────────────────────────────────────
+        return (
+            f'<task description="{task_label}">\n'
+            f"{chr(10).join(sub_parts)}\n"
+            f"</task>\n"
+            f"{gap_note}\n"
+            f"<context>\n{context_text}\n</context>"
         )
 
     def _aggregate_group(self, label: str, results: list[SubQueryResult],
@@ -177,7 +196,7 @@ class Aggregator:
         parts = []
         for i, r in enumerate(results):
             answer = r.answer or "(no answer)"
-            status = "✓" if r.is_sufficient else "⚠"
+            status = "✓" if not r.gap_analysis else "⚠"
             parts.append(f"**Query {i + 1}** [{status}]: {r.query}\n{answer}")
         return "\n\n".join(parts) if parts else "No information found"
 

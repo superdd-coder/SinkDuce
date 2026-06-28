@@ -12,9 +12,11 @@ from dataclasses import dataclass, field
 from src.rag.agent_state import AgentState
 from src.rag.agent_nodes import (
     node_combined_grade,
-    node_check_and_rewrite,
     _dedup_by_id,
 )
+
+# node_check_and_rewrite REMOVED — RewriteLoop deprecated in favor of VariantFetcher
+node_check_and_rewrite = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 from src.rag import get_log_ctx as _ctx
@@ -75,13 +77,20 @@ class RewriteLoop:
                 except Exception:
                     logger.exception(_ctx() + "[Loop] on_step callback raised")
 
+        # DEPRECATED: RewriteLoop is superseded by VariantFetcher.
+        # AgentState no longer has current_query/phase/max_iterations.
+        # This module is kept for backward-compat reference only.
         state = AgentState(
             original_query=query,
             collections=list(collections),
-            current_query=query,
-            phase="rewrite",
-            max_iterations=max_iterations,
         )
+        # Shim: attach removed fields for legacy code compatibility
+        state.current_query = query          # type: ignore[attr-defined]
+        state.history_queries = []            # type: ignore[attr-defined]
+        state.iteration_count = 0             # type: ignore[attr-defined]
+        state.max_iterations = max_iterations # type: ignore[attr-defined]
+        state.phase = "rewrite"               # type: ignore[attr-defined]
+        state.is_sufficient = False           # type: ignore[attr-defined]
 
         logger.info(_ctx() + "[Loop] start q=%r cols=%s max_iter=%d dry_limit=%d",
                     query[:120], collections, max_iterations, dry_streak_limit)

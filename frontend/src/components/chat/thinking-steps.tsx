@@ -6,7 +6,6 @@ import {
   Loader2,
   Sparkles,
   Layers,
-  RotateCcw,
 } from "lucide-react"
 import type { ThinkingIteration, ThinkingSummary, TaskSummary, AqSummary, MetaInfo } from "@/stores/app-store"
 
@@ -20,7 +19,7 @@ interface ThinkingStepsProps {
 // ── Icons ──
 
 function AqIcon({ aq }: { aq: AqSummary }) {
-  if (aq.sufficient) return <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+  if (aq.has_gaps === false) return <Check className="h-3 w-3 shrink-0 text-emerald-500" />
   return <span className="text-[10px] shrink-0 text-amber-500">⚠</span>
 }
 
@@ -28,15 +27,16 @@ function AqIcon({ aq }: { aq: AqSummary }) {
 
 function AqRow({ aq }: { aq: AqSummary }) {
   const [expanded, setExpanded] = useState(false)
-  const hasRewrites = aq.rewritten.length > 0
+  const variants = aq.variants ?? []
+  const totalQueries = 1 + (aq.variant_count ?? 0)
 
   return (
     <div className="ml-5 text-[11px] leading-relaxed">
       <div
         className="flex items-start gap-1.5 py-0.5 cursor-pointer"
-        onClick={() => hasRewrites && setExpanded(!expanded)}
+        onClick={() => variants.length > 0 && setExpanded(!expanded)}
       >
-        {hasRewrites ? (
+        {variants.length > 0 ? (
           expanded ? <ChevronDown className="h-2.5 w-2.5 mt-0.5 shrink-0 text-muted-foreground" /> :
           <ChevronRight className="h-2.5 w-2.5 mt-0.5 shrink-0 text-muted-foreground" />
         ) : (
@@ -45,9 +45,9 @@ function AqRow({ aq }: { aq: AqSummary }) {
         <AqIcon aq={aq} />
         <span className="text-muted-foreground truncate">{aq.query}</span>
         <span className="text-muted-foreground/50 shrink-0">
-          {aq.final_chunks > 0 ? (
+          {(aq.final_chunks ?? 0) > 0 ? (
             <>→ {aq.final_chunks} chunks</>
-          ) : aq.current_chunks > 0 ? (
+          ) : (aq.current_chunks ?? 0) > 0 ? (
             <span className="text-muted-foreground/40">
               <Loader2 className="h-2.5 w-2.5 inline animate-spin mr-0.5" />
               {aq.current_chunks} chunks so far
@@ -55,17 +55,25 @@ function AqRow({ aq }: { aq: AqSummary }) {
           ) : (
             <span className="text-muted-foreground/30 italic">searching…</span>
           )}
-          {aq.iterations > 1 && ` (${aq.iterations} iters)`}
+          {totalQueries > 1 && (
+            <span className="text-muted-foreground/40 ml-1">
+              ({totalQueries} queries)
+            </span>
+          )}
         </span>
       </div>
 
-      {/* Rewrite details */}
-      {expanded && hasRewrites && (
+      {/* Variant details */}
+      {expanded && variants.length > 0 && (
         <div className="ml-7 mb-1 space-y-0.5">
-          {aq.rewritten.map((r, i) => (
+          <div className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
+            <Sparkles className="h-2.5 w-2.5 shrink-0" />
+            <span>original</span>
+          </div>
+          {variants.map((v, i) => (
             <div key={i} className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
-              <RotateCcw className="h-2.5 w-2.5 shrink-0" />
-              <span>rewrote to: {r}</span>
+              <Sparkles className="h-2.5 w-2.5 shrink-0 text-muted-foreground/30" />
+              <span>variant {i + 1}: {v}</span>
             </div>
           ))}
         </div>
@@ -104,7 +112,7 @@ function TaskGroup({ task }: { task: TaskSummary }) {
               {task.task_query}
             </div>
           )}
-          {task.aqs.map((aq) => (
+          {(task.aqs ?? []).map((aq) => (
             <AqRow key={aq.aq_id} aq={aq} />
           ))}
         </div>
@@ -119,7 +127,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
   const [topExpanded, setTopExpanded] = useState(true)
 
   // Waiting for first events — show spinner
-  if (isStreaming && (!summary || summary.tasks.length === 0)) {
+  if (isStreaming && (!summary || (summary.tasks?.length ?? 0) === 0)) {
     return (
       <div className="mt-5 pt-3.5 border-t border-dashed border-border">
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 italic">
@@ -132,7 +140,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
   }
 
   // Prefer clean summary over verbose step tree
-  if (summary && summary.tasks.length > 0) {
+  if (summary && (summary.tasks?.length ?? 0) > 0) {
     return (
       <div className="mt-5 pt-3.5 border-t border-dashed border-border">
         {/* Meta info */}
@@ -175,7 +183,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
         {/* Tasks */}
         {topExpanded && (
           <div className="space-y-1">
-            {summary.tasks.map((task, i) => (
+            {(summary.tasks ?? []).map((task, i) => (
               <TaskGroup key={i} task={task} />
             ))}
 

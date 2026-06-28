@@ -13,7 +13,8 @@ def _make_sqr(query="q", retained_info="info", task="", task_query="", sufficien
     ck.metadata = {"id": "c1", "source": "doc.md", "chunk_index": 1}
     return SubQueryResult(
         query=query, retained_chunks=[ck], retained_info=retained_info,
-        is_sufficient=sufficient, task=task, task_query=task_query,
+        gap_analysis="" if sufficient else "missing data",
+        task=task, task_query=task_query,
     )
 
 

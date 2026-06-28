@@ -30,19 +30,37 @@ _DECOMPOSE_SYSTEM = """You are a search query optimizer for a knowledge base sys
 Your input is a concrete set of information needs — NOT a user question. Someone upstream
 has already decided WHAT to search for. Your job is HOW to search it optimally.
 
-STEP 1 — Identify independent tasks (different document scopes):
-  - Separate tasks = truly independent topics that need DIFFERENT documents to answer
-  - Single task = the same documents would contain all the information needed
-  - Do NOT split closely related facets that share the same topic and document scope.
-    Example: "X 项目技术架构" is ONE task, no matter how many aspects it has.
-  - Example: "A项目技术方案, B项目技术方案" → 2 tasks (different project docs)
-  - Each task MUST have: "task" (short label) and "task_query" (complete sentence)
-  - If the information needs describe no searchable content, return [].
+GUIDING PRINCIPLE — The available collections define the searchable universe:
+  - Each collection has an "aspects" field — a compact inventory of concrete topics
+    its documents cover.
+  - When the information needs clearly match specific aspects, split into focused
+    AtomicQueries targeting those collections.
+  - When the information needs are only loosely related to the available aspects
+    (or the aspects are too vague to split on), produce a single broad AtomicQuery
+    with no target_collections — the system will search all available collections
+    and let the relevance grader filter results downstream.
+  - When the information needs are clearly about a completely different domain
+    than ALL collections' aspects, return [] — there is nothing to find here.
+  - When in doubt between returning [] and a broad query, prefer the broad query.
+    The downstream grader is better at filtering irrelevance than you are at
+    predicting it from compact aspect labels.
 
-STEP 2 — Within each task, produce 1-2 search queries as complete questions (not keyword fragments).
-  Do NOT create a separate query for each adjective or minor variation of the same question.
-  Route to collections by matching their description/type/tags. Use the index numbers in [brackets]
-  for target_collections, e.g. [0, 2]. Omit the field if unsure (the system will search all).
+STEP 1 — Match and group:
+  - Scan each collection's aspects. Where an information need aligns with a
+    specific listed aspect, create an AtomicQuery targeting that collection.
+  - Group AtomicQueries by the ENTITY or PROJECT they are about, not by the
+    aspect. One task = one entity/project. Assign a short
+    "task" label (the entity name) and a "task_query" describing what this
+    overall task is asking about that entity.
+  - Within each task, each matched aspect produces 1 search query as a
+    complete question.
+  - Route to collections using the index numbers in [brackets], e.g. [0, 2].
+    Omit target_collections to search all.
+
+STEP 2 — When aspects are too vague to split:
+  - If the aspects are generic labels (e.g. "Technical specifications") rather
+    than concrete topic inventories, treat them as "no specific match" and
+    produce a single broad AQ.
 
 Respond with ONLY a JSON array:
 [{"task": "...", "task_query": "...", "queries": [{"query": "...", "target_collections": [...]}]}]"""
@@ -52,8 +70,9 @@ _DECOMPOSE_USER = """Information needs: {raw_query}
 Available collections (use [index] for routing):
 {catalog_text}
 
-Group the information needs into tasks, then produce search queries within each task.
-Route each query to the most relevant collections by index number.
+These collections are the data sources. If the information needs are clearly
+about a different domain than these, return []. Otherwise, match and split.
+
 Return a JSON array."""
 
 
@@ -196,25 +215,20 @@ Which collections (by index) are relevant? Return a JSON array."""
             logger.info("[Decompose] done — 0 retrieval AQs (all non-retrieval)")
             return []
 
-        # Log tasks
-        tasks = {}
+        # ── Print task plan ──────────────────────────────────────────
+        # Group AQs by task for a readable table
+        task_aqs: dict[str, list[AtomicQuery]] = {}
         for aq in aqs:
-            t = aq.task or "(single)"
-            tasks.setdefault(t, 0)
-            tasks[t] += 1
-        logger.info("[Decompose] done — %d AQs across %d tasks: %s", len(aqs), len(tasks), tasks)
-        # Log task context
-        seen_tasks = {}
-        for aq in aqs:
-            t = aq.task or "(single)"
-            if t not in seen_tasks and aq.task_query:
-                logger.info("[Decompose]   task %r: %s", t, aq.task_query)
-                seen_tasks[t] = True
-        # Log each AQ
-        for aq in aqs:
-            cols = aq.target_collections if aq.target_collections else ["ALL"]
-            label = aq.task or "-"
-            logger.info("[Decompose]     ↳ [%s] %r → %s", label, aq.query[:120], cols)
+            t = aq.task or "(no task)"
+            task_aqs.setdefault(t, []).append(aq)
+
+        logger.info("[Decompose] %d AQs in %d tasks:", len(aqs), len(task_aqs))
+        for task_label, items in task_aqs.items():
+            tq = items[0].task_query or task_label
+            cols = items[0].target_collections or ["ALL"]
+            logger.info("[Decompose]   [%s] %s → %s", task_label, tq[:100], ", ".join(cols[:3]))
+            for aq in items:
+                logger.info("[Decompose]     ↳ %s", aq.query[:120])
 
         return aqs
 
@@ -245,12 +259,12 @@ Which collections (by index) are relevant? Return a JSON array."""
                 continue
             index_map[i] = eid
             line = f"[{i}] {name}"
-            if cov:
-                line += f" — {cov}"
-            if tags:
-                line += f" | tags: {', '.join(tags)}"
             if defn:
-                line += f"\n    {defn}"
+                line += f"\n    description: {defn}"
+            if cov:
+                line += f"\n    aspects: {cov}"
+            if tags:
+                line += f"\n    tags: {', '.join(tags)}"
             lines.append(line)
         return "\n".join(lines), index_map
 

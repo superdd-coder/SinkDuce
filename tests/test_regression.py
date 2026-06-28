@@ -50,8 +50,9 @@ class TestAgentNodesKeptFunctions:
         with pytest.raises(ImportError):
             from src.rag.agent_nodes import node_llm_grade
 
-    def test_node_check_and_rewrite_importable(self):
-        from src.rag.agent_nodes import node_check_and_rewrite
+    def test_node_check_and_rewrite_removed(self):
+        with pytest.raises(ImportError):
+            from src.rag.agent_nodes import node_check_and_rewrite
 
     def test_dedup_by_id_importable(self):
         from src.rag.agent_nodes import _dedup_by_id
@@ -82,7 +83,11 @@ class TestAgentPromptsCleaned:
             from src.rag.agent_prompts import GENERATE_SYSTEM
 
     def test_new_prompts_exist(self):
-        from src.rag.agent_prompts import GRADE_COMBINED_SYSTEM, GRADE_COMBINED_USER, REWRITE_SYSTEM
+        from src.rag.agent_prompts import GRADE_COMBINED_SYSTEM, GRADE_COMBINED_USER, VARIANT_GENERATION_SYSTEM
+
+    def test_rewrite_prompts_removed(self):
+        with pytest.raises(ImportError):
+            from src.rag.agent_prompts import REWRITE_SYSTEM
 
 
 # ── TestCollectionUtilsCleaned ────────────────────────────────────────────
@@ -118,8 +123,8 @@ class TestNewModulesImportable:
     def test_context_builder(self):
         from src.rag.context_builder import build_context
 
-    def test_rewrite_loop(self):
-        from src.rag.rewrite_loop import RewriteLoop, RewriteLoopResult
+    def test_variant_fetcher(self):
+        from src.rag.variant_fetcher import VariantFetcher, VariantFetcherResult
 
     def test_catalog(self):
         from src.rag.catalog import CollectionCatalog, CatalogEntry

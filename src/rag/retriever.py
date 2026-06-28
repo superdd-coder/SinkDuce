@@ -42,7 +42,7 @@ class Retriever:
     ) -> list[RetrievedChunk]:
         emb = embedding_override or self.embedding
         query_vector = emb.embed_query(query)
-        logger.info("[Retriever] col=%s mode=%s dim=%d top_k=%d min_score=%.2f",
+        logger.debug("[Retriever] col=%s mode=%s dim=%d top_k=%d min_score=%.2f",
                      collection, search_mode, len(query_vector), top_k, min_score)
 
         if search_mode == "hybrid":
@@ -58,7 +58,7 @@ class Retriever:
         # Threshold only applies to dense mode (cosine scores 0-1), not hybrid (RRF rank scores)
         if min_score > 0 and search_mode != "hybrid":
             chunks = [c for c in chunks if c.score >= min_score]
-        logger.info("[Retriever] col=%s → %d results", collection, len(chunks))
+        logger.debug("[Retriever] col=%s → %d results", collection, len(chunks))
         return chunks
 
     def _hybrid_retrieve(
@@ -89,18 +89,18 @@ class Retriever:
             sparse_query, _keywords = preprocess_query_for_sparse(query, llm)
 
             if llm is not None and sparse_query != query:
-                logger.info("[Retriever] hybrid: LLM expanded query %r → %r", query[:80], sparse_query[:80])
+                logger.debug("[Retriever] hybrid: LLM expanded query %r → %r", query[:80], sparse_query[:80])
 
             sparse_vector = encoder.encode_query(sparse_query)
 
             if not sparse_vector:
-                logger.info("[Retriever] hybrid: empty sparse vector for %r, falling back to dense", query[:80])
+                logger.debug("[Retriever] hybrid: empty sparse vector for %r, falling back to dense", query[:80])
                 raise ValueError("Query produced empty sparse vector (no known terms)")
 
             id_to_term = {v: k for k, v in encoder.term_to_id.items()}
             top5 = sorted(sparse_vector.items(), key=lambda x: x[1], reverse=True)[:5]
             top_terms = [f"{id_to_term.get(tid, '?')}({w:.2f})" for tid, w in top5]
-            logger.info("[Retriever] hybrid: sparse_dim=%d top_terms=[%s]",
+            logger.debug("[Retriever] hybrid: sparse_dim=%d top_terms=[%s]",
                         len(sparse_vector), ", ".join(top_terms))
 
             results = self.db.hybrid_search(
@@ -111,7 +111,7 @@ class Retriever:
                 filter_condition=filter_condition,
             )
             chunks = self._to_chunks(results)
-            logger.info("[Retriever] hybrid: col=%s → %d chunks top_score=%.4f",
+            logger.debug("[Retriever] hybrid: col=%s → %d chunks top_score=%.4f",
                         collection, len(chunks), chunks[0].score if chunks else 0)
             return chunks
         except Exception as e:
@@ -166,7 +166,7 @@ def multi_collection_retrieve(
                 c.metadata["collection"] = col
                 all_results.append(c)
 
-    logger.info("[Retriever] multi: %d results from %d collections", len(all_results), len(collections))
+    logger.debug("[Retriever] multi: %d results from %d collections", len(all_results), len(collections))
     if reranker and all_results:
         all_results = reranker.rerank(query, all_results)
 

@@ -258,12 +258,12 @@ class TestCoverageLogic:
         prompt = llm.generate.call_args[0][0]
         assert "Q4 financial report summary" in prompt
 
-    def test_prompt_classifies_type_not_topic(self):
-        """Prompt asks for document TYPE, not topic."""
+    def test_prompt_generates_aspect_inventory(self):
+        """Prompt asks for aspect inventory, not document type."""
         db = MagicMock()
         db.get_collection_config.return_value = {"coverage": ""}
         llm = MagicMock()
-        llm.generate.return_value = "Meeting notes"
+        llm.generate.return_value = "membrane specs(UF/RO types) | pretreatment(softener)"
 
         cat = CollectionCatalog(db, llm)
         cat._collect_file_infos = MagicMock(return_value=[
@@ -273,16 +273,14 @@ class TestCoverageLogic:
 
         cat.update_coverage("col_a")
         prompt = llm.generate.call_args[0][0]
-        assert "TYPE" in prompt
-        assert "TOPIC" in prompt
-        assert "WRONG" in prompt
+        assert "aspect" in prompt.lower()
 
     def test_truncation_safety_net(self):
         db = MagicMock()
         db.get_collection_config.return_value = {"coverage": ""}
         db.update_collection_config.return_value = {}
         llm = MagicMock()
-        llm.generate.return_value = "A" * 100
+        llm.generate.return_value = "A" * 500
 
         cat = CollectionCatalog(db, llm)
         cat._collect_file_infos = MagicMock(return_value=[
@@ -292,7 +290,7 @@ class TestCoverageLogic:
 
         cat.update_coverage("col_a")
         saved = db.update_collection_config.call_args[0][1]["coverage"]
-        assert len(saved) <= 50
+        assert len(saved) <= 400
 
 
 class TestCoverageConcurrent:

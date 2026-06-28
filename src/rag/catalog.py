@@ -24,7 +24,7 @@ class CatalogEntry:
     name: str
     id: str
     definition: str          # from collection project_description
-    coverage: str            # ≤50 chars, LLM-generated document-type label
+    coverage: str            # ~300 chars, compact aspect inventory for Decomposer routing
     tags: list[str] = field(default_factory=list)
 
 
@@ -36,10 +36,10 @@ class CollectionCatalog:
         self.llm = llm
 
         self._lock = threading.Lock()
-        self._debounce_seconds: float = 180.0
+        self._debounce_seconds: float = 60.0
 
         # Per-collection state (protected by _lock)
-        self._cooling: dict[str, bool] = {}          # in 180s cooldown after generation
+        self._cooling: dict[str, bool] = {}          # in 60s cooldown after generation
         self._dirty: dict[str, bool] = {}            # file changed during cooling
         self._timers: dict[str, threading.Timer] = {}  # one timer per cooling collection
 
@@ -211,12 +211,12 @@ class CollectionCatalog:
         logger.info("[Coverage] GENERATING col=%r files=%d (with_text=%d)",
                     collection_id, len(file_infos), n_summary)
 
-        # Build prompt — classify document TYPE, not topic
+        # Build prompt — compact aspect inventory for Decomposer routing
         lines = []
         for fi in file_infos:
             line = f"- {fi['filename']}"
             if fi.get("chunk0_text"):
-                line += f"\n  Content: {fi['chunk0_text']}"
+                line += f"\n    {fi['chunk0_text']}"
             lines.append(line)
 
         file_block = "\n".join(lines)
@@ -224,35 +224,36 @@ class CollectionCatalog:
         prompt = (
             f"The collection '{collection_id}' currently contains these files:\n\n"
             f"{file_block}\n\n"
-            f"Classify the TYPE of documents, NOT the topic. A document TYPE "
-            f"describes what kind of document it is, NOT what it is about.\n\n"
-            f"Examples of document TYPE (CORRECT):\n"
-            f"  \"Project introduction\"  \"Financial reports\"  \"Meeting notes\"\n"
-            f"  \"Contracts\"  \"Technical specifications\"  \"Legal documents\"\n"
-            f"  \"Invoices\"  \"Research papers\"  \"Manuals\"\n\n"
-            f"Examples of TOPIC (WRONG — do NOT output these):\n"
-            f"  \"Biogas plant at IWK treatment\"  \"Q4 revenue analysis\"\n"
-            f"  \"Project Alpha financial data\"  \"Python programming guide\"\n\n"
-            f"Output ONLY the document type label, ≤50 characters. "
-            f"No JSON, no quotes, no explanation."
+            f"Produce a compact ASPECT INVENTORY — list the concrete topics and "
+            f"information aspects this collection's documents cover, so a search "
+            f"router can match queries against them.\n\n"
+            f"Guidelines:\n"
+            f"- Use '|' to separate distinct aspects. Within each aspect, use '()' "
+            f"to pack related keywords and specifics.\n"
+            f"- Merge similar files into one aspect. A good aspect is something a "
+            f"user might search for as a single atomic query.\n"
+            f"- Be specific and dense. Prefer concrete terms over generic labels.\n"
+            f"- Write in English. No markdown, no JSON, no quotes, no explanations.\n"
+            f"- Target ~250 characters, maximum 400."
         )
 
         try:
             new_coverage = self.llm.generate(
                 prompt,
                 system=(
-                    "You are a document CLASSIFIER. Given filenames and content, "
-                    "output ONLY the document TYPE — NOT the topic. Types are "
-                    "categories like \"Project introduction\", \"Financial reports\", "
-                    "\"Meeting notes\", \"Contracts\". Topics are things like "
-                    "\"Biogas plant\" or \"Q4 revenue\" — NEVER output topics. "
-                    "Respond with ONLY the type label, ≤50 characters."
+                    "You produce compact aspect inventories of document collections. "
+                    "Given a file list with content summaries, output a single line "
+                    "listing the concrete information aspects covered, separated by '|'. "
+                    "Within each aspect, pack relevant keywords in '()'. "
+                    "Merge similar files; keep distinct topics separate. "
+                    "Be specific — prefer technical terms over generic labels. "
+                    "Output ONLY the aspect inventory line, nothing else."
                 ),
-                max_tokens=256, thinking=False,
+                max_tokens=512, thinking=False,
             ).strip()
             new_coverage = new_coverage.strip('"').strip("'").strip()
-            if len(new_coverage) > 50:
-                new_coverage = new_coverage[:50]
+            if len(new_coverage) > 400:
+                new_coverage = new_coverage[:400]
             logger.info("[Coverage] RESULT col=%r → %r", collection_id, new_coverage)
         except Exception:
             logger.exception("[Coverage] LLM failed for %r", collection_id)

@@ -19,7 +19,7 @@ class QwenReranker(RerankerProvider):
         self._base_url = (config.base_url or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
 
     def rerank(self, query: str, documents: list[str], top_k: int = 5) -> list[tuple[int, float]]:
-        logger.info("Qwen rerank: %d docs, top_k=%d, model=%s", len(documents), top_k, self._model)
+        logger.debug("Qwen rerank: %d docs, top_k=%d, model=%s", len(documents), top_k, self._model)
         url = f"{self._base_url}/services/rerank/text-rerank/text-rerank"
         headers = {
             "Authorization": f"Bearer {self._api_key}",

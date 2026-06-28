@@ -13,7 +13,7 @@ from src.rag.retriever import Retriever
 from src.rag.reranker import Reranker
 from src.rag.direct_query import DirectQueryModule
 from src.rag.catalog import CollectionCatalog
-from src.rag.rewrite_loop import RewriteLoop
+from src.rag.variant_fetcher import VariantFetcher
 from src.rag.decomposer import Decomposer
 from src.rag.aggregator import Aggregator
 from src.rag.agentic_query import AgenticQueryService
@@ -203,7 +203,7 @@ class Services:
     retriever: Retriever = None
     reranker: Reranker = None
     direct_query: DirectQueryModule = None
-    rewrite_loop: RewriteLoop = None
+    variant_fetcher: VariantFetcher = None
     catalog: CollectionCatalog = None
     decomposer: Decomposer = None
     aggregator: Aggregator = None
@@ -309,7 +309,7 @@ def init_services():
             reranker=services.reranker,
             llm=services.llm,
         )
-        services.rewrite_loop = RewriteLoop(
+        services.variant_fetcher = VariantFetcher(
             direct_module=services.direct_query,
             llm=services.llm,
             reranker=services.reranker,
@@ -322,7 +322,7 @@ def init_services():
         services.aggregator = Aggregator(llm=services.llm)
         services.agentic_query = AgenticQueryService(
             direct_module=services.direct_query,
-            rewrite_loop=services.rewrite_loop,
+            variant_fetcher=services.variant_fetcher,
             catalog=services.catalog,
             decomposer=services.decomposer,
             aggregator=services.aggregator,
@@ -334,7 +334,7 @@ def init_services():
         )
     else:
         services.direct_query = None
-        services.rewrite_loop = None
+        services.variant_fetcher = None
         services.catalog = None
         services.decomposer = None
         services.aggregator = None

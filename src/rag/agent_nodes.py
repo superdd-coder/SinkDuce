@@ -15,8 +15,6 @@ from src.rag.agent_state import AgentState
 from src.rag.agent_prompts import (
     GRADE_COMBINED_SYSTEM,
     GRADE_COMBINED_USER,
-    REWRITE_SYSTEM,
-    REWRITE_USER,
 )
 from src.rag.retriever import RetrievedChunk
 from src.providers.base import LLMProvider
@@ -168,12 +166,11 @@ def node_combined_grade(
 
     Side effects:
     - Promotes relevant chunks from current_batch to state.retained_chunks
-    - Updates state.retained_info, state.current_gap_analysis, state.is_sufficient
+    - Updates state.retained_info, state.current_gap_analysis
     """
     if not current_batch:
         logger.info(_ctx() + "[Grade] skipped: empty batch")
-        state.is_sufficient = False
-        state.current_gap_analysis = "No new results found for the current query."
+        state.current_gap_analysis = "No relevant results found for the current query."
         return
 
     logger.info(_ctx() + "[Grade] combined: judging %d candidates (%d retained so far)",
@@ -233,10 +230,9 @@ def node_combined_grade(
     # ── Update knowledge record fields ──────────────────────────────
     state.retained_info = str(result.get("retained_info", state.retained_info))
     state.current_gap_analysis = str(result.get("gap_analysis", ""))
-    state.is_sufficient = bool(result.get("is_sufficient", False))
 
-    logger.info(_ctx() + "[Grade] combined: sufficient=%s info=%d chars gap=%r",
-                state.is_sufficient, len(state.retained_info),
+    logger.info(_ctx() + "[Grade] combined: info=%d chars gap=%r",
+                len(state.retained_info),
                 state.current_gap_analysis[:80] if state.current_gap_analysis else "")
 
 
@@ -248,67 +244,9 @@ def _combined_grade_fallback(state: AgentState, current_batch: list[RetrievedChu
             state.retained_chunks.append(c)
     if not state.retained_info:
         state.retained_info = "Unable to evaluate relevance — fallback mode."
-    state.is_sufficient = False
     state.current_gap_analysis = "Unable to evaluate — the grader did not produce valid output."
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Node 3: Check & Rewrite
-# ══════════════════════════════════════════════════════════════════════════
-
-def node_check_and_rewrite(
-    state: AgentState,
-    *,
-    llm: LLMProvider,
-    task_query: str = "",
-    temperature: float | None = None,
-) -> None:
-    """Add query to history, then either rewrite or transition to decompose.
-
-    Side effects:
-    - Appends current_query to history_queries
-    - If iteration < max: sets current_query to rewritten query, increments iteration_count
-    - If iteration >= max: sets phase to "decompose"
-    """
-    state.history_queries.append(state.current_query)
-    logger.info(_ctx() + "[Requery] history=%d iter=%d/%d",
-                len(state.history_queries), state.iteration_count, state.max_iterations)
-
-    if state.iteration_count >= state.max_iterations:
-        logger.info(_ctx() + "[Requery] max iter %d reached", state.max_iterations)
-        state.phase = "decompose"
-        return
-
-    # Generate new query (with task context and retained_info)
-    history_text = "\n".join(f"- {q}" for q in state.history_queries)
-    prompt = REWRITE_USER.format(
-        original_query=state.original_query,
-        task_query=task_query or "No additional task context.",
-        retained_info=state.retained_info or "No information gathered yet.",
-        gap_analysis=state.current_gap_analysis or "No relevant information found in previous searches.",
-        history_queries=history_text,
-    )
-
-    try:
-        result = _llm_generate_json(llm, prompt, REWRITE_SYSTEM, temperature=temperature, thinking=False)
-        if isinstance(result, dict) and result.get("new_query"):
-            new_query = str(result["new_query"]).strip()
-            if new_query and new_query != state.current_query:
-                state.current_query = new_query
-                state.iteration_count += 1
-                logger.info(_ctx() + "[Requery] → %r", new_query[:80])
-                return
-    except (ValueError, KeyError) as e:
-        logger.warning(_ctx() + "[Requery] failed — %s, keeping original", e)
-
-    # Fallback: keep original query but still increment
-    state.iteration_count += 1
-    logger.info(_ctx() + "[Requery] fallback, iter=%d", state.iteration_count)
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Node 4: Decompose Query
-# ══════════════════════════════════════════════════════════════════════════
-
+# node_check_and_rewrite — REMOVED (replaced by VariantFetcher variant generation)
 # node_decompose_query — REMOVED (moved to decomposer.py)
 # node_parallel_sub_queries — REMOVED (replaced by AgenticQueryService fan-out)

@@ -15,7 +15,7 @@ class Reranker:
 
     def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int | None = None) -> list[RetrievedChunk]:
         k = top_k if top_k is not None else self.top_k
-        logger.info("[Rerank] %d chunks → top_k=%s", len(chunks), k)
+        logger.debug("[Rerank] %d chunks → top_k=%s", len(chunks), k)
         if not chunks:
             return []
 

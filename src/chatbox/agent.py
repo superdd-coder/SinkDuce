@@ -90,10 +90,17 @@ YOUR ROLE — Information Planner:
 Before calling search_knowledge_base, think about WHAT information you need, not just
 what the user asked. Translate the user's question into concrete information needs.
 
-DECISION RULES — one call or multiple rounds?
-- DEFAULT: ONE call with decompose=true. Pack ALL information needs into it.
-  The system handles decomposition and parallel search internally. This applies to
-  comparison, multi-entity, multi-facet, and most analytical queries.
+DECISION RULES — when to search vs answer directly:
+- BEFORE calling the tool, check the knowledge base reference above. It lists
+  exactly what topics each collection covers. If the user is asking about a
+  project, entity, or topic that does NOT appear in any collection's description
+  or aspects, search will return nothing useful. In that case, tell the user
+  directly: "I don't have information about X in the knowledge base. The available
+  collections cover: [list what IS available]." Do NOT call the tool.
+- DEFAULT (when the topic IS covered): ONE call with decompose=true. Pack ALL
+  information needs into it. The system handles decomposition and parallel search
+  internally. This applies to comparison, multi-entity, multi-facet, and most
+  analytical queries.
 - EXCEPTION — dependency chain: ONLY use multiple rounds when you literally cannot
   formulate round N+1 until you see round N's results. This is a dependency, not
   a preference. Example: "What DB does X use? What CVEs does that DB have?" —
@@ -161,7 +168,7 @@ class ChatboxAgent:
 
     # ── helpers ──────────────────────────────────────────────────────
 
-    def _build_catalog_text(self, session_id: str) -> str:
+    def _build_catalog_text(self, session_id: str, *, collections: list[str] | None = None) -> str:
         """Build a concise catalog summary for the system prompt."""
         if self._agentic is None:
             return ""
@@ -169,7 +176,7 @@ class ChatboxAgent:
             catalog = self._agentic.catalog
             if catalog is None:
                 return ""
-            cols = self._get_collections(session_id)
+            cols = collections if collections is not None else self._get_collections(session_id)
             entries = catalog.get_catalog(cols if cols else None)
         except Exception:
             return ""
@@ -205,6 +212,7 @@ class ChatboxAgent:
         user_message: str,
         *,
         extra_messages: list[dict] | None = None,
+        collections: list[str] | None = None,
     ) -> list[dict]:
         """Build OpenAI-compatible messages array for the LLM call."""
         messages: list[dict] = []
@@ -213,7 +221,7 @@ class ChatboxAgent:
         messages.append({"role": "system", "content": self._system_prompt})
 
         # Catalog reference as separate message (position 1 — per-session, static within session)
-        catalog_text = self._build_catalog_text(session_id)
+        catalog_text = self._build_catalog_text(session_id, collections=collections)
         if catalog_text:
             messages.append({"role": "system", "content": catalog_text})
 
@@ -268,6 +276,7 @@ class ChatboxAgent:
         for _round in range(_MAX_TOOL_ROUNDS):
             messages = self._build_messages(
                 session_id, user_message, extra_messages=extra_messages,
+                collections=collections,
             )
 
             # Call LLM with tools — use underlying OpenAI client directly
@@ -425,6 +434,7 @@ class ChatboxAgent:
         for _round in range(_MAX_TOOL_ROUNDS):
             messages = self._build_messages(
                 session_id, user_message, extra_messages=extra_messages,
+                collections=collections,
             )
 
             # ── Streaming LLM call (real token-by-token, threaded) ──
@@ -470,6 +480,7 @@ class ChatboxAgent:
                 tool_calls_acc: dict[int, dict] = {}  # index → accumulated delta
                 reasoning = None
                 finish_reason = None
+                streamed_reasoning = False  # sticky: once we get reasoning, suppress content duplicates
 
                 for chunk in stream:
                     if not chunk.choices:
@@ -478,10 +489,20 @@ class ChatboxAgent:
                     delta = choice.delta
                     finish_reason = choice.finish_reason
 
-                    # Content tokens → emit immediately
+                    # Reasoning (DeepSeek) — check first
+                    delta_reasoning = getattr(delta, "reasoning_content", None) or None
+                    if delta_reasoning:
+                        streamed_reasoning = True
+
+                    # Content tokens
                     if delta.content:
                         content += delta.content
-                        token_queue.put(("token", delta.content))
+                        # If this round produced reasoning, content is a duplicate.
+                        # Exception: after any tool call, content is answer text.
+                        if streamed_reasoning and total_tool_calls == 0:
+                            pass  # suppressed — duplicate of reasoning_content
+                        else:
+                            token_queue.put(("token", delta.content))
 
                     # Tool call deltas → accumulate
                     if delta.tool_calls:
@@ -503,7 +524,6 @@ class ChatboxAgent:
                                     acc["function"]["arguments"] += tc_delta.function.arguments
 
                     # Reasoning (DeepSeek) — stream to frontend
-                    delta_reasoning = getattr(delta, "reasoning_content", None) or None
                     if delta_reasoning:
                         if reasoning is None:
                             reasoning = ""
@@ -625,9 +645,9 @@ class ChatboxAgent:
                             if event.get("step") in (
                                 "decompose", "task_start", "aq_start",
                                 "aq_done", "synthesize_task", "synthesize_merge",
-                                # Rewrite loop internals — per-AQ progress
+                                # Variant fetcher internals — per-AQ progress
                                 "retrieve", "retrieving", "grading",
-                                "rewriting", "rewrite_loop_done",
+                                "variant_generation", "rewrite_loop_done",
                             ):
                                 step_queue.put(event)
 
@@ -894,7 +914,6 @@ def _build_thinking_summary(events: list[dict]) -> dict:
     tasks: dict[str, dict] = {}
     task_order: list[str] = []
     total_aqs = 0
-    aq_rewrites: dict[str, list[str]] = {}
     aq_current_chunks: dict[str, int] = {}  # progressive chunk count
     status = ""
 
@@ -903,7 +922,7 @@ def _build_thinking_summary(events: list[dict]) -> dict:
         content = e.get("content", "")
 
         # Track latest activity for live status
-        if step in ("decompose", "retrieving", "grading", "rewriting",
+        if step in ("decompose", "retrieving", "grading", "variant_generation",
                      "synthesize_task", "synthesize_merge", "retrieve"):
             status = content
 
@@ -923,47 +942,48 @@ def _build_thinking_summary(events: list[dict]) -> dict:
             total_aqs += 1
             aq_id = e.get("aq_id", "")
             task_key = e.get("task", "")
-            aq_rewrites[aq_id] = []
             if task_key in tasks:
                 tasks[task_key]["aqs"].append({
                     "aq_id": aq_id,
                     "query": content,
-                    "iterations": 0,
-                    "rewritten": [],
+                    "variants": [],
+                    "variant_count": 0,
                     "final_chunks": 0,
                     "current_chunks": 0,
-                    "sufficient": False,
+                    "has_gaps": False,
                 })
+
+        elif step == "variant_generation":
+            aq_id = e.get("aq_id", "")
+            variants = e.get("variants", [])
+            vc = e.get("variant_count", 0)
+            for t in tasks.values():
+                for aq in t["aqs"]:
+                    if aq["aq_id"] == aq_id:
+                        aq["variants"] = list(variants)
+                        aq["variant_count"] = vc
+                        break
 
         elif step == "retrieving":
             aq_id = e.get("aq_id", "")
-            # Parse progressive chunk count: "Retrieved N new chunks (total seen: M)"
-            if "total seen: " in content:
+            # Parse: "Retrieved N unique chunks across M search variants"
+            if "unique chunks" in content:
                 try:
-                    total = int(content.split("total seen: ")[1].split(")")[0])
+                    total = int(content.split("unique chunks")[0].split()[-1])
                     aq_current_chunks[aq_id] = total
                 except (ValueError, IndexError):
                     pass
 
-        elif step == "rewriting":
-            aq_id = e.get("aq_id", "")
-            if "Rewritten to:" not in content:
-                continue  # skip placeholder events
-            rewritten = content.split("Rewritten to:", 1)[1].strip().rstrip(")")
-            aq_rewrites.setdefault(aq_id, []).append(rewritten)
-
         elif step == "aq_done":
             aq_id = e.get("aq_id", "")
             chunks = e.get("chunks", 0)
-            sufficient = e.get("sufficient", False)
+            has_gaps = e.get("has_gaps", True)
             for t in tasks.values():
                 for aq in t["aqs"]:
                     if aq["aq_id"] == aq_id:
                         aq["final_chunks"] = chunks
                         aq["current_chunks"] = chunks
-                        aq["sufficient"] = sufficient
-                        aq["iterations"] = len(aq_rewrites.get(aq_id, [])) + 1
-                        aq["rewritten"] = aq_rewrites.get(aq_id, [])
+                        aq["has_gaps"] = has_gaps
                         t["useful_chunks"] = sum(a["final_chunks"] for a in t["aqs"])
                         break
 
@@ -973,10 +993,6 @@ def _build_thinking_summary(events: list[dict]) -> dict:
             aid = aq["aq_id"]
             if aid in aq_current_chunks and aq["final_chunks"] == 0:
                 aq["current_chunks"] = aq_current_chunks[aid]
-            # Show rewrites as they happen, not just at aq_done
-            if aid in aq_rewrites and not aq["rewritten"]:
-                aq["rewritten"] = aq_rewrites[aid]
-                aq["iterations"] = len(aq_rewrites[aid]) + 1
 
     return {
         "aq_count": total_aqs,

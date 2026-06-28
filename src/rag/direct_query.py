@@ -89,7 +89,7 @@ class DirectQueryModule:
                 except Exception:
                     pass
 
-        logger.info("[Direct] retrieve q=%r cols=%s top_k=%d mode=%s rerank=%s rerank_top_k=%s min_score=%.2f",
+        logger.debug("[Direct] retrieve q=%r cols=%s top_k=%d mode=%s rerank=%s rerank_top_k=%s min_score=%.2f",
                     query[:120], collections, top_k, search_mode, rerank_enabled, rerank_top_k, min_score)
 
         all_chunks: list[RetrievedChunk] = []
@@ -112,7 +112,7 @@ class DirectQueryModule:
 
             chunk_mode = col_config.get("chunk_mode", "normal")
             emb_override = overrides.get(col)
-            logger.info("[Direct] col=%s | mode=%s top_k=%d", col, chunk_mode, top_k)
+            logger.debug("[Direct] col=%s | mode=%s top_k=%d", col, chunk_mode, top_k)
 
             try:
                 if chunk_mode == "parent_child":
@@ -170,7 +170,7 @@ class DirectQueryModule:
             try:
                 k = rerank_top_k if rerank_top_k else None
                 all_chunks = self.reranker.rerank(query, all_chunks, top_k=k)
-                logger.info("[Direct] rerank: %d → %d chunks", n_before, len(all_chunks))
+                logger.debug("[Direct] rerank: %d → %d chunks", n_before, len(all_chunks))
             except Exception:
                 logger.exception("[Direct] rerank failed, using un-reranked results")
                 do_rerank = False
@@ -183,6 +183,12 @@ class DirectQueryModule:
             limit = top_k
         all_chunks = all_chunks[:limit]
 
+        # ── Score threshold (only after rerank, which normalizes scores to 0-1) ──
+        # Raw RRF scores from hybrid are on a different scale — skip threshold there.
+        if min_score > 0 and do_rerank:
+            all_chunks = [c for c in all_chunks if c.score >= min_score]
+            logger.debug("[Direct] min_score=%.2f → %d chunks after threshold", min_score, len(all_chunks))
+
         # Filter child_groups to only include parents kept after truncation
         kept_ids = {c.metadata.get("id", "") for c in all_chunks}
         filtered_groups = {
@@ -192,10 +198,10 @@ class DirectQueryModule:
 
         total_children = sum(len(v) for v in filtered_groups.values())
         if total_children:
-            logger.info("[Direct] done: %d parents, %d children, %d collections",
+            logger.debug("[Direct] done: %d parents, %d children, %d collections",
                         len(all_chunks), total_children, len(collections))
         else:
-            logger.info("[Direct] done: %d chunks, %d collections",
+            logger.debug("[Direct] done: %d chunks, %d collections",
                         len(all_chunks), len(collections))
 
         # emit: step="retrieve_done", chunks, collections
@@ -216,7 +222,7 @@ class DirectQueryModule:
             )
             try:
                 answer = self.llm.generate(prompt, max_tokens=8192, thinking=True).strip()
-                logger.info("[Direct] answer: %d chars", len(answer))
+                logger.debug("[Direct] answer: %d chars", len(answer))
                 # emit: step="synthesize_done", answer_len
                 _emit("synthesize_done", f"{len(answer)} chars", answer_len=len(answer))
             except Exception:

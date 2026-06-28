@@ -33,10 +33,10 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
 
     When *gap_indicators* is False, the ``[Note: ...]`` lines are skipped.
     """
-    logger.info("[Context] %d chunks, gap_indicators=%s", len(chunks), gap_indicators)
+    logger.debug("[Context] %d chunks, gap_indicators=%s", len(chunks), gap_indicators)
 
     if not chunks:
-        logger.info("[Context] empty input → empty output")
+        logger.debug("[Context] empty input → empty output")
         return ""
 
     # ── Normalise to a uniform intermediate representation ──────────
@@ -167,5 +167,5 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
                 parts.append("")  # blank line between chunks
 
     result = "\n".join(parts).rstrip()
-    logger.info("[Context] done — %d chars output", len(result))
+    logger.debug("[Context] done — %d chars output", len(result))
     return result
