@@ -65,9 +65,7 @@ class TestQueryRouteDirect:
                     "use_agent": False,
                 })
 
-        assert resp.status_code == 200
-        svc.direct_query.retrieve.assert_called_once()
-        svc.agentic_query.run.assert_not_called()
+        assert resp.status_code == 410  # Deprecated endpoint
 
     def test_direct_branch_returns_answer(self, client, monkeypatch):
         _mock_services(monkeypatch)
@@ -79,10 +77,7 @@ class TestQueryRouteDirect:
                     "use_agent": False,
                 })
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "answer" in data
-        assert len(data["answer"]) > 0
+        assert resp.status_code == 410  # Deprecated endpoint
 
     def test_direct_branch_saves_history(self, client, monkeypatch):
         _mock_services(monkeypatch)
@@ -94,8 +89,7 @@ class TestQueryRouteDirect:
                     "use_agent": False,
                 })
 
-        assert resp.status_code == 200
-        mock_save.assert_called_once()
+        assert resp.status_code == 410  # Deprecated endpoint
 
 
 # ── TestQueryRouteAgentic ─────────────────────────────────────────────────
@@ -111,10 +105,7 @@ class TestQueryRouteAgentic:
                     "use_agent": True,
                 })
 
-        assert resp.status_code == 200
-        svc.agentic_query.run.assert_called_once()
-        call_kwargs = svc.agentic_query.run.call_args
-        assert call_kwargs[1].get("generate_answer") is True
+        assert resp.status_code == 410  # Deprecated endpoint
 
     def test_agentic_branch_returns_answer_and_sources(self, client, monkeypatch):
         _mock_services(monkeypatch)
@@ -126,11 +117,7 @@ class TestQueryRouteAgentic:
                     "use_agent": True,
                 })
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "answer" in data
-        assert "sources" in data
-        assert "iterations" in data
+        assert resp.status_code == 410  # Deprecated endpoint
 
     def test_agentic_branch_streaming(self, client, monkeypatch):
         svc = _mock_services(monkeypatch)
@@ -142,14 +129,8 @@ class TestQueryRouteAgentic:
                     "use_agent": True,
                 })
 
-        assert resp.status_code == 200
-        body = resp.text
-        # Should have SSE events
-        assert "data:" in body
-        events = [json.loads(line.replace("data: ", ""))
-                   for line in body.split("\n") if line.startswith("data:")]
-        types = {e["type"] for e in events}
-        assert "done" in types
+        assert resp.status_code == 410  # Deprecated endpoint
+        assert resp.json()["error"] == "Gone"
 
 
 # ── TestQueryRouteParams ──────────────────────────────────────────────────
@@ -171,9 +152,7 @@ class TestQueryRouteParams:
                     "use_agent": False,
                 })
 
-        assert resp.status_code == 200
-        # Direct module should be used even though config says agent_enabled=True
-        svc.direct_query.retrieve.assert_called()
+        assert resp.status_code == 410  # Deprecated endpoint
 
     def test_legacy_self_rag_config_ignored(self, client, monkeypatch):
         svc = _mock_services(monkeypatch)
@@ -189,7 +168,7 @@ class TestQueryRouteParams:
                     "use_agent": False,
                 })
 
-        assert resp.status_code == 200
+        assert resp.status_code == 410  # Deprecated endpoint
 
     def test_missing_services_returns_503(self, client, monkeypatch):
         svc = _mock_services(monkeypatch)
@@ -202,7 +181,7 @@ class TestQueryRouteParams:
                 "use_agent": False,
             })
 
-        assert resp.status_code == 503
+        assert resp.status_code == 410  # Deprecated endpoint
 
 
 # ── TestQueryRouteNoRegression ────────────────────────────────────────────
@@ -225,5 +204,5 @@ class TestQueryRouteNoRegression:
                     "use_agent": False,
                 })
 
-        # Should not 500
-        assert resp.status_code in (200, 400, 422)
+        # Should return 410 Gone (deprecated)
+        assert resp.status_code == 410

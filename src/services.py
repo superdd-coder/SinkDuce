@@ -161,6 +161,39 @@ def _reload_transcription_provider(model_id: str, loading: bool):
         logger.info("Transcription provider unloaded: %s", model_id)
 
 
+def _resolve_chat_llm(config):
+    """Find an LLM provider with function_call_model_ids for ChatboxAgent.
+
+    Preference order:
+    1. Provider matching config.default_chat_model (by model name)
+    2. Provider with is_default=True and function_call_model_ids
+    3. First provider with function_call_model_ids
+    """
+    from src.providers.llm import create_llm_for_provider
+
+    eligible = [p for p in config.llm.providers if p.function_call_model_ids]
+    if not eligible:
+        return None
+
+    # Prefer default_chat_model
+    if config.default_chat_model:
+        for p in eligible:
+            if p.default_model == config.default_chat_model or p.model == config.default_chat_model:
+                return create_llm_for_provider(p)
+        # Try by provider id
+        for p in eligible:
+            if p.id == config.default_chat_model:
+                return create_llm_for_provider(p)
+
+    # Prefer the is_default provider (same as RAG default)
+    default_eligible = [p for p in eligible if p.is_default]
+    if default_eligible:
+        return create_llm_for_provider(default_eligible[0])
+
+    # Fallback: first eligible
+    return create_llm_for_provider(eligible[0])
+
+
 class Services:
     config = None
     db: QdrantManager = None
@@ -177,6 +210,8 @@ class Services:
     agentic_query: AgenticQueryService = None
     contextual: ContextualRetrieval = None
     chunker: TextChunker = None
+    session_store = None
+    chatbox_agent = None
 
 
 services = Services()
@@ -308,3 +343,27 @@ def init_services():
 
     # Clean up inactive transcription providers from cache
     _preload_transcription_providers(config)
+
+    # Session store (sqlite3, zero new deps)
+    from src.db.sessions import SessionStore
+    services.session_store = SessionStore()
+
+    # ChatboxAgent — requires an LLM provider with function_call_model_ids
+    services.chatbox_agent = None
+    if services.agentic_query and services.session_store:
+        chat_llm = _resolve_chat_llm(config)
+        if chat_llm:
+            from src.chatbox.agent import ChatboxAgent
+            services.chatbox_agent = ChatboxAgent(
+                session_store=services.session_store,
+                chat_llm=chat_llm,
+                agentic_service=services.agentic_query,
+            )
+            logger.info("ChatboxAgent initialized with model=%s",
+                        getattr(chat_llm, "_model", "unknown"))
+        else:
+            logger.warning(
+                "No chat LLM with function_call_model_ids configured — "
+                "chat endpoint will return 503. Enable Function Calling "
+                "on model(s) in LLM Settings and configure default_chat_model."
+            )

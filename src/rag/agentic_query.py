@@ -89,11 +89,12 @@ class AgenticQueryService:
         rerank_top_k: int = 5,
         search_mode: str = "dense",
         min_score: float = 0.0,
-        max_iterations: int = 4,
+        max_iterations: int = 3,
         sparse_llm_tokenize: bool = False,
+        decompose: bool = True,
     ) -> AgenticQueryResult:
-        logger.info("[Agentic] run q=%r gen_ans=%s top_k=%d rerank=%s rerank_top_k=%s mode=%s",
-                    raw_query[:200], generate_answer, top_k, rerank_enabled, rerank_top_k, search_mode)
+        logger.info("[Agentic] run q=%r gen_ans=%s decompose=%s top_k=%d rerank=%s rerank_top_k=%s mode=%s",
+                    raw_query[:200], generate_answer, decompose, top_k, rerank_enabled, rerank_top_k, search_mode)
 
         if not raw_query or not raw_query.strip():
             return AgenticQueryResult(answer=None, context="", all_chunks=[])
@@ -109,22 +110,30 @@ class AgenticQueryService:
                 except Exception:
                     logger.exception("[Agentic] on_step callback raised")
 
-        # ── ① Decompose (one LLM call) ──────────────────────────────────
-        # emit: step="decompose", content=status text
-        _emit("decompose", f"Decomposing: {raw_query[:200]}")
+        # ── ① Decompose (one LLM call, skippable) ──────────────────────
         catalog_entries = self.catalog.get_catalog(collections)
-        try:
-            aqs = self.decomposer.decompose(raw_query, catalog_entries)
-        except Exception as e:
-            logger.exception("[Agentic] decompose failed")
-            _emit("decompose", f"Decompose failed: {e}")
-            aqs = [AtomicQuery(query=raw_query)]
+        if decompose:
+            _emit("decompose", f"Decomposing: {raw_query[:200]}")
+            try:
+                aqs = self.decomposer.decompose(raw_query, catalog_entries)
+            except Exception as e:
+                logger.exception("[Agentic] decompose failed")
+                _emit("decompose", f"Decompose failed: {e}")
+                aqs = [AtomicQuery(query=raw_query)]
 
-        if not aqs:
-            _emit("decompose", "No retrieval needed — non-retrieval query")
-            return AgenticQueryResult(answer=None, context="", all_chunks=[])
+            if not aqs:
+                _emit("decompose", "No retrieval needed — non-retrieval query")
+                return AgenticQueryResult(answer=None, context="", all_chunks=[])
 
-        _emit("decompose", f"Found {len(aqs)} atomic query(s)")
+            _emit("decompose", f"Found {len(aqs)} atomic query(s)")
+        else:
+            # Lightweight collection routing only — no task decomposition
+            _emit("decompose", f"Routing: {raw_query[:200]}")
+            target_cols = self.decomposer.route_collections(raw_query, catalog_entries)
+            aqs = [AtomicQuery(query=raw_query, target_collections=target_cols,
+                               task="(single)", task_query=raw_query)]
+            _emit("decompose", f"Routed to {len(target_cols)} collection(s)"
+                  if target_cols else "Routed to all collections")
         # emit: step="task_start", task, task_query, aq_count (once per task)
         tasks_seen = set()
         for aq in aqs:

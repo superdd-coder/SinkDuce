@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Combobox } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw, Sparkles } from "lucide-react"
+import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw, Sparkles, MessageSquare } from "lucide-react"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { useAppStore } from "@/stores/app-store"
 import {
@@ -462,6 +462,13 @@ export function LLMProviderView() {
   const [showVisualModelDropdown, setShowVisualModelDropdown] = useState(false)
   const visualModelBtnRef = useRef<HTMLButtonElement>(null)
   const visualModelMenuRef = useRef<HTMLDivElement>(null)
+
+  // Chat Model selection
+  const [chatModelId, setChatModelId] = useState<string>("")
+  const [showChatModelDropdown, setShowChatModelDropdown] = useState(false)
+  const chatModelBtnRef = useRef<HTMLButtonElement>(null)
+  const chatModelMenuRef = useRef<HTMLDivElement>(null)
+  const [chatModelPos, setChatModelPos] = useState({ top: 0, left: 0, width: 0 })
   const [visualModelPos, setVisualModelPos] = useState({ top: 0, left: 0, width: 0 })
 
   // MinerU cloud parsing options
@@ -489,11 +496,13 @@ export function LLMProviderView() {
     { value: "devanagari", label: "Devanagari (Hindi/Marathi/Nepali)" },
   ]
 
-  const [ragTopK,setRagTopK]=useState(20);const [ragRerankTopK,setRagRerankTopK]=useState(5);const [ragMaxParallel,setRagMaxParallel]=useState(10);const [ragMaxIter,setRagMaxIter]=useState(8);const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState(0)
-  const [dirTopK,setDirTopK]=useState(20);const [dirRerankTopK,setDirRerankTopK]=useState(5);const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState(0)
-  const [enrichMaxParallel,setEnrichMaxParallel]=useState(50);const [enrichModel,setEnrichModel]=useState("")
+  const [ragTopK,setRagTopK]=useState("20");const [ragRerankTopK,setRagRerankTopK]=useState("5");const [ragMaxParallel,setRagMaxParallel]=useState("10");const [ragMaxIter,setRagMaxIter]=useState("8");const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState("0")
+  const [dirTopK,setDirTopK]=useState("20");const [dirRerankTopK,setDirRerankTopK]=useState("5");const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState("0")
+  const [enrichMaxParallel,setEnrichMaxParallel]=useState("50");const [enrichModel,setEnrichModel]=useState("")
   const [showAdvanced,setShowAdvanced]=useState(false)
   const enrichModelBtnRef=useRef<HTMLButtonElement>(null);const enrichModelMenuRef=useRef<HTMLDivElement>(null);const [showEnrichModelDropdown,setShowEnrichModelDropdown]=useState(false);const [enrichModelPos,setEnrichModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
+  const _saveRag=(mode?:string)=>updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:mode??ragSearchMode,min_score:parseFloat(ragMinScore)||0}).catch(()=>{})
+  const _saveDir=(mode?:string)=>updateConfig("direct_rag",{top_k:parseInt(dirTopK)||20,rerank_top_k:parseInt(dirRerankTopK)||5,use_reranker:dirRerankEnabled,default_search_mode:mode??dirSearchMode,min_score:parseFloat(dirMinScore)||0}).catch(()=>{})
   // MinerU cloud parsing settings
   const [mineruEnabled, setMineruEnabled] = useState(false)
   const [mineruToken, setMineruToken] = useState("")
@@ -514,12 +523,17 @@ export function LLMProviderView() {
 
   // Close dropdowns on click outside
   useEffect(() => {
-    if (!showVisualModelDropdown && !showMineruModelDropdown && !showMineruLanguageDropdown) return
+    if (!showVisualModelDropdown && !showChatModelDropdown && !showMineruModelDropdown && !showMineruLanguageDropdown) return
     const handler = (e: MouseEvent) => {
       if (showVisualModelDropdown &&
           !visualModelBtnRef.current?.contains(e.target as Node) &&
           !visualModelMenuRef.current?.contains(e.target as Node)) {
         setShowVisualModelDropdown(false)
+      }
+      if (showChatModelDropdown &&
+          !chatModelBtnRef.current?.contains(e.target as Node) &&
+          !chatModelMenuRef.current?.contains(e.target as Node)) {
+        setShowChatModelDropdown(false)
       }
       if (showMineruModelDropdown &&
           !mineruModelBtnRef.current?.contains(e.target as Node) &&
@@ -653,6 +667,17 @@ export function LLMProviderView() {
     try {
       const list = await getLLMProviders()
       setProviders(list.map((p) => ({ ...p, status: "unknown" as const })))
+      // Sync default_chat_model: if no fc-capable default exists, clear it
+      const fcDefaults = list.filter(p => p.is_default && (p.function_call_model_ids ?? []).length > 0)
+      if (fcDefaults.length === 0) {
+        setChatModelId("")
+        updateConfig("default_chat_model", { default_chat_model: null }).catch(() => {})
+      } else {
+        // Re-fetch config to refresh chatModelId in case backend auto-set it
+        getConfig().then(c => {
+          if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
+        }).catch(() => {})
+      }
     } catch { toast.error("Failed to load providers") }
   }
 
@@ -687,9 +712,10 @@ export function LLMProviderView() {
       setLocalDevice(typeof c.transcription?.local_device === "string" ? c.transcription.local_device as string : "cpu")
       // Load Visual Model config
       if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
-      if(c.rag){if(typeof c.rag.top_k==="number")setRagTopK(c.rag.top_k);if(typeof c.rag.rerank_top_k==="number")setRagRerankTopK(c.rag.rerank_top_k);if(typeof c.rag.max_parallel_queries==="number")setRagMaxParallel(c.rag.max_parallel_queries);if(typeof c.rag.max_iterations==="number")setRagMaxIter(c.rag.max_iterations);if(typeof c.rag.default_search_mode==="string")setRagSearchMode(c.rag.default_search_mode);if(typeof c.rag.min_score==="number")setRagMinScore(c.rag.min_score)}
-      if(c.direct_rag){if(typeof c.direct_rag.top_k==="number")setDirTopK(c.direct_rag.top_k);if(typeof c.direct_rag.rerank_top_k==="number")setDirRerankTopK(c.direct_rag.rerank_top_k);if(typeof c.direct_rag.default_search_mode==="string")setDirSearchMode(c.direct_rag.default_search_mode);setDirRerankEnabled(c.direct_rag.use_reranker!==false);if(typeof c.direct_rag.min_score==="number")setDirMinScore(c.direct_rag.min_score)}
-      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(c.enrichment.max_parallel_context);if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model)}
+      if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
+      if(c.rag){if(typeof c.rag.top_k==="number")setRagTopK(String(c.rag.top_k));if(typeof c.rag.rerank_top_k==="number")setRagRerankTopK(String(c.rag.rerank_top_k));if(typeof c.rag.max_parallel_queries==="number")setRagMaxParallel(String(c.rag.max_parallel_queries));if(typeof c.rag.max_iterations==="number")setRagMaxIter(String(c.rag.max_iterations));if(typeof c.rag.default_search_mode==="string")setRagSearchMode(c.rag.default_search_mode);if(typeof c.rag.min_score==="number")setRagMinScore(String(c.rag.min_score))}
+      if(c.direct_rag){if(typeof c.direct_rag.top_k==="number")setDirTopK(String(c.direct_rag.top_k));if(typeof c.direct_rag.rerank_top_k==="number")setDirRerankTopK(String(c.direct_rag.rerank_top_k));if(typeof c.direct_rag.default_search_mode==="string")setDirSearchMode(c.direct_rag.default_search_mode);setDirRerankEnabled(c.direct_rag.use_reranker!==false);if(typeof c.direct_rag.min_score==="number")setDirMinScore(String(c.direct_rag.min_score))}
+      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(String(c.enrichment.max_parallel_context));if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model)}
       // Load MinerU config
       if (c.mineru) {
         setMineruEnabled(!!c.mineru.enabled)
@@ -814,7 +840,7 @@ export function LLMProviderView() {
         <section className="border-b border-border pb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-[18px] font-[350] tracking-tight uppercase">LLM SETTINGS</h2>
+              <h2 className="text-[18px] font-[350] tracking-tight uppercase">LANGUAGE MODELS</h2>
             </div>
             <div className="flex gap-2">
               <Button variant="default" onClick={handleAdd} className="font-light uppercase">ADD</Button>
@@ -825,10 +851,9 @@ export function LLMProviderView() {
               <ProviderCard key={p.id} provider={p} onEdit={handleEdit} onRefresh={fetchProviders} />
             ))}
           </div>
-        </section>
 
-        {/* ── Visual Model ── */}
-        <section className="border-b border-border pb-6">
+          {/* ── Visual Model ── */}
+          <div className="pt-4 mt-4 border-t border-border/50">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-[18px] font-[350] tracking-tight uppercase">VISUAL MODEL</h2>
@@ -917,6 +942,100 @@ export function LLMProviderView() {
               </div>
             )
           })()}
+          </div>
+
+          {/* ── Chat Model ── */}
+          <div className="pt-4 mt-4 border-t border-border/50">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-[18px] font-[350] tracking-tight uppercase">CHAT MODEL</h2>
+              <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed mt-1">
+                Select the default model for Chat. Only providers with Supports Functions enabled are listed.
+              </p>
+            </div>
+          </div>
+          {(() => {
+            const chatModels = providers.flatMap((p) =>
+              (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
+                model: m,
+                providerName: p.name || p.id,
+                providerId: p.id,
+                isFunctionCall: ((p as any).function_call_model_ids || []).includes(m),
+              }))
+            ).filter((cm) => cm.isFunctionCall)
+            if (chatModels.length === 0) {
+              return (
+                <div className="border border-dashed border-muted-foreground/30 rounded-lg p-6 text-center">
+                  <MessageSquare className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
+                  <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+                    No chat-capable models configured. Enable Supports Functions for an LLM provider above.
+                  </p>
+                </div>
+              )
+            }
+            return (
+              <div className="flex items-center gap-3">
+                <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
+                <div className="flex-1 max-w-md relative" ref={chatModelMenuRef}>
+                  <button
+                    type="button"
+                    ref={chatModelBtnRef}
+                    onClick={() => {
+                      const r = chatModelMenuRef.current?.getBoundingClientRect()
+                      if (r) setChatModelPos({ top: r.bottom + 4, left: r.left, width: chatModelBtnRef.current?.getBoundingClientRect().width || r.width })
+                      setShowChatModelDropdown(!showChatModelDropdown)
+                    }}
+                    className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+                    style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showChatModelDropdown ? "var(--color-primary-foreground)" : chatModelId ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
+                  >
+                    <span className="relative z-10 whitespace-nowrap">
+                      {chatModelId ? chatModels.find(vm => vm.model === chatModelId)?.model || chatModelId : "NONE (AUTO)"}
+                    </span>
+                    <span
+                      className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
+                      style={{ transform: showChatModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showChatModelDropdown ? "right" : "left" }}
+                    />
+                  </button>
+                  <div
+                    className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${
+                      showChatModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"
+                    }`}
+                    style={{ width: chatModelPos.width, top: chatModelPos.top, left: chatModelPos.left }}
+                  >
+                    {[{ value: "", label: "NONE (AUTO)" }, ...chatModels.map(vm => ({ value: vm.model, label: `${vm.providerName} / ${vm.model}` }))].map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={async () => {
+                          setChatModelId(opt.value)
+                          setShowChatModelDropdown(false)
+                          try {
+                            await updateConfig("default_chat_model", { default_chat_model: opt.value || null })
+                            toast.success("Chat model updated")
+                          } catch {
+                            toast.error("Failed to update chat model")
+                          }
+                        }}
+                        className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+                        style={{ background: "none", border: "none" }}
+                      >
+                        <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
+                          {chatModelId === opt.value || (!chatModelId && opt.value === "") ? (
+                            <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
+                          ) : (
+                            <span className="w-1.5 h-1.5 shrink-0" />
+                          )}
+                          {opt.label}
+                        </span>
+                        <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+          </div>
         </section>
 
         {/* ── Embedding Providers ── */}
@@ -1259,7 +1378,7 @@ export function LLMProviderView() {
                 </div>
               </div>
               <div className="flex items-center gap-4">
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={enrichMaxParallel} onChange={(e)=>{const r=e.target.value;if(r===""){setEnrichMaxParallel(50);return}const v=parseInt(r);if(!isNaN(v))setEnrichMaxParallel(Math.max(1,Math.min(100,v)))}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={enrichMaxParallel} onChange={(e)=>setEnrichMaxParallel(e.target.value)} onBlur={()=>{const v=parseInt(enrichMaxParallel)||50;setEnrichMaxParallel(String(Math.max(1,Math.min(100,v))));updateConfig("enrichment",{max_parallel_context:v,batch_poll_interval:30,enrichment_model:enrichModel}).catch(()=>{})}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
               </div>
             </div>
 
@@ -1268,14 +1387,14 @@ export function LLMProviderView() {
               <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">AGENTIC RAG DEFAULTS</h3>
               <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Applies to decompose, rewrite loop, and aggregate.</p>
               <div className="flex items-center gap-4 mb-3">
-                <button type="button" onClick={()=>{const m=ragSearchMode==="hybrid"?"dense":"hybrid";setRagSearchMode(m);updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:m,min_score:ragMinScore}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:ragSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{ragSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${ragSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+                <button type="button" onClick={()=>{const m=ragSearchMode==="hybrid"?"dense":"hybrid";setRagSearchMode(m);_saveRag(m)}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:ragSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{ragSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${ragSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
               </div>
               <div className="flex items-center gap-4">
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={ragTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setRagTopK(20);return}const v=parseInt(r);if(!isNaN(v)){setRagTopK(Math.max(1,Math.min(100,v)));updateConfig("rag",{top_k:v,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={ragRerankTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setRagRerankTopK(5);return}const v=parseInt(r);if(!isNaN(v)){setRagRerankTopK(Math.max(1,Math.min(50,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:v,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={ragMaxParallel} onChange={(e)=>{const r=e.target.value;if(r===""){setRagMaxParallel(10);return}const v=parseInt(r);if(!isNaN(v)){setRagMaxParallel(Math.max(1,Math.min(32,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:v,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Iter</label><input type="text" inputMode="numeric" value={ragMaxIter} onChange={(e)=>{const r=e.target.value;if(r===""){setRagMaxIter(8);return}const v=parseInt(r);if(!isNaN(v)){setRagMaxIter(Math.max(1,Math.min(20,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:v,default_search_mode:ragSearchMode,min_score:ragMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                {ragSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score %</label><input type="text" inputMode="numeric" value={ragMinScore} onChange={(e)=>{const r=e.target.value;if(r===""){setRagMinScore(0);return}const v=parseFloat(r);if(!isNaN(v)){setRagMinScore(Math.max(0,Math.min(1,v)));updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:v}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={ragTopK} onChange={(e)=>setRagTopK(e.target.value)} onBlur={()=>{const v=parseInt(ragTopK)||20;setRagTopK(String(Math.max(1,Math.min(100,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={ragRerankTopK} onChange={(e)=>setRagRerankTopK(e.target.value)} onBlur={()=>{const v=parseInt(ragRerankTopK)||5;setRagRerankTopK(String(Math.max(1,Math.min(50,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={ragMaxParallel} onChange={(e)=>setRagMaxParallel(e.target.value)} onBlur={()=>{const v=parseInt(ragMaxParallel)||10;setRagMaxParallel(String(Math.max(1,Math.min(32,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Iter</label><input type="text" inputMode="numeric" value={ragMaxIter} onChange={(e)=>setRagMaxIter(e.target.value)} onBlur={()=>{const v=parseInt(ragMaxIter)||8;setRagMaxIter(String(Math.max(1,Math.min(20,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                {ragSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score</label><input type="text" inputMode="numeric" value={ragMinScore} onChange={(e)=>setRagMinScore(e.target.value)} onBlur={()=>{const v=parseFloat(ragMinScore)||0;setRagMinScore(String(Math.max(0,Math.min(1,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
               </div>
             </div>
 
@@ -1284,13 +1403,13 @@ export function LLMProviderView() {
               <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">DIRECT RAG DEFAULTS</h3>
               <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Used when Agentic mode is disabled. Direct retrieval with optional rerank.</p>
               <div className="flex items-center gap-4 mb-3">
-                <button type="button" onClick={()=>{const n=!dirRerankEnabled;setDirRerankEnabled(n);const tk=n?20:10;setDirTopK(tk);updateConfig("direct_rag",{use_reranker:n,top_k:tk,rerank_top_k:dirRerankTopK,default_search_mode:dirSearchMode,min_score:dirMinScore}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirRerankEnabled?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirRerankEnabled?"RERANK ON":"RERANK OFF"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirRerankEnabled?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
-                <button type="button" onClick={()=>{const m=dirSearchMode==="hybrid"?"dense":"hybrid";setDirSearchMode(m);updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:m,min_score:dirMinScore}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+                <button type="button" onClick={()=>{const n=!dirRerankEnabled;setDirRerankEnabled(n);setDirTopK(n?"20":"10");updateConfig("direct_rag",{use_reranker:n}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirRerankEnabled?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirRerankEnabled?"RERANK ON":"RERANK OFF"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirRerankEnabled?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+                <button type="button" onClick={()=>{const m=dirSearchMode==="hybrid"?"dense":"hybrid";setDirSearchMode(m);_saveDir(m)}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
               </div>
               <div className="flex items-center gap-4">
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={dirTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setDirTopK(dirRerankEnabled?20:10);return}const v=parseInt(r);if(!isNaN(v)){setDirTopK(Math.max(1,Math.min(100,v)));updateConfig("direct_rag",{top_k:v,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:dirMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                {dirRerankEnabled&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={dirRerankTopK} onChange={(e)=>{const r=e.target.value;if(r===""){setDirRerankTopK(5);return}const v=parseInt(r);if(!isNaN(v)){setDirRerankTopK(Math.max(1,Math.min(50,v)));updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:v,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:dirMinScore}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
-                {dirSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score %</label><input type="text" inputMode="numeric" value={dirMinScore} onChange={(e)=>{const r=e.target.value;if(r===""){setDirMinScore(0);return}const v=parseFloat(r);if(!isNaN(v)){setDirMinScore(Math.max(0,Math.min(1,v)));updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:v}).catch(()=>{})}}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={dirTopK} onChange={(e)=>setDirTopK(e.target.value)} onBlur={()=>{const v=parseInt(dirTopK)||(dirRerankEnabled?20:10);setDirTopK(String(Math.max(1,Math.min(100,v))));_saveDir()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+                {dirRerankEnabled&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={dirRerankTopK} onChange={(e)=>setDirRerankTopK(e.target.value)} onBlur={()=>{const v=parseInt(dirRerankTopK)||5;setDirRerankTopK(String(Math.max(1,Math.min(50,v))));_saveDir()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+                {dirSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score</label><input type="text" inputMode="numeric" value={dirMinScore} onChange={(e)=>setDirMinScore(e.target.value)} onBlur={()=>{const v=parseFloat(dirMinScore)||0;setDirMinScore(String(Math.max(0,Math.min(1,v))));_saveDir()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
               </div>
             </div>
 
@@ -1321,7 +1440,7 @@ export function LLMProviderView() {
         </div>
 
         <div className="flex justify-end pt-4 pb-6">
-          <Button className="font-light uppercase" onClick={async()=>{try{await Promise.all([updateConfig("rag",{top_k:ragTopK,rerank_top_k:ragRerankTopK,max_parallel_queries:ragMaxParallel,max_iterations:ragMaxIter,default_search_mode:ragSearchMode,min_score:ragMinScore}),updateConfig("direct_rag",{top_k:dirTopK,rerank_top_k:dirRerankTopK,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:dirMinScore}),updateConfig("enrichment",{max_parallel_context:enrichMaxParallel,batch_poll_interval:30,enrichment_model:enrichModel}),updateConfig("mineru",{enabled:mineruEnabled,api_token:mineruToken,base_url:"https://mineru.net/api/v4",model_version:mineruModel,is_ocr:mineruOcr,enable_formula:mineruFormula,enable_table:mineruTable,language:mineruLanguage})]);toast.success("Settings saved")}catch{toast.error("Failed to save")}}}>Save Settings</Button>
+          <Button className="font-light uppercase" onClick={async()=>{try{await Promise.all([updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:ragSearchMode,min_score:parseFloat(ragMinScore)||0}),updateConfig("direct_rag",{top_k:parseInt(dirTopK)||20,rerank_top_k:parseInt(dirRerankTopK)||5,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:parseFloat(dirMinScore)||0}),updateConfig("enrichment",{max_parallel_context:parseInt(enrichMaxParallel)||50,batch_poll_interval:30,enrichment_model:enrichModel}),updateConfig("mineru",{enabled:mineruEnabled,api_token:mineruToken,base_url:"https://mineru.net/api/v4",model_version:mineruModel,is_ocr:mineruOcr,enable_formula:mineruFormula,enable_table:mineruTable,language:mineruLanguage})]);toast.success("Settings saved")}catch{toast.error("Failed to save")}}}>Save Settings</Button>
         </div>
 
         {/* ── Dialogs ── */}

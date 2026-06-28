@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Pencil, Trash2, Plug, Star, Loader2 } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
-import { deleteLLMProvider, testLLMProvider, setDefaultLLMProvider } from "@/api/client"
+import { deleteLLMProvider, testLLMProvider, setDefaultLLMProvider, updateConfig } from "@/api/client"
 import type { LLMProvider } from "@/stores/app-store"
 import { toast } from "sonner"
 
@@ -63,6 +63,11 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
       if (res.error) toast.error(res.error)
       else {
         toast.success(res.message || "Default updated")
+        // Auto-sync default_chat_model when provider has function_call models
+        if ((provider.function_call_model_ids ?? []).length > 0) {
+          const chatModel = provider.default_model || provider.function_call_model_ids![0]
+          await updateConfig("default_chat_model", { default_chat_model: chatModel })
+        }
         onRefresh()
       }
     } catch {

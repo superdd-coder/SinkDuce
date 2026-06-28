@@ -45,8 +45,6 @@ _DEFAULT_COLLECTION_CONFIG = {
     "rerank_top_k": 5,
     "contextual_enabled": True,
     "contextual_window": 1,
-    "agent_enabled": True,
-    "agent_max_iterations": 3,
     "search_mode": "dense",
     "sparse_llm_tokenize": True,
     "summary_change_counter": 0,

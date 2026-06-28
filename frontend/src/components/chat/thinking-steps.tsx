@@ -1,190 +1,218 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState } from "react"
 import {
   ChevronRight,
   ChevronDown,
   Check,
   Loader2,
-  Cpu,
-  Search,
-  SlidersHorizontal,
-  RotateCcw,
-  Puzzle,
   Sparkles,
   Layers,
+  RotateCcw,
 } from "lucide-react"
-import type { ThinkingIteration, MetaInfo } from "@/stores/app-store"
+import type { ThinkingIteration, ThinkingSummary, TaskSummary, AqSummary, MetaInfo } from "@/stores/app-store"
 
 interface ThinkingStepsProps {
   steps: ThinkingIteration[]
+  summary?: ThinkingSummary
   metaInfo?: MetaInfo
   isStreaming: boolean
 }
 
-const STEP_ICONS: Record<string, typeof Search> = {
-  retrieving: Search,
-  grading: SlidersHorizontal,
-  rewriting: RotateCcw,
-  decomposing: Puzzle,
-  synthesizing: Sparkles,
-  generating: Sparkles,
-  assembling: Layers,
+// ── Icons ──
+
+function AqIcon({ aq }: { aq: AqSummary }) {
+  if (aq.sufficient) return <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+  return <span className="text-[10px] shrink-0 text-amber-500">⚠</span>
 }
 
-function getStepIcon(label: string) {
-  const lower = label.toLowerCase()
-  for (const [key, Icon] of Object.entries(STEP_ICONS)) {
-    if (lower.includes(key)) return Icon
-  }
-  return Cpu
-}
+// ── AQ row ──
 
-export function ThinkingSteps({ steps, metaInfo, isStreaming }: ThinkingStepsProps) {
-  const totalSteps = steps.reduce((acc, g) => acc + g.steps.length, 0)
-  const [topExpanded, setTopExpanded] = useState(true)
-  const [expandedIters, setExpandedIters] = useState<Set<number>>(new Set())
-
-  useEffect(() => {
-    if (!isStreaming) {
-      setTopExpanded(false)
-      return
-    }
-    if (steps.length > 0) {
-      const latestIter = steps[steps.length - 1].iteration
-      setExpandedIters(new Set([latestIter]))
-      setTopExpanded(true)
-    }
-  }, [steps.length, isStreaming])
-
-  const toggleIter = useCallback((iter: number) => {
-    setExpandedIters(prev => {
-      const next = new Set(prev)
-      if (next.has(iter)) next.delete(iter)
-      else next.add(iter)
-      return next
-    })
-  }, [])
-
-  if (totalSteps === 0) return null
+function AqRow({ aq }: { aq: AqSummary }) {
+  const [expanded, setExpanded] = useState(false)
+  const hasRewrites = aq.rewritten.length > 0
 
   return (
-    <div
-      className="mt-5 pt-3.5 border-t border-t border-dashed border-border"
-    >
-      {/* Meta info */}
-      {metaInfo && (metaInfo.provider || metaInfo.model) && (
-        <div
-          className="flex items-center gap-2 text-[10px] mb-2 flex-wrap text-muted-foreground"
-        >
-          {metaInfo.provider && metaInfo.model && (
-            <span>{metaInfo.provider} / {metaInfo.model}</span>
+    <div className="ml-5 text-[11px] leading-relaxed">
+      <div
+        className="flex items-start gap-1.5 py-0.5 cursor-pointer"
+        onClick={() => hasRewrites && setExpanded(!expanded)}
+      >
+        {hasRewrites ? (
+          expanded ? <ChevronDown className="h-2.5 w-2.5 mt-0.5 shrink-0 text-muted-foreground" /> :
+          <ChevronRight className="h-2.5 w-2.5 mt-0.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <span className="w-2.5 shrink-0" />
+        )}
+        <AqIcon aq={aq} />
+        <span className="text-muted-foreground truncate">{aq.query}</span>
+        <span className="text-muted-foreground/50 shrink-0">
+          {aq.final_chunks > 0 ? (
+            <>→ {aq.final_chunks} chunks</>
+          ) : aq.current_chunks > 0 ? (
+            <span className="text-muted-foreground/40">
+              <Loader2 className="h-2.5 w-2.5 inline animate-spin mr-0.5" />
+              {aq.current_chunks} chunks so far
+            </span>
+          ) : (
+            <span className="text-muted-foreground/30 italic">searching…</span>
           )}
-          {metaInfo.search_mode && (
-            <>
-              <span style={{ opacity: 0.3 }}>·</span>
-              <span>{metaInfo.search_mode}</span>
-            </>
-          )}
-          {metaInfo.mode && (
-            <>
-              <span style={{ opacity: 0.3 }}>·</span>
-              <span>{metaInfo.mode === "agentic" ? "Agentic RAG" : metaInfo.mode}</span>
-            </>
-          )}
+          {aq.iterations > 1 && ` (${aq.iterations} iters)`}
+        </span>
+      </div>
+
+      {/* Rewrite details */}
+      {expanded && hasRewrites && (
+        <div className="ml-7 mb-1 space-y-0.5">
+          {aq.rewritten.map((r, i) => (
+            <div key={i} className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
+              <RotateCcw className="h-2.5 w-2.5 shrink-0" />
+              <span>rewrote to: {r}</span>
+            </div>
+          ))}
         </div>
       )}
+    </div>
+  )
+}
 
-      {/* Toggle */}
+// ── Task group ──
+
+function TaskGroup({ task }: { task: TaskSummary }) {
+  const [expanded, setExpanded] = useState(true)
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-1.5 py-1 cursor-pointer text-[12px]"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? (
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3 w-3 text-muted-foreground" />
+        )}
+        <Layers className="h-3 w-3 text-muted-foreground/50" />
+        <span className="font-[400]">{task.task || "Task"}</span>
+        <span className="text-muted-foreground/60">
+          — {task.aq_count} AQ{task.aq_count > 1 ? "s" : ""}, {task.useful_chunks} useful chunks
+        </span>
+      </div>
+
+      {expanded && (
+        <div>
+          {task.task_query && (
+            <div className="ml-7 text-[10px] text-muted-foreground/40 mb-0.5 italic">
+              {task.task_query}
+            </div>
+          )}
+          {task.aqs.map((aq) => (
+            <AqRow key={aq.aq_id} aq={aq} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main component ──
+
+export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: ThinkingStepsProps) {
+  const [topExpanded, setTopExpanded] = useState(true)
+
+  // Waiting for first events — show spinner
+  if (isStreaming && (!summary || summary.tasks.length === 0)) {
+    return (
+      <div className="mt-5 pt-3.5 border-t border-dashed border-border">
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 italic">
+          <Loader2 className="h-3 w-3 animate-spin text-primary" />
+          <Sparkles className="h-3 w-3 text-amber-500/60" />
+          Agentic RAG — searching…
+        </div>
+      </div>
+    )
+  }
+
+  // Prefer clean summary over verbose step tree
+  if (summary && summary.tasks.length > 0) {
+    return (
+      <div className="mt-5 pt-3.5 border-t border-dashed border-border">
+        {/* Meta info */}
+        {metaInfo && (metaInfo.provider || metaInfo.model) && (
+          <div className="flex items-center gap-2 text-[10px] mb-2 flex-wrap text-muted-foreground">
+            {metaInfo.provider && metaInfo.model && (
+              <span>{metaInfo.provider} / {metaInfo.model}</span>
+            )}
+          </div>
+        )}
+
+        {/* Toggle */}
+        <button
+          type="button"
+          onClick={() => setTopExpanded(!topExpanded)}
+          className="flex items-center gap-1.5 mb-2 cursor-pointer"
+        >
+          {isStreaming ? (
+            <span className="text-[10px] font-normal text-muted-foreground/50 w-3 text-center">
+              {topExpanded ? "▼" : "▶"}
+            </span>
+          ) : topExpanded ? (
+            <ChevronDown className="h-3 w-3 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+          )}
+          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80">
+            <Sparkles className="h-3 w-3 inline mr-1 text-amber-500/60" />
+            Agentic RAG · {summary.task_count} task{summary.task_count > 1 ? "s" : ""}, {summary.aq_count} AQ{summary.aq_count > 1 ? "s" : ""}
+          </span>
+        </button>
+
+        {/* Live status */}
+        {summary.status && isStreaming && (
+          <div className="ml-1 text-[10px] text-muted-foreground/50 italic mb-1 truncate">
+            {summary.status}
+          </div>
+        )}
+
+        {/* Tasks */}
+        {topExpanded && (
+          <div className="space-y-1">
+            {summary.tasks.map((task, i) => (
+              <TaskGroup key={i} task={task} />
+            ))}
+
+            {/* Generating indicator */}
+            {isStreaming && (
+              <div className="flex items-center gap-2 ml-1 py-1 text-[11px] text-muted-foreground/60 italic">
+                <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                Generating answer…
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Fallback: old verbose step tree (for messages without summary)
+  if (steps.length === 0) return null
+
+  const totalSteps = steps.reduce((acc, g) => acc + g.steps.length, 0)
+
+  return (
+    <div className="mt-5 pt-3.5 border-t border-dashed border-border">
       <button
         type="button"
         onClick={() => setTopExpanded(!topExpanded)}
         className="flex items-center gap-1.5 mb-2 cursor-pointer"
       >
-        {isStreaming ? (
-          <Loader2 className="h-3 w-3 animate-spin text-primary" />
-        ) : topExpanded ? (
+        {topExpanded ? (
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         ) : (
           <ChevronRight className="h-3 w-3 text-muted-foreground" />
         )}
-        <span
-          className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80"
-        >
-          {isStreaming ? "Reasoning" : `Steps · ${totalSteps}`}
+        <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80">
+          Steps · {totalSteps}
         </span>
       </button>
-
-      {/* Steps */}
-      {topExpanded && (
-        <div>
-          {steps.map((group) => {
-            const isIterExpanded = expandedIters.has(group.iteration)
-            const isPhase2 = group.iteration === 0
-
-            return (
-              <div key={group.iteration}>
-                <button
-                  type="button"
-                  onClick={() => toggleIter(group.iteration)}
-                  className="flex items-center gap-1.5 py-0.5 cursor-pointer w-full text-left"
-                >
-                  {isIterExpanded ? (
-                    <ChevronDown className="h-2.5 w-2.5 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-2.5 w-2.5 text-muted-foreground" />
-                  )}
-                  <span
-                    className="text-[10px] font-medium text-foreground"
-                  >
-                    {isPhase2 ? "Decompose" : `Iteration ${group.iteration}`}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground" style={{ opacity: 0.5 }}>
-                    ({group.steps.length})
-                  </span>
-                </button>
-
-                {isIterExpanded && (
-                  <div className="ml-4">
-                    {group.steps.map((step, si) => {
-                      const Icon = getStepIcon(step.label)
-                      const isActive = step.status === "active"
-
-                      return (
-                        <div key={si}>
-                          <div
-                            className={`flex items-center gap-2 py-0.5 text-[11px] ${isActive ? "text-foreground" : "text-muted-foreground"}`}
-                          >
-                            {isActive ? (
-                              <Loader2 className="h-3 w-3 animate-spin shrink-0 text-primary" />
-                            ) : (
-                              <Check className="h-3 w-3 shrink-0 text-primary" style={{ opacity: 0.6 }} />
-                            )}
-                            <Icon className="h-3 w-3 shrink-0 opacity-40" />
-                            <span>{step.label}</span>
-                          </div>
-
-                          {step.details && step.details.length > 0 && (
-                            <div className="ml-7">
-                              {step.details.map((d, di) => (
-                                <div
-                                  key={di}
-                                  className="text-[10px] leading-relaxed py-0.5 text-muted-foreground"
-                                  style={{ opacity: 0.5 }}
-                                >
-                                  {d}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }

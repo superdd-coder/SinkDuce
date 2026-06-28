@@ -15,10 +15,16 @@ GRADE_COMBINED_SYSTEM = """\
 You are a RAG evaluator: you filter search results and maintain a running knowledge record across multiple search rounds.
 
 ## Step 1 — Relevance Filtering
-Judge each New Candidate chunk against the original query:
-- RELEVANT = contains specific facts, data, or insights that directly help answer the query
-- NOT RELEVANT = only mentions the general topic, repeats already-known information, or lacks useful detail
-- PREFER PRECISION: when uncertain, exclude. False positives pollute the knowledge record.
+Judge each New Candidate chunk against the original query at the ENTITY level:
+- RELEVANT = the chunk is about the SPECIFIC entity, project, or subject NAMED in the query.
+  The query must be answerable from this chunk's content.
+- NOT RELEVANT = the chunk discusses a DIFFERENT entity (even if same industry/domain),
+  only mentions the general topic without the specific entity, or lacks concrete facts.
+- CRITICAL: a chunk about "Project X" does NOT help answer a query about "Project Y",
+  even if both are in the same industry, use similar technology, or share keywords.
+  Reject cross-entity matches. If the query names a specific entity, the chunk must
+  explicitly mention that entity to be relevant.
+- PREFER PRECISION: when uncertain, exclude. One false positive can derail the entire search.
 
 ## Step 2 — Knowledge Record Update
 Using ONLY the chunks you marked relevant in Step 1, update "retained_info".
@@ -64,10 +70,12 @@ You are a search query optimizer. Given the original question, the broader task 
 what we already know, what is still missing, and previously tried queries that returned
 nothing useful, write a new search query targeting the missing information.
 
-- Use the task context to understand the broader goal when rewriting.
-- Write a complete, grammatical sentence or question — not a list of keywords.
+- Write ONE clear, focused question — not a compound query. Target the most important gap.
 - Use different wording and perspective than all previous queries.
-- If the gap mentions specific missing details, include them naturally in the query.
+- Include specific entity names, numbers, or terms from the gap ONLY when they are
+  essential to disambiguate the search. Do not enumerate every missing detail.
+- Prefer breadth over narrowness: a query that finds 10 relevant chunks is better than
+  one that finds 2 perfectly-matching chunks.
 
 Respond with ONLY a JSON object:
 {"new_query": "your new query here"}"""

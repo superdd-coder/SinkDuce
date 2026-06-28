@@ -121,7 +121,9 @@ from src.meeting.routes import router as meeting_router
 from src.hot_words.routes import router as hot_words_router
 from src.notes.routes import router as notes_router
 from src.api.routes.visual import router as visual_router
+from src.api.routes.sessions import router as sessions_router
 
+app.include_router(sessions_router, prefix="/api")
 app.include_router(query_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
 app.include_router(collections_router, prefix="/api")

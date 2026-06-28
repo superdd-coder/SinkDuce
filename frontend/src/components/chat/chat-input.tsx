@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react"
 import { createPortal } from "react-dom"
-import { Bot, Sparkles, Settings } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
+import { Sparkles } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useStreamChat } from "@/hooks/use-stream"
 import { uploadFiles } from "@/api/client"
@@ -21,15 +19,7 @@ function persisted<T>(key: string, fallback: T): T {
 export function ChatInput() {
   const [input, setInput] = useState("")
   const [showCollections, setShowCollections] = useState(false)
-  const [useAgent, setUseAgent] = useState(() => persisted("useAgent", true))
-  const [searchMode, setSearchMode] = useState(() => persisted("searchMode", "dense"))
-  const [sparseLlmTokenize, setSparseLlmTokenize] = useState(() => persisted("sparseLlmTokenize", true))
-  const getDefaultTopK = (rerankerOn: boolean) => rerankerOn ? 15 : 5
-  const [useReranker, setUseReranker] = useState(() => persisted("useReranker", true))
-  const [topK, setTopK] = useState(() => persisted("topK", getDefaultTopK(persisted("useReranker", true))))
-  const [maxIterations, setMaxIterations] = useState(() => persisted("maxIterations", 3))
-  const [rerankTopK, setRerankTopK] = useState(() => persisted("rerankTopK", 5))
-  const [minScore, setMinScore] = useState(() => persisted("minScore", 0))
+  const [thinking, setThinking] = useState(() => persisted("thinking", true))
   const {
     isStreaming,
     activeCollection,
@@ -42,7 +32,7 @@ export function ChatInput() {
     setActiveModel,
     providers,
   } = useAppStore()
-  const { sendMessage } = useStreamChat()
+  const { sendMessage, stopGeneration } = useStreamChat()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const collectionMenuRef = useRef<HTMLDivElement>(null)
@@ -55,14 +45,7 @@ export function ChatInput() {
   const providerButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => { fetchCollections() }, [fetchCollections])
-  useEffect(() => { localStorage.setItem("chat_useAgent", JSON.stringify(useAgent)) }, [useAgent])
-  useEffect(() => { localStorage.setItem("chat_searchMode", JSON.stringify(searchMode)) }, [searchMode])
-  useEffect(() => { localStorage.setItem("chat_sparseLlmTokenize", JSON.stringify(sparseLlmTokenize)) }, [sparseLlmTokenize])
-  useEffect(() => { if (!isNaN(topK)) localStorage.setItem("chat_topK", JSON.stringify(topK)) }, [topK])
-  useEffect(() => { localStorage.setItem("chat_useReranker", JSON.stringify(useReranker)) }, [useReranker])
-  useEffect(() => { if (!isNaN(maxIterations)) localStorage.setItem("chat_maxIterations", JSON.stringify(maxIterations)) }, [maxIterations])
-  useEffect(() => { if (!isNaN(rerankTopK)) localStorage.setItem("chat_rerankTopK", JSON.stringify(rerankTopK)) }, [rerankTopK])
-  useEffect(() => { localStorage.setItem("chat_minScore", JSON.stringify(minScore)) }, [minScore])
+  useEffect(() => { localStorage.setItem("chat_thinking", JSON.stringify(thinking)) }, [thinking])
 
   // Auto-resize textarea
   useEffect(() => {
@@ -107,17 +90,7 @@ export function ChatInput() {
     const text = input.trim()
     if (!text || isStreaming) return
     setInput("")
-    const cols = selectedCollections.length > 0
-      ? selectedCollections
-      : collections.map(c => c.id)
-    await sendMessage(text, cols, activeProvider, activeModel, useAgent, searchMode, {
-      top_k: isNaN(topK) ? 5 : topK,
-      use_reranker: useReranker,
-      max_iterations: isNaN(maxIterations) ? 3 : maxIterations,
-      min_score: minScore,
-      rerank_top_k: isNaN(rerankTopK) ? 5 : rerankTopK,
-      sparse_llm_tokenize: sparseLlmTokenize,
-    })
+    await sendMessage(text, thinking)
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -210,99 +183,17 @@ export function ChatInput() {
 
           <div className="w-px h-3 bg-border" />
 
-          {/* Agent toggle — solid dark green when ON */}
+          {/* Thinking toggle — solid when ON */}
           <button
             type="button"
-            className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${useAgent ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
-            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: useAgent ? "3px 8px" : "0", borderRadius: "2px" }}
-            onClick={() => {
-              const next = !useAgent
-              setUseAgent(next)
-              if (next) setUseReranker(true)
-            }}
-            title={useAgent ? "Agentic RAG ON" : "Agentic RAG OFF — direct retrieval"}
+            className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${thinking ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
+            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: thinking ? "3px 8px" : "0", borderRadius: "2px" }}
+            onClick={() => setThinking(!thinking)}
+            title={thinking ? "Deep thinking ON — slower, more thorough" : "Deep thinking OFF — faster responses"}
           >
-            <Bot className="h-3 w-3" />
-            {useAgent ? "Agent" : "Direct"}
+            <Sparkles className="h-3 w-3" />
+            Think
           </button>
-
-          {/* Reranker — solid dark green when ON */}
-          <button
-            type="button"
-            className={`cursor-pointer border-none font-sans transition-all ${
-              useAgent
-                ? "bg-primary/50 text-primary-foreground/60 cursor-not-allowed"
-                : useReranker
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-transparent text-muted-foreground hover:text-primary"
-            }`}
-            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: (useAgent || useReranker) ? "3px 8px" : "0", borderRadius: "2px" }}
-            disabled={useAgent}
-            onClick={() => {
-              if (!useAgent) {
-                const next = !useReranker
-                setUseReranker(next)
-                // Auto-adjust Top K when toggling Reranker:
-                // ON → switch from 5 to 15 (more candidates for rerank)
-                // OFF → switch from 15 to 5 (less candidates needed)
-                setTopK(prev => {
-                  const n = isNaN(prev) ? 0 : prev
-                  if (next && n <= 5) return 15
-                  if (!next && n >= 15) return 5
-                  return n
-                })
-              }
-            }}
-            title={useAgent ? "Reranker is required for Agentic RAG" : "Toggle reranker"}
-          >
-            Rerank
-          </button>
-
-          {/* Search Mode + optional LLM — grouped when hybrid, with animation */}
-          <div
-            className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
-              searchMode === "hybrid"
-                ? "rounded border border-primary/30 py-1 pl-1 pr-2 max-w-[200px] opacity-100"
-                : "max-w-[60px] border-transparent opacity-100"
-            }`}
-          >
-            <button
-              type="button"
-              className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${
-                searchMode === "hybrid"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-transparent text-muted-foreground hover:text-primary"
-              }`}
-              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: searchMode === "hybrid" ? "3px 8px" : "0", borderRadius: "2px" }}
-              onClick={() => setSearchMode(searchMode === "hybrid" ? "dense" : "hybrid")}
-              title={searchMode === "hybrid" ? "Hybrid — Dense + BM25" : "Dense — vector similarity"}
-            >
-              {searchMode === "hybrid" ? "Hybrid" : "Dense"}
-            </button>
-            <div
-              className={`flex items-center gap-2 transition-all duration-300 ease-in-out overflow-hidden ${
-                searchMode === "hybrid" ? "opacity-100 max-w-[100px]" : "opacity-0 max-w-0"
-              }`}
-            >
-              <span className="text-[10px] text-muted-foreground/60 select-none">·</span>
-              <button
-                type="button"
-                className={`cursor-pointer border-none font-sans transition-all ${
-                  useAgent
-                    ? "bg-primary/50 text-primary-foreground/60 cursor-not-allowed"
-                    : sparseLlmTokenize
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-transparent text-muted-foreground hover:text-primary"
-                }`}
-                style={{ fontSize: "10px", padding: (useAgent || sparseLlmTokenize) ? "3px 5px" : "0", borderRadius: "2px", lineHeight: 1 }}
-                disabled={useAgent}
-                onClick={() => { if (!useAgent) setSparseLlmTokenize(!sparseLlmTokenize) }}
-                title={useAgent ? "Always on in Agentic mode" : sparseLlmTokenize ? "LLM keyword extraction ON" : "LLM keyword extraction OFF — raw tokenization"}
-              >
-                <Sparkles className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
 
           <div className="w-px h-3 bg-border hidden lg:block" />
 
@@ -413,60 +304,6 @@ export function ChatInput() {
               )}
             </div>
           )}
-
-          {/* Settings */}
-          <div className="ml-auto">
-            <Sheet>
-              <SheetTrigger render={<Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" />}>
-                <Settings className="h-3.5 w-3.5" />
-              </SheetTrigger>
-              <SheetContent side="right" className="sm:max-w-sm">
-                <SheetHeader>
-                  <SheetTitle>Chat Settings</SheetTitle>
-                </SheetHeader>
-                <div className="px-4 pb-4 space-y-4 overflow-y-auto flex-1">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium">Top K — chunks to retrieve</label>
-                    <input type="number" min={1} max={50} value={isNaN(topK) ? "" : topK}
-                      onChange={(e) => { const v = e.target.value; if (v === "") { setTopK(NaN); return } const n = parseInt(v); if (!isNaN(n)) setTopK(Math.max(1, Math.min(50, n))) }}
-                      onBlur={() => { if (isNaN(topK)) setTopK(getDefaultTopK(useReranker)) }}
-                      className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs"
-                    />
-                  </div>
-                  {useReranker && (
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium">Rerank Top K</label>
-                      <input type="number" min={1} max={50} value={isNaN(rerankTopK) ? "" : rerankTopK}
-                        onChange={(e) => { const v = e.target.value; if (v === "") { setRerankTopK(NaN); return } const n = parseInt(v); if (!isNaN(n)) setRerankTopK(Math.max(1, Math.min(50, n))) }}
-                        onBlur={() => { if (isNaN(rerankTopK)) setRerankTopK(5) }}
-                        className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs"
-                      />
-                    </div>
-                  )}
-                  {searchMode !== "hybrid" && (
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium">Similarity Threshold — {minScore.toFixed(2)}</label>
-                      <input type="range" min={0} max={1} step={0.05} value={minScore} onChange={(e) => setMinScore(parseFloat(e.target.value))} className="w-full" />
-                      <div className="flex justify-between text-[10px] text-muted-foreground">
-                        <span>0.00 (all results)</span>
-                        <span>1.00 (exact match)</span>
-                      </div>
-                    </div>
-                  )}
-                  {useAgent && (
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium">Max Iterations</label>
-                      <input type="number" min={1} max={10} value={isNaN(maxIterations) ? "" : maxIterations}
-                        onChange={(e) => { const v = e.target.value; if (v === "") { setMaxIterations(NaN); return } const n = parseInt(v); if (!isNaN(n)) setMaxIterations(Math.max(1, Math.min(10, n))) }}
-                        onBlur={() => { if (isNaN(maxIterations)) setMaxIterations(3) }}
-                        className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs"
-                      />
-                    </div>
-                  )}
-                </div>
-              </SheetContent>
-            </Sheet>
-          </div>
         </div>
 
         {/* Input area */}
@@ -485,22 +322,39 @@ export function ChatInput() {
             disabled={isStreaming}
           />
 
-          <button
-            type="button"
-            className="shrink-0 flex items-center gap-1.5 cursor-pointer transition-opacity border-none text-white font-sans"
-            style={{
-              background: "var(--ze-green)",
-              fontSize: "10px", fontWeight: 600,
-              textTransform: "uppercase", letterSpacing: "0.12em",
-              padding: "8px 16px", borderRadius: "2px",
-              opacity: !input.trim() || isStreaming ? 0.3 : 1,
-            }}
-            onClick={handleSend}
-            disabled={!input.trim() || isStreaming}
-          >
-            Send
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
-          </button>
+          {isStreaming ? (
+            <button
+              type="button"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer border-none text-white font-sans"
+              style={{
+                background: "oklch(0.55 0.18 20)",
+                fontSize: "10px", fontWeight: 600,
+                textTransform: "uppercase", letterSpacing: "0.12em",
+                padding: "8px 16px", borderRadius: "2px",
+              }}
+              onClick={stopGeneration}
+            >
+              Stop
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2" /></svg>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer transition-opacity border-none text-white font-sans"
+              style={{
+                background: "var(--ze-green)",
+                fontSize: "10px", fontWeight: 600,
+                textTransform: "uppercase", letterSpacing: "0.12em",
+                padding: "8px 16px", borderRadius: "2px",
+                opacity: !input.trim() ? 0.3 : 1,
+              }}
+              onClick={handleSend}
+              disabled={!input.trim()}
+            >
+              Send
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
+            </button>
+          )}
         </div>
 
         {/* Disclaimer */}

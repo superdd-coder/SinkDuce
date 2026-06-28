@@ -357,6 +357,11 @@ async def add_llm_provider(provider: LLMProviderConfig):
     config = get_config()
     if not provider.id:
         provider.id = str(uuid.uuid4())
+    if provider.is_default:
+        for p in config.llm.providers:
+            p.is_default = False
+    elif not config.llm.providers:
+        provider.is_default = True
     config.llm.providers.append(provider.model_copy())
     save_config(config)
     reload_config()
@@ -380,6 +385,11 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
                     elif key in _bool_fields:
                         value = bool(value)
                     setattr(config.llm.providers[i], key, value)
+            # If setting this provider as default, clear default on all others
+            if update.get("is_default"):
+                for j, other in enumerate(config.llm.providers):
+                    if j != i:
+                        other.is_default = False
             save_config(config)
             reload_config()
             await async_reload_services()
@@ -497,6 +507,10 @@ async def update_embedding_provider(provider_id: str, update: dict = Body()):
                     elif key in _bool_fields:
                         value = bool(value)
                     setattr(config.embedding.providers[i], key, value)
+            if update.get("is_default"):
+                for j, other in enumerate(config.embedding.providers):
+                    if j != i:
+                        other.is_default = False
             save_config(config)
             reload_config()
             await async_reload_services()
@@ -614,6 +628,10 @@ async def update_rerank_provider(provider_id: str, update: dict = Body()):
                     elif key in _bool_fields:
                         value = bool(value)
                     setattr(config.rerank.providers[i], key, value)
+            if update.get("is_default"):
+                for j, other in enumerate(config.rerank.providers):
+                    if j != i:
+                        other.is_default = False
             save_config(config)
             reload_config()
             await async_reload_services()

@@ -1,17 +1,21 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { MessageBubble } from "./message-bubble"
 import { ChatInput } from "./chat-input"
 import { SourceDetailPanel } from "./source-detail-panel"
-import { PanelRightClose } from "lucide-react"
+import { SessionSidebar } from "./session-sidebar"
+import { PanelRightClose, ArrowDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { getLLMProviders } from "@/api/client"
 import type { Source } from "@/stores/app-store"
 
 export function ChatView() {
-  const { messages, setProviders, setActiveProvider, setActiveModel, activeProvider, activeModel } = useAppStore()
+  const { messages, setProviders, setActiveProvider, setActiveModel, activeProvider, activeModel, sessionId, sessions } = useAppStore()
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const userScrolledUp = useRef(false)
   const [selectedSource, setSelectedSource] = useState<Source | null>(null)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   useEffect(() => {
     const loadProviders = async () => {
@@ -35,7 +39,32 @@ export function ChatView() {
   }, [])
 
   useEffect(() => {
+    const { sessionId, loadSessionMessages, messages } = useAppStore.getState()
+    // Only load from backend if we don't already have messages for this session
+    if (sessionId && messages.length === 0) {
+      loadSessionMessages(sessionId)
+    }
+  }, [])
+
+  // Track scroll position — only auto-scroll if user is near bottom
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    const up = dist > 80
+    userScrolledUp.current = up
+    setShowScrollBtn(up)
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    userScrolledUp.current = false
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [])
+
+  useEffect(() => {
+    if (!userScrolledUp.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" as any })
+    }
   }, [messages])
 
   const handleSelectSource = (source: Source) => {
@@ -48,12 +77,28 @@ export function ChatView() {
 
   const selectedSourceId = (selectedSource?.metadata?.id as string) || null
 
+  const currentSession = sessions.find(s => s.id === sessionId)
+  const sessionTitle = currentSession?.title || "New Chat"
+
   return (
     <div className="flex flex-col h-full overflow-hidden relative">
       <div className="flex-1 flex min-h-0">
+        {/* Session sidebar — left */}
+        <SessionSidebar />
+
         {/* Main chat area */}
-        <div className={`flex flex-col flex-1 min-w-0 ${selectedSource ? "hidden sm:flex" : ""}`}>
-          <div className="flex-1 overflow-y-auto pb-44">
+        <div className={`flex flex-col flex-1 min-w-0 relative ${selectedSource ? "hidden sm:flex" : ""}`}>
+          {/* Session title header */}
+          <div className="shrink-0 px-12 pt-5 pb-3 border-b border-border/30">
+            <h1
+              className="text-[15px] font-[400] tracking-[-0.01em] text-foreground/80 truncate"
+              style={{ fontFamily: "var(--font-serif)" }}
+            >
+              {sessionTitle}
+            </h1>
+          </div>
+
+          <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto pb-44 relative">
             {messages.length === 0 ? (
               <div
                 className="flex flex-col items-center justify-center h-full gap-2 py-20"
@@ -68,7 +113,7 @@ export function ChatView() {
                 <p className="text-xs">Upload documents first, then start chatting</p>
               </div>
             ) : (
-              <div className="max-w-3xl mx-auto py-4 px-12">
+              <div className="max-w-4xl mx-auto py-4 px-12">
                 {messages.map((msg) => (
                   <MessageBubble
                     key={msg.id}
@@ -80,6 +125,27 @@ export function ChatView() {
                 <div ref={bottomRef} />
               </div>
             )}
+          </div>
+
+          {/* Jump-to-bottom button */}
+          {showScrollBtn && (
+            <div className="absolute bottom-36 left-1/2 -translate-x-1/2 z-10">
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background/80 backdrop-blur border border-border shadow-sm text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ArrowDown className="h-3 w-3" />
+                Scroll to bottom
+              </button>
+            </div>
+          )}
+
+          {/* Floating chat input — positioned within main chat area */}
+          <div className={`absolute bottom-4 left-0 right-0 z-10 pointer-events-none transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]`}>
+            <div className="pointer-events-auto">
+              <ChatInput />
+            </div>
           </div>
         </div>
 
@@ -93,13 +159,6 @@ export function ChatView() {
             </div>
             <SourceDetailPanel source={selectedSource} onClose={handleClosePanel} />
           </div>
-        </div>
-      </div>
-
-      {/* Floating chat input — overlays the message area */}
-      <div className={`absolute bottom-4 left-0 z-10 pointer-events-none transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${selectedSource ? "right-[42vw] max-sm:hidden" : "right-0"}`}>
-        <div className="pointer-events-auto">
-          <ChatInput />
         </div>
       </div>
     </div>

@@ -27,16 +27,17 @@ class AtomicQuery:
 
 _DECOMPOSE_SYSTEM = """You are a search query optimizer for a knowledge base system.
 
-STEP 1 — Split the query into independent tasks:
-  - Separate tasks = truly independent topics that would need DIFFERENT documents to answer
-  - Single task = the same documents/chunks would contain all the information needed
-  - Do NOT split closely related sub-questions that share the same topic and document scope.
-    Example: "why is X reliable and low-cost" is ONE task, NOT two tasks
-    for "reliable" and "low-cost" separately (same topic, same documents).
-  - Example: "A vs B costs, and A's 2024 AR" → 2 tasks (cost comparison across companies
-    vs. a specific company's annual report — different document scope)
-  - Each task MUST have: "task" (short label with key terms) and "task_query" (complete sentence)
-  - If the query needs NO knowledge base search, return [].
+Your input is a concrete set of information needs — NOT a user question. Someone upstream
+has already decided WHAT to search for. Your job is HOW to search it optimally.
+
+STEP 1 — Identify independent tasks (different document scopes):
+  - Separate tasks = truly independent topics that need DIFFERENT documents to answer
+  - Single task = the same documents would contain all the information needed
+  - Do NOT split closely related facets that share the same topic and document scope.
+    Example: "X 项目技术架构" is ONE task, no matter how many aspects it has.
+  - Example: "A项目技术方案, B项目技术方案" → 2 tasks (different project docs)
+  - Each task MUST have: "task" (short label) and "task_query" (complete sentence)
+  - If the information needs describe no searchable content, return [].
 
 STEP 2 — Within each task, produce 1-2 search queries as complete questions (not keyword fragments).
   Do NOT create a separate query for each adjective or minor variation of the same question.
@@ -46,12 +47,13 @@ STEP 2 — Within each task, produce 1-2 search queries as complete questions (n
 Respond with ONLY a JSON array:
 [{"task": "...", "task_query": "...", "queries": [{"query": "...", "target_collections": [...]}]}]"""
 
-_DECOMPOSE_USER = """User query: {raw_query}
+_DECOMPOSE_USER = """Information needs: {raw_query}
 
 Available collections (use [index] for routing):
 {catalog_text}
 
-First identify the tasks, then produce search queries within each task. Route each query to the most relevant collections by index number.
+Group the information needs into tasks, then produce search queries within each task.
+Route each query to the most relevant collections by index number.
 Return a JSON array."""
 
 
@@ -60,6 +62,65 @@ class Decomposer:
 
     def __init__(self, llm):
         self.llm = llm
+
+    # ── collection routing (lightweight, no task decomposition) ──────
+
+    _ROUTE_SYSTEM = """You are a collection router. Given a search query and a list of
+available collections, return the numeric indices of the most relevant collections.
+
+Rules:
+- Return only indices of collections that are genuinely relevant
+- If no collection clearly matches, return [] to search all
+- Do NOT invent collections — only use indices from the provided list
+
+Respond with ONLY a JSON array of integers, e.g. [0] or [0, 2] or []."""
+
+    _ROUTE_USER = """Query: {raw_query}
+
+Available collections:
+{catalog_text}
+
+Which collections (by index) are relevant? Return a JSON array."""
+
+    def route_collections(self, raw_query: str, catalog: list) -> list[str]:
+        """Return the collection IDs relevant to *raw_query*, or [] for all."""
+        if not raw_query or not raw_query.strip():
+            return []
+        if not catalog:
+            return []
+
+        catalog_text, index_map = self._build_catalog_text(catalog)
+        if not catalog_text:
+            return []
+
+        prompt = self._ROUTE_USER.format(raw_query=raw_query[:200], catalog_text=catalog_text)
+
+        try:
+            result = self._llm_json(prompt, self._ROUTE_SYSTEM)
+        except Exception as e:
+            logger.warning("[Route] LLM failed: %s, fallback to all", e)
+            return []
+
+        if not isinstance(result, list):
+            return []
+
+        target_ids = []
+        for t in result:
+            try:
+                idx = int(t)
+            except (ValueError, TypeError):
+                continue
+            if idx in index_map:
+                target_ids.append(index_map[idx])
+
+        if target_ids:
+            cols = target_ids
+        else:
+            cols = []
+        logger.info("[Route] q=%r → %s", raw_query[:120], cols if cols else "ALL")
+        return cols
+
+    # ── full decomposition ───────────────────────────────────────────
 
     def decompose(self, raw_query: str, catalog: list) -> list[AtomicQuery]:
         """Break *raw_query* into AtomicQueries with collection routing.

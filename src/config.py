@@ -25,7 +25,7 @@ class LLMProviderConfig(BaseModel):
     selected_models: list[str] = []
     default_model: str = ""
     visual_model_ids: list[str] = []
-    supports_functions: bool = False
+    function_call_model_ids: list[str] = []
 
 
 class LLMConfig(BaseModel):

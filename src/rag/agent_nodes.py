@@ -30,19 +30,57 @@ from src.rag import get_log_ctx as _ctx
 # ══════════════════════════════════════════════════════════════════════════
 
 def _parse_json(text: str) -> dict | list:
-    """Parse JSON from LLM output, handling markdown fences and leading/trailing noise."""
+    """Parse JSON from LLM output, handling markdown fences and common repair."""
+    import re
+
     text = text.strip()
     # Strip markdown code fences
     if text.startswith("```"):
         lines = text.split("\n")
-        # Remove opening fence line
         if lines[0].startswith("```"):
             lines = lines[1:]
-        # Remove closing fence line
         if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
         text = "\n".join(lines)
-    return json.loads(text)
+
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Repair: try escaping bare newlines inside JSON strings
+    # A newline that appears between an opening quote and closing quote
+    # inside a JSON value is likely an unescaped newline
+    repaired = re.sub(
+        r'(?<=[^\\])\\n', r'\\\\n',
+        text,
+    )
+    # Also handle literal newlines that break JSON string values:
+    # find "key": "value\nwith\nnewlines" → escape them
+    # Simpler approach: escape ALL bare newlines that aren't structural
+    repaired = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if escape_next:
+            repaired.append(ch)
+            escape_next = False
+            continue
+        if ch == '\\':
+            repaired.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            repaired.append(ch)
+            continue
+        if in_string and ch == '\n':
+            repaired.append('\\n')
+        else:
+            repaired.append(ch)
+    repaired_text = ''.join(repaired)
+
+    return json.loads(repaired_text)
 
 
 def _llm_generate_json(
@@ -163,7 +201,7 @@ def node_combined_grade(
     try:
         result = _llm_generate_json(
             llm, prompt, GRADE_COMBINED_SYSTEM,
-            temperature=temperature, thinking=True, max_tokens=3072,
+            temperature=temperature, thinking=False, max_tokens=8192,
         )
     except ValueError as e:
         logger.error(_ctx() + "[Grade] combined: JSON parse failed — %s", e)

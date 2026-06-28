@@ -139,9 +139,9 @@ class TestNewModulesImportable:
 class TestConfigUpdated:
     """配置新增字段"""
 
-    def test_supports_functions_on_provider(self):
+    def test_function_call_model_ids_on_provider(self):
         from src.config import LLMProviderConfig
-        assert 'supports_functions' in LLMProviderConfig.model_fields
+        assert 'function_call_model_ids' in LLMProviderConfig.model_fields
 
     def test_rag_config_present(self):
         from src.config import AppConfig

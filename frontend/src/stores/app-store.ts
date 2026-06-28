@@ -21,11 +21,40 @@ export interface ThinkingStep {
   label: string
   status: "active" | "done"
   details?: string[]
+  children?: ThinkingStep[]
 }
 
 export interface ThinkingIteration {
   iteration: number
+  label?: string
   steps: ThinkingStep[]
+}
+
+// ── Clean thinking summary (from backend metadata / SSE) ──
+
+export interface AqSummary {
+  aq_id: string
+  query: string
+  iterations: number
+  rewritten: string[]
+  final_chunks: number
+  current_chunks: number
+  sufficient: boolean
+}
+
+export interface TaskSummary {
+  task: string
+  task_query: string
+  aq_count: number
+  aqs: AqSummary[]
+  useful_chunks: number
+}
+
+export interface ThinkingSummary {
+  aq_count: number
+  task_count: number
+  tasks: TaskSummary[]
+  status?: string
 }
 
 export interface MetaInfo {
@@ -36,6 +65,13 @@ export interface MetaInfo {
   max_iterations?: number
 }
 
+export interface TimelineBlock {
+  type: "thinking" | "tool"
+  content?: string              // thinking text (accumulated)
+  summary?: ThinkingSummary     // tool call summary
+  isStreaming?: boolean         // still receiving
+}
+
 export interface Message {
   id: string
   role: "user" | "assistant"
@@ -43,7 +79,12 @@ export interface Message {
   sources?: Source[]
   isStreaming?: boolean
   thinkingSteps?: ThinkingIteration[]
+  thinkingSummary?: ThinkingSummary
+  thinkingContent?: string
+  hasToolCall?: boolean
   metaInfo?: MetaInfo
+  /** Ordered timeline of thinking + tool calls */
+  timeline?: TimelineBlock[]
 }
 
 export interface LLMProvider {
@@ -55,6 +96,7 @@ export interface LLMProvider {
   api_key: string
 
   is_default: boolean
+  function_call_model_ids: string[]
   selected_models?: string[]
   default_model?: string
   visual_model_ids?: string[]
@@ -68,7 +110,7 @@ export interface CollectionItem {
 }
 
 // Import getCollections for fetchCollections action
-import { getCollections } from "@/api/client"
+import { getCollections, createSession, getSession, deleteSession } from "@/api/client"
 
 interface AppState {
   sidebarView: SidebarView
@@ -94,10 +136,14 @@ interface AppState {
   ingestProjectNames: string[]
   setIngestState: (meetingId: string | null, progress: Record<number, "pending" | "done" | "error">, names: string[]) => void
 
-  selectedCollections: string[]  // Now stores collection IDs
+  selectedCollections: string[]  // Chat collection selection
   setSelectedCollections: (ids: string[]) => void
   toggleCollection: (id: string) => void
   removeDeletedCollection: (id: string) => void
+
+  recallCollections: string[]     // Recall page collection selection
+  setRecallCollections: (ids: string[]) => void
+  toggleRecallCollection: (id: string) => void
 
   activeProvider: string | null
   setActiveProvider: (id: string | null) => void
@@ -113,6 +159,12 @@ interface AppState {
   setLastMessageSources: (sources: Source[]) => void
   setLastMessageMetaInfo: (info: MetaInfo) => void
   setLastMessageThinkingSteps: (steps: ThinkingIteration[]) => void
+  setLastMessageThinkingSummary: (summary: ThinkingSummary | undefined) => void
+  setLastMessageThinkingContent: (token: string) => void
+  appendTimelineThinking: (token: string) => void
+  setTimelineToolSummary: (summary: ThinkingSummary | undefined) => void
+  startTimelineTool: () => void
+  setLastMessageHasToolCall: () => void
   finishLastMessage: () => void
   setStreaming: (v: boolean) => void
 
@@ -128,6 +180,49 @@ interface AppState {
   // Navigation guard — return false to block navigation
   navigationGuard: (() => boolean) | null
   setNavigationGuard: (guard: (() => boolean) | null) => void
+
+  // ── Session ──
+  sessionId: string | null
+  sessions: import("@/api/client").SessionItem[]
+  setSessionId: (id: string | null) => void
+  setSessions: (s: import("@/api/client").SessionItem[]) => void
+  initSession: (collections?: string[]) => Promise<string>
+  loadSessionMessages: (sessionId: string) => Promise<void>
+  deleteCurrentSession: () => Promise<void>
+}
+
+// Module-level per-session state
+const _streamAborts = new Map<string, AbortController>()
+const _sessionCache = new Map<string, Message[]>()
+
+/** Register an abort controller for a session. Returns the controller. */
+export function _registerStream(sessionId: string, ctrl: AbortController) {
+  _streamAborts.get(sessionId)?.abort()
+  _streamAborts.set(sessionId, ctrl)
+}
+/** Abort a specific session's stream. */
+export function _abortStream(sessionId: string) {
+  _streamAborts.get(sessionId)?.abort()
+  _streamAborts.delete(sessionId)
+}
+/** Unregister without aborting (stream ended normally). */
+export function _unregisterStream(sessionId: string) {
+  _streamAborts.delete(sessionId)
+}
+/** Get or create cached messages for a session. */
+export function _getCachedMessages(sessionId: string): Message[] | undefined {
+  return _sessionCache.get(sessionId)
+}
+/** Set cached messages for a session. */
+export function _setCachedMessages(sessionId: string, msgs: Message[]) {
+  _sessionCache.set(sessionId, msgs)
+}
+/** Save active session messages from store to cache. */
+function _saveActiveToCache() {
+  const { sessionId, messages } = useAppStore.getState()
+  if (sessionId && messages.length > 0) {
+    _sessionCache.set(sessionId, [...messages])
+  }
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -193,6 +288,18 @@ export const useAppStore = create<AppState>((set) => ({
       activeCollection: s.activeCollection === id ? "" : s.activeCollection,
     })),
 
+  recallCollections: [],
+  setRecallCollections: (ids) => set({ recallCollections: ids }),
+  toggleRecallCollection: (id) =>
+    set((s) => {
+      const exists = s.recallCollections.includes(id)
+      return {
+        recallCollections: exists
+          ? s.recallCollections.filter((c) => c !== id)
+          : [...s.recallCollections, id],
+      }
+    }),
+
   activeProvider: loadPersisted<string | null>("activeProvider", null),
   setActiveProvider: (id) => set({ activeProvider: id }),
   activeModel: loadPersisted<string | null>("activeModel", null),
@@ -239,6 +346,79 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { messages: msgs }
     }),
+  setLastMessageThinkingSummary: (summary: ThinkingSummary | undefined) =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], thinkingSummary: summary }
+      }
+      return { messages: msgs }
+    }),
+  setLastMessageThinkingContent: (token) =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        msgs[msgs.length - 1] = { ...last, thinkingContent: (last.thinkingContent || "") + token }
+      }
+      return { messages: msgs }
+    }),
+  appendTimelineThinking: (token) =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        const tl = [...(last.timeline || [])]
+        const lastBlock = tl[tl.length - 1]
+        if (lastBlock && lastBlock.type === "thinking" && lastBlock.isStreaming) {
+          tl[tl.length - 1] = { ...lastBlock, content: (lastBlock.content || "") + token }
+        } else {
+          tl.push({ type: "thinking", content: token, isStreaming: true })
+        }
+        msgs[msgs.length - 1] = { ...last, timeline: tl }
+      }
+      return { messages: msgs }
+    }),
+  startTimelineTool: () =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        const tl = [...(last.timeline || [])]
+        // Close any open thinking block
+        if (tl.length > 0 && tl[tl.length - 1].type === "thinking") {
+          tl[tl.length - 1] = { ...tl[tl.length - 1], isStreaming: false }
+        }
+        tl.push({ type: "tool", summary: undefined })
+        msgs[msgs.length - 1] = { ...last, timeline: tl }
+      }
+      return { messages: msgs }
+    }),
+  setTimelineToolSummary: (summary) =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        const tl = [...(last.timeline || [])]
+        // Update last tool block
+        for (let i = tl.length - 1; i >= 0; i--) {
+          if (tl[i].type === "tool") {
+            tl[i] = { ...tl[i], summary: summary || tl[i].summary }
+            break
+          }
+        }
+        msgs[msgs.length - 1] = { ...last, timeline: tl }
+      }
+      return { messages: msgs }
+    }),
+  setLastMessageHasToolCall: () =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], hasToolCall: true }
+      }
+      return { messages: msgs }
+    }),
   finishLastMessage: () =>
     set((s) => {
       const msgs = [...s.messages]
@@ -260,6 +440,57 @@ export const useAppStore = create<AppState>((set) => ({
 
   navigationGuard: null,
   setNavigationGuard: (guard) => set({ navigationGuard: guard }),
+
+  // ── Session ──
+  sessionId: loadPersisted<string | null>("sessionId", null),
+  sessions: [] as import("@/api/client").SessionItem[],
+  setSessionId: (id) => set({ sessionId: id }),
+  setSessions: (sessions) => set({ sessions }),
+  initSession: async (collections) => {
+    const state = useAppStore.getState()
+    const s = await createSession("", collections ?? state.selectedCollections)
+    set({ sessionId: s.id, messages: [] })
+    return s.id
+  },
+  loadSessionMessages: async (sessionId) => {
+    // Save current session to cache (keep its stream alive in background)
+    _saveActiveToCache()
+    // Restore target from cache if available
+    const cached = _sessionCache.get(sessionId)
+    if (cached) {
+      set({ messages: [...cached], sessionId, isStreaming: useAppStore.getState().isStreaming })
+      return
+    }
+    set({ isStreaming: false })
+    try {
+      const detail = await getSession(sessionId)
+      set({
+        messages: detail.messages.map((m) => {
+          const meta = (m.metadata ?? {}) as Record<string, any>
+          const summary = meta.thinking_summary as ThinkingSummary | undefined
+          return {
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            sources: m.sources ?? undefined,
+            metaInfo: meta as MetaInfo,
+            thinkingSummary: summary,
+          }
+        }),
+        sessionId,
+      })
+    } catch {
+      set({ sessionId: null, messages: [] })
+    }
+  },
+  deleteCurrentSession: async () => {
+    const { sessionId } = useAppStore.getState()
+    if (!sessionId) return
+    _abortStream(sessionId)
+    _sessionCache.delete(sessionId)
+    await deleteSession(sessionId)
+    set({ sessionId: null, messages: [] })
+  },
 }))
 
 // Helper functions to get collection by id or name
@@ -280,5 +511,6 @@ useAppStore.subscribe((state) => {
     localStorage.setItem("rag_activeModel", JSON.stringify(state.activeModel))
     localStorage.setItem("rag_selectedCollections", JSON.stringify(state.selectedCollections))
     localStorage.setItem("rag_sidebarView", JSON.stringify(state.sidebarView))
+    localStorage.setItem("rag_sessionId", JSON.stringify(state.sessionId))
   }, 500)
 })

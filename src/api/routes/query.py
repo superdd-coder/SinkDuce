@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from src.api.schemas import QueryRequest, QueryResponse, SourceItem
 from src.config import get_config
@@ -21,6 +21,18 @@ router = APIRouter()
 
 HISTORY_DIR = Path("data/history")
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _deprecated_response():
+    return JSONResponse(
+        status_code=410,
+        content={
+            "error": "Gone",
+            "message": "This endpoint is deprecated. Please migrate to POST /api/sessions/{id}/messages",
+            "migration_doc": "https://github.com/superdd-coder/sinkduce",
+        },
+        headers={"Deprecation": "true", "Sunset": "Sat, 01 Aug 2026 00:00:00 GMT"},
+    )
 
 
 def _col_display_name(col_id: str) -> str:
@@ -165,157 +177,20 @@ def _run_agentic(query_text: str, target_collections: list[str], params: dict,
 # POST /query
 # ══════════════════════════════════════════════════════════════════════════
 
-@router.post("/query", response_model=QueryResponse)
-def query(req: QueryRequest):
-    try:
-        def resolve_collection(cid: str) -> str:
-            meta = collections_store.get_collection_meta(cid)
-            return meta["id"] if meta else cid
-
-        collection = resolve_collection(req.collection)
-        target_collections = [resolve_collection(c) for c in (req.collections or [req.collection])]
-
-        if not services.db.collection_exists(collection):
-            return QueryResponse(
-                answer=f"Collection '{req.collection}' does not exist. Please create it first.",
-                sources=[], iterations=0, query_used=req.question,
-            )
-
-        col_config = services.db.get_collection_config(collection)
-        params = _resolve_params(req, col_config)
-        llm, provider_info, temperature = _resolve_llm(req)
-        embedding_overrides = get_embedding_overrides(target_collections)
-
-        logger.info("[Query] collections=%s use_agent=%s", target_collections, params["use_agent"])
-
-        if params["use_agent"]:
-            r = _run_agentic(req.question, target_collections, params, llm, temperature)
-        else:
-            r = _run_direct(req.question, target_collections, params,
-                            embedding_overrides, None, llm, temperature)
-
-        note = _multi_collection_note(r["sources"])
-        if note:
-            r["answer"] += note
-
-        sources = [SourceItem(**s) for s in r["sources"]]
-        _save_history(req.question, r["answer"], req.collection, r["sources"])
-        return QueryResponse(
-            answer=r["answer"], sources=sources,
-            iterations=r.get("iterations", 1), query_used=r.get("query_used", req.question),
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+@router.post("/query", include_in_schema=False)
+def query(req: QueryRequest = None):
+    """Deprecated. Use POST /api/sessions/{id}/messages instead."""
+    return _deprecated_response()
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # POST /query/stream
 # ══════════════════════════════════════════════════════════════════════════
 
-@router.post("/query/stream")
-async def query_stream(req: QueryRequest):
-    """SSE streaming endpoint — streams answer tokens one by one."""
-
-    def generate():
-        try:
-            def resolve_collection(cid: str) -> str:
-                meta = collections_store.get_collection_meta(cid)
-                return meta["id"] if meta else cid
-
-            collection = resolve_collection(req.collection)
-            target_collections = [resolve_collection(c) for c in (req.collections or [req.collection])]
-
-            if not services.db.collection_exists(collection):
-                yield f"data: {json.dumps({'type': 'error', 'content': f'Collection {req.collection} does not exist'})}\n\n"
-                return
-
-            col_config = services.db.get_collection_config(collection)
-            params = _resolve_params(req, col_config)
-            llm, provider_info, temperature = _resolve_llm(req)
-            embedding_overrides = get_embedding_overrides(target_collections)
-
-            logger.info("Query stream: collections=%s use_agent=%s", target_collections, params["use_agent"])
-
-            if params["use_agent"]:
-                # Agentic mode — use AgenticQueryService.run_stream style
-                if not services.agentic_query:
-                    yield f"data: {json.dumps({'type': 'error', 'content': 'Agentic query service not available'})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                    return
-
-                result = services.agentic_query.run(
-                    req.question, collections=target_collections, generate_answer=True,
-                    top_k=params["top_k"],
-                    rerank_enabled=True,
-                    rerank_top_k=params["rerank_top_k"],
-                    search_mode=params["search_mode"],
-                    min_score=params["min_score"],
-                    max_iterations=params["max_iterations"],
-                    sparse_llm_tokenize=params["sparse_llm_tokenize"],
-                )
-                sources = [
-                    {"text": c.text, "score": c.score, "metadata": c.metadata}
-                    for c in (result.all_chunks or [])
-                ]
-                meta = {
-                    "type": "meta", "sources": sources,
-                    "iterations": 0,
-                    "query_used": req.question,
-                    "mode": "agentic", "agent_active": True,
-                    "provider": provider_info["name"], "model": provider_info["model"],
-                    "search_mode": params["search_mode"],
-                }
-                yield f"data: {json.dumps(meta)}\n\n"
-                if result.answer:
-                    note = _multi_collection_note(sources)
-                    yield f"data: {json.dumps({'type': 'token', 'content': result.answer})}\n\n"
-                    if note:
-                        yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
-                    _save_history(req.question, result.answer + (note if note else ""), req.collection, sources)
-            else:
-                # Direct mode
-                if not services.direct_query:
-                    yield f"data: {json.dumps({'type': 'error', 'content': 'Direct query module not available'})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                    return
-
-                dq_result = services.direct_query.retrieve(
-                    req.question, target_collections, top_k=params["top_k"],
-                    search_mode=params["search_mode"],
-                    rerank_enabled=params["use_reranker"],
-                    rerank_top_k=params["rerank_top_k"],
-                    min_score=params["min_score"],
-                    sparse_llm_tokenize=params["sparse_llm_tokenize"],
-                    embedding_overrides=embedding_overrides,
-                    llm_for_sparse=llm if params["sparse_llm_tokenize"] else None,
-                    generate_answer=True,
-                )
-                sources = [{"text": c.text, "score": c.score, "metadata": c.metadata} for c in dq_result.chunks]
-                meta = {
-                    "type": "meta", "sources": sources, "iterations": 1,
-                    "query_used": req.question, "mode": "direct", "agent_active": False,
-                    "provider": provider_info["name"], "model": provider_info["model"],
-                    "search_mode": params["search_mode"],
-                }
-                yield f"data: {json.dumps(meta)}\n\n"
-                answer = dq_result.answer or ""
-                # Stream pre-generated answer token by token
-                for token in answer:
-                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-                note = _multi_collection_note(sources)
-                if note:
-                    yield f"data: {json.dumps({'type': 'token', 'content': note})}\n\n"
-                _save_history(req.question, answer, req.collection, sources)
-
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+@router.post("/query/stream", include_in_schema=False)
+def query_stream(req: QueryRequest = None):
+    """Deprecated. Use POST /api/sessions/{id}/messages instead."""
+    return _deprecated_response()
 
 
 # ══════════════════════════════════════════════════════════════════════════

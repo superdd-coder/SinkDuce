@@ -1,221 +1,186 @@
-import { useAppStore, type Source, type ThinkingIteration, type MetaInfo } from "@/stores/app-store"
+import { useCallback } from "react"
+import {
+  useAppStore,
+  _registerStream, _abortStream, _unregisterStream,
+  _getCachedMessages, _setCachedMessages,
+  type ThinkingSummary,
+} from "@/stores/app-store"
+import { generateSessionTitle, listSessions } from "@/api/client"
+/** Check if sid is the active session; if not, update cache instead of store. */
+function _isActive(sid: string) {
+  return useAppStore.getState().sessionId === sid
+}
 
-interface StreamInfo {
-  type: "info"
-  provider?: string
-  model?: string
-  search_mode?: string
-  mode?: string
-  max_iterations?: number
+/** Append to last message of cached messages for a given session. */
+function _cacheAppend(sid: string, token: string) {
+  const msgs = _getCachedMessages(sid) ?? []
+  if (msgs.length > 0) {
+    const last = { ...msgs[msgs.length - 1], content: msgs[msgs.length - 1].content + token }
+    msgs[msgs.length - 1] = last
+    _setCachedMessages(sid, msgs)
+  }
 }
-interface StreamMeta {
-  type: "meta"
-  sources: Source[]
-  iterations: number
-  query_used: string
-  provider?: string
-  model?: string
-  search_mode?: string
-  mode?: string
-  agent_active?: boolean
+function _cacheSetLastSources(sid: string, sources: any[]) {
+  const msgs = _getCachedMessages(sid) ?? []
+  if (msgs.length > 0) {
+    msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], sources }
+    _setCachedMessages(sid, msgs)
+  }
 }
-interface StreamToken {
-  type: "token"
-  content: string
+function _cacheFinishLast(sid: string) {
+  const msgs = _getCachedMessages(sid) ?? []
+  if (msgs.length > 0) {
+    msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], isStreaming: false }
+    _setCachedMessages(sid, msgs)
+  }
 }
-interface StreamStep {
-  type: "step"
-  step: string
-  content: string
-  iteration?: number
+
+/** Sync cache with current store messages for a session. */
+function _syncCacheFromStore(sid: string) {
+  const { messages } = useAppStore.getState()
+  _setCachedMessages(sid, [...messages])
 }
-interface StreamDetail {
-  type: "detail"
-  iteration: number
-  content: string
-}
-interface StreamDone {
-  type: "done"
-}
-interface StreamError {
-  type: "error"
-  content: string
-}
-type StreamEvent = StreamInfo | StreamMeta | StreamToken | StreamStep | StreamDetail | StreamDone | StreamError
 
 export function useStreamChat() {
   const {
-    addMessage,
-    appendToLastMessage,
-    setLastMessageSources,
-    setLastMessageMetaInfo,
-    setLastMessageThinkingSteps,
-    finishLastMessage,
-    setStreaming,
+    sessionId, initSession,
+    addMessage, appendToLastMessage, setLastMessageSources,
+    appendTimelineThinking, setTimelineToolSummary, startTimelineTool,
+    finishLastMessage, setStreaming, selectedCollections,
   } = useAppStore()
 
-  const sendMessage = async (
-    question: string,
-    collections: string[],
-    providerId?: string | null,
-    model?: string | null,
-    useAgent?: boolean,
-    searchMode?: string,
-    params?: { top_k?: number; use_reranker?: boolean; max_iterations?: number; min_score?: number; rerank_top_k?: number; sparse_llm_tokenize?: boolean },
-  ) => {
-    const userId = crypto.randomUUID()
-    const assistantId = crypto.randomUUID()
+  const sendMessage = async (content: string, thinking = true) => {
+    let sid = sessionId
+    if (!sid) {
+      sid = await initSession()
+    }
 
-    addMessage({ id: userId, role: "user", content: question })
+    // Abort previous stream for the SAME session only
+    _abortStream(sid)
+    const controller = new AbortController()
+    _registerStream(sid, controller)
+
+    addMessage({ id: crypto.randomUUID(), role: "user", content })
+    const assistantId = crypto.randomUUID()
     addMessage({ id: assistantId, role: "assistant", content: "", isStreaming: true })
     setStreaming(true)
-
-    // Local accumulator for thinking steps (rebuilt on each update)
-    const thinkingSteps: ThinkingIteration[] = []
-    let metaInfo: MetaInfo = {}
+    _syncCacheFromStore(sid)
 
     try {
-      const body: Record<string, unknown> = {
-        question,
-        collection: collections[0] || "default",
-        use_agent: useAgent !== false,
-      }
-      if (providerId) body.provider_id = providerId
-      if (model) body.model = model
-      if (collections.length > 1) body.collections = collections
-      if (searchMode) body.search_mode = searchMode
-      if (params?.top_k) body.top_k = params.top_k
-      if (params?.rerank_top_k) body.rerank_top_k = params.rerank_top_k
-      if (params?.use_reranker !== undefined) body.use_reranker = params.use_reranker
-      if (params?.max_iterations) body.max_iterations = params.max_iterations
-      if (params?.min_score !== undefined && params.min_score > 0) body.min_score = params.min_score
-      if (params?.sparse_llm_tokenize !== undefined) body.sparse_llm_tokenize = params.sparse_llm_tokenize
-
-      const res = await fetch("/api/query/stream", {
+      const resp = await fetch(`/api/sessions/${sid}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ content, thinking, collections: selectedCollections }),
+        signal: controller.signal,
       })
 
-      if (!res.ok) {
-        const text = await res.text()
-        appendToLastMessage(`Error: ${res.status} - ${text}`)
-        finishLastMessage()
+      if (!resp.ok) {
+        const err = await resp.text()
+        if (_isActive(sid)) appendToLastMessage(`Error: ${resp.status} - ${err}`)
+        else _cacheAppend(sid, `Error: ${resp.status} - ${err}`)
+        if (_isActive(sid)) finishLastMessage()
+        else _cacheFinishLast(sid)
         return
       }
 
-      const reader = res.body!.getReader()
+      const reader = resp.body!.getReader()
       const decoder = new TextDecoder()
-      let buffer = ""
+      let buffer = "", currentEvent = ""
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split("\n")
         buffer = lines.pop() ?? ""
 
         for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed.startsWith("data: ")) continue
+          const t = line.trimEnd()
+          if (t.startsWith("event: ")) {
+            currentEvent = t.slice(7).trim()
+          } else if (t.startsWith("data: ")) {
+            let data: any
+            try { data = JSON.parse(t.slice(6)) } catch { continue }
 
-          let event: StreamEvent
-          try {
-            event = JSON.parse(trimmed.slice(6))
-          } catch {
-            continue
-          }
+            const active = _isActive(sid)
 
-          switch (event.type) {
-            case "info": {
-              metaInfo = {
-                provider: event.provider,
-                model: event.model,
-                search_mode: event.search_mode,
-                mode: event.mode,
-                max_iterations: event.max_iterations,
-              }
-              setLastMessageMetaInfo(metaInfo)
-              break
-            }
-            case "meta": {
-              // Legacy meta event — extract provider info if no info event was received
-              if (!metaInfo.provider && (event.provider || event.model)) {
-                metaInfo = {
-                  provider: event.provider,
-                  model: event.model,
-                  search_mode: event.search_mode,
-                  mode: event.mode,
+            switch (currentEvent) {
+              case "thinking":
+                if (active) appendTimelineThinking(data.content)
+                // (cache helpers for thinking timeline are more complex; skip for bg sessions for now)
+                break
+
+              case "token":
+                if (active) appendToLastMessage(data.content)
+                else _cacheAppend(sid, data.content)
+                break
+
+              case "tool_call_start":
+                if (active) startTimelineTool()
+                break
+
+              case "thinking_summary":
+                if (active) setTimelineToolSummary(data as ThinkingSummary)
+                break
+
+              case "done":
+                if (data.sources?.length) {
+                  if (active) setLastMessageSources(data.sources)
+                  else _cacheSetLastSources(sid, data.sources)
                 }
-                setLastMessageMetaInfo(metaInfo)
-              }
-              setLastMessageSources(event.sources)
-              break
-            }
-            case "step": {
-              const iterNum = event.iteration ?? 0
-              // Mark ALL steps across ALL iterations as done first
-              for (const g of thinkingSteps) {
-                for (const s of g.steps) {
-                  s.status = "done"
+                if (active) {
+                  finishLastMessage()
+                  _syncCacheFromStore(sid)
+                } else {
+                  _cacheFinishLast(sid)
                 }
-              }
-              // Find or create iteration group
-              let group = thinkingSteps.find(g => g.iteration === iterNum)
-              if (!group) {
-                group = { iteration: iterNum, steps: [] }
-                thinkingSteps.push(group)
-                // Sort by iteration number (0 = decompose phase, goes last)
-                thinkingSteps.sort((a, b) => {
-                  if (a.iteration === 0) return 1
-                  if (b.iteration === 0) return -1
-                  return a.iteration - b.iteration
-                })
-              }
-              // Add new active step
-              group.steps.push({ label: event.content, status: "active" })
-              // Trigger store update
-              setLastMessageThinkingSteps([...thinkingSteps])
-              break
-            }
-            case "detail": {
-              const iterNum = event.iteration ?? 0
-              const group = thinkingSteps.find(g => g.iteration === iterNum)
-              if (group && group.steps.length > 0) {
-                const lastStep = group.steps[group.steps.length - 1]
-                if (!lastStep.details) lastStep.details = []
-                lastStep.details.push(event.content)
-                setLastMessageThinkingSteps([...thinkingSteps])
-              }
-              break
-            }
-            case "token":
-              // Mark all thinking steps as done when answer tokens start
-              for (const g of thinkingSteps) {
-                for (const s of g.steps) {
-                  s.status = "done"
+                _unregisterStream(sid)
+                if (sid) {
+                  const msgs = active ? useAppStore.getState().messages : (_getCachedMessages(sid) ?? [])
+                  const userCount = msgs.filter(m => m.role === "user").length
+                  if (userCount === 1) {
+                    generateSessionTitle(sid)
+                      .then(() => listSessions())
+                      .then(sessions => {
+                        useAppStore.getState().setSessions(sessions)
+                      })
+                      .catch(err => {
+                        console.error("Auto-title failed:", err)
+                      })
+                  }
                 }
-              }
-              setLastMessageThinkingSteps([...thinkingSteps])
-              appendToLastMessage(event.content)
-              break
-            case "done":
-              finishLastMessage()
-              return
-            case "error":
-              appendToLastMessage(`\n\n**Error:** ${event.content}`)
-              finishLastMessage()
-              return
+                return
+
+              case "error":
+                if (active) appendToLastMessage(`Error: ${data.content}`)
+                else _cacheAppend(sid, `Error: ${data.content}`)
+                if (active) finishLastMessage()
+                else _cacheFinishLast(sid)
+                return
+            }
+            currentEvent = ""
           }
         }
       }
-    } catch (err) {
-      appendToLastMessage(`\n\n**Error:** ${err instanceof Error ? err.message : String(err)}`)
+    } catch (err: any) {
+      if (err.name === "AbortError") return
+      if (_isActive(sid)) appendToLastMessage(`Error: ${err.message}`)
+      else _cacheAppend(sid, `Error: ${err.message}`)
     } finally {
-      finishLastMessage()
+      if (_isActive(sid)) {
+        finishLastMessage()
+        _syncCacheFromStore(sid)
+      } else {
+        _cacheFinishLast(sid)
+      }
+      _unregisterStream(sid)
     }
   }
 
-  return { sendMessage }
+  const stopGeneration = useCallback(() => {
+    const sid = useAppStore.getState().sessionId
+    if (sid) _abortStream(sid)
+  }, [])
+
+  return { sendMessage, stopGeneration }
 }

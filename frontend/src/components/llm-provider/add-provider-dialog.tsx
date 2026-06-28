@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Eye, EyeOff, Loader2, RefreshCw } from "lucide-react"
+import { Eye, EyeOff, Loader2, RefreshCw, Wrench } from "lucide-react"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { cn } from "@/lib/utils"
-import { createLLMProvider, updateLLMProvider, getAvailableModels, type LLMProvider } from "@/api/client"
+import { createLLMProvider, updateLLMProvider, getAvailableModels, updateConfig, type LLMProvider } from "@/api/client"
 import { useProviderTypes } from "@/hooks/use-provider-types"
 import { toast } from "sonner"
 
@@ -23,6 +23,7 @@ const defaultForm = {
   base_url: "",
   api_key: "",
   is_default: false,
+  function_call_model_ids: [] as string[],
   selected_models: [] as string[],
   default_model: "",
   visual_model_ids: [] as string[],
@@ -46,9 +47,10 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         base_url: provider.base_url || "",
         api_key: provider.api_key || "",
         is_default: provider.is_default,
+        function_call_model_ids: (provider as any).function_call_model_ids || [],
         selected_models: provider.selected_models || (provider.model ? [provider.model] : []),
         default_model: provider.default_model || provider.model || "",
-        visual_model_ids: provider.visual_model_ids || [],
+        visual_model_ids: (provider as any).visual_model_ids || [],
       })
     } else {
       setForm(defaultForm)
@@ -115,6 +117,15 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
     })
   }
 
+  const toggleFunctionCallModel = (model: string) => {
+    setForm((prev) => {
+      const fc = prev.function_call_model_ids.includes(model)
+        ? prev.function_call_model_ids.filter((m) => m !== model)
+        : [...prev.function_call_model_ids, model]
+      return { ...prev, function_call_model_ids: fc }
+    })
+  }
+
   const handleSave = async () => {
     if (!form.name.trim()) {
       toast.error("Name is required")
@@ -129,6 +140,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         base_url: form.base_url,
         api_key: form.api_key || undefined,
         is_default: form.is_default,
+        function_call_model_ids: form.function_call_model_ids,
         selected_models: form.selected_models,
         default_model: form.default_model || form.selected_models[0],
         visual_model_ids: form.visual_model_ids,
@@ -139,6 +151,11 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
       } else {
         await createLLMProvider(data)
         toast.success("Provider created")
+      }
+      // Auto-sync default_chat_model when is_default is set and provider has function_call models
+      if (form.is_default && form.function_call_model_ids.length > 0) {
+        const chatModel = form.default_model || form.function_call_model_ids[0]
+        await updateConfig("default_chat_model", { default_chat_model: chatModel })
       }
       onSaved()
     } catch (err) {
@@ -243,10 +260,31 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                           >
                             {form.default_model === model ? "default" : "set default"}
                           </button>
+                          {(() => {
+                            const isFc = (form as any).function_call_model_ids?.includes(model)
+                            return (
+                              <button
+                                type="button"
+                                className={cn(
+                                  "text-[10px] px-1 py-0.5 rounded shrink-0 transition-colors",
+                                  isFc
+                                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                    : "bg-muted text-muted-foreground hover:bg-accent",
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  toggleFunctionCallModel(model)
+                                }}
+                                title={isFc ? "Function Calling enabled" : "Enable Function Calling"}
+                              >
+                                <Wrench className="h-3 w-3" />
+                              </button>
+                            )
+                          })()}
                           <button
                             type="button"
                             className={cn(
-                              "text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap transition-colors",
+                              "text-[10px] px-1 py-0.5 rounded shrink-0 transition-colors",
                               isVisual
                                 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
                                 : "bg-muted text-muted-foreground hover:bg-accent",
@@ -257,8 +295,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                             }}
                             title={isVisual ? "Visual enabled" : "Enable for Visual Translate"}
                           >
-                            <Eye className="h-3 w-3 inline mr-0.5" />
-                            {isVisual ? "visual" : "visual"}
+                            <Eye className="h-3 w-3" />
                           </button>
                         </>
                       )}
@@ -294,10 +331,31 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                       >
                         {form.default_model === model ? "default" : "set default"}
                       </button>
+                      {(() => {
+                        const isFc = (form as any).function_call_model_ids?.includes(model)
+                        return (
+                          <button
+                            type="button"
+                            className={cn(
+                              "text-[10px] px-1 py-0.5 rounded shrink-0 transition-colors",
+                              isFc
+                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                : "bg-muted text-muted-foreground hover:bg-accent",
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleFunctionCallModel(model)
+                            }}
+                            title={isFc ? "Function Calling enabled" : "Enable Function Calling"}
+                          >
+                            <Wrench className="h-3 w-3" />
+                          </button>
+                        )
+                      })()}
                       <button
                         type="button"
                         className={cn(
-                          "text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap transition-colors",
+                          "text-[10px] px-1 py-0.5 rounded shrink-0 transition-colors",
                           isVisual
                             ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
                             : "bg-muted text-muted-foreground hover:bg-accent",
@@ -308,8 +366,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                         }}
                         title={isVisual ? "Visual enabled" : "Enable for Visual Translate"}
                       >
-                        <Eye className="h-3 w-3 inline mr-0.5" />
-                        {isVisual ? "visual" : "visual"}
+                        <Eye className="h-3 w-3" />
                       </button>
                     </label>
                   )
@@ -333,6 +390,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
             />
             Set as default
           </label>
+
         </div>
 
         <div className="flex justify-end gap-2 pt-2">

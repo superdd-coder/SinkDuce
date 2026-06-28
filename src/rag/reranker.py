@@ -20,11 +20,23 @@ class Reranker:
             return []
 
         documents = [c.text for c in chunks]
-        ranked = self.provider.rerank(query, documents, top_k=k)
+        # Filter out empty docs (Qwen/DashScope rejects empty strings),
+        # while preserving original indices for result mapping.
+        valid_indices: list[int] = []
+        valid_docs: list[str] = []
+        for i, doc in enumerate(documents):
+            if doc and doc.strip():
+                valid_indices.append(i)
+                valid_docs.append(doc)
+
+        if not valid_docs:
+            return []
+
+        ranked = self.provider.rerank(query, valid_docs, top_k=k)
 
         result = []
         for idx, score in ranked:
-            chunk = chunks[idx]
+            chunk = chunks[valid_indices[idx]]
             chunk.score = score
             result.append(chunk)
         return result

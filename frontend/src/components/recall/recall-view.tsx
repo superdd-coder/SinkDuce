@@ -26,7 +26,7 @@ import { TooltipLabel } from "@/components/shared/tooltip-label"
 // ── Search Tab (existing) ──────────────────────────────────
 
 function SearchTab() {
-  const { selectedCollections, setSelectedCollections, collections, fetchCollections } = useAppStore()
+  const { recallCollections, toggleRecallCollection, collections, fetchCollections } = useAppStore()
   const [query, setQuery] = useState("")
   const [topK, setTopK] = useState("10")
   const [rerankTopK, setRerankTopK] = useState("5")
@@ -71,16 +71,12 @@ function SearchTab() {
     el.style.height = Math.min(el.scrollHeight, 300) + "px"
   }, [query])
 
-  const toggleCollection = (id: string) => {
-    const exists = selectedCollections.includes(id)
-    const next = exists ? selectedCollections.filter((c) => c !== id) : [...selectedCollections, id]
-    setSelectedCollections(next)
-  }
+  const toggleCollection = toggleRecallCollection
 
   const handleSearch = async () => {
     if (!query.trim()) return
     // Use IDs for API calls
-    const cols = selectedCollections.length > 0 ? selectedCollections : collections.map(c => c.id)
+    const cols = recallCollections.length > 0 ? recallCollections : collections.map(c => c.id)
     setResults([])
     setSearching(true)
     try {
@@ -147,10 +143,10 @@ function SearchTab() {
                 ref={buttonRef}
                 onClick={() => setShowCollections(!showCollections)}
                 className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
-                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: showCollections ? "var(--color-primary-foreground)" : selectedCollections.length > 0 ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
+                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: showCollections ? "var(--color-primary-foreground)" : recallCollections.length > 0 ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
               >
                 <span className="relative z-10 whitespace-nowrap text-center">
-                  Collections ({selectedCollections.length})
+                  Collections ({recallCollections.length})
                 </span>
                 <span
                   className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
@@ -180,7 +176,7 @@ function SearchTab() {
                     className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
                   >
                     <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                      {selectedCollections.includes(col.id) ? (
+                      {recallCollections.includes(col.id) ? (
                         <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
                       ) : (
                         <span className="w-1.5 h-1.5 shrink-0" />
@@ -356,8 +352,8 @@ const EVAL_RUNNING_PREFIX = "eval_running_"
 const GEN_RUNNING_PREFIX = "gen_running_"
 
 function EvaluateTab() {
-  const { selectedCollections, setSelectedCollections, collections, fetchCollections } = useAppStore()
-  const collection = selectedCollections[0] || ""
+  const { recallCollections, setRecallCollections, collections, fetchCollections } = useAppStore()
+  const collection = recallCollections[0] || ""
   const [cases, setCases] = useState<EvalTestCase[]>([])
   const [loading, setLoading] = useState(false)
   const [evalTopK, setEvalTopK] = useState("10")
@@ -416,9 +412,9 @@ function EvaluateTab() {
 
   const selectEvalCollection = (id: string) => {
     if (collection === id) {
-      setSelectedCollections([])
+      setRecallCollections([])
     } else {
-      setSelectedCollections([id])
+      setRecallCollections([id])
     }
     setEvalShowCollections(false)
   }

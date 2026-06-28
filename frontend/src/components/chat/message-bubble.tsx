@@ -1,14 +1,58 @@
-import { memo } from "react"
+import { memo, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { ChevronDown, ChevronRight, Brain } from "lucide-react"
 import { SourcesCard } from "./sources-card"
 import { ThinkingSteps } from "./thinking-steps"
-import type { Message, Source } from "@/stores/app-store"
+import type { Message, Source, TimelineBlock } from "@/stores/app-store"
+
+function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+  const [expanded, setExpanded] = useState(true)
+  if (!text) return null
+  return (
+    <div className="mt-4 mb-3">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 uppercase tracking-[0.1em] cursor-pointer hover:text-muted-foreground/70 transition-colors"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <Brain className="h-3 w-3 text-amber-500/60" />
+        Thinking{isStreaming ? "…" : ""}
+      </button>
+      {expanded && (
+        <div
+          className="mt-1.5 pl-5 text-[11px] leading-relaxed border-l border-amber-500/20"
+          style={{ color: "oklch(0.45 0.08 80 / 0.6)", fontFamily: "var(--font-serif)", fontStyle: "italic" }}
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  )
+}
 
 interface MessageBubbleProps {
   message: Message
   onSelectSource?: (source: Source) => void
   selectedSourceId?: string | null
+}
+
+function TimelineBlockView({ block, metaInfo, isStreaming }: { block: TimelineBlock; metaInfo?: Message["metaInfo"]; isStreaming: boolean }) {
+  if (block.type === "thinking") {
+    return <ThinkingContent text={block.content || ""} isStreaming={!!block.isStreaming} />
+  }
+  if (block.type === "tool") {
+    return (
+      <ThinkingSteps
+        steps={[]}
+        summary={block.summary}
+        metaInfo={metaInfo}
+        isStreaming={isStreaming}
+      />
+    )
+  }
+  return null
 }
 
 export const MessageBubble = memo(function MessageBubble({ message, onSelectSource, selectedSourceId }: MessageBubbleProps) {
@@ -40,13 +84,26 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
         Assistant
       </div>
 
-      {/* Thinking steps */}
-      {(message.thinkingSteps?.length || message.metaInfo) && (
-        <ThinkingSteps
-          steps={message.thinkingSteps || []}
-          metaInfo={message.metaInfo}
-          isStreaming={!!message.isStreaming}
-        />
+      {/* Timeline: interleaved thinking + tool calls in chronological order */}
+      {message.timeline && message.timeline.length > 0 ? (
+        message.timeline.map((block, i) => (
+          <TimelineBlockView key={i} block={block} metaInfo={message.metaInfo} isStreaming={!!message.isStreaming} />
+        ))
+      ) : (
+        <>
+          {/* Fallback: old flat rendering */}
+          {message.thinkingContent && (
+            <ThinkingContent text={message.thinkingContent} isStreaming={!!message.isStreaming} />
+          )}
+          {(message.hasToolCall || message.thinkingSummary || message.thinkingSteps?.length) && (
+            <ThinkingSteps
+              steps={message.thinkingSteps || []}
+              summary={message.thinkingSummary}
+              metaInfo={message.metaInfo}
+              isStreaming={!!message.isStreaming}
+            />
+          )}
+        </>
       )}
 
       {/* Answer content */}
