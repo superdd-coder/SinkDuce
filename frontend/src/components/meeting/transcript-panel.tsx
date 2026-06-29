@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import { ChevronRight, ChevronLeft, Clock, Pencil, Check, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tabs, TabsList, TabsTrigger, TabsIndicator, TabsContent } from "@/components/ui/tabs"
@@ -10,6 +10,8 @@ interface TranscriptPanelProps {
   segments: TranscriptSegment[]
   partialText?: string
   onSegmentClick?: (startTime: number) => void
+  focusRef?: { id: string; ts: number } | null
+  activeSectionTag?: string
   speakerNames?: Record<string, string>
   onUpdateSpeakerName?: (speakerId: string, name: string) => void
   isRealtime?: boolean
@@ -21,6 +23,8 @@ export function TranscriptPanel({
   segments,
   partialText,
   onSegmentClick,
+  focusRef,
+  activeSectionTag,
   speakerNames = {},
   onUpdateSpeakerName,
   isRealtime = false,
@@ -69,6 +73,8 @@ export function TranscriptPanel({
                 segments={segments}
                 partialText={partialText}
                 onSegmentClick={onSegmentClick}
+                focusRef={focusRef}
+                activeSectionTag={activeSectionTag}
                 speakerNames={speakerNames}
               />
             </TabsContent>
@@ -78,6 +84,7 @@ export function TranscriptPanel({
                 speakerNames={speakerNames}
                 onUpdateSpeakerName={onUpdateSpeakerName}
                 onSegmentClick={onSegmentClick}
+                activeSectionTag={activeSectionTag}
               />
             </TabsContent>
           </Tabs>
@@ -95,14 +102,20 @@ function TranscriptTab({
   segments,
   partialText,
   onSegmentClick,
+  focusRef,
+  activeSectionTag,
   speakerNames,
 }: {
   segments: TranscriptSegment[]
   partialText?: string
   onSegmentClick?: (startTime: number) => void
+  focusRef?: { id: string; ts: number } | null
+  activeSectionTag?: string
   speakerNames: Record<string, string>
 }) {
   const [search, setSearch] = useState("")
+  const [focusedIdx, setFocusedIdx] = useState(-1)
+  const containerRef = useRef<HTMLDivElement>(null)
   const query = search.toLowerCase().trim()
 
   const filtered = useMemo(() => {
@@ -113,6 +126,23 @@ function TranscriptTab({
         (seg.speaker_id && (speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`).toLowerCase().includes(query))
     )
   }, [segments, query, speakerNames])
+
+  // Scroll to focused sentence when ref is clicked
+  useEffect(() => {
+    if (!focusRef?.id || !containerRef.current) return
+    const idx = segments.findIndex((seg) => seg.sentence_id?.endsWith(focusRef.id))
+    if (idx === -1) return
+    setFocusedIdx(idx)
+    // Find the DOM element — segments are rendered flat in the container
+    const items = containerRef.current.querySelectorAll("[data-seg-idx]")
+    const el = items[idx] as HTMLElement | undefined
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" })
+    }
+    // Clear highlight after 2s
+    const timer = setTimeout(() => setFocusedIdx(-1), 2000)
+    return () => clearTimeout(timer)
+  }, [focusRef?.ts, focusRef?.id, segments])
 
   const highlight = (text: string) => {
     if (!query) return text
@@ -146,7 +176,7 @@ function TranscriptTab({
         )}
       </div>
 
-      <div className="flex-1 overflow-auto p-2 space-y-3">
+      <div ref={containerRef} className="flex-1 overflow-auto p-2 space-y-3">
         {filtered.length === 0 && !partialText && (
           <p className="text-xs text-muted-foreground text-center py-8">
             {query ? "No matching segments" : "No transcript yet"}
@@ -156,13 +186,17 @@ function TranscriptTab({
           const displayName = seg.speaker_id
             ? speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`
             : null
+          // Find original index in full segments array for highlight matching
+          const origIdx = segments.indexOf(seg)
           return (
             <div
               key={`${seg.start}-${i}`}
+              data-seg-idx={origIdx}
               className={cn(
                 "rounded-md px-2 py-1.5 -mx-1 transition-colors",
                 onSegmentClick && "cursor-pointer hover:bg-accent",
-                query && seg.text.toLowerCase().includes(query) && "ring-1 ring-primary/30"
+                query && seg.text.toLowerCase().includes(query) && "ring-1 ring-primary/30",
+                origIdx === focusedIdx && "ring-2 ring-primary bg-primary/5"
               )}
               onClick={() => onSegmentClick?.(seg.start)}
             >
@@ -170,6 +204,27 @@ function TranscriptTab({
                 {displayName && (
                   <span className="text-xs font-light text-primary bg-primary/10 px-1.5 py-0.5 rounded">
                     {highlight(displayName)}
+                  </span>
+                )}
+                {seg.section_tags && seg.section_tags.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    {seg.section_tags.map((tag) => {
+                      const isActive = activeSectionTag === tag
+                      return (
+                        <span
+                          key={tag}
+                          className={cn(
+                            "text-[10px] font-light px-1 py-0.5 rounded border",
+                            isActive
+                              ? "border-green-500/40 text-green-600 bg-green-500/10"
+                              : "border-border text-muted-foreground bg-muted/50"
+                          )}
+                          title={tag}
+                        >
+                          {sectionTagLabel(tag)}
+                        </span>
+                      )
+                    })}
                   </span>
                 )}
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -202,11 +257,13 @@ function SpeakersTab({
   speakerNames,
   onUpdateSpeakerName,
   onSegmentClick,
+  activeSectionTag,
 }: {
   segments: TranscriptSegment[]
   speakerNames: Record<string, string>
   onUpdateSpeakerName?: (speakerId: string, name: string) => void
   onSegmentClick?: (startTime: number) => void
+  activeSectionTag?: string
 }) {
   // Extract unique speakers and pick 5 random samples each
   const speakers = useMemo(() => {
@@ -246,6 +303,7 @@ function SpeakersTab({
           samples={speaker.samples}
           onUpdateName={(name) => onUpdateSpeakerName?.(speaker.id, name)}
           onSegmentClick={onSegmentClick}
+          activeSectionTag={activeSectionTag}
         />
       ))}
     </div>
@@ -263,11 +321,13 @@ function SpeakerCard({
   samples,
   onUpdateName,
   onSegmentClick,
+  activeSectionTag,
 }: {
   speakerId: string
   displayName?: string
   segmentCount: number
   samples: TranscriptSegment[]
+  activeSectionTag?: string
   onUpdateName: (name: string) => void
   onSegmentClick?: (startTime: number) => void
 }) {
@@ -332,13 +392,30 @@ function SpeakerCard({
           <div
             key={i}
             className={cn(
-              "text-xs px-2 py-1.5 rounded transition-colors",
+              "text-xs px-2 py-1.5 rounded transition-colors flex items-start gap-1.5",
               onSegmentClick && "cursor-pointer hover:bg-accent"
             )}
             onClick={() => onSegmentClick?.(seg.start)}
           >
-            <span className="text-muted-foreground mr-1.5">{formatTime(seg.start)}</span>
-            <span className="text-foreground">{seg.text.length > 80 ? seg.text.slice(0, 80) + "..." : seg.text}</span>
+            <span className="text-muted-foreground shrink-0">{formatTime(seg.start)}</span>
+            <span className="text-foreground flex-1">{seg.text.length > 80 ? seg.text.slice(0, 80) + "..." : seg.text}</span>
+            {seg.section_tags && seg.section_tags.length > 0 && (
+              <span className="flex items-center gap-0.5 shrink-0">
+                {seg.section_tags.map((tag) => {
+                  const isActive = activeSectionTag === tag
+                  return (
+                    <span key={tag} className={cn(
+                      "text-[10px] font-light px-1 py-0.5 rounded border",
+                      isActive
+                        ? "border-green-500/40 text-green-600 bg-green-500/10"
+                        : "border-border text-muted-foreground bg-muted/50"
+                    )}>
+                      {sectionTagLabel(tag)}
+                    </span>
+                  )
+                })}
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -354,4 +431,11 @@ function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
   return `${m}:${s.toString().padStart(2, "0")}`
+}
+
+/** Convert tab_sec_01 → T1, tab_sec_02 → T2 */
+function sectionTagLabel(tag: string): string {
+  const m = tag.match(/^tab_sec_(\d+)$/)
+  if (m) return `T${parseInt(m[1], 10)}`
+  return tag
 }

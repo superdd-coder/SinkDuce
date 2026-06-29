@@ -152,7 +152,22 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
 
     # 4. Save the transcription result
     store.save_transcript(meeting_id, result)
-    update(90, "Updating meeting status...")
+    update(80, "Normalizing sentences...")
+
+    # 4b. Pipeline Node 0.0 + 0.1: normalize sentences & chunk
+    from src.meeting.pipeline import chunk_sentences, normalize_sentences
+
+    sentences = normalize_sentences(meeting_id, result.segments)
+    store.save_sentences(meeting_id, [s.model_dump() for s in sentences])
+
+    chunks = chunk_sentences(meeting_id, sentences)
+    store.save_chunks(meeting_id, [c.model_dump() for c in chunks])
+
+    logger.info(
+        "[PIPELINE] Node 0.0+0.1 done: %d sentences, %d chunks for meeting %s",
+        len(sentences), len(chunks), meeting_id,
+    )
+    update(95, "Updating meeting status...")
 
     # 5. Mark meeting as completed
     store.update_meeting(meeting_id, status=MeetingStatus.completed)
@@ -177,7 +192,7 @@ task_manager.register_handler("meeting_summary", meeting_summary_handler)
 # MeetingService
 # ---------------------------------------------------------------------------
 
-from src.prompts import MEETING_SUMMARY_SYSTEM, MEETING_SUMMARY_PROMPT
+from src.prompts import MEETING_BLUEPRINT_SYSTEM, MEETING_BLUEPRINT_PROMPT
 
 
 class MeetingService:
@@ -213,141 +228,1100 @@ class MeetingService:
     # -- Summary generation -------------------------------------------------
 
     async def start_generate_summary(self, meeting_id: str) -> Meeting:
-        """Start background summary generation. Returns immediately with summarizing=True."""
+        """Start background blueprint summary (Node 0.3)."""
         meeting = store.get_meeting(meeting_id)
         if meeting is None:
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
-        meeting.summarizing = True
-        store.update_meeting(meeting_id, summarizing=True)
-        import threading
-        t = threading.Thread(target=self._do_generate_summary, args=(meeting_id,), daemon=True)
-        t.start()
-        return meeting
 
-    def _do_generate_summary(self, meeting_id: str) -> None:
-        """Background: generate summary via LLM and save to meeting store."""
-        logger.info("[SUMMARY] Starting generation for meeting %s", meeting_id)
+        from src.meeting.models import ProcessingState
+
+        store.update_meeting(
+            meeting_id,
+            processing_state=ProcessingState.summarizing.value,
+        )
+        import threading
+
+        t = threading.Thread(
+            target=self._do_blueprint_summary, args=(meeting_id,), daemon=True
+        )
+        t.start()
+        return store.get_meeting(meeting_id)
+
+    def _do_blueprint_summary(self, meeting_id: str) -> None:
+        """Node 0.3: generate General summary + decomposition blueprint.
+
+        Uses the v2 prompt → LLM → parses {general_md_content, blueprint} →
+        saves general tab md + updates meta.json with blueprint & tabs.
+        """
+        from src.meeting.models import ProcessingState
+
+        logger.info("[BLUEPRINT] Starting for meeting %s", meeting_id)
         try:
             meeting = store.get_meeting(meeting_id)
             if meeting is None:
                 return
 
-            transcript_result = store.get_transcript(meeting_id)
+            # ── Build transcript text (with sentence IDs for refs) ────
             notes = store.get_notes(meeting_id)
             speaker_names = meeting.speaker_names or {}
+            sentences_data = store.get_sentences(meeting_id)
 
-            transcript_text = transcript_result.text if transcript_result else "(No transcript available)"
-            if speaker_names and transcript_result:
+            if sentences_data:
                 lines = []
-                for seg in transcript_result.segments:
-                    name = speaker_names.get(seg.speaker_id, f"Speaker {seg.speaker_id}") if seg.speaker_id else ""
-                    prefix = f"[{name}] " if name else ""
-                    lines.append(f"{prefix}{seg.text}")
+                for s in sentences_data:
+                    sid = s.get("sentence_id", "")
+                    speaker = s.get("speaker", "")
+                    text = s.get("original_text", "")
+                    name = speaker_names.get(speaker, f"Speaker {speaker}") if speaker else ""
+                    spk_prefix = f"[{name}] " if name else ""
+                    lines.append(f"[{sid}] {spk_prefix}{text}")
                 transcript_text = "\n".join(lines)
+            else:
+                transcript_result = store.get_transcript(meeting_id)
+                transcript_text = (
+                    transcript_result.text
+                    if transcript_result
+                    else "(No transcript available)"
+                )
+
+            # ── Build speakers list (ALL speakers from transcript) ──────
+            # Collect all speaker IDs from sentences, not just renamed ones
+            all_speaker_ids: set[str] = set()
+            if sentences_data:
+                for s in sentences_data:
+                    spk = s.get("speaker", "")
+                    if spk:
+                        all_speaker_ids.add(spk)
+            if all_speaker_ids:
+                speakers_text = "\n".join(
+                    f"- Speaker {sid}: {speaker_names.get(sid, f'Speaker {sid}')}"
+                    for sid in sorted(all_speaker_ids, key=lambda x: int(x) if x.isdigit() else 0)
+                )
+            elif speaker_names:
+                speakers_text = "\n".join(
+                    f"- Speaker {sid}: {name}" for sid, name in speaker_names.items()
+                )
+            else:
+                speakers_text = "(No speakers identified)"
 
             notes_text = notes if notes else "(No notes)"
-
-            if speaker_names:
-                speakers_text = "\n".join(f"- Speaker {sid}: {name}" for sid, name in speaker_names.items())
-            else:
-                speakers_text = "(No speaker names assigned)"
-            logger.info("[SUMMARY] Transcript: %d chars, Notes: %d chars", len(transcript_text), len(notes_text))
-
-            from src.rag.summary_manager import SummaryManager
-            db_section_names: list[str] = []
-            db_grouping_instruction = (
-                "Group content into sections by project/topic. "
-                "Each section goes into the 'sections' array with its own heading, detail, summary, and todos."
+            logger.info(
+                "[BLUEPRINT] Transcript: %d chars, Notes: %d chars",
+                len(transcript_text),
+                len(notes_text),
             )
+
+            # ── Build collection catalog ──────────────────────────────
+            collection_catalog = "No existing collections."
             try:
-                sm = SummaryManager(db=services.db, vector_size=_detect_embedding_dim())
+                from src.rag.summary_manager import SummaryManager
+
+                sm = SummaryManager(
+                    db=services.db, vector_size=_detect_embedding_dim()
+                )
                 sm.ensure_collection()
                 project_descs = sm.get_all_project_descriptions()
                 if project_descs:
-                    desc_map = {d.get("collection_id", ""): d.get("content", "") for d in project_descs}
-                    db_section_names = [d.get("collection_id", "") for d in project_descs if d.get("collection_id")]
-                    if db_section_names:
-                        existing_lines = []
-                        for name in db_section_names:
-                            desc = desc_map.get(name, "")
-                            if desc:
-                                existing_lines.append(f"- **{name}**: {desc}")
-                            else:
-                                existing_lines.append(f"- **{name}**")
-                        existing_block = "\n".join(existing_lines)
-                        db_grouping_instruction = (
-                            "Existing projects in the database (match meeting content to these if relevant):\n\n"
-                            f"{existing_block}\n\n"
-                            "Use these project names ONLY as reference for creating sections. "
-                            "Create one section per matching project. "
-                            "Content that doesn't match any project goes into an 'Other Topics' section. "
-                            "If the meeting introduces a new project/initiative, create a section for it. "
-                            "Do NOT mention in the output which projects matched or didn't match — just organize the content into the appropriate sections."
-                        )
-                    logger.info("[SUMMARY] Found %d project descriptions for grouping", len(project_descs))
-            except Exception as e:
-                logger.warning("[SUMMARY] Failed to fetch project descriptions: %s", e)
+                    from src.collections.store import get_collection_meta, list_collections_meta
 
+                    existing_ids = {c["id"] for c in list_collections_meta()}
+                    lines = []
+                    stale_ids: list[str] = []
+                    for pd in project_descs:
+                        cid = pd.get("collection_id", "")
+                        content = pd.get("content", "")
+                        # Skip entries for collections that no longer exist
+                        if cid not in existing_ids:
+                            stale_ids.append(cid)
+                            logger.info(
+                                "[BLUEPRINT] Skipping stale project_description for '%s'",
+                                cid,
+                            )
+                            continue
+                        meta = get_collection_meta(cid)
+                        display_name = meta.get("name", cid) if meta else cid
+                        lines.append(
+                            f"- id: {cid}  |  name: {display_name}  |  description: {content}"
+                        )
+                    # Clean up stale entries from __summaries__
+                    for stale_cid in stale_ids:
+                        try:
+                            sm.delete_project_description(stale_cid)
+                            logger.info(
+                                "[BLUEPRINT] Deleted stale project_description for '%s'",
+                                stale_cid,
+                            )
+                        except Exception:
+                            pass
+                    collection_catalog = "\n".join(lines)
+                    logger.info(
+                        "[BLUEPRINT] Found %d collections for catalog (%d stale cleaned)",
+                        len(lines),
+                        len(stale_ids),
+                    )
+                    logger.info("[BLUEPRINT] Collection catalog:\n%s", collection_catalog)
+            except Exception as e:
+                logger.warning("[BLUEPRINT] Failed to build collection catalog: %s", e)
+
+            # ── Hot words ─────────────────────────────────────────────
             hot_words_text = "(None)"
             if meeting.hot_words_library_id:
                 try:
                     from src.hot_words.store import get_library
+
                     lib = get_library(meeting.hot_words_library_id)
                     if lib and lib.words:
                         hot_words_text = ", ".join(w.text for w in lib.words)
-                        logger.info("[SUMMARY] Loaded %d hot words from library %s", len(lib.words), lib.name)
                 except Exception:
-                    logger.warning("[SUMMARY] Failed to load hot words", exc_info=True)
+                    logger.warning("[BLUEPRINT] Failed to load hot words", exc_info=True)
 
-            prompt = MEETING_SUMMARY_PROMPT.format(
-                transcript=transcript_text, notes=notes_text, speakers=speakers_text,
-                database_grouping_instruction=db_grouping_instruction,
+            # ── Call LLM ──────────────────────────────────────────────
+            prompt = MEETING_BLUEPRINT_PROMPT.format(
+                transcript=transcript_text,
+                notes=notes_text,
+                speakers=speakers_text,
                 hot_words=hot_words_text,
+                collection_catalog=collection_catalog,
             )
-            logger.info("[SUMMARY] Calling LLM with %d char prompt...", len(prompt))
+            logger.info("[BLUEPRINT] Calling LLM with %d char prompt...", len(prompt))
 
             llm = services.llm
             if llm is None:
                 from src.config import get_config
                 from src.providers.llm import create_llm_for_provider
+
                 config = get_config()
                 if config.llm.providers:
-                    default_p = next((p for p in config.llm.providers if p.is_default), config.llm.providers[0])
+                    default_p = next(
+                        (p for p in config.llm.providers if p.is_default),
+                        config.llm.providers[0],
+                    )
                     llm = create_llm_for_provider(default_p)
             if llm is None:
-                raise RuntimeError("No LLM provider configured. Add one in Settings first.")
+                raise RuntimeError(
+                    "No LLM provider configured. Add one in Settings first."
+                )
 
             raw_response = llm.generate(
                 prompt,
-                system=MEETING_SUMMARY_SYSTEM,
+                system=MEETING_BLUEPRINT_SYSTEM,
                 max_tokens=32768,
                 thinking=True,
+                response_format={"type": "json_object"},
             )
-            logger.info("[SUMMARY] LLM returned %d chars", len(raw_response))
+            logger.info("[BLUEPRINT] LLM returned %d chars", len(raw_response))
+            # DEBUG: dump raw response for ref debugging
+            _ref_lines = [l for l in raw_response.split("\n") if "stt_" in l]
+            if _ref_lines:
+                logger.info("[BLUEPRINT] RAW lines with stt_ refs:\n%s", "\n".join(_ref_lines))
 
-            title, detail, summary, todos, sections = _parse_summary_response(raw_response)
-            logger.info("[SUMMARY] Parsed: title='%s' detail=%d chars summary=%d chars todos=%d sections=%d",
-                        title, len(detail), len(summary), len(todos), len(sections) if sections else 0)
+            # ── Parse response ───────────────────────────────────────
+            general_md, blueprint_raw, parsed_title = _parse_blueprint_response(
+                raw_response
+            )
+            logger.info(
+                "[BLUEPRINT] Parsed: general_md=%d chars, blueprint=%d sections, title='%s'",
+                len(general_md),
+                len(blueprint_raw),
+                parsed_title,
+            )
 
-            if not summary and detail:
-                lines = [l.strip() for l in detail.split("\n") if l.strip() and not l.strip().startswith("#")]
-                if lines:
-                    summary = "\n".join(lines[:5])
-                    logger.info("[SUMMARY] Summary was empty, extracted %d chars from detail as fallback", len(summary))
+            # ── Validate sentence refs in General content ────────────
+            all_sids = [s.get("sentence_id", "") for s in (sentences_data or [])]
+            general_md = _clean_refs(general_md, all_sids)
 
-            update_fields: dict = dict(detail=detail, summary=summary, todos=todos, sections=sections, summarizing=False)
-            if title:
+            # ── Clean up old derived data before writing new ────────
+            # Reset sentence tags (old blueprint sections no longer exist)
+            old_sentences = store.get_sentences(meeting_id)
+            if old_sentences:
+                for s in old_sentences:
+                    s["section_tags"] = []
+                store.save_sentences(meeting_id, old_sentences)
+            # Delete old section .md files
+            if meeting.tabs:
+                for old_tab in meeting.tabs:
+                    tid = (
+                        old_tab["tab_id"]
+                        if isinstance(old_tab, dict)
+                        else old_tab.tab_id
+                    )
+                    if tid and tid != "tab_general":
+                        p = store.section_md_path(meeting_id, tid)
+                        if p.exists():
+                            p.unlink()
+            logger.info(
+                "[BLUEPRINT] Cleaned old sentence tags & section .md files for meeting %s",
+                meeting_id,
+            )
+
+            # ── Assign tab_ids (code-generated, not LLM) ─────────────
+            tabs: list[dict] = []
+            # General tab always present
+            general_tab_path = store.save_section_md(
+                meeting_id, "tab_general", general_md
+            )
+            tabs.append(
+                {
+                    "tab_id": "tab_general",
+                    "type": "general",
+                    "name": "General",
+                    "associated_collection_id": "",
+                    "associated_collection_name": "",
+                    "md_file_path": general_tab_path,
+                    "payload_ref": [],
+                }
+            )
+
+            blueprint: list[dict] = []
+            for idx, item in enumerate(blueprint_raw):
+                tab_id = f"tab_sec_{idx + 1:02d}"
+                bp_entry = {
+                    "tab_id": tab_id,
+                    "tab_name": item.get("tab_name", f"Section {idx + 1}"),
+                    "associated_collection_id": item.get(
+                        "associated_collection_id", ""
+                    ),
+                    "associated_collection_name": item.get(
+                        "associated_collection_name", ""
+                    ),
+                    "section_description": item.get("section_description", "")[:200],
+                }
+                blueprint.append(bp_entry)
+                # Skip "Other" from tabs — needed for tagging but not displayed
+                if bp_entry["tab_name"].strip().lower() == "other":
+                    continue
+                tabs.append(
+                    {
+                        "tab_id": tab_id,
+                        "type": "section",
+                        "name": bp_entry["tab_name"],
+                        "associated_collection_id": bp_entry[
+                            "associated_collection_id"
+                        ],
+                        "associated_collection_name": bp_entry[
+                            "associated_collection_name"
+                        ],
+                        "md_file_path": "",  # filled by breakdown
+                        "payload_ref": [],
+                    }
+                )
+
+            # ── Persist ───────────────────────────────────────────────
+            update_fields: dict = dict(
+                detail=general_md,
+                summary=general_md[:500] if len(general_md) > 500 else general_md,
+                blueprint=blueprint,
+                tabs=tabs,
+
+                processing_state=ProcessingState.idle.value,
+            )
+            if parsed_title:
                 prefix = meeting.created_at.strftime("%Y-%m-%d %H:%M")
-                update_fields["title"] = f"{prefix} {title}"
-            store.update_meeting(meeting_id, **update_fields)
-            logger.info("[SUMMARY] Done for meeting %s", meeting_id)
-        except Exception as e:
-            logger.error("[SUMMARY] Failed for meeting %s: %s", meeting_id, e)
-            store.update_meeting(meeting_id, summarizing=False)
+                update_fields["title"] = f"{prefix} {parsed_title}"
 
-    async def generate_summary(self, meeting_id: str) -> Meeting:
-        """Legacy: kept for backward compat. Use start_generate_summary for async."""
-        return await self.start_generate_summary(meeting_id)
+            store.update_meeting(meeting_id, **update_fields)
+            logger.info("[BLUEPRINT] Done for meeting %s", meeting_id)
+
+        except Exception as e:
+            logger.error("[BLUEPRINT] Failed for meeting %s: %s", meeting_id, e, exc_info=True)
+            store.update_meeting(
+                meeting_id,
+
+                processing_state=ProcessingState.idle.value,
+            )
+
+    # -- Breakdown (Pipeline 2) ---------------------------------------------
+
+    async def start_breakdown(self, meeting_id: str) -> Meeting:
+        """Start background breakdown. Returns immediately."""
+        from src.meeting.models import ProcessingState
+
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+        if not meeting.blueprint:
+            raise ValueError(
+                "Meeting has no blueprint. Generate a summary first."
+            )
+        if not store.get_sentences(meeting_id):
+            raise ValueError(
+                "Meeting has no sentence data. Transcription completed? "
+            )
+        if meeting.processing_state != ProcessingState.idle.value:
+            raise RuntimeError(
+                f"Meeting is busy: {meeting.processing_state}"
+            )
+
+        store.update_meeting(
+            meeting_id,
+            processing_state=ProcessingState.breaking_down.value,
+        )
+        import threading
+
+        t = threading.Thread(
+            target=self._do_breakdown, args=(meeting_id,), daemon=True
+        )
+        t.start()
+        return store.get_meeting(meeting_id)
+
+    def _do_breakdown(self, meeting_id: str) -> None:
+        """Node 1.1 → 1.2 → 1.3: full breakdown pipeline.
+
+        1. Tag every chunk via LLM (bounded concurrency)
+        2. Write tags to sentences, persist
+        3. Build per-section payloads (Node 1.2)
+        4. Summarize each section via LLM (concurrent, Node 1.3)
+        5. Persist section md files, update meeting metadata
+        """
+        import json as _json
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from src.meeting.models import ProcessingState
+        from src.meeting.pipeline import build_payload
+        from src.meeting.schemas import Chunk, Sentence
+        from src.prompts import (
+            MEETING_TAGGING_PROMPT,
+            MEETING_TAGGING_SYSTEM,
+            MEETING_SECTION_SUMMARY_PROMPT,
+            MEETING_SECTION_SUMMARY_SYSTEM,
+        )
+
+        logger.info("[BREAKDOWN] Starting for meeting %s", meeting_id)
+        try:
+            meeting = store.get_meeting(meeting_id)
+            if meeting is None:
+                return
+
+            sentences_data = store.get_sentences(meeting_id)
+            if sentences_data is None:
+                raise ValueError("No sentences data")
+            chunks_data = store.get_chunks(meeting_id)
+            if chunks_data is None:
+                raise ValueError("No chunks data")
+
+            # Convert dicts to objects
+            sentences = [
+                Sentence(**s) if isinstance(s, dict) else s
+                for s in sentences_data
+            ]
+            chunks = [
+                Chunk(**c) if isinstance(c, dict) else c
+                for c in chunks_data
+            ]
+            blueprint = meeting.blueprint or []
+
+            # ── Build id-to-index lookup ─────────────────────────────
+            id_to_sentence: dict[str, Sentence] = {
+                s.sentence_id: s for s in sentences
+            }
+
+            def chunk_json(chunk_sids: list[str]) -> list[dict]:
+                return [
+                    {
+                        "sentence_id": sid,
+                        "start_time": id_to_sentence[sid].start_time,
+                        "speaker": id_to_sentence[sid].speaker,
+                        "original_text": id_to_sentence[sid].original_text,
+                    }
+                    for sid in chunk_sids
+                    if sid in id_to_sentence
+                ]
+
+            blueprint_json = _json.dumps(blueprint, ensure_ascii=False)
+
+            # ── Resolve LLM ──────────────────────────────────────────
+            llm = services.llm
+            if llm is None:
+                llm = _resolve_default_llm()
+            if llm is None:
+                raise RuntimeError("No LLM provider configured.")
+
+            MAX_CONCURRENT = 6
+            semaphore = threading.BoundedSemaphore(MAX_CONCURRENT)
+            tag_results_lock = threading.Lock()
+            tag_results: dict[int, dict[str, list[str]]] = {}  # chunk_idx → mapping
+            failed_chunks: list[int] = []
+
+            def tag_one_chunk(idx: int, chunk: Chunk) -> None:
+                """Tag a single chunk with retry."""
+                with semaphore:
+                    target_json = _json.dumps(
+                        chunk_json(chunk.sentence_refs), ensure_ascii=False
+                    )
+                    # Build context: previous 2 chunks
+                    ctx_sids: list[str] = []
+                    for offset in (2, 1):
+                        ci = idx - offset
+                        if ci >= 0:
+                            ctx_sids.extend(chunks[ci].sentence_refs)
+                    context_json = _json.dumps(
+                        chunk_json(ctx_sids), ensure_ascii=False
+                    ) if ctx_sids else "[]"
+
+                    prompt = MEETING_TAGGING_PROMPT.format(
+                        blueprint_json=blueprint_json,
+                        context_json=context_json,
+                        target_json=target_json,
+                    )
+
+                    for attempt in range(3):
+                        try:
+                            raw = llm.generate(
+                                prompt,
+                                system=MEETING_TAGGING_SYSTEM,
+                                max_tokens=4096,
+                                thinking=False,
+                            )
+                            mapping = _parse_tagging_response(raw)
+                            with tag_results_lock:
+                                tag_results[idx] = mapping
+                            logger.info(
+                                "[BREAKDOWN] Chunk %d/%d tagged: %s",
+                                idx + 1, len(chunks),
+                                {k: len(v) for k, v in mapping.items()},
+                            )
+                            return
+                        except Exception as exc:
+                            logger.warning(
+                                "[BREAKDOWN] Chunk %d attempt %d/3 failed: %s",
+                                idx + 1, attempt + 1, exc,
+                            )
+                            if attempt < 2:
+                                import time
+                                time.sleep(2 ** attempt)
+                    # All retries exhausted
+                    with tag_results_lock:
+                        failed_chunks.append(idx)
+                        tag_results[idx] = {}
+                    logger.error("[BREAKDOWN] Chunk %d FAILED after 3 retries", idx + 1)
+
+            # ── Phase A: Tag all chunks (bounded concurrency) ────────
+            logger.info(
+                "[BREAKDOWN] Tagging %d chunks (max %d concurrent)",
+                len(chunks), MAX_CONCURRENT,
+            )
+            with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
+                futures = [
+                    pool.submit(tag_one_chunk, i, c)
+                    for i, c in enumerate(chunks)
+                ]
+                for f in as_completed(futures):
+                    f.result()  # propagate any unexpected errors
+
+            logger.info(
+                "[BREAKDOWN] Tagging phase done: %d/%d chunks tagged, %d failed",
+                len(tag_results), len(chunks), len(failed_chunks),
+            )
+
+            # ── Write tags back to sentences ────────────────────────
+            # Build short-ID → full-ID lookup (LLM may return stt_0012
+            # instead of 756f0b7c_stt_0012 as shown in prompt examples)
+            short_to_full: dict[str, str] = {}
+            for fid in id_to_sentence:
+                parts = fid.rsplit("_stt_", 1)
+                if len(parts) == 2:
+                    short_to_full["stt_" + parts[1]] = fid
+            for chunk_idx, mapping in tag_results.items():
+                for tab_id, sids in mapping.items():
+                    for sid in sids:
+                        full_sid = short_to_full.get(sid, sid)
+                        sent = id_to_sentence.get(full_sid)
+                        if sent and tab_id not in sent.section_tags:
+                            sent.section_tags.append(tab_id)
+
+            # Persist tagged sentences
+            store.save_sentences(
+                meeting_id,
+                [s.model_dump() if hasattr(s, "model_dump") else s for s in sentences],
+            )
+
+            # ── Phase B: Build section payloads (Node 1.2) ──────────
+            tagged_sets: dict[str, set[str]] = {}
+            for s in sentences:
+                for tag in s.section_tags:
+                    tagged_sets.setdefault(tag, set()).add(s.sentence_id)
+
+            section_payloads: dict[str, list[str]] = {}
+            for tab_id, tagged_ids in tagged_sets.items():
+                section_payloads[tab_id] = build_payload(
+                    tagged_ids, sentences, radius=3
+                )
+
+            # ── Phase C: Summarize sections (Node 1.3) ──────────────
+            blueprint_map: dict[str, dict] = {
+                b["tab_id"]: b for b in blueprint
+            }
+            # Build cross-section summary for context injection
+            other_descriptions = "\n".join(
+                f"- {b['tab_name']}: {b.get('section_description', '')}"
+                for b in blueprint
+                if b["tab_id"] not in ("other",)
+            )
+
+            section_mds: dict[str, str] = {}
+
+            def summarize_one_section(tab_id: str, tagged_ids: set[str]) -> None:
+                bp = blueprint_map.get(
+                    tab_id,
+                    {
+                        "tab_name": tab_id,
+                        "section_description": "",
+                    },
+                )
+                payload_ids = section_payloads.get(tab_id, [])
+                payload_json = _json.dumps(
+                    chunk_json(payload_ids), ensure_ascii=False
+                )
+
+                prompt = MEETING_SECTION_SUMMARY_PROMPT.format(
+                    section_name=bp.get("tab_name", tab_id),
+                    section_description=bp.get("section_description", ""),
+                    sentences_json=payload_json,
+                    other_sections_summary=other_descriptions,
+                )
+
+                for attempt in range(3):
+                    try:
+                        raw = llm.generate(
+                            prompt,
+                            system=MEETING_SECTION_SUMMARY_SYSTEM,
+                            max_tokens=8192,
+                            thinking=True,
+                        )
+                        # DEBUG: dump raw section summary for ref debugging
+                        _ref_lines = [l for l in raw.split("\n") if "stt_" in l]
+                        if _ref_lines:
+                            logger.info(
+                                "[BREAKDOWN] Section '%s' RAW lines with stt_:\n%s",
+                                bp.get("tab_name", tab_id),
+                                "\n".join(_ref_lines),
+                            )
+                        # Strip invalid [ref:...] tags
+                        raw = _clean_refs(raw, payload_ids)
+                        with tag_results_lock:
+                            section_mds[tab_id] = raw
+                        logger.info(
+                            "[BREAKDOWN] Section '%s' summarized (%d chars)",
+                            bp.get("tab_name", tab_id), len(raw),
+                        )
+                        return
+                    except Exception as exc:
+                        logger.warning(
+                            "[BREAKDOWN] Section '%s' attempt %d/3 failed: %s",
+                            bp.get("tab_name", tab_id), attempt + 1, exc,
+                        )
+                        if attempt < 2:
+                            import time
+                            time.sleep(2 ** attempt)
+
+                # Failed — mark as retryable
+                with tag_results_lock:
+                    section_mds[tab_id] = (
+                        f"# {bp.get('tab_name', tab_id)}\n\n"
+                        "⚠️ Generation failed. Click retry."
+                    )
+                logger.error(
+                    "[BREAKDOWN] Section '%s' FAILED after 3 retries",
+                    bp.get("tab_name", tab_id),
+                )
+
+            # All sections (concurrent)
+            non_other_sections = {
+                k: v for k, v in tagged_sets.items() if k != "other"
+            }
+            logger.info(
+                "[BREAKDOWN] Summarizing %d sections",
+                len(non_other_sections),
+            )
+            with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
+                futures = [
+                    pool.submit(summarize_one_section, tid, tids)
+                    for tid, tids in non_other_sections.items()
+                ]
+                for f in as_completed(futures):
+                    f.result()
+
+            # ── Persist section mds and update metadata ─────────────
+            updated_tabs = meeting.tabs or []
+            for tab_entry in updated_tabs:
+                tid = (
+                    tab_entry["tab_id"]
+                    if isinstance(tab_entry, dict)
+                    else tab_entry.tab_id
+                )
+                if tid == "tab_general":
+                    continue
+                if tid in section_mds:
+                    md_path = store.save_section_md(
+                        meeting_id, tid, section_mds[tid]
+                    )
+                    if isinstance(tab_entry, dict):
+                        tab_entry["md_file_path"] = md_path
+                        if tid in section_payloads:
+                            tab_entry["payload_ref"] = section_payloads[tid]
+                    else:
+                        tab_entry.md_file_path = md_path
+                        if tid in section_payloads:
+                            tab_entry.payload_ref = section_payloads[tid]
+
+            store.update_meeting(
+                meeting_id,
+                tabs=updated_tabs,
+                processing_state=ProcessingState.idle.value,
+            )
+            logger.info("[BREAKDOWN] Done for meeting %s", meeting_id)
+
+        except Exception as e:
+            logger.error(
+                "[BREAKDOWN] Failed for meeting %s: %s",
+                meeting_id, e, exc_info=True,
+            )
+            store.update_meeting(
+                meeting_id,
+                processing_state=ProcessingState.idle.value,
+            )
+
+    # -- Magic Extract (Pipeline 3) -----------------------------------------
+
+    async def start_magic_extract(
+        self, meeting_id: str, topics: list[dict], target_tab_id: str | None = None,
+    ) -> Meeting:
+        """Start background magic extract for one or more custom topics.
+
+        topics: [{"name": "...", "description": "..."}]
+        target_tab_id: if set, overwrite this tab instead of creating a new one
+        """
+        from src.meeting.models import ProcessingState
+
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+        if not topics:
+            raise ValueError("At least one topic is required")
+        if meeting.processing_state != ProcessingState.idle.value:
+            raise RuntimeError(f"Meeting is busy: {meeting.processing_state}")
+
+        store.update_meeting(
+            meeting_id,
+            processing_state=ProcessingState.extracting.value,
+        )
+        import threading
+
+        t = threading.Thread(
+            target=self._do_magic_extract,
+            args=(meeting_id, topics, target_tab_id),
+            daemon=True,
+        )
+        t.start()
+        return store.get_meeting(meeting_id)
+
+    def _do_magic_extract(
+        self, meeting_id: str, topics: list[dict], target_tab_id: str | None = None,
+    ) -> None:
+        """Node 2.2: concurrent constrained re-scan for multiple topics.
+
+        Each topic re-scans all chunks (respecting existing tags as
+        guardrails), then builds payload and summarizes.
+        If target_tab_id is set, overwrites that tab instead of creating a new one.
+        """
+        import json as _json
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from src.meeting.models import ProcessingState
+        from src.meeting.pipeline import build_payload
+        from src.meeting.schemas import Chunk, Sentence
+        from src.prompts import (
+            MEETING_EXTRACT_PROMPT,
+            MEETING_EXTRACT_SYSTEM,
+            MEETING_SECTION_SUMMARY_PROMPT,
+            MEETING_SECTION_SUMMARY_SYSTEM,
+        )
+
+        logger.info(
+            "[EXTRACT] Starting for meeting %s with %d topics",
+            meeting_id, len(topics),
+        )
+        try:
+            meeting = store.get_meeting(meeting_id)
+            if meeting is None:
+                return
+
+            sentences_data = store.get_sentences(meeting_id)
+            chunks_data = store.get_chunks(meeting_id)
+            if sentences_data is None or chunks_data is None:
+                raise ValueError("No sentences or chunks data")
+
+            sentences = [
+                Sentence(**s) if isinstance(s, dict) else s
+                for s in sentences_data
+            ]
+            chunks = [
+                Chunk(**c) if isinstance(c, dict) else c
+                for c in chunks_data
+            ]
+            existing_tabs = meeting.tabs or []
+
+            id_to_sentence: dict[str, Sentence] = {
+                s.sentence_id: s for s in sentences
+            }
+
+            def chunk_json(chunk_sids: list[str]) -> list[dict]:
+                return [
+                    {
+                        "sentence_id": sid,
+                        "start_time": id_to_sentence[sid].start_time,
+                        "speaker": id_to_sentence[sid].speaker,
+                        "original_text": id_to_sentence[sid].original_text,
+                    }
+                    for sid in chunk_sids
+                    if sid in id_to_sentence
+                ]
+
+            # Existing section summary for guardrail context
+            existing_summary = _json.dumps(
+                [
+                    {
+                        "tab_id": t.get("tab_id", ""),
+                        "name": t.get("name", ""),
+                    }
+                    for t in existing_tabs
+                    if t.get("type") == "section"
+                ],
+                ensure_ascii=False,
+            )
+
+            llm = services.llm
+            if llm is None:
+                llm = _resolve_default_llm()
+            if llm is None:
+                raise RuntimeError("No LLM provider configured.")
+
+            MAX_CONCURRENT = 4
+
+            def _rescan_chunks_for_topic(
+                topic: dict,
+            ) -> tuple[set[str], dict[str, str]]:
+                """Re-scan all chunks for one topic → (tagged_ids, {sentence_id: tab_id})"""
+                topic_name = topic.get("name", "Untitled")
+                topic_desc = topic.get("description", "")
+
+                # Use target_tab_id if provided (overwrite mode), else generate new
+                extract_tab_id = target_tab_id or self._make_tab_id(existing_tabs)
+                tagged_ids: set[str] = set()
+                semaphore = threading.BoundedSemaphore(MAX_CONCURRENT)
+                lock = threading.Lock()
+
+                def rescan_one_chunk(idx: int, chunk: Chunk) -> None:
+                    with semaphore:
+                        target_json = _json.dumps(
+                            chunk_json(chunk.sentence_refs),
+                            ensure_ascii=False,
+                        )
+                        ctx_sids: list[str] = []
+                        for offset in (2, 1):
+                            ci = idx - offset
+                            if ci >= 0:
+                                ctx_sids.extend(chunks[ci].sentence_refs)
+                        context_json = (
+                            _json.dumps(chunk_json(ctx_sids), ensure_ascii=False)
+                            if ctx_sids
+                            else "[]"
+                        )
+
+                        prompt = MEETING_EXTRACT_PROMPT.format(
+                            target_topic_name=topic_name,
+                            target_topic_description=topic_desc,
+                            existing_sections_json=existing_summary,
+                            context_json=context_json,
+                            target_json=target_json,
+                        )
+
+                        for attempt in range(3):
+                            try:
+                                raw = llm.generate(
+                                    prompt,
+                                    system=MEETING_EXTRACT_SYSTEM,
+                                    max_tokens=2048,
+                                    thinking=False,
+                                )
+                                mapping = _parse_tagging_response(raw)
+                                sids = mapping.get("extract_target", [])
+                                with lock:
+                                    tagged_ids.update(sids)
+                                logger.info(
+                                    "[EXTRACT] '%s' chunk %d: %d sentences matched",
+                                    topic_name, idx + 1, len(sids),
+                                )
+                                return
+                            except Exception as exc:
+                                logger.warning(
+                                    "[EXTRACT] '%s' chunk %d attempt %d: %s",
+                                    topic_name, idx + 1, attempt + 1, exc,
+                                )
+                                if attempt < 2:
+                                    import time
+
+                                    time.sleep(2 ** attempt)
+
+                with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
+                    futures = [
+                        pool.submit(rescan_one_chunk, i, c)
+                        for i, c in enumerate(chunks)
+                    ]
+                    for f in as_completed(futures):
+                        f.result()
+
+                # Build payload and summarize
+                payload_ids = build_payload(tagged_ids, sentences, radius=3)
+
+                # Cross-section summary
+                other_descriptions = "\n".join(
+                    f"- {t.get('name', '')}: {t.get('type', '')}"
+                    for t in existing_tabs
+                    if t.get("type") == "section"
+                )
+
+                payload_json = _json.dumps(
+                    chunk_json(payload_ids), ensure_ascii=False
+                )
+
+                summary_prompt = MEETING_SECTION_SUMMARY_PROMPT.format(
+                    section_name=topic_name,
+                    section_description=topic_desc,
+                    sentences_json=payload_json,
+                    other_sections_summary=other_descriptions,
+                )
+
+                md_content = ""
+                for attempt in range(3):
+                    try:
+                        raw = llm.generate(
+                            summary_prompt,
+                            system=MEETING_SECTION_SUMMARY_SYSTEM,
+                            max_tokens=8192,
+                            thinking=True,
+                        )
+                        md_content = _clean_refs(raw, payload_ids)
+                        break
+                    except Exception as exc:
+                        logger.warning(
+                            "[EXTRACT] '%s' summary attempt %d: %s",
+                            topic_name, attempt + 1, exc,
+                        )
+                        if attempt < 2:
+                            import time
+
+                            time.sleep(2 ** attempt)
+
+                if not md_content:
+                    md_content = (
+                        f"# {topic_name}\n\n"
+                        "⚠️ Generation failed. Click retry."
+                    )
+
+                return tagged_ids, {
+                    "tab_id": extract_tab_id,
+                    "type": "section",
+                    "name": topic_name,
+                    "md_content": md_content,
+                    "payload_ids": payload_ids,
+                }
+
+            # ── Process all topics concurrently ─────────────────────
+            results: list[tuple[set[str], dict]] = []
+            with ThreadPoolExecutor(max_workers=len(topics)) as pool:
+                futures = [
+                    pool.submit(_rescan_chunks_for_topic, t) for t in topics
+                ]
+                for f in as_completed(futures):
+                    results.append(f.result())
+
+            # ── Apply tags & persist ────────────────────────────────
+            # Build short-ID → full-ID lookup
+            short_to_full: dict[str, str] = {}
+            for fid in id_to_sentence:
+                parts = fid.rsplit("_stt_", 1)
+                if len(parts) == 2:
+                    short_to_full["stt_" + parts[1]] = fid
+            updated_tabs: list[dict] = list(existing_tabs) if existing_tabs else []
+            for tagged_ids, meta in results:
+                tab_id = meta["tab_id"]
+                # Write tags to sentences
+                for sid in tagged_ids:
+                    full_sid = short_to_full.get(sid, sid)
+                    sent = id_to_sentence.get(full_sid)
+                    if sent and tab_id not in sent.section_tags:
+                        sent.section_tags.append(tab_id)
+
+                # Persist md
+                md_path = store.save_section_md(
+                    meeting_id, tab_id, meta["md_content"]
+                )
+                # Preserve existing tab type if overwriting
+                existing = next((t for t in existing_tabs if t.get("tab_id") == tab_id), None)
+                tab_type = existing.get("type", "section") if existing else "section"
+                tab_entry = {
+                    "tab_id": tab_id,
+                    "type": tab_type,
+                    "name": meta["name"],
+                    "associated_collection_id": existing.get("associated_collection_id", "") if existing else "",
+                    "associated_collection_name": existing.get("associated_collection_name", "") if existing else "",
+                    "md_file_path": md_path,
+                    "payload_ref": meta["payload_ids"],
+                }
+                # Replace existing or append
+                if existing:
+                    idx = updated_tabs.index(existing)
+                    updated_tabs[idx] = tab_entry
+                else:
+                    updated_tabs.append(tab_entry)
+
+            store.save_sentences(
+                meeting_id,
+                [
+                    s.model_dump() if hasattr(s, "model_dump") else s
+                    for s in sentences
+                ],
+            )
+            store.update_meeting(
+                meeting_id,
+                tabs=updated_tabs,
+                processing_state=ProcessingState.idle.value,
+            )
+            logger.info(
+                "[EXTRACT] Done for meeting %s: %d new sections",
+                meeting_id, len(results),
+            )
+
+        except Exception as e:
+            logger.error(
+                "[EXTRACT] Failed for meeting %s: %s",
+                meeting_id, e, exc_info=True,
+            )
+            store.update_meeting(
+                meeting_id,
+                processing_state=ProcessingState.idle.value,
+            )
+
+    async def delete_section(self, meeting_id: str, tab_id: str) -> Meeting:
+        """Node 2.1: remove a section and its tags from all sentences."""
+        from src.meeting.models import ProcessingState
+
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+        if meeting.processing_state != ProcessingState.idle.value:
+            raise RuntimeError(f"Meeting is busy: {meeting.processing_state}")
+
+        # Clean tags
+        sentences_data = store.get_sentences(meeting_id)
+        if sentences_data:
+            from src.meeting.schemas import Sentence
+
+            sentences = [
+                Sentence(**s) if isinstance(s, dict) else s
+                for s in sentences_data
+            ]
+            for s in sentences:
+                if tab_id in s.section_tags:
+                    s.section_tags.remove(tab_id)
+            store.save_sentences(
+                meeting_id,
+                [
+                    s.model_dump() if hasattr(s, "model_dump") else s
+                    for s in sentences
+                ],
+            )
+
+        # Remove from tabs and delete md file
+        updated_tabs = [
+            t for t in (meeting.tabs or [])
+            if (t["tab_id"] if isinstance(t, dict) else t.tab_id) != tab_id
+        ]
+        store.update_meeting(meeting_id, tabs=updated_tabs)
+
+        md_path = store.section_md_path(meeting_id, tab_id)
+        if md_path.exists():
+            md_path.unlink()
+            logger.info("[DELETE-SECTION] Removed md for %s/%s", meeting_id, tab_id)
+
+        return store.get_meeting(meeting_id)
+
+    async def start_section_regenerate(
+        self, meeting_id: str, tab_id: str
+    ) -> Meeting:
+        """Regenerate one section: clean its tags, then re-scan and re-summarize.
+
+        Uses the section's existing name and type as the extract topic.
+        """
+        from src.meeting.models import ProcessingState
+
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+        if meeting.processing_state != ProcessingState.idle.value:
+            raise RuntimeError(f"Meeting is busy: {meeting.processing_state}")
+
+        # Find this tab's metadata
+        tab_meta: dict | None = None
+        for t in (meeting.tabs or []):
+            tid = t["tab_id"] if isinstance(t, dict) else t.tab_id
+            if tid == tab_id:
+                tab_meta = t if isinstance(t, dict) else t.model_dump()
+                break
+
+        if tab_meta is None:
+            raise ValueError(f"Tab '{tab_id}' not found")
+
+        # Clean old tags for this section (Node 2.1)
+        sentences_data = store.get_sentences(meeting_id)
+        if sentences_data:
+            from src.meeting.schemas import Sentence
+
+            sentences = [
+                Sentence(**s) if isinstance(s, dict) else s
+                for s in sentences_data
+            ]
+            for s in sentences:
+                if tab_id in s.section_tags:
+                    s.section_tags.remove(tab_id)
+            store.save_sentences(
+                meeting_id,
+                [
+                    s.model_dump() if hasattr(s, "model_dump") else s
+                    for s in sentences
+                ],
+            )
+
+        # Re-extract with section's own name + description
+        bp_desc = ""
+        if meeting.blueprint:
+            for b in meeting.blueprint:
+                if b.get("tab_id") == tab_id:
+                    bp_desc = b.get("section_description", "")
+                    break
+
+        topics = [
+            {
+                "name": tab_meta.get("name", tab_id),
+                "description": bp_desc or tab_meta.get("name", "Meeting section"),
+            }
+        ]
+        return await self.start_magic_extract(meeting_id, topics, target_tab_id=tab_id)
+
+    @staticmethod
+    def _make_tab_id(existing_tabs: list[dict]) -> str:
+        """Generate the next available section tab id (tab_sec_XX)."""
+        import re as _re
+        max_n = 0
+        for t in (existing_tabs or []):
+            tid = t.get("tab_id", "") if isinstance(t, dict) else ""
+            m = _re.match(r"tab_sec_(\d+)", tid)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+        return f"tab_sec_{max_n + 1:02d}"
 
     # -- Collection allocation ----------------------------------------------
 
@@ -374,12 +1348,18 @@ class MeetingService:
         # 2. Build combined content
         content_parts: list[str] = []
         if meeting.detail:
-            content_parts.append(f"# Detail\n\n{meeting.detail}")
+            content_parts.append(f"# General Summary\n\n{meeting.detail}")
         if meeting.summary:
             content_parts.append(f"# Summary\n\n{meeting.summary}")
-        if meeting.todos:
-            todos_md = "\n".join(f"- {t.get('text', str(t))}" for t in meeting.todos)
-            content_parts.append(f"# TODO\n\n{todos_md}")
+
+        # V2: include per-section breakdown content
+        if meeting.tabs:
+            for tab in meeting.tabs:
+                section_md = store.get_section_md(meeting_id, tab.tab_id)
+                if section_md:
+                    label = tab.tab_name or tab.tab_id
+                    content_parts.append(f"# {label}\n\n{section_md}")
+
         notes = store.get_notes(meeting_id)
         if notes:
             content_parts.append(f"# Notes\n\n{notes}")
@@ -461,390 +1441,311 @@ class MeetingService:
         except Exception as exc:
             logger.warning("Failed to delete allocation file_id=%s: %s", file_id, exc)
 
-    async def delete_all_allocations(self, meeting_id: str) -> None:
-        """Delete all meeting allocations from all collections and clear meeting allocation fields."""
-        meeting = store.get_meeting(meeting_id)
-        if meeting is None:
-            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+    async def allocate_section_to_collection(
+        self, meeting_id: str, tab_id: str, collection_id: str,
+    ) -> Meeting:
+        """Allocate a single section's .md content to a collection.
 
-        collections = meeting.allocated_collections or []
-        file_ids = meeting.allocated_file_ids or []
-
-        for col, fid in zip(collections, file_ids):
-            self._delete_allocation(col, fid)
-
-        # Also check old single-collection format
-        if not collections and meeting.allocated_collection and meeting.allocated_file_id:
-            self._delete_allocation(meeting.allocated_collection, meeting.allocated_file_id)
-
-        # Clear allocation fields
-        store.update_meeting(meeting_id, allocated_collections=[], allocated_file_ids=[])
-        logger.info("[RE-INGEST] Deleted all allocations for meeting %s", meeting_id)
-
-    # -- Project splitting --------------------------------------------------
-
-    async def split_by_project(self, meeting_id: str) -> list[dict]:
-        """Extract project sections from the meeting's structured summary sections."""
-        meeting = store.get_meeting(meeting_id)
-        if meeting is None:
-            raise FileNotFoundError(f"Meeting {meeting_id} not found")
-
-        if meeting.sections:
-            projects = []
-            for s in meeting.sections:
-                heading = s.get("heading", "")
-                projects.append({
-                    "name": heading.strip(),
-                    "summary": s.get("summary", ""),
-                    "detail": s.get("detail", ""),
-                    "todos": s.get("todos", []),
-                })
-            return projects
-
-        if not meeting.detail and not meeting.summary:
-            raise ValueError(
-                f"Meeting {meeting_id} has no content to split. "
-                "Generate a summary first."
-            )
-
-        # Fallback: treat entire meeting as a single project
-        title = meeting.title or "Meeting"
-        name = title.split(" ", 1)[-1] if title[:10].count("-") >= 2 else title
-        return [{
-            "name": name.strip(),
-            "summary": meeting.summary or "",
-            "detail": meeting.detail or "",
-            "todos": meeting.todos or [],
-        }]
-
-    # -- Collection recommendation -----------------------------------------
-
-    @staticmethod
-    def _get_collection_docs(sm) -> tuple[list[str], list[str]]:
-        """Return (collection_names, collection_docs) using project descriptions.
-
-        Uses the 2-sentence project descriptions generated during
-        consolidation. Falls back to doc summaries if no project
-        description exists for a collection.
-        """
-        project_descs = sm.get_all_project_descriptions()
-        if project_descs:
-            names = [d.get("collection_id", "") for d in project_descs]
-            # Prepend project name so reranker can match on name + description
-            docs = [f"{d.get('collection_id', '')}: {d.get('content', '')}" for d in project_descs]
-            return names, docs
-
-        # Fallback: collections with summaries but no project descriptions yet
-        summaries = sm.get_all_collection_summaries()
-        names = [s.get("collection_id", "") for s in summaries]
-        docs = []
-        for name in names:
-            doc_summaries = sm.get_doc_summaries(name, included_only=True)
-            if doc_summaries:
-                lines = [f"Project: {name}"]
-                for ds in doc_summaries:
-                    for item in ds.get("data", []) + ds.get("facts", []):
-                        candidate = f"- {item}"
-                        if len("\n".join(lines + [candidate])) <= 1500:
-                            lines.append(candidate)
-                docs.append("\n".join(lines))
-            else:
-                cs = sm.get_collection_summary(name)
-                docs.append(cs["content"][:1500] if cs and cs.get("content") else name)
-        return names, docs
-
-    async def recommend_collections(self, meeting_id: str) -> list[dict]:
-        """Recommend collections based on reranker scoring against project descriptions."""
-        from src.rag.summary_manager import SummaryManager
-
-        logger.info("[RECOMMEND] Starting recommendation for meeting %s", meeting_id)
-        meeting = store.get_meeting(meeting_id)
-        if meeting is None:
-            raise FileNotFoundError(f"Meeting {meeting_id} not found")
-
-        parts = []
-        if meeting.detail:
-            parts.append(meeting.detail)
-        meeting_text = "\n\n".join(parts)
-
-        if not meeting_text:
-            logger.info("[RECOMMEND] No meeting text available, returning empty")
-            return []
-
-        if not services.reranker_provider:
-            logger.warning("[RECOMMEND] No reranker configured, cannot recommend collections")
-            return []
-
-        logger.info("[RECOMMEND] Meeting text: %d chars", len(meeting_text))
-
-        sm = SummaryManager(db=services.db, vector_size=_detect_embedding_dim())
-        sm.ensure_collection()
-        collection_names, collection_docs = self._get_collection_docs(sm)
-        if not collection_names:
-            return []
-
-        logger.info("[RECOMMEND] Found %d collections to score", len(collection_names))
-
-        loop = asyncio.get_running_loop()
-        ranked = await loop.run_in_executor(
-            None,
-            lambda: services.reranker_provider.rerank(
-                query=meeting_text,
-                documents=collection_docs,
-                top_k=len(collection_docs),
-            ),
-        )
-
-        results = [
-            {"collection": collection_names[idx], "score": round(score, 4)}
-            for idx, score in ranked
-        ]
-        results.sort(key=lambda r: r["score"], reverse=True)
-        logger.info("[RECOMMEND] Meeting %s: %d recommendations (top=%s score=%.4f)",
-                    meeting_id, len(results),
-                    results[0]["collection"] if results else "none",
-                    results[0]["score"] if results else 0)
-        return results
-
-    async def recommend_collections_for_text(self, text: str) -> list[dict]:
-        """Recommend collections based on reranker scoring for arbitrary text."""
-        from src.rag.summary_manager import SummaryManager
-
-        if not text.strip():
-            return []
-
-        if not services.reranker_provider:
-            logger.warning("[RECOMMEND] No reranker configured, cannot recommend collections")
-            return []
-
-        vec_size = _detect_embedding_dim()
-        sm = SummaryManager(db=services.db, vector_size=vec_size)
-        sm.ensure_collection()
-        collection_names, collection_docs = self._get_collection_docs(sm)
-        if not collection_names:
-            return []
-
-        loop = asyncio.get_running_loop()
-        ranked = await loop.run_in_executor(
-            None,
-            lambda: services.reranker_provider.rerank(
-                query=text,
-                documents=collection_docs,
-                top_k=len(collection_docs),
-            ),
-        )
-
-        results = [
-            {"collection": collection_names[idx], "score": round(score, 4)}
-            for idx, score in ranked
-        ]
-        results.sort(key=lambda r: r["score"], reverse=True)
-        logger.info("[RECOMMEND] Reranker scored %d collections, top='%s' (%.4f)",
-                    len(results), results[0]["collection"] if results else "none",
-                    results[0]["score"] if results else 0)
-        return results
-
-    # -- Multi-collection allocation ---------------------------------------
-
-    async def allocate_to_multiple_collections(
-        self, meeting_id: str, allocations: list[dict]
-    ) -> list[dict]:
-        """Allocate meeting content to multiple collections.
-
-        allocations: [{"collection": "name", "content": "markdown content", "project_name": "..."}]
+        Resolves [spk:ID] → speaker names, strips [stt_XXXX] refs,
+        then uploads as a single file via the document pipeline.
         """
         import re as _re
 
-        logger.info("[ALLOCATE-MULTI] Starting multi-allocation for meeting %s (%d allocations)", meeting_id, len(allocations))
+        from src.collections.store import get_collection_meta
+        from src.tasks.handlers import upload_handler
+
         meeting = store.get_meeting(meeting_id)
         if meeting is None:
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
 
-        if not allocations:
-            raise ValueError("allocations list is empty")
+        # Find the tab
+        tab_meta: dict | None = None
+        for t in (meeting.tabs or []):
+            tid = t["tab_id"] if isinstance(t, dict) else t.tab_id
+            if tid == tab_id:
+                tab_meta = t if isinstance(t, dict) else t.model_dump()
+                break
 
-        results = []
-        allocated_collections: list[str] = []
-        allocated_file_ids: list[str] = []
+        if tab_meta is None:
+            raise ValueError(f"Tab '{tab_id}' not found")
 
-        for section_idx, alloc in enumerate(allocations):
-            collection = alloc["collection"]
-            content = alloc["content"]
+        # Read section .md content
+        content = store.get_section_md(meeting_id, tab_id)
+        if not content:
+            raise ValueError(f"No content for tab '{tab_id}'")
 
-            # Each section gets a unique source and file_id
-            section_source = f"__meeting__:{meeting_id}_{section_idx}"
-            alloc_file_id = uuid.uuid4().hex
-            file_dir = _files_dir(collection) / alloc_file_id
-            file_dir.mkdir(parents=True, exist_ok=True)
-            file_path = file_dir / "meeting.md"
-            file_path.write_text(content, encoding="utf-8")
+        # ── Process content ────────────────────────────────────
+        # 1. Resolve [spk:ID] → speaker names
+        speaker_names: dict[str, str] = getattr(meeting, "speaker_names", None) or {}
+        for spk_id, name in speaker_names.items():
+            content = content.replace(f"[spk:{spk_id}]", name)
+            content = _re.sub(rf"\bSpeaker {_re.escape(spk_id)}\b", name, content)
 
-            # Call upload pipeline
-            from src.tasks.handlers import upload_handler
+        # 2. Remove sentence refs: [stt_0001,stt_0002-0005] and bare stt_XXXX
+        content = _re.sub(
+            r"\[(?:ref:)?\s*(?:stt_\d+(?:\s*[-–]\s*\d+)?"
+            r"(?:\s*,\s*stt_\d+(?:\s*[-–]\s*\d+)?)*)\s*\]",
+            "", content,
+        )
+        content = _re.sub(r"\bstt_\d{4}\b", "", content)
+        content = _re.sub(r"\n{3,}", "\n\n", content)
+        content = content.strip()
 
-            upload_task = Task(
-                id=str(uuid.uuid4()),
-                filename=f"meeting_{meeting_id}",
-                collection=collection,
-                status=TaskStatus.PROCESSING,
-                created_at=datetime.now(),
-            )
-            result = await upload_handler(upload_task, str(file_path), collection, section_source,
-                                          meeting_id=meeting_id,
-                                          source_label=f"Meeting: {meeting.title}",
-                                          file_id=alloc_file_id)
+        section_label = tab_meta.get("name", tab_id)
+        full_content = f"# {section_label}\n\n{content}"
 
-            allocated_collections.append(collection)
-            allocated_file_ids.append(alloc_file_id)
+        # ── Upload to collection ────────────────────────────────
+        alloc_file_id = uuid.uuid4().hex
+        file_dir = _files_dir(collection_id) / alloc_file_id
+        file_dir.mkdir(parents=True, exist_ok=True)
+        file_path = file_dir / f"{tab_id}.md"
+        file_path.write_text(full_content, encoding="utf-8")
 
-            results.append({
-                "collection": collection,
-                "chunks_count": result.get("chunks_count", 0),
-            })
+        section_source = f"__meeting__:{meeting_id}:{tab_id}"
 
-            logger.info(
-                "Allocated meeting %s to collection '%s' (%d chunks)",
-                meeting_id, collection, result.get("chunks_count", 0),
-            )
-
-        # Track all allocations in meeting metadata
-        store.update_meeting(
-            meeting_id,
-            allocated_collections=allocated_collections,
-            allocated_file_ids=allocated_file_ids,
+        upload_task = Task(
+            id=str(uuid.uuid4()),
+            filename=f"meeting_{meeting_id}_{tab_id}",
+            collection=collection_id,
+            status=TaskStatus.PROCESSING,
+            created_at=datetime.now(),
         )
 
-        return results
+        await upload_handler(
+            upload_task, str(file_path), collection_id, section_source,
+            source_label=f"Meeting: {meeting.title} / {section_label}",
+            file_id=alloc_file_id,
+        )
+
+        # ── Update tab metadata ─────────────────────────────────
+        col_meta = get_collection_meta(collection_id)
+        col_name = col_meta.get("name", collection_id) if col_meta else collection_id
+
+        updated_tabs: list[dict] = []
+        for t in (meeting.tabs or []):
+            td = t if isinstance(t, dict) else t.model_dump()
+            if td.get("tab_id") == tab_id:
+                td["associated_collection_id"] = collection_id
+                td["associated_collection_name"] = col_name
+                td["allocated_file_id"] = alloc_file_id
+            updated_tabs.append(td)
+
+        store.update_meeting(meeting_id, tabs=updated_tabs)
+
+        # Also add to meeting-level allocated_collections so Meeting Log can find it
+        existing_cols = list(meeting.allocated_collections or [])
+        existing_fids = list(meeting.allocated_file_ids or [])
+        if collection_id not in existing_cols:
+            existing_cols.append(collection_id)
+            existing_fids.append(alloc_file_id)
+            store.update_meeting(
+                meeting_id,
+                allocated_collections=existing_cols,
+                allocated_file_ids=existing_fids,
+            )
+
+        updated = store.get_meeting(meeting_id)
+        assert updated is not None
+
+        logger.info(
+            "Allocated section %s/%s to collection '%s'",
+            meeting_id, tab_id, collection_id,
+        )
+
+        return updated
+
+    async def delete_section_allocation(
+        self, meeting_id: str, tab_id: str,
+    ) -> Meeting:
+        """Remove a section's allocation: delete file snapshot and clear tab metadata."""
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+
+        tab_meta: dict | None = None
+        for t in (meeting.tabs or []):
+            td = t if isinstance(t, dict) else t.model_dump()
+            if td.get("tab_id") == tab_id:
+                tab_meta = td
+                break
+
+        if tab_meta is None:
+            raise ValueError(f"Tab '{tab_id}' not found")
+
+        col_id = tab_meta.get("associated_collection_id", "")
+        file_id = tab_meta.get("allocated_file_id", "")
+        if col_id and file_id:
+            self._delete_allocation(col_id, file_id)
+
+        # Clear tab metadata
+        updated_tabs: list[dict] = []
+        for t in (meeting.tabs or []):
+            td = t if isinstance(t, dict) else t.model_dump()
+            if td.get("tab_id") == tab_id:
+                td.pop("associated_collection_id", None)
+                td.pop("associated_collection_name", None)
+                td.pop("allocated_file_id", None)
+            updated_tabs.append(td)
+
+        store.update_meeting(meeting_id, tabs=updated_tabs)
+
+        # Clean up meeting-level tracking: remove file_id; remove collection
+        # if no other section still references it
+        if file_id:
+            existing_fids = list(meeting.allocated_file_ids or [])
+            existing_cols = list(meeting.allocated_collections or [])
+            if file_id in existing_fids:
+                idx = existing_fids.index(file_id)
+                existing_fids.pop(idx)
+                if idx < len(existing_cols):
+                    existing_cols.pop(idx)
+            # Also check: any other tab still references this collection?
+            col_still_used = any(
+                td.get("associated_collection_id") == col_id
+                for td in updated_tabs
+            )
+            if not col_still_used and col_id in existing_cols:
+                existing_cols.remove(col_id)
+            store.update_meeting(
+                meeting_id,
+                allocated_collections=existing_cols,
+                allocated_file_ids=existing_fids,
+            )
+
+        updated = store.get_meeting(meeting_id)
+        assert updated is not None
+        return updated
 
 
-# ---------------------------------------------------------------------------
-# Response parser
-# ---------------------------------------------------------------------------
+def _parse_blueprint_response(raw: str) -> tuple[str, list[dict], str]:
+    """Parse Node 0.3 LLM response into (general_md_content, blueprint, title).
 
-def _parse_summary_response(raw: str) -> tuple[str, str, str, list[dict], list[dict] | None]:
-    """Parse LLM response into (title, detail, summary, todos, sections).
-
-    Returns sections=None if JSON parsing fails (fallback to legacy format).
-    Each section dict has keys: heading, detail, summary, todos.
+    Tries JSON first; falls back to treating the entire response as
+    markdown with an empty blueprint.
     """
     import json as _json
     import re as _re
 
-    # Try JSON first
+    raw_stripped = raw.strip()
+
+    # Try to extract JSON block
+    json_match = _re.search(r"\{[\s\S]*\}", raw_stripped)
+    if json_match:
+        try:
+            data = _json.loads(json_match.group())
+            general_md = data.get("general_md_content", "")
+            blueprint = data.get("blueprint", [])
+            title = data.get("title", "")
+            if isinstance(blueprint, list):
+                return general_md, blueprint, title
+        except (_json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+    # Fallback: treat raw as plain markdown, infer single-general section
+    logger.warning(
+        "[BLUEPRINT] JSON parse failed, falling back to plain markdown "
+        "(raw=%d chars)",
+        len(raw_stripped),
+    )
+    return raw_stripped, [], ""
+
+
+def _clean_refs(md: str, valid_ids: list[str]) -> str:
+    """Strip [stt_XXX] tags whose sentence IDs are not in *valid_ids*.
+
+    Supports range notation: [stt_0019-0036] expands to all IDs in the range,
+    and mixed forms like [stt_0001-0005,stt_0010,stt_0100-0105].
+    """
+    import re as _re
+
+    valid_set = set(valid_ids)
+
+    def _expand_range(start_str: str, end_str: str) -> list[str]:
+        """Expand stt_0019-0036 → [stt_0019, stt_0020, ..., stt_0036]."""
+        try:
+            s = int(start_str)
+            e = int(end_str)
+            if e < s or e - s > 50:  # sanity cap
+                return [f"stt_{start_str}"]
+            return [f"stt_{n:04d}" for n in range(s, e + 1)]
+        except ValueError:
+            return [f"stt_{start_str}"]
+
+    def _clean_one(m: _re.Match) -> str:
+        inner = m.group(1) or m.group(2)
+        # Split on commas (ranges are kept as single tokens like stt_0019-0036)
+        tokens = [t.strip() for t in inner.split(",") if t.strip()]
+        expanded: list[str] = []
+        for token in tokens:
+            # Range: stt_0019-0036 or stt_0019–0036
+            rm = _re.match(r"^stt_(\d+)\s*[-–]\s*(\d+)$", token)
+            if rm:
+                expanded.extend(_expand_range(rm.group(1), rm.group(2)))
+                continue
+            # Concatenated IDs: stt_004144465356
+            cm = _re.match(r"^stt_(\d{5,})$", token)
+            if cm:
+                digits = cm.group(1)
+                chunks = [digits[j:j+4] for j in range(0, len(digits), 4)]
+                expanded.extend([f"stt_{c}" for c in chunks])
+                continue
+            # Plain stt_XXXX
+            if _re.match(r"^stt_\d+$", token):
+                expanded.append(token)
+                continue
+
+        kept = [i for i in expanded if any(v.endswith(i) for v in valid_set)]
+        if not kept:
+            return ""
+        return "[" + ",".join(kept) + "]"
+
+    # Match bracketed [stt_XXXX,…] (with optional ranges) and bare stt_XXXX
+    return _re.sub(
+        r"\[(?:ref:)?\s*(stt_\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*stt_\d+(?:\s*[-–]\s*\d+)?)*)\s*\]"
+        r"|(?<!\w)(stt_\d+)(?!\w)",
+        _clean_one,
+        md,
+    )
+
+
+def _resolve_default_llm():
+    """Resolve the default LLM from config. Returns None if none found."""
+    try:
+        from src.config import get_config
+        from src.providers.llm import create_llm_for_provider
+
+        config = get_config()
+        if config.llm.providers:
+            default_p = next(
+                (p for p in config.llm.providers if p.is_default),
+                config.llm.providers[0],
+            )
+            return create_llm_for_provider(default_p)
+    except Exception:
+        logger.warning("Failed to resolve default LLM", exc_info=True)
+    return None
+
+
+def _parse_tagging_response(raw: str) -> dict[str, list[str]]:
+    """Parse Node 1.1 LLM tagging response into {tab_id: [sentence_ids]}."""
+    import json as _json
+    import re as _re
+
     raw_stripped = raw.strip()
     json_match = _re.search(r"\{[\s\S]*\}", raw_stripped)
     if json_match:
         try:
             data = _json.loads(json_match.group())
-            title = data.get("title", "")[:80]
-            sections = data.get("sections", [])
-            if sections and isinstance(sections, list):
-                # Compute flat fields from sections
-                detail_parts = [f"## {s.get('heading', '')}\n\n{s.get('detail', '')}" for s in sections]
-                summary_parts = [f"## {s.get('heading', '')}\n\n{s.get('summary', '')}" for s in sections]
-                todos = []
-                for s in sections:
-                    section_todos = s.get("todos", [])
-                    if isinstance(section_todos, list):
-                        for t in section_todos:
-                            if isinstance(t, dict) and t.get("text"):
-                                item = {"text": t["text"]}
-                                if t.get("assignee"):
-                                    item["assignee"] = t["assignee"]
-                                if t.get("priority"):
-                                    item["priority"] = t["priority"]
-                                todos.append(item)
-                detail = "\n\n".join(detail_parts)
-                summary = "\n\n".join(summary_parts)
-                return title, detail, summary, todos, sections
+            mapping = data.get("mapping", {})
+            if isinstance(mapping, dict):
+                return {k: v for k, v in mapping.items() if isinstance(v, list)}
         except (_json.JSONDecodeError, KeyError, TypeError):
             pass
 
-    # Fallback: legacy === delimiter format
-    title = ""
-    detail_parts: list[str] = []
-    summary_parts: list[str] = []
-    todos: list[dict] = []
-
-    sections = raw.split("===")
-
-    current_section = None
-    for part in sections:
-        stripped = part.strip()
-        if stripped == "TITLE":
-            current_section = "title"
-            continue
-        elif stripped == "DETAIL":
-            current_section = "detail"
-            continue
-        elif stripped == "SUMMARY":
-            current_section = "summary"
-            continue
-        elif stripped == "TODO":
-            current_section = "todo"
-            continue
-
-        if not stripped:
-            continue
-
-        if current_section == "title" and not title:
-            title = stripped.split("\n")[0].strip()[:80]
-        elif current_section == "detail":
-            detail_parts.append(stripped)
-        elif current_section == "summary":
-            summary_parts.append(stripped)
-        elif current_section == "todo":
-            parsed = _parse_todos(stripped)
-            todos.extend(parsed)
-
-    detail = "\n".join(detail_parts)
-    summary = "\n".join(summary_parts)
-    return title, detail, summary, todos, None
-
-
-def _parse_todos(raw: str) -> list[dict]:
-    """Extract JSON arrays from the TODO section of the LLM response.
-
-    Handles multiple JSON arrays (e.g., from PROJECT sub-sections).
-    """
-    # Try to find ALL JSON arrays in the text and merge them
-    all_todos: list[dict] = []
-    remaining = raw
-    while True:
-        start = remaining.find("[")
-        if start == -1:
-            break
-        # Find matching closing bracket
-        depth = 0
-        end = -1
-        for i in range(start, len(remaining)):
-            if remaining[i] == "[":
-                depth += 1
-            elif remaining[i] == "]":
-                depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-        if end == -1:
-            break
-        try:
-            parsed = json.loads(remaining[start : end + 1])
-            if isinstance(parsed, list):
-                all_todos.extend(parsed)
-        except json.JSONDecodeError:
-            pass
-        remaining = remaining[end + 1:]
-
-    if all_todos:
-        return all_todos
-
-    # Fallback: treat each non-empty line as a todo item
-    items: list[dict] = []
-    for line in raw.splitlines():
-        line = line.strip().lstrip("-").lstrip("*").strip()
-        if line and not line.startswith("PROJECT:"):
-            items.append({"text": line})
-    return items
+    logger.warning(
+        "[TAGGING] Failed to parse LLM response (%d chars)", len(raw_stripped)
+    )
+    return {}
 
 
 # Module-level singleton

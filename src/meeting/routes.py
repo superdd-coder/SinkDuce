@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, File, UploadFile, WebSocket, WebSocketDisco
 from fastapi.responses import FileResponse
 
 from src.meeting import store
-from src.meeting.models import MeetingMode, MeetingStatus, TranscriptSegment, TranscriptionResult
+from src.meeting.models import MeetingMode, MeetingStatus, ProcessingState, TranscriptSegment, TranscriptionResult
 from src.meeting.service import meeting_service
 from src.tasks.task_manager import task_manager
 
@@ -120,7 +120,7 @@ async def delete_meeting(meeting_id: str):
 @router.put("/meetings/{meeting_id}")
 async def update_meeting(meeting_id: str, body: dict = Body()):
     logger.info("[UPDATE] Meeting %s fields=%s", meeting_id, list(body.keys()))
-    allowed_fields = {"title", "detail", "summary", "todos", "status", "mode", "speaker_names", "hot_words_library_id"}
+    allowed_fields = {"title", "detail", "summary", "status", "mode", "speaker_names", "hot_words_library_id"}
     fields = {k: v for k, v in body.items() if k in allowed_fields}
     # Handle notes separately -- save to file
     if "notes" in body:
@@ -196,11 +196,37 @@ async def serve_audio(meeting_id: str, token: str | None = None):
 
 @router.get("/meetings/{meeting_id}/transcript")
 async def get_transcript(meeting_id: str):
-    """Return transcript segments for a meeting."""
+    """Return transcript segments for a meeting.
+
+    Prefers sentences.json (with section_tags) when available;
+    falls back to transcript.json otherwise.
+    """
+    sentences = store.get_sentences(meeting_id)
+    if sentences:
+        segments = [
+            {
+                "start": s.get("start_time", 0),
+                "end": s.get("end_time", 0),
+                "text": s.get("original_text", ""),
+                "speaker_id": s.get("speaker", ""),
+                "sentence_id": s.get("sentence_id", ""),
+                "section_tags": s.get("section_tags", []),
+            }
+            for s in sentences
+        ]
+        return {"segments": segments}
+
+    # Fallback: transcript.json without sentence metadata
     transcript = store.get_transcript(meeting_id)
     if not transcript:
         return {"segments": []}
-    return {"segments": [s.model_dump() for s in transcript.segments]}
+
+    segments = [
+        {**seg.model_dump(), "sentence_id": "", "section_tags": []}
+        for seg in transcript.segments
+    ]
+    return {"segments": segments}
+
 
 
 @router.get("/transcription/active-provider-info")
@@ -529,7 +555,7 @@ async def generate_summary(meeting_id: str):
         return {"error": "No transcript available"}
 
     logger.info("[SUMMARY] Starting LLM generation for meeting %s (%d transcript segments)", meeting_id, len(transcript.segments))
-    store.update_meeting(meeting_id, summarizing=True)
+    store.update_meeting(meeting_id, processing_state=ProcessingState.summarizing.value)
     task = task_manager.create_task(
         filename=f"summary:{meeting_id}",
         task_type="meeting_summary",
@@ -537,6 +563,132 @@ async def generate_summary(meeting_id: str):
     )
     logger.info("[SUMMARY] Task created for meeting %s: task_id=%s", meeting_id, task.id)
     return {"message": "Generation started", "task": task.to_dict(), "meeting_id": meeting_id}
+
+
+@router.post("/meetings/{meeting_id}/breakdown")
+async def start_breakdown(meeting_id: str):
+    """Start the breakdown pipeline (Pipeline 2: tagging + section summarization)."""
+    logger.info("[BREAKDOWN] Request for meeting %s", meeting_id)
+    try:
+        meeting = await meeting_service.start_breakdown(meeting_id)
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    logger.info("[BREAKDOWN] Started for meeting %s", meeting_id)
+    return meeting.model_dump()
+
+
+@router.post("/meetings/{meeting_id}/magic-extract")
+async def magic_extract(meeting_id: str, body: dict = Body()):
+    """Start magic extract for one or more custom topics.
+
+    Body: {"topics": [...], "target_tab_id": "tab_sec_01" (optional)}
+    """
+    topics = body.get("topics", [])
+    target_tab_id = body.get("target_tab_id")
+    logger.info("[EXTRACT] Request for meeting %s: %d topics, target=%s", meeting_id, len(topics), target_tab_id)
+    try:
+        meeting = await meeting_service.start_magic_extract(meeting_id, topics, target_tab_id)
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    logger.info("[EXTRACT] Started for meeting %s", meeting_id)
+    return meeting.model_dump()
+
+
+@router.delete("/meetings/{meeting_id}/sections/{tab_id}")
+async def delete_section(meeting_id: str, tab_id: str):
+    """Delete a section and clean up its tags (Node 2.1)."""
+    logger.info("[DELETE-SECTION] Meeting %s tab=%s", meeting_id, tab_id)
+    try:
+        meeting = await meeting_service.delete_section(meeting_id, tab_id)
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    return meeting.model_dump()
+
+
+@router.post("/meetings/{meeting_id}/sections/{tab_id}/regenerate")
+async def regenerate_section(meeting_id: str, tab_id: str):
+    """Regenerate one section: clean tags + re-scan + re-summarize."""
+    logger.info("[REGENERATE] Meeting %s tab=%s", meeting_id, tab_id)
+    try:
+        meeting = await meeting_service.start_section_regenerate(
+            meeting_id, tab_id
+        )
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    logger.info("[REGENERATE] Started for meeting %s tab=%s", meeting_id, tab_id)
+    return meeting.model_dump()
+
+
+@router.post("/meetings/{meeting_id}/sections/{tab_id}/allocate")
+async def allocate_section(meeting_id: str, tab_id: str, body: dict):
+    """Allocate one section's content to a collection (speaker names resolved, refs stripped)."""
+    collection_id = body.get("collection_id", "")
+    if not collection_id:
+        return {"error": "collection_id is required"}
+    logger.info("[ALLOCATE_SECTION] Meeting %s tab=%s → collection=%s", meeting_id, tab_id, collection_id)
+    try:
+        meeting = await meeting_service.allocate_section_to_collection(
+            meeting_id, tab_id, collection_id,
+        )
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    logger.info("[ALLOCATE_SECTION] Done meeting %s tab=%s", meeting_id, tab_id)
+    return meeting.model_dump()
+
+
+@router.delete("/meetings/{meeting_id}/sections/{tab_id}/allocate")
+async def delete_section_allocation(meeting_id: str, tab_id: str):
+    """Remove a section's collection allocation (delete file snapshot + clear metadata)."""
+    logger.info("[DELETE_ALLOCATION] Meeting %s tab=%s", meeting_id, tab_id)
+    try:
+        meeting = await meeting_service.delete_section_allocation(meeting_id, tab_id)
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    logger.info("[DELETE_ALLOCATION] Done meeting %s tab=%s", meeting_id, tab_id)
+    return meeting.model_dump()
+
+
+@router.get("/meetings/{meeting_id}/sections/{tab_id}/md")
+async def get_section_md_content(meeting_id: str, tab_id: str):
+    """Serve the rendered markdown content for a section tab."""
+    from fastapi.responses import PlainTextResponse
+    content = store.get_section_md(meeting_id, tab_id)
+    if content is None:
+        return PlainTextResponse(
+            content="Section not found",
+            status_code=404,
+            media_type="text/plain; charset=utf-8",
+        )
+    return PlainTextResponse(content=content, media_type="text/markdown; charset=utf-8")
+
+
+@router.put("/meetings/{meeting_id}/sections/{tab_id}/md")
+async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Body()):
+    """Save edited markdown content for a section tab."""
+    content = body.get("content", "")
+    path = store.save_section_md(meeting_id, tab_id, content)
+    if tab_id == "tab_general":
+        store.update_meeting(meeting_id, detail=content)
+    logger.info("[SAVE-SECTION-MD] Saved %s/%s (%d chars)", meeting_id, tab_id, len(content))
+    return {"ok": True, "path": path}
 
 
 @router.post("/meetings/{meeting_id}/allocate")
@@ -549,67 +701,3 @@ async def allocate_to_db(meeting_id: str, body: dict = Body()):
     updated = await meeting_service.allocate_to_collection(meeting_id, collection)
     logger.info("[ALLOCATE] Meeting %s allocated to '%s'", meeting_id, collection)
     return updated.model_dump()
-
-
-@router.post("/meetings/{meeting_id}/split-by-project")
-async def split_meeting_by_project(meeting_id: str):
-    logger.info("[SPLIT] Split by project request for meeting %s", meeting_id)
-    try:
-        projects = await meeting_service.split_by_project(meeting_id)
-    except FileNotFoundError as exc:
-        return {"error": str(exc)}
-    except ValueError as exc:
-        return {"error": str(exc)}
-    logger.info("[SPLIT] Meeting %s split into %d projects", meeting_id, len(projects))
-    return {"projects": projects}
-
-
-@router.get("/meetings/{meeting_id}/recommend-collections")
-async def recommend_collections(meeting_id: str):
-    logger.info("[RECOMMEND] Recommend collections for meeting %s", meeting_id)
-    try:
-        recommendations = await meeting_service.recommend_collections(meeting_id)
-    except FileNotFoundError as exc:
-        return {"error": str(exc)}
-    logger.info("[RECOMMEND] Meeting %s: %d recommendations", meeting_id, len(recommendations))
-    return {"recommendations": recommendations}
-
-
-@router.post("/recommend-collections-for-text")
-async def recommend_for_text(body: dict = Body()):
-    """Recommend collections based on arbitrary text (e.g. a sub-project's content)."""
-    text = body.get("text", "")
-    if not text:
-        return {"recommendations": []}
-    logger.info("[RECOMMEND-TEXT] Recommending for %d chars of text", len(text))
-    try:
-        recommendations = await meeting_service.recommend_collections_for_text(text)
-    except Exception as exc:
-        logger.error("[RECOMMEND-TEXT] Failed: %s", exc)
-        return {"recommendations": []}
-    logger.info("[RECOMMEND-TEXT] %d recommendations", len(recommendations))
-    return {"recommendations": recommendations}
-
-
-@router.post("/meetings/{meeting_id}/allocate-multi")
-async def allocate_multi(meeting_id: str, body: dict = Body()):
-    allocations = body.get("allocations", [])
-    logger.info("[ALLOCATE-MULTI] Meeting %s -> %d allocations", meeting_id, len(allocations))
-    try:
-        result = await meeting_service.allocate_to_multiple_collections(meeting_id, allocations)
-    except (FileNotFoundError, ValueError) as exc:
-        return {"error": str(exc)}
-    logger.info("[ALLOCATE-MULTI] Meeting %s allocated to %d collections", meeting_id, len(result))
-    return result
-
-
-@router.delete("/meetings/{meeting_id}/allocations")
-async def delete_all_allocations(meeting_id: str):
-    """Delete all meeting allocations from all collections."""
-    logger.info("[DELETE-ALLOC] Deleting all allocations for meeting %s", meeting_id)
-    try:
-        await meeting_service.delete_all_allocations(meeting_id)
-    except FileNotFoundError as exc:
-        return {"error": str(exc)}
-    logger.info("[DELETE-ALLOC] All allocations deleted for meeting %s", meeting_id)
-    return {"message": "All allocations deleted"}

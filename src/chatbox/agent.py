@@ -480,7 +480,6 @@ class ChatboxAgent:
                 tool_calls_acc: dict[int, dict] = {}  # index → accumulated delta
                 reasoning = None
                 finish_reason = None
-                streamed_reasoning = False  # sticky: once we get reasoning, suppress content duplicates
 
                 for chunk in stream:
                     if not chunk.choices:
@@ -491,16 +490,14 @@ class ChatboxAgent:
 
                     # Reasoning (DeepSeek) — check first
                     delta_reasoning = getattr(delta, "reasoning_content", None) or None
-                    if delta_reasoning:
-                        streamed_reasoning = True
 
-                    # Content tokens
+                    # Content tokens — only suppress in chunks that ALSO carry
+                    # reasoning (which is a content duplicate). After reasoning
+                    # phase ends, content is the real answer and must be streamed.
                     if delta.content:
                         content += delta.content
-                        # If this round produced reasoning, content is a duplicate.
-                        # Exception: after any tool call, content is answer text.
-                        if streamed_reasoning and total_tool_calls == 0:
-                            pass  # suppressed — duplicate of reasoning_content
+                        if delta_reasoning and total_tool_calls == 0:
+                            pass  # suppressed — same-chunk duplicate of reasoning
                         else:
                             token_queue.put(("token", delta.content))
 

@@ -771,8 +771,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 # ---------------------------------------------------------------------------
 
 async def meeting_summary_handler(task: Task, meeting_id: str, **kwargs) -> dict:
-    """Generate meeting summary via LLM, with summarizing flag on meeting model."""
+    """Generate meeting blueprint summary (Node 0.3)."""
     from src.meeting import store
+    from src.meeting.models import ProcessingState
     from src.meeting.service import MeetingService
     logger.info("[MEETING_SUMMARY] Starting for meeting %s", meeting_id)
 
@@ -780,20 +781,27 @@ async def meeting_summary_handler(task: Task, meeting_id: str, **kwargs) -> dict
     if not meeting:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
 
-    store.update_meeting(meeting_id, summarizing=True)
+    store.update_meeting(
+        meeting_id,
+        processing_state=ProcessingState.summarizing.value,
+    )
     loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(None, _do_meeting_summary, meeting_id)
         return {"message": "Summary generated", "meeting_id": meeting_id}
     except Exception:
-        store.update_meeting(meeting_id, summarizing=False)
+        store.update_meeting(
+            meeting_id,
+            processing_state=ProcessingState.idle.value,
+        )
         raise
 
 
 def _do_meeting_summary(meeting_id: str):
     from src.meeting.service import MeetingService
+
     svc = MeetingService()
-    svc._do_generate_summary(meeting_id)
+    svc._do_blueprint_summary(meeting_id)
 
 
 # ---------------------------------------------------------------------------

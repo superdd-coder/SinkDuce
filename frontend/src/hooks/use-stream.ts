@@ -45,7 +45,7 @@ export function useStreamChat() {
   const {
     sessionId, initSession,
     addMessage, appendToLastMessage, setLastMessageSources,
-    appendTimelineThinking, setTimelineToolSummary, startTimelineTool,
+    appendTimelineThinking, setTimelineToolSummary, setTimelineToolStatus, startTimelineTool,
     finishLastMessage, flushLastMessageToThinking, setStreaming, selectedCollections,
   } = useAppStore()
 
@@ -107,7 +107,6 @@ export function useStreamChat() {
             switch (currentEvent) {
               case "thinking":
                 if (active) appendTimelineThinking(data.content)
-                // (cache helpers for thinking timeline are more complex; skip for bg sessions for now)
                 break
 
               case "token":
@@ -122,8 +121,17 @@ export function useStreamChat() {
                 }
                 break
 
+              case "tool_step":
+                // Live progress: update tool block status from step events
+                if (active) setTimelineToolStatus(data.content || data.step || "")
+                break
+
               case "thinking_summary":
                 if (active) setTimelineToolSummary(data as ThinkingSummary)
+                break
+
+              case "tool_result":
+                // Tool execution complete — summary already sent via thinking_summary
                 break
 
               case "done":

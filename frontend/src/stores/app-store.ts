@@ -130,12 +130,6 @@ interface AppState {
   pendingOpenNote: string | null
   setPendingOpenNote: (noteId: string | null) => void
 
-  // Meeting ingest progress (persists across dialog open/close)
-  ingestMeetingId: string | null
-  ingestProgress: Record<number, "pending" | "done" | "error">
-  ingestProjectNames: string[]
-  setIngestState: (meetingId: string | null, progress: Record<number, "pending" | "done" | "error">, names: string[]) => void
-
   selectedCollections: string[]  // Chat collection selection
   setSelectedCollections: (ids: string[]) => void
   toggleCollection: (id: string) => void
@@ -163,6 +157,7 @@ interface AppState {
   setLastMessageThinkingContent: (token: string) => void
   appendTimelineThinking: (token: string) => void
   setTimelineToolSummary: (summary: ThinkingSummary | undefined) => void
+  setTimelineToolStatus: (status: string) => void
   startTimelineTool: () => void
   setLastMessageHasToolCall: () => void
   finishLastMessage: () => void
@@ -257,15 +252,6 @@ export const useAppStore = create<AppState>((set) => ({
   setPendingOpenFile: (source) => set({ pendingOpenFile: source }),
   pendingOpenNote: null,
   setPendingOpenNote: (noteId) => set({ pendingOpenNote: noteId }),
-
-  ingestMeetingId: null,
-  ingestProgress: {},
-  ingestProjectNames: [],
-  setIngestState: (meetingId, progress, names) => set({
-    ingestMeetingId: meetingId,
-    ingestProgress: progress,
-    ingestProjectNames: names,
-  }),
 
   selectedCollections: loadPersisted<string[]>("selectedCollections", []),
   setSelectedCollections: (ids) => {
@@ -424,6 +410,23 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { messages: msgs }
     }),
+  setTimelineToolStatus: (status) =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        const tl = [...(last.timeline || [])]
+        for (let i = tl.length - 1; i >= 0; i--) {
+          if (tl[i].type === "tool") {
+            const cur = tl[i].summary || { aq_count: 0, task_count: 0, tasks: [] }
+            tl[i] = { ...tl[i], summary: { ...cur, status } }
+            break
+          }
+        }
+        msgs[msgs.length - 1] = { ...last, timeline: tl }
+      }
+      return { messages: msgs }
+    }),
   setLastMessageHasToolCall: () =>
     set((s) => {
       const msgs = [...s.messages]
@@ -478,18 +481,26 @@ export const useAppStore = create<AppState>((set) => ({
     try {
       const detail = await getSession(sessionId)
       set({
-        messages: detail.messages.map((m) => {
-          const meta = (m.metadata ?? {}) as Record<string, any>
-          const summary = meta.thinking_summary as ThinkingSummary | undefined
-          return {
-            id: m.id,
-            role: m.role as "user" | "assistant",
-            content: m.content,
-            sources: m.sources ?? undefined,
-            metaInfo: meta as MetaInfo,
-            thinkingSummary: summary,
-          }
-        }),
+        messages: detail.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => {
+            const meta = (m.metadata ?? {}) as Record<string, any>
+            const summary = meta.thinking_summary as ThinkingSummary | undefined
+            // Skip assistant messages that are just tool-call placeholders
+            // (no visible content, only function call metadata)
+            if (m.role === "assistant" && !m.content && meta.tool_calls) {
+              return null
+            }
+            return {
+              id: m.id,
+              role: m.role as "user" | "assistant",
+              content: m.content,
+              sources: m.sources ?? undefined,
+              metaInfo: meta as MetaInfo,
+              thinkingSummary: summary,
+            }
+          })
+          .filter((m): m is NonNullable<typeof m> => m != null),
         sessionId,
       })
     } catch {

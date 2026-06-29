@@ -1,33 +1,30 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Share, Pencil, Check, X, Loader2 } from "lucide-react"
+import { Pencil, Check, X } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useAudioRecorder } from "@/hooks/use-audio-recorder"
 import { useTranscription } from "@/hooks/use-transcription"
 import {
   getMeetings, getMeeting, deleteMeeting,
   uploadMeetingAudio, transcribeMeeting, cancelTranscribeMeeting,
-  generateMeetingSummary,
   getMeetingTranscript, updateMeeting,
   getRealtimeTranscriptionProviders, getFileTranscriptionProviders,
   getActiveProviderInfo,
-  type Meeting, type TranscriptSegment, type TodoItem, type LanguageHintOption,
+  type Meeting, type TranscriptSegment, type LanguageHintOption,
 } from "@/api/client"
 import { toast } from "sonner"
+import { MeetingTabs } from "./meeting-tabs"
 import { AlertCircle, Settings } from "lucide-react"
 import { MeetingList } from "./meeting-list"
 import { MediaBar } from "./media-bar"
 import type { MediaBarHandle } from "./media-bar"
-import { NotesEditor } from "./notes-editor"
 import { TranscriptPanel } from "./transcript-panel"
-import { MultiIngestDialog } from "./multi-ingest-dialog"
 import { HotWordsSelector } from "./hot-words-selector"
 import { LanguageHintsSelector, DEFAULT_LANGUAGE_HINTS } from "./language-hints-selector"
 
 export function MeetingView() {
-  const { activeMeeting, setActiveMeeting, setSidebarView, setActiveCollection, setNavigationGuard, ingestMeetingId, ingestProgress, collections, fetchCollections } = useAppStore()
-  const isIngesting = ingestMeetingId === activeMeeting && Object.values(ingestProgress).some((s) => s === "pending")
+  const { activeMeeting, setActiveMeeting, setSidebarView, setActiveCollection, collections, fetchCollections } = useAppStore()
 
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
@@ -41,12 +38,6 @@ export function MeetingView() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(true)
   const [realtimeEnabled, setRealtimeEnabled] = useState(false)
-  const [generating, setGenerating] = useState(false)
-  const [generatingMeetingId, setGeneratingMeetingId] = useState<string | null>(null)
-  const [notesDraft, setNotesDraft] = useState("")
-  const [notesSavedContent, setNotesSavedContent] = useState("")
-  const [isNotesDirty, setIsNotesDirty] = useState(false)
-  const [multiIngestOpen, setMultiIngestOpen] = useState(false)
   const [hasRealtimeProvider, setHasRealtimeProvider] = useState(false)
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [providerSupportsHotWords, setProviderSupportsHotWords] = useState(false)
@@ -57,8 +48,9 @@ export function MeetingView() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState("")
   const [audioVersion, setAudioVersion] = useState(0)
-  const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
   const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false)
+  const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | null>(null)
+  const [activeSectionTag, setActiveSectionTag] = useState("")
 
   // Hooks
   const transcription = useTranscription(activeMeeting)
@@ -80,12 +72,6 @@ export function MeetingView() {
   }, [activeMeeting]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const notesDraftRef = useRef("")
-  const notesSavedContentRef = useRef("")
-
-  // Keep refs in sync with state for stale-closure-safe comparisons
-  useEffect(() => { notesDraftRef.current = notesDraft }, [notesDraft])
-  useEffect(() => { notesSavedContentRef.current = notesSavedContent }, [notesSavedContent])
 
   // Keep languageHints in a ref so the recording effect always sees current value
   const languageHintsRef = useRef(languageHints)
@@ -133,32 +119,22 @@ export function MeetingView() {
       // Guard: if activeMeeting changed while fetching, discard stale result
       if (fetchMeetingIdRef.current !== id) return
       setMeeting(m)
-      // If a background summary is in progress, resume polling
-      if (m.summarizing) {
-        setGenerating(true)
-        setGeneratingMeetingId(id)
+      // If a background task is in progress, resume polling
+      const busy = m.processing_state && m.processing_state !== "idle"
+      if (busy) {
         const poll = setInterval(async () => {
           try {
             const updated = await getMeeting(id)
-            if (!updated.summarizing) {
+            // Guard: user may have switched meetings while polling
+            if (fetchMeetingIdRef.current !== id) { clearInterval(poll); return }
+            const stillBusy = updated.processing_state && updated.processing_state !== "idle"
+            if (!stillBusy) {
               clearInterval(poll)
               setMeeting(updated)
-              setGenerating(false)
-              setGeneratingMeetingId(null)
               fetchMeetings()
             }
           } catch { /* ignore */ }
         }, 2000)
-      }
-      // Determine the server-side notes content
-      const serverNotes: string = m.notes_content ?? ""
-      // Only reset the draft when there are no unsaved edits
-      if (notesDraftRef.current === notesSavedContentRef.current) {
-        setNotesDraft(serverNotes)
-        setNotesSavedContent(serverNotes)
-      } else {
-        // User has unsaved edits – just update the saved-content baseline
-        setNotesSavedContent(serverNotes)
       }
     } catch { /* ignore */ }
   }, [])
@@ -207,6 +183,8 @@ export function MeetingView() {
           }
         })
         .catch(() => setProviderSupportsHotWords(false))
+      setMeeting(null)
+      setTranscript([])
       fetchMeeting(activeMeeting)
       fetchTranscript(activeMeeting)
     } else {
@@ -287,43 +265,6 @@ export function MeetingView() {
     }
   }
 
-  const handleGenerate = () => {
-    if (!activeMeeting) return
-    if (meeting?.summary) {
-      setRegenerateConfirmOpen(true)
-      return
-    }
-    doGenerate()
-  }
-
-  const doGenerate = async () => {
-    if (!activeMeeting) return
-    setRegenerateConfirmOpen(false)
-    setGenerating(true)
-    setGeneratingMeetingId(activeMeeting)
-    try {
-      await generateMeetingSummary(activeMeeting)
-      // Async via task queue: poll until done
-      const poll = setInterval(async () => {
-        try {
-          const m = await getMeeting(activeMeeting)
-          if (m && !m.summarizing) {
-            clearInterval(poll)
-            setMeeting(m)
-            fetchMeetings()
-            setGenerating(false)
-            setGeneratingMeetingId(null)
-            toast.success("Summary generated")
-          }
-        } catch { /* ignore poll errors */ }
-      }, 2000)
-    } catch (err) {
-      setGenerating(false)
-      setGeneratingMeetingId(null)
-      toast.error(`Generation failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
   const handleCancelTranscribe = async () => {
     if (!activeMeeting) return
     try {
@@ -332,48 +273,6 @@ export function MeetingView() {
       toast.info("Transcription cancelled")
     } catch (err) {
       toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  const handleSaveNotes = async (content: string) => {
-    if (!activeMeeting) return
-    try {
-      const m = await updateMeeting(activeMeeting, { notes: content })
-      setMeeting(m)
-      setNotesDraft(content)
-      setNotesSavedContent(content)
-      setIsNotesDirty(false)
-      toast.success("Notes saved")
-    } catch (err) {
-      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  const handleDiscardNotes = () => {
-    setNotesDraft(notesSavedContent)
-    setIsNotesDirty(false)
-  }
-
-  const hasContent = !!(meeting?.summary || meeting?.detail || (meeting?.todos && meeting.todos.length > 0) || notesDraft)
-
-  const handleReingest = () => {
-    if (!activeMeeting) return
-    setMultiIngestOpen(true)
-  }
-
-  const handleUpdateGenerated = async (data: { summary?: string; detail?: string; todos?: TodoItem[] }) => {
-    if (!activeMeeting) return
-    const key = data.summary !== undefined ? "summary" : "detail"
-    const content = data.summary ?? data.detail ?? ""
-    console.log(`[Save ${key}] sent:`, JSON.stringify(content.slice(0, 300)))
-    try {
-      const m = await updateMeeting(activeMeeting, data)
-      const returned = key === "summary" ? m.summary : m.detail
-      console.log(`[Save ${key}] returned:`, JSON.stringify((returned ?? "").slice(0, 300)))
-      setMeeting(m)
-      toast.success("Updated")
-    } catch (err) {
-      toast.error(`Update failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -398,37 +297,14 @@ export function MeetingView() {
     mediaBarRef.current?.seekTo(startTime)
   }
 
-  // beforeunload guard when notes dirty
-  useEffect(() => {
-    if (!isNotesDirty) return
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-    }
-    window.addEventListener("beforeunload", handler)
-    return () => window.removeEventListener("beforeunload", handler)
-  }, [isNotesDirty])
-
-  // Sidebar navigation guard
-  useEffect(() => {
-    if (isNotesDirty) {
-      setNavigationGuard(() => {
-        const ok = window.confirm("You have unsaved notes. Discard changes and leave?")
-        if (ok) setIsNotesDirty(false)
-        return ok
-      })
-      return () => setNavigationGuard(null)
-    } else {
-      setNavigationGuard(null)
-    }
-  }, [isNotesDirty, setNavigationGuard])
+  const handleMeetingUpdate = useCallback((m: Meeting) => {
+    setMeeting(m)
+    if (activeMeeting) fetchMeetings()
+  }, [activeMeeting, fetchMeetings])
 
   const handleSelectMeeting = useCallback((id: string) => {
-    if (isNotesDirty) {
-      if (!window.confirm("You have unsaved notes. Discard changes and switch meeting?")) return
-      setIsNotesDirty(false)
-    }
     setActiveMeeting(id)
-  }, [isNotesDirty, setActiveMeeting])
+  }, [setActiveMeeting])
 
   const handleUpdateSpeakerName = async (speakerId: string, name: string) => {
     if (!activeMeeting || !meeting) return
@@ -546,19 +422,6 @@ export function MeetingView() {
                     ))}
                   </span>
                 )}
-                  <Button
-                    variant={meeting?.allocated_collections?.length ? "outline" : "default"}
-                    size="sm"
-                    disabled={!hasContent || isIngesting}
-                    title={!hasContent ? "Add notes or generate a summary first" : undefined}
-                    onClick={meeting?.allocated_collections?.length ? handleReingest : () => setMultiIngestOpen(true)}
-                  >
-                    {isIngesting ? (
-                      <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Ingesting...</>
-                    ) : (
-                      <><Share className="h-4 w-4 mr-1" /> {meeting?.allocated_collections?.length ? "Re-ingest" : "Ingest"}</>
-                    )}
-                  </Button>
               </div>
             </div>
 
@@ -604,36 +467,28 @@ export function MeetingView() {
               </div>
             )}
 
-            {/* Notes + Transcript */}
+            {/* Content: MeetingTabs + transcript */}
             <div className="flex-1 flex min-h-0">
-              <div className="flex-1 min-h-0 px-2">
-                <NotesEditor
-                  meetingId={meeting.id}
-                  notesContent={notesDraft}
-                  detail={meeting.detail ?? null}
-                  summary={meeting.summary ?? null}
-                  todos={meeting.todos ?? null}
-                  hasTranscript={
-                    !!meeting.transcript_path ||
-                    transcript.length > 0 ||
-                    transcription.segments.length > 0
-                  }
-                  generating={generating && generatingMeetingId === activeMeeting}
-                  onSaveNotes={handleSaveNotes}
-                  onDiscardNotes={handleDiscardNotes}
-                  onGenerate={handleGenerate}
-                  onRegenerate={handleGenerate}
-                  onUpdateGenerated={handleUpdateGenerated}
-                  onNotesUploaded={(content) => { setNotesDraft(content); setNotesSavedContent(content); setIsNotesDirty(false) }}
-                  onDirtyChange={setIsNotesDirty}
-                />
-              </div>
+              <MeetingTabs
+                key={meeting.id}
+                meetingId={meeting.id}
+                meeting={meeting}
+                notesContent={meeting.notes_content ?? ""}
+                onMeetingUpdate={handleMeetingUpdate}
+                onSeekTo={handleSegmentClick}
+                onFocusSentence={(id) => setFocusRef({ id, ts: Date.now() })}
+                onActiveTabChange={setActiveSectionTag}
+                transcriptSegments={transcription.segments.length > 0 ? transcription.segments : transcript}
+              />
               <TranscriptPanel
+                key={meeting.id}
                 open={transcriptOpen}
                 onToggle={() => setTranscriptOpen(!transcriptOpen)}
                 segments={transcription.segments.length > 0 ? transcription.segments : transcript}
                 partialText={transcription.currentPartial}
                 onSegmentClick={handleSegmentClick}
+                focusRef={focusRef}
+                activeSectionTag={activeSectionTag}
                 speakerNames={meeting.speaker_names ?? {}}
                 onUpdateSpeakerName={handleUpdateSpeakerName}
                 isRealtime={transcription.isTranscribing}
@@ -651,21 +506,6 @@ export function MeetingView() {
 
       {/* Dialogs */}
 
-      <MultiIngestDialog
-        open={multiIngestOpen}
-        onOpenChange={setMultiIngestOpen}
-        meetingId={activeMeeting ?? ""}
-        isReingest={(meeting?.allocated_collections?.length ?? 0) > 0}
-        allocatedCollections={meeting?.allocated_collections}
-        allocatedFileIds={meeting?.allocated_file_ids}
-        onComplete={async () => {
-          if (activeMeeting) {
-            await fetchMeeting(activeMeeting)
-            fetchMeetings()
-          }
-        }}
-      />
-
       <Dialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -677,21 +517,6 @@ export function MeetingView() {
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button variant="destructive" onClick={confirmDelete}>Delete</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={regenerateConfirmOpen} onOpenChange={setRegenerateConfirmOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Re-summarize Meeting</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Re-summarizing will overwrite the existing Summary, Detail, and TODO.
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setRegenerateConfirmOpen(false)}>Cancel</Button>
-            <Button onClick={doGenerate}>Continue</Button>
           </div>
         </DialogContent>
       </Dialog>

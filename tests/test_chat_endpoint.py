@@ -28,7 +28,7 @@ def _make_mock_agent(store):
     """Create a mock ChatboxAgent that yields some SSE events."""
     agent = MagicMock()
 
-    async def _mock_stream(session_id, user_message):
+    async def _mock_stream(session_id, user_message, **kwargs):
         yield {"type": "token", "content": "Hello"}
         yield {"type": "token", "content": "!"}
         yield {"type": "done", "sources": []}
@@ -84,7 +84,7 @@ class TestChatEndpoint:
         s = store.create_session(title="test")
         mock_agent = MagicMock()
 
-        async def _stream_with_sources(session_id, user_message):
+        async def _stream_with_sources(session_id, user_message, **kwargs):
             yield {"type": "token", "content": "Answer"}
             yield {
                 "type": "done",

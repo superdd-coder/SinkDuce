@@ -665,3 +665,227 @@ input[type="checkbox"] {
   pointer-events: auto !important;
   user-select: auto !important;
 }
+
+/* ============================================================
+   v3.1 ALIVE LAYER · chat-input probe (experimental)
+   Styles mirror AI-COMP-111 (chat-input), AI-COMP-001 (button),
+   AI-COMP-010 (checkbox-diamond), AI-COMP-120 (reasoning-flow).
+   Reuses existing --ze-* tokens.
+   Removed by deleting the @sk-input-probe comment block below.
+   ============================================================ */
+/* @sk-input-probe:start */
+
+/* ── AI-COMP-111 · chat-input · static box-shadow + ::before scale breathe ── */
+/* Persistent breathing lives on ::before (scale 1 ↔ 1.018 only) so it never
+   fights with box-shadow transitions. The host's box-shadow values are static
+   and transition smoothly between idle and focused states — no flicker. */
+@keyframes sk-input-breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.018); }
+}
+.sk-input-frame {
+  position: relative;
+  overflow: visible;
+  border: 1.5px solid oklch(0.38 0.08 160 / 0.30);
+  /* idle baseline box-shadow */
+  box-shadow:
+    0 -8px 30px -4px rgba(0,0,0,0.06),
+    0 2px 8px -2px rgba(0,0,0,0.03),
+    0 0 0 2px oklch(0.38 0.08 160 / 0.10),
+    0 0 18px -4px oklch(0.38 0.08 160 / 0.25);
+  transition:
+    border-color 1.4s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow   1.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* breathing halo — sits behind, uses transform only so it never interferes
+   with the host's box-shadow transition */
+.sk-input-frame::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  box-shadow:
+    0 0 0 2px oklch(0.38 0.08 160 / 0.08),
+    0 0 24px -4px oklch(0.38 0.08 160 / 0.20);
+  animation: sk-input-breathe 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  transition:
+    box-shadow 1.4s cubic-bezier(0.4, 0, 0.2, 1),
+    animation-duration 1.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sk-input-frame:focus-within {
+  border-color: var(--ze-green);
+  box-shadow:
+    0 -8px 30px -4px rgba(0,0,0,0.06),
+    0 2px 8px -2px rgba(0,0,0,0.03),
+    0 0 0 1px oklch(0.38 0.08 160),
+    0 0 0 5px oklch(0.38 0.08 160 / 0.20),
+    0 0 32px -2px oklch(0.38 0.08 160 / 0.50),
+    0 0 80px -8px oklch(0.38 0.08 160 / 0.30);
+}
+.sk-input-frame:focus-within::before {
+  box-shadow:
+    0 0 0 6px oklch(0.38 0.08 160 / 0.18),
+    0 0 40px -2px oklch(0.38 0.08 160 / 0.45),
+    0 0 100px -8px oklch(0.38 0.08 160 / 0.35);
+  animation-duration: 2.4s;
+}
+
+/* ── AI-COMP-001 · btn-default expanding ring (jelly halo) ── */
+@keyframes sk-btn-ring {
+  0%   { opacity: 0.75; transform: scale(1); }
+  100% { opacity: 0;    transform: scale(1.35); }
+}
+@keyframes sk-send-shine {
+  0%   { transform: translateX(-150%); }
+  100% { transform: translateX(150%); }
+}
+.sk-send-btn {
+  position: relative;
+  overflow: hidden;
+  background: var(--ze-green);
+  color: #E8F0EB;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1),
+              background-color 200ms cubic-bezier(0.25, 1, 0.5, 1),
+              box-shadow 200ms cubic-bezier(0.25, 1, 0.5, 1);
+  box-shadow: 0 1px 2px rgba(10, 18, 14, 0.1);
+}
+.sk-send-btn > * { position: relative; z-index: 1; }
+.sk-send-btn:not(:disabled):hover {
+  background: oklch(0.32 0.08 160);
+  transform: translateY(-1px);
+  box-shadow:
+    0 2px 6px rgba(10, 18, 14, 0.14),
+    0 0 0 6px oklch(0.38 0.08 160 / 0.10),
+    0 0 28px -2px oklch(0.38 0.08 160 / 0.55),
+    0 0 60px -10px oklch(0.38 0.08 160 / 0.40);
+}
+.sk-send-btn:not(:disabled):active {
+  transform: translateY(0);
+  background: oklch(0.32 0.08 160);
+}
+.sk-send-btn:not(:disabled)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid oklch(0.72 0.10 160);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.sk-send-btn:not(:disabled):hover::after {
+  animation: sk-btn-ring 2s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+.sk-send-btn:not(:disabled)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 35%, rgba(255,255,255,0.32) 50%, transparent 65%);
+  transform: translateX(-150%);
+  pointer-events: none;
+  z-index: 0;
+}
+.sk-send-btn:not(:disabled):hover::before {
+  animation: sk-send-shine 0.9s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* ── AI-COMP-001 · btn-outline (Cancel replacement for Stop) ── */
+.sk-stop-btn {
+  background: var(--bg-elevated, #fff);
+  color: var(--text);
+  border: 1px solid var(--line-section, oklch(0.42 0.04 160 / 0.55));
+  transition: background-color 200ms cubic-bezier(0.25, 1, 0.5, 1),
+              border-color 200ms cubic-bezier(0.25, 1, 0.5, 1),
+              color 200ms cubic-bezier(0.25, 1, 0.5, 1),
+              transform 200ms cubic-bezier(0.25, 1, 0.5, 1);
+  position: relative;
+  overflow: hidden;
+}
+.sk-stop-btn:hover {
+  background: oklch(0.38 0.08 160 / 0.04);
+  border-color: var(--ze-green);
+  color: var(--ze-green);
+  transform: translateY(-1px);
+}
+.sk-stop-btn:active { transform: translateY(0); }
+
+/* ── AI-COMP-121 · streaming cursor ── */
+@keyframes sk-cursor-blink {
+  0%, 45%   { opacity: 1; transform: scaleY(1); }
+  50%, 95%  { opacity: 0.25; transform: scaleY(0.85); }
+  100%      { opacity: 1; transform: scaleY(1); }
+}
+.sk-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--ze-green);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  border-radius: 1px;
+  animation: sk-cursor-blink 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* ── AI-COMP-010 · checkbox-diamond ── */
+.sk-diamond {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--line-section, oklch(0.42 0.04 160 / 0.55));
+  background: transparent;
+  transform: rotate(45deg);
+  position: relative;
+  transition: background var(--dur-base, 200ms) cubic-bezier(0.25, 1, 0.5, 1),
+              border-color var(--dur-base, 200ms) cubic-bezier(0.25, 1, 0.5, 1),
+              transform var(--dur-slow, 420ms) cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow var(--dur-base, 200ms) cubic-bezier(0.25, 1, 0.5, 1);
+}
+.sk-diamond.on {
+  background: var(--ze-green);
+  border-color: var(--ze-green);
+  transform: rotate(135deg);
+  box-shadow: 0 0 0 5px oklch(0.38 0.08 160 / 0.10), 0 0 16px -2px oklch(0.38 0.08 160 / 0.45);
+}
+.sk-diamond.on::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1px solid var(--ze-green);
+  opacity: 0;
+  pointer-events: none;
+  animation: sk-check-ring 1.8s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+@keyframes sk-check-ring {
+  0%   { opacity: 0.55; transform: scale(1); }
+  100% { opacity: 0;    transform: scale(1.4); }
+}
+
+/* ── AI-COMP-120 · reasoning flow · 4-edge marquee via background dual-layer ── */
+/* Uses background-clip: padding-box / border-box with a transparent border.
+   No mask-composite needed — works in all browsers. */
+@keyframes sk-reasoning-flow {
+  0%   { background-position: 0 0, 100% 0; }
+  100% { background-position: 0 0, -100% 0; }
+}
+.sk-reasoning-flow {
+  position: relative;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--bg), var(--bg)) padding-box,
+    linear-gradient(115deg,
+      transparent 0%,
+      transparent 30%,
+      var(--ze-green) 50%,
+      transparent 70%,
+      transparent 100%) border-box;
+  background-size: 100% 100%, 200% 100%;
+  background-repeat: no-repeat, no-repeat;
+  background-position: 0 0, 100% 0;
+  animation: sk-reasoning-flow 2.2s linear infinite;
+}
+/* @sk-input-probe:end */

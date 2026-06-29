@@ -115,6 +115,9 @@ def get_session(session_id: str):
     if session is None:
         raise HTTPException(404, f"Session {session_id} not found")
     msgs = store.get_messages(session_id)
+    # Filter out internal tool/function messages — they are LLM conversation
+    # context (tool_call + tool_result pairs), not user-visible chat content.
+    visible_msgs = [m for m in msgs if m.role in ("user", "assistant")]
     return SessionDetailResponse(
         id=session.id,
         title=session.title,
@@ -131,7 +134,7 @@ def get_session(session_id: str):
                 metadata=m.metadata,
                 created_at=m.created_at,
             )
-            for m in msgs
+            for m in visible_msgs
         ],
     )
 

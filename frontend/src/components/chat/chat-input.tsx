@@ -114,13 +114,12 @@ export function ChatInput() {
     : `${selectedCollections.length} collection${selectedCollections.length !== 1 ? "s" : ""}`
 
   return (
-    <div className="px-12 pb-5 pt-1">
+    <div className="px-6 sm:px-12 pb-5 pt-1">
       <div
-        className="max-w-3xl mx-auto space-y-2.5 bg-background/60 backdrop-blur-md border px-5 py-3"
+        className="max-w-3xl mx-auto w-full space-y-2.5 bg-background/60 backdrop-blur-md border px-5 py-3 sk-input-frame"
         style={{
           borderRadius: "4px",
-          borderColor: "oklch(0.38 0.08 160 / 0.25)",
-          boxShadow: "0 -8px 30px -4px rgba(0,0,0,0.06), 0 2px 8px -2px rgba(0,0,0,0.03), 0 0 18px -4px oklch(0.38 0.08 160 / 0.12)",
+          boxShadow: "0 -8px 30px -4px rgba(0,0,0,0.06), 0 2px 8px -2px rgba(0,0,0,0.03)",
         }}
       >
         {/* Toolbar */}
@@ -166,11 +165,10 @@ export function ChatInput() {
                     className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
                   >
                     <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                      {selectedCollections.includes(col.id) ? (
-                        <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-500" />
-                      ) : (
-                        <span className="w-1.5 h-1.5 shrink-0" />
-                      )}
+                      <span
+                        className={`sk-diamond ${selectedCollections.includes(col.id) ? "on" : ""}`}
+                        aria-hidden
+                      />
                       <span className="whitespace-normal break-words min-w-0 leading-snug">{col.name}</span>
                     </span>
                     <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
@@ -310,43 +308,59 @@ export function ChatInput() {
         <div className="flex items-end gap-3">
           <input ref={fileRef} type="file" multiple accept=".pdf,.txt,.md,.docx,.xlsx,.pptx" className="hidden" onChange={handleFileAttach} />
 
-          <textarea
-            ref={textareaRef}
-            className="flex-1 resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[160px] outline-none bg-transparent leading-[1.7] focus:border-primary"
-            style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", color: "var(--ze-text)", borderRadius: 0 }}
-            placeholder="Ask about your documents…"
-            rows={1}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isStreaming}
-          />
+          <div className="relative flex-1">
+            <textarea
+              ref={textareaRef}
+              className="w-full resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[160px] outline-none bg-transparent leading-[1.7] focus:border-primary"
+              style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", color: "var(--ze-text)", borderRadius: 0 }}
+              placeholder="Ask about your documents…"
+              rows={1}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isStreaming}
+            />
+            {isStreaming && <span className="sk-stream-cursor absolute right-0 bottom-3" aria-hidden />}
+          </div>
+        </div>
 
+        {/* Disclaimer + Send row */}
+        <div className="flex items-center justify-between gap-3 pt-1">
+          <p
+            className="select-none text-left flex-1 min-w-0"
+            style={{
+              fontSize: "10px",
+              fontWeight: 400,
+              color: "oklch(0.38 0.07 160 / 0.85)",
+              fontFamily: "var(--font-serif)",
+              fontStyle: "italic",
+            }}
+          >
+            AI-generated answers may contain errors. Please verify critical information.
+          </p>
           {isStreaming ? (
             <button
               type="button"
-              className="shrink-0 flex items-center gap-1.5 cursor-pointer border-none text-white font-sans"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer font-sans sk-stop-btn"
               style={{
-                background: "oklch(0.55 0.18 20)",
                 fontSize: "10px", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.12em",
                 padding: "8px 16px", borderRadius: "2px",
               }}
               onClick={stopGeneration}
             >
-              Stop
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2" /></svg>
+              Cancel
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
             </button>
           ) : (
             <button
               type="button"
-              className="shrink-0 flex items-center gap-1.5 cursor-pointer transition-opacity border-none text-white font-sans"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer font-sans sk-send-btn"
               style={{
-                background: "var(--ze-green)",
                 fontSize: "10px", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.12em",
                 padding: "8px 16px", borderRadius: "2px",
-                opacity: !input.trim() ? 0.3 : 1,
+                opacity: !input.trim() ? 0.32 : 1,
               }}
               onClick={handleSend}
               disabled={!input.trim()}
@@ -356,20 +370,6 @@ export function ChatInput() {
             </button>
           )}
         </div>
-
-        {/* Disclaimer */}
-        <p
-          className="text-center select-none"
-          style={{
-            fontSize: "10px",
-            fontWeight: 400,
-            color: "oklch(0.38 0.07 160 / 0.85)",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-          }}
-        >
-          AI-generated answers may contain errors. Please verify critical information.
-        </p>
       </div>
     </div>
   )

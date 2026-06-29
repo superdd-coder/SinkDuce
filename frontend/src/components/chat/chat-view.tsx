@@ -10,7 +10,7 @@ import { getLLMProviders } from "@/api/client"
 import type { Source } from "@/stores/app-store"
 
 export function ChatView() {
-  const { messages, setProviders, setActiveProvider, setActiveModel, activeProvider, activeModel, sessionId, sessions } = useAppStore()
+  const { messages, setProviders, setActiveProvider, setActiveModel, activeProvider, activeModel, sessionId, sessions, isStreaming } = useAppStore()
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolledUp = useRef(false)
@@ -81,7 +81,7 @@ export function ChatView() {
   const sessionTitle = currentSession?.title || "New Chat"
 
   return (
-    <div className="flex flex-col h-full overflow-hidden relative">
+    <div className={`flex flex-col h-full overflow-hidden relative ${isStreaming ? "sk-reasoning-flow" : ""}`} style={isStreaming ? { border: "1.5px solid transparent" } : undefined}>
       <div className="flex-1 flex min-h-0">
         {/* Session sidebar — left */}
         <SessionSidebar />

@@ -165,3 +165,91 @@ def get_transcript(meeting_id: str) -> TranscriptionResult | None:
     if data is None:
         return None
     return TranscriptionResult(**data)
+
+
+# ── Pipeline data (sentences, chunks, section markdown) ───────────────
+
+
+def sentences_path(meeting_id: str) -> Path:
+    return _meeting_dir(meeting_id) / "sentences.json"
+
+
+def chunks_path(meeting_id: str) -> Path:
+    return _meeting_dir(meeting_id) / "chunks.json"
+
+
+def save_sentences(meeting_id: str, sentences: list[dict]) -> str:
+    """Persist Sentence array (metadata only, no embedding vectors)."""
+    path = sentences_path(meeting_id)
+    _write_json(path, {"sentences": sentences})
+    return str(path)
+
+
+def get_sentences(meeting_id: str) -> list[dict] | None:
+    """Return raw Sentence dicts or None if not yet computed."""
+    data = _read_json(sentences_path(meeting_id))
+    if data is None:
+        return None
+    return data.get("sentences", [])
+
+
+def save_chunks(meeting_id: str, chunks: list[dict]) -> str:
+    """Persist Chunk array."""
+    path = chunks_path(meeting_id)
+    _write_json(path, {"chunks": chunks})
+    return str(path)
+
+
+def get_chunks(meeting_id: str) -> list[dict] | None:
+    """Return raw Chunk dicts or None if not yet computed."""
+    data = _read_json(chunks_path(meeting_id))
+    if data is None:
+        return None
+    return data.get("chunks", [])
+
+
+def section_md_path(meeting_id: str, tab_id: str) -> Path:
+    return _meeting_dir(meeting_id) / f"{tab_id}.md"
+
+
+def save_section_md(meeting_id: str, tab_id: str, content: str) -> str:
+    """Write a section's generated markdown to its tab file."""
+    path = section_md_path(meeting_id, tab_id)
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+
+
+def get_section_md(meeting_id: str, tab_id: str) -> str | None:
+    """Read a section's generated markdown or None."""
+    path = section_md_path(meeting_id, tab_id)
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def delete_pipeline_data(meeting_id: str) -> None:
+    """Remove all derived pipeline data (sentences, chunks, section mds).
+
+    Called before re-running pipeline after re-transcription.
+    Keeps transcript.json and meta.json intact.
+    """
+    import os as _os
+
+    _meeting_dir(meeting_id)
+    for name in ("sentences.json", "chunks.json"):
+        p = _meeting_dir(meeting_id) / name
+        if p.exists():
+            p.unlink()
+    # Remove section .md files
+    meeting = get_meeting(meeting_id)
+    if meeting and meeting.tabs:
+        for tab in meeting.tabs:
+            if isinstance(tab, dict):
+                tid = tab.get("tab_id", "")
+            else:
+                tid = getattr(tab, "tab_id", "")
+            if tid:
+                md = section_md_path(meeting_id, tid)
+                if md.exists():
+                    md.unlink()
+    logger.info("Deleted pipeline data for meeting %s", meeting_id)

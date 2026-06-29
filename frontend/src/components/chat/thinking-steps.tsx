@@ -200,6 +200,19 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
     )
   }
 
+  // Tool was used but no detailed task breakdown — show compact summary
+  if (summary && !isStreaming) {
+    return (
+      <div className="mt-5 pt-3.5 border-t border-dashed border-border">
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60">
+          <Check className="h-3 w-3 text-emerald-500" />
+          <Sparkles className="h-3 w-3 text-amber-500/60" />
+          Agentic RAG — {summary.aq_count > 0 ? `${summary.aq_count} AQ${summary.aq_count > 1 ? "s" : ""} searched` : "search completed"}
+        </div>
+      </div>
+    )
+  }
+
   // Fallback: old verbose step tree (for messages without summary)
   if (steps.length === 0) return null
 

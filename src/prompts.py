@@ -223,67 +223,411 @@ Rules:
 # ═══════════════════════════════════════════════════════════════════════
 # Meeting Summary
 # ═══════════════════════════════════════════════════════════════════════
+# Meeting v2 — Blueprint Inference (Node 0.3)
+# ═══════════════════════════════════════════════════════════════════════
 
-# MEETING_SUMMARY_SYSTEM + MEETING_SUMMARY_PROMPT
-#   Purpose: Generates a structured meeting summary (title, per-project sections,
-#            TODO items) from the meeting transcript + user notes.
-#            Triggered by the "Summarize" button on the Recording page.
-#   Role: MEETING_SUMMARY_SYSTEM → system (persona)
-#         MEETING_SUMMARY_PROMPT  → user  (carries transcript, notes, hot words)
-#   Called by: src/meeting/service.py → MeetingService.summarize() → llm.generate()
-#   Template vars: {transcript}                     — full meeting transcript text
-#                  {speakers}                       — speaker list
-#                  {notes}                          — user notes content
-#                  {hot_words}                      — domain terms (for ASR correction, not output)
-#                  {database_grouping_instruction}  — Collection grouping hint (dynamic, may be empty)
-MEETING_SUMMARY_SYSTEM = "You are a professional meeting assistant. You extract structured information from meeting transcripts and notes."
+# MEETING_BLUEPRINT_SYSTEM + MEETING_BLUEPRINT_PROMPT
+#   Purpose: Generates a full meeting summary (General tab) plus a
+#            decomposition blueprint that maps sections to existing
+#            RAG collections.  This is Node 0.3 of the v2 pipeline.
+#   Role: MEETING_BLUEPRINT_SYSTEM → system (persona)
+#         MEETING_BLUEPRINT_PROMPT  → user  (carries transcript, notes,
+#                                          collection catalog)
+#   Called by: src/meeting/service.py → MeetingService._do_blueprint_summary()
+#   Template vars: {transcript}                    — full transcript text
+#                  {speakers}                      — speaker list
+#                  {notes}                         — user notes content
+#                  {hot_words}                     — domain terms (correction aid)
+#                  {collection_catalog}            — existing RAG collection list
+MEETING_BLUEPRINT_SYSTEM = (
+    "You are a professional meeting analyst and information architect. "
+    "You extract structured insights and map meeting topics to existing "
+    "knowledge-base collections with precision."
+)
 
-MEETING_SUMMARY_PROMPT = """\
-Based on the following meeting transcript and notes, generate a structured summary.
+MEETING_BLUEPRINT_PROMPT = """\
+Complete two tasks based on the meeting transcript, user notes, and the
+user's existing collection catalog.
 
----TRANSCRIPT---
+--- TRANSCRIPT ---
 {transcript}
 
----SPEAKERS---
+--- SPEAKERS ---
 {speakers}
 
----NOTES---
+--- NOTES ---
 {notes}
 
----HOT WORDS (Domain Terminology)---
+--- HOT WORDS (Correction Aid) ---
 {hot_words}
 
-These hot words are domain-specific terms (names, acronyms, jargon) for YOUR REFERENCE ONLY. Use them ONLY to correct potential ASR errors — if you see garbled or out-of-place words that phonetically resemble a hot word, replace them with the correct spelling. Do NOT list, mention, or regurgitate hot words anywhere in the output. They are a correction aid, not content.
+These hot words are domain terms for correcting ASR errors only.
+Replace garbled words that phonetically resemble a hot word with the
+correct spelling.  Do NOT list hot words in the output.
 
-Requirements:
-- **Title**: A short, descriptive meeting title (max 50 characters). Format: "[Main Topic] - [Key Context]". Do NOT include a date prefix.
-- **Sections**: Split the meeting into logical sections by project/topic. Each section has:
-  • heading: The project/topic name (e.g. "Project WD", "Other Topics")
-  • detail: Comprehensive account of everything discussed under this topic. Include key points, data, arguments, decisions, context from notes. Use Markdown with bullet points, bold, and real speaker names.
-  • summary: Concise 2-4 sentence summary of this topic's discussion and outcomes. Use Markdown.
-  • todos: JSON array of action items for this topic. Each item has "text" (required), optional "assignee" (real speaker name), optional "priority" (high/medium/low). CRITICAL: Every section MUST have a todos array, even if empty ([]).
+--- EXISTING COLLECTION CATALOG ---
+{collection_catalog}
 
-{database_grouping_instruction}
+Each collection has an id (stable identifier), a name (human-readable),
+and possibly a description.  Use this catalog to ground your section
+mapping — prefer matching meeting topics to existing collections.
 
-IMPORTANT: Always incorporate information from the NOTES section. Notes may contain important context, decisions, or details not present in the transcript.
+---
 
-Output a single JSON object with this EXACT schema (no markdown fences, no extra text):
+TASK 1 — General Summary
+
+Produce a comprehensive meeting-level Markdown document with these
+sections:
+
+## Summary
+A concise 3-5 sentence overview of the entire meeting.
+Use [spk:ID] for every meeting speaker reference (see Speaker rules
+in Task 2).
+Use [stt_XXX] to link key claims to source sentences when appropriate.
+
+## Data & Facts
+Key data points, figures, metrics, decisions, deadlines mentioned.
+Present as bulleted blocks.  For each fact block, append a reference
+tag listing the source sentence IDs: [stt_0001,stt_0003].
+
+REF ACCURACY — CRITICAL:
+- Before writing a [stt_XXX], verify that sentence stt_XXX ACTUALLY
+  contains the data point, figure, or decision stated in the fact.
+- Re-read the sentence text in the transcript above to confirm.
+- If no single sentence directly supports a fact, do NOT add a ref tag.
+  An unsupported fact without a ref is better than a wrong ref.
+- Use commas between IDs or ranges: [stt_0001,stt_0003] or [stt_0001-005].
+  For consecutive sentence ranges, use dash notation: [stt_0001-005]
+  expands to stt_0001,stt_0002,stt_0003,stt_0004,stt_0005.
+  Combine ranges and singles with commas: [stt_0001-005,stt_0010,stt_0015-018].
+- Use [spk:ID] for all meeting speakers (listed in SPEAKERS).  Use the
+  person's name as mentioned for non-speakers.
+
+## Detail
+A thorough, structured Markdown account of the entire meeting, organised
+by topic flow.  Use headings (###), bullet points, and bold for emphasis.
+Use [spk:ID] for all meeting speakers.  Use the person's name as
+mentioned for non-speakers.
+Use [stt_XXX] to link factual claims to source sentences when appropriate.
+
+---
+
+TASK 2 — Decomposition Blueprint
+
+Infer the logical sub-topics (sections) present in this meeting, guided
+by the collection catalog above.
+
+Rules:
+- Map each sub-topic to the most relevant existing collection when a
+  clear match exists.  Use the collection's id from the catalog.
+- If a sub-topic has no matching collection, leave
+  ``associated_collection_id`` as an empty string and use a descriptive
+  ``tab_name`` that follows the user's naming conventions.
+- Low-value chatter (greetings, tech checks, off-topic small-talk)
+  belongs in an "Other" section.
+- Provide a ~100-character ``section_description`` summarising what
+  this section covers, to help downstream labelling.
+
+---
+
+Output EXACTLY this JSON object (no markdown fences, no extra text):
 
 {{
-  "title": "Meeting Title",
-  "sections": [
+  "general_md_content": "## Summary\\n...\\n\\n## Data & Facts\\n...\\n\\n## Detail\\n...",
+  "blueprint": [
     {{
-      "heading": "Project/Topic Name",
-      "detail": "Markdown detail text...",
-      "summary": "Markdown summary text...",
-      "todos": [{{"text": "action item", "assignee": "Name", "priority": "high"}}]
+      "tab_name": "Project Alpha - Budget Review",
+      "associated_collection_id": "col_abc123",
+      "associated_collection_name": "Project Alpha",
+      "section_description": "Budget approval discussion for Project Alpha, including vendor negotiations and staffing plan for Q3. Approximately 100 chars."
+    }},
+    {{
+      "tab_name": "Other",
+      "associated_collection_id": "",
+      "associated_collection_name": "",
+      "section_description": "Greetings, equipment setup checks, and unrelated casual conversation with no business attribution."
     }}
   ]
 }}
 
-RULES for sections:
-- Each section represents a distinct project or major topic group
-- Sub-points and numbered items stay as bullets within their section's detail
-- If the meeting covers a single topic, use one section
-- Always include at least one section
-- NEVER mention hot words, project matching results, or reference-only metadata in the output. Hot words are a correction aid; project names are section grouping hints. Neither should appear as content."""
+CRITICAL:
+- The ``blueprint`` array MUST include every identified sub-topic.
+  Always include an "Other" section as the last entry.
+- The ``general_md_content`` string is a single flat Markdown document.
+  Escape inner double-quotes and newlines so the JSON is valid.
+- Prefer matching to existing collections.  Err toward fewer, broader
+  sections rather than many narrow ones.
+- When referencing a speaker, use the format [spk:ID] where ID is
+	  the speaker identifier from the source sentences (e.g. [spk:0]).
+	  NEVER write bare speaker names — always use the marker so the UI
+	  can dynamically map names later.  Example: "[spk:0] proposed
+	  increasing the budget to $450k."
+- Speaker references: throughout the ENTIRE document (Summary, Todo,
+  Data & Facts, Detail), use [spk:ID] for every meeting speaker (anyone
+  in the SPEAKERS list).  NEVER write a speaker's name directly.
+- For non-speakers (people mentioned but NOT in the SPEAKERS list),
+  use their name as it appears in conversation.  Do NOT invent [spk:ID].
+- Example: "[spk:0] proposed the budget. They suggested asking Finance
+  Director Li to approve." — [spk:0] is a speaker; Finance Director Zhang is a non-speaker.
+- Write in the same language as the transcript."""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Meeting v2 — Context-Aware Sentence Tagging (Node 1.1)
+# ═══════════════════════════════════════════════════════════════════════
+
+# MEETING_TAGGING_SYSTEM + MEETING_TAGGING_PROMPT
+#   Purpose: Classifies every sentence in the target chunk into the
+#            blueprint sections defined during Node 0.3.  Uses a rolling
+#            context window (2 prior chunks + current chunk) for
+#            co-reference resolution while strictly tagging only the
+#            target chunk's sentences.
+#   Role: MEETING_TAGGING_SYSTEM → system (persona)
+#         MEETING_TAGGING_PROMPT  → user  (carries blueprint, background
+#                                         context, and target sentences)
+#   Called by: src/meeting/service.py → MeetingService._tag_chunk()
+#   Template vars: {blueprint_json}   — section definitions from Node 0.3
+#                  {context_json}     — Chunk -2 & -1 sentences as background
+#                  {target_json}      — Chunk 0 sentences to classify
+MEETING_TAGGING_SYSTEM = (
+    "You are a precise meeting section classifier. "
+    "You assign each sentence in a target window to one or more "
+    "predefined topic sections.  Be conservative — a sentence that is "
+    "ambiguous or transitional should be placed in the single best-fit "
+    "section rather than multiple sections."
+)
+
+MEETING_TAGGING_PROMPT = """\
+Map every sentence in <target> to the most appropriate section(s) from
+the blueprint below.  Sentences in <context> are provided ONLY for
+co-reference resolution (e.g. to understand what "that project" refers
+to).  Do NOT tag context sentences.
+
+--- BLUEPRINT ---
+{blueprint_json}
+
+CRITICAL RULES:
+1. Tag ONLY sentences inside <target>.  Context sentences are read-only.
+2. A sentence may belong to multiple sections when it genuinely spans
+   two topics (e.g. "the budget increase affects both Project A and
+   Project C").
+3. The "Other" section is a catch-all for greetings, tech checks, and
+   small-talk with no business attribution.  Default to "Other" only
+   when no better section fits.
+4. Pay attention to speaker changes and explicit topic transitions
+   (e.g. "Let's move on to...").
+
+Output EXACTLY this JSON (no markdown, no extra text):
+
+{{
+  "mapping": {{
+    "tab_sec_01": ["stt_0012", "stt_0013"],
+    "tab_sec_02": ["stt_0014", "stt_0015"],
+    "other": ["stt_0016"]
+  }}
+}}
+
+The mapping keys are blueprint tab_ids.  Each value is a list of
+sentence IDs from <target> assigned to that section.
+
+---
+
+<context>
+{context_json}
+</context>
+
+<target>
+{target_json}
+</target>"""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Meeting v2 — Section Summarization (Node 1.3)
+# ═══════════════════════════════════════════════════════════════════════
+
+# MEETING_SECTION_SUMMARY_SYSTEM + MEETING_SECTION_SUMMARY_PROMPT
+#   Purpose: Generates a focused markdown summary for one section of a
+#            meeting, using the section's tagged sentences and context.
+#            Includes LLM-generated reference annotations for fact
+#            traceability.
+#   Role: MEETING_SECTION_SUMMARY_SYSTEM → system (persona)
+#         MEETING_SECTION_SUMMARY_PROMPT  → user
+#   Called by: src/meeting/service.py → MeetingService._summarize_section()
+#   Template vars: {section_name}       — e.g. "Project Alpha - Budget Review"
+#                  {section_description} — 100-char description from blueprint
+#                  {sentences_json}      — tagged sentences with surrounding context
+#                  {other_sections_summary} — brief descriptions of other sections
+#                                            for cross-reference resolution
+MEETING_SECTION_SUMMARY_SYSTEM = (
+    "You are a professional meeting minute writer. "
+    "You write concise, well-structured meeting notes for a single "
+    "specific topic section, using only the provided source sentences."
+)
+
+MEETING_SECTION_SUMMARY_PROMPT = """\
+Write a focused meeting summary for the following section.
+
+Section: {section_name}
+Context: {section_description}
+
+Other sections discussed in this meeting (for cross-reference only):
+{other_sections_summary}
+
+---
+
+Source sentences (each has an id, speaker, and text):
+
+{sentences_json}
+
+---
+
+Produce a Markdown document with these sections:
+
+## Summary
+2-4 sentence overview of the discussion and outcomes for this section.
+Use [spk:ID] for every meeting speaker reference (same rules as Todo).
+Use [stt_XXX] to link claims to source sentences when appropriate.
+
+## Todo
+Action items specific to this section.  Each as a bullet with assignee
+and priority.
+
+Assignee rules:
+- If the assignee IS a meeting speaker (appears in any source sentence's
+  "speaker" field), use the [spk:ID] marker (e.g. [spk:0]).
+- If the assignee is a non-speaker (mentioned in conversation but does
+  NOT appear as a "speaker" in the source sentences), use their name
+  exactly as it appears in the conversation.
+
+Attribution rule — CRITICAL:
+Attribute each task to the person who is expected to DO it, NOT the
+person who merely mentioned or suggested it.  Carefully determine this
+from the conversation context.  For example: if [spk:0] says "Finance Director Zhang should update the dashboard", the task
+belongs to Finance Director Zhang, not [spk:0].
+
+Priority: append [priority: high], [priority: medium], or [priority: low]
+at the end of each bullet when the conversation indicates urgency.
+
+Examples:
+- [spk:0] to prepare the Q3 budget report [priority: high]
+- Finance Director Zhang to update the team dashboard [priority: medium]
+
+## Data & Facts
+Key data points, figures, metrics, decisions, and deadlines mentioned
+in this section.  Present each as a standalone bullet block followed by
+a source reference tag on the same line in the format [stt_0001].
+
+REF ACCURACY — CRITICAL:
+- Before writing a [stt_XXX], verify that sentence stt_XXX ACTUALLY
+  contains the data point, figure, or decision stated in the fact.
+- Re-read the sentence text to confirm.  Do NOT guess or match by topic
+  alone.  The sentence must literally contain the stated number or claim.
+- If no single sentence directly supports a fact, do NOT add a ref tag.
+  An unsupported fact without a ref is FAR better than a wrong ref.
+- Combine multiple IDs in one tag when a fact draws from several sentences.
+- Use commas between IDs or ranges: [stt_0001,stt_0003] or [stt_0001-005].
+  For consecutive sentences, use dash ranges: [stt_0001-005] expands to
+  stt_0001,stt_0002,stt_0003,stt_0004,stt_0005.  Mix ranges and singles with
+  commas: [stt_0001-005,stt_0010,stt_0015-018].
+  NEVER concatenate IDs without commas or dash, e.g. [stt_0036038] —
+  every stt_XXXX must be a 4-digit ID.
+- ALWAYS include the "stt_" prefix.  NEVER write bare numbers like
+  [0278] or [278-0281] — these are invalid and will be silently removed.
+- Only reference sentence IDs that actually appear in the source sentences
+  above AND whose text confirms the fact.
+
+Use [spk:ID] for ALL speaker references within facts.  Example:
+
+- [spk:0] reported Q3 revenue at $2.1M, a 15% increase YoY. [stt_0012,stt_0015]
+- Vendor X was selected for the supply chain re-design, contract starts July 1. [stt_0023]
+
+## Detail
+A structured, thorough Markdown account of this section's discussion.
+Use headings (###), bullet points, and bold.  Organise by sub-topic
+flow within the section.  Use [spk:ID] for every meeting speaker
+reference (same rules as Todo).  Use [stt_XXX] to link factual
+claims to source sentences when appropriate.
+
+CRITICAL:
+- When referencing a MEETING SPEAKER (someone who appears in the source
+  sentences' "speaker" field), use the [spk:ID] marker (e.g. [spk:0]).
+  NEVER write the speaker's name directly — always use the marker so the
+  UI can dynamically map names later.
+- When referencing a NON-SPEAKER (a person mentioned in conversation
+  who does NOT appear as a speaker in the source sentences), use their
+  name exactly as mentioned.  Do NOT invent a [spk:ID] for them.
+  NEVER write [spk:?] — it is an invalid marker.  Just write the person's
+  name directly (e.g. "Allen" not "[spk:?] (likely Allen)").
+- Example: "[spk:0] proposed increasing the budget.  They suggested
+  asking Finance Director Zhang to approve it." — [spk:0] is a speaker;
+  "Finance Director Zhang" is a non-speaker rendered as plain text.
+- Restrict content to this section's topic.  Do not include information
+  from the other sections listed above — they are provided only to help
+  you resolve cross-references like "as discussed in the budget review".
+- Sentence references [stt_XXX] may be used in ANY section (Summary,
+  Todo, Data & Facts, Detail) to link claims to source sentences.
+  Each [stt_XXX] MUST point to a sentence whose text literally
+  contains the claim being stated.  Verify by re-reading the sentence.
+  No ref is better than a wrong ref.
+- Write in the same language as the source sentences."""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Meeting v2 — Magic Extract Rescan (Node 2.2)
+# ═══════════════════════════════════════════════════════════════════════
+
+# MEETING_EXTRACT_SYSTEM + MEETING_EXTRACT_PROMPT
+#   Purpose: Re-scans all meeting chunks for sentences matching a
+#            user-defined custom topic.  Existing section tags act as
+#            guardrails — sentences already belonging to another section
+#            are preferentially respected unless the sentence has strong
+#            dual relevance to the new topic.
+#   Role: MEETING_EXTRACT_SYSTEM → system (persona)
+#         MEETING_EXTRACT_PROMPT  → user
+#   Called by: src/meeting/service.py → MeetingService._rescan_chunk()
+#   Template vars: {target_topic_name}        — user-defined topic name
+#                  {target_topic_description}  — user-defined description
+#                  {existing_sections_json}    — existing sections summary
+#                  {context_json}              — background chunk sentences
+#                  {target_json}               — current chunk sentences
+MEETING_EXTRACT_SYSTEM = (
+    "You are a precise meeting content extractor. "
+    "You find sentences matching a specific topic while respecting "
+    "pre-existing classifications."
+)
+
+MEETING_EXTRACT_PROMPT = """\
+Find every sentence in <target> that relates to the following topic:
+
+Topic: {target_topic_name}
+Description: {target_topic_description}
+
+Existing section assignments for context:
+{existing_sections_json}
+
+CRITICAL RULES:
+1. Tag ONLY sentences inside <target>.
+2. A sentence tagged with an existing section tag should be included
+   ONLY when it genuinely has strong dual relevance to the target topic.
+   Avoid "tag grabbing" — respect the prior classification by default.
+3. If no sentences match, return an empty mapping object.
+4. Treat the target topic as a brand-new section — use the key
+   "extract_target" consistently in the mapping output.
+
+Output EXACTLY this JSON (no markdown, no extra text):
+
+{{
+  "mapping": {{
+    "extract_target": ["stt_0012", "stt_0025"]
+  }}
+}}
+
+---
+
+<context>
+{context_json}
+</context>
+
+<target>
+{target_json}
+</target>"""

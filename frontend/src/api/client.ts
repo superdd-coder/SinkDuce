@@ -679,6 +679,30 @@ export interface TranscriptSegment {
   end: number
   text: string
   speaker_id?: string
+  sentence_id?: string
+  section_tags?: string[]
+}
+
+// ── Meeting v2 types ──
+
+export type ProcessingState = "idle" | "summarizing" | "breaking_down" | "extracting"
+
+export interface BlueprintItem {
+  tab_id: string
+  tab_name: string
+  associated_collection_id: string
+  associated_collection_name: string
+  section_description: string
+}
+
+export interface MeetingTab {
+  tab_id: string
+  type: "general" | "section"
+  name: string
+  associated_collection_id: string
+  associated_collection_name: string
+  md_file_path: string
+  payload_ref: string[]
 }
 
 export interface Meeting {
@@ -691,10 +715,11 @@ export interface Meeting {
   transcript_path?: string
   detail?: string
   summary?: string
-  todos?: TodoItem[]
   notes_content?: string
   transcription_error?: string
-  summarizing?: boolean
+  processing_state?: ProcessingState
+  blueprint?: BlueprintItem[]
+  tabs?: MeetingTab[]
   allocated_collections: string[]
   allocated_file_ids: string[]
   speaker_names?: Record<string, string>
@@ -715,7 +740,7 @@ export const createMeeting = (title?: string) =>
     body: JSON.stringify(title ? { title } : {}),
   })
 
-export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "detail" | "summary" | "todos" | "speaker_names" | "hot_words_library_id"> & { notes?: string }>) =>
+export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "detail" | "summary" | "speaker_names" | "hot_words_library_id"> & { notes?: string }>) =>
   request<Meeting>(`/meetings/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
@@ -765,40 +790,12 @@ export const cancelTranscribeMeeting = (id: string) =>
     method: "POST",
   })
 
-// ── Meeting Multi-Ingest ──
+// ── Meeting Ingest ──
 
-export interface ProjectSplit {
-  name: string
-  summary: string
-  detail: string
-  todos: any[]
-}
-
-export interface CollectionRecommendation {
-  collection: string
-  score: number
-}
-
-export const splitMeetingByProject = (meetingId: string) =>
-  request<{ projects: ProjectSplit[] }>(`/meetings/${meetingId}/split-by-project`, {
+export const allocateToCollection = (meetingId: string, collection: string) =>
+  request<Meeting>(`/meetings/${meetingId}/allocate`, {
     method: "POST",
-  })
-
-export const recommendCollectionsForText = (text: string) =>
-  request<{ recommendations: CollectionRecommendation[] }>(`/recommend-collections-for-text`, {
-    method: "POST",
-    body: JSON.stringify({ text }),
-  })
-
-export const allocateMulti = (meetingId: string, allocations: { collection: string; content: string }[]) =>
-  request<any>(`/meetings/${meetingId}/allocate-multi`, {
-    method: "POST",
-    body: JSON.stringify({ allocations }),
-  })
-
-export const deleteAllAllocations = (meetingId: string) =>
-  request<{ message: string }>(`/meetings/${meetingId}/allocations`, {
-    method: "DELETE",
+    body: JSON.stringify({ collection }),
   })
 
 export const generateMeetingSummary = (id: string) =>
@@ -816,6 +813,48 @@ export const saveMeetingTranscript = (
   request<{ message: string; segments: number }>(`/meetings/${id}/save-transcript`, {
     method: "POST",
     body: JSON.stringify(payload),
+  })
+
+// ── Meeting v2: Breakdown & Extract ──
+
+export const startBreakdown = (id: string) =>
+  request<Meeting>(`/meetings/${id}/breakdown`, { method: "POST" })
+
+export const magicExtract = (id: string, topics: { name: string; description: string }[], targetTabId?: string) =>
+  request<Meeting>(`/meetings/${id}/magic-extract`, {
+    method: "POST",
+    body: JSON.stringify({ topics, target_tab_id: targetTabId }),
+  })
+
+export const deleteSection = (meetingId: string, tabId: string) =>
+  request<Meeting>(`/meetings/${meetingId}/sections/${tabId}`, {
+    method: "DELETE",
+  })
+
+export const regenerateSection = (meetingId: string, tabId: string) =>
+  request<Meeting>(`/meetings/${meetingId}/sections/${tabId}/regenerate`, {
+    method: "POST",
+  })
+
+export const allocateSection = (meetingId: string, tabId: string, collectionId: string) =>
+  request<Meeting>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
+    method: "POST",
+    body: JSON.stringify({ collection_id: collectionId }),
+  })
+
+export const deleteSectionAllocation = (meetingId: string, tabId: string) =>
+  request<Meeting>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
+    method: "DELETE",
+  })
+
+export const getSectionMd = (meetingId: string, tabId: string) =>
+  fetch(`${BASE}/meetings/${meetingId}/sections/${tabId}/md`)
+    .then((r) => (r.ok ? r.text() : null))
+
+export const saveSectionMd = (meetingId: string, tabId: string, content: string) =>
+  request<{ ok: boolean }>(`/meetings/${meetingId}/sections/${tabId}/md`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
   })
 
 // ── Transcription Providers ──

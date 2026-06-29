@@ -142,6 +142,17 @@ def delete_collection(collection_id: str):
     # Delete metadata
     collections_store.delete_collection_meta(collection_id)
 
+    # Clean up __summaries__ entries for this collection
+    try:
+        from src.rag.summary_manager import SummaryManager
+        sm = SummaryManager(services.db)
+        sm.delete_project_description(collection_id)
+        sm.delete_collection_summary(collection_id)
+        sm.delete_conflicts(collection_id)
+        logger.info("Cleaned up __summaries__ entries for collection: %s", collection_id)
+    except Exception as e:
+        logger.warning("Failed to clean up __summaries__ for %s: %s", collection_id, e)
+
     logger.info("Deleted collection: %s (%s)", meta["name"], collection_id)
     return {"message": f"Collection '{meta['name']}' deleted"}
 
