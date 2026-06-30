@@ -321,7 +321,7 @@ function SectionMetadata({
   tabs: MeetingTab[]
   meetingId: string
   onMeetingUpdate: (m: Meeting) => void
-  onIngestingChange?: (v: boolean) => void
+  onIngestingChange?: (tabId: string, v: boolean) => void
 }) {
   const bpEntry = (blueprint ?? []).find((b) => b.tab_id === tab.tab_id)
   const description = bpEntry?.section_description ?? ""
@@ -347,7 +347,12 @@ function SectionMetadata({
   const { collections, fetchCollections } = useAppStore()
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState(tab.name)
-  const [pickerIngesting, setPickerIngesting] = useState(false)
+  // 首次 ingest：还没 associated collection 时，选中后立刻在顶部按钮显示 pending 名称
+  const [pendingName, setPendingName] = useState<string | null>(null)
+
+  const showTopButton = hasAssociated || ingested || !!pendingName
+  const topButtonLabel = ingesting ? "Ingesting..." : (displayName || pendingName || associatedName)
+  const topButtonIsActive = ingesting || displayActive || !!pendingName
 
   // Inline editing for section name + description
   const [editingMeta, setEditingMeta] = useState(false)
@@ -434,23 +439,21 @@ function SectionMetadata({
 
   const doIngest = async (colId: string) => {
     setDropdownOpen(false)
-    setPickerIngesting(true)
+    const colMeta = collections.find((c) => c.id === colId)
+    setPendingName(colMeta?.name || colId)
     setSwitchTarget(null)
     try {
-      // Delete old ingestion if switching
       if (ingested && colId !== associatedId) {
         await deleteSectionAllocation(meetingId, tab.tab_id)
       }
       await handleIngest(colId)
-      setDropdownOpen(false)
-      setCreating(false)
       fetchCollections()
     } catch { /* error handled in parent */ }
-    setPickerIngesting(false)
+    setPendingName(null)
   }
 
   const handleCreateAndSelect = async () => {
-    if (!newName.trim() || pickerIngesting) return
+    if (!newName.trim() || !!pendingName) return
     // If switching, confirm first
     if (ingested) {
       setSwitchTarget("__new__")
@@ -461,10 +464,9 @@ function SectionMetadata({
 
   const doCreateAndIngest = async () => {
     setDropdownOpen(false)
-    setPickerIngesting(true)
+    setPendingName(newName.trim())
     setSwitchTarget(null)
     try {
-      // Delete old ingestion if switching
       if (ingested) {
         await deleteSectionAllocation(meetingId, tab.tab_id)
       }
@@ -474,13 +476,12 @@ function SectionMetadata({
       if (!colId) throw new Error("No collection ID returned")
       await handleIngest(colId)
       await fetchCollections()
-      setDropdownOpen(false)
       setCreating(false)
       toast.success(`Created "${newName.trim()}" and ingested`)
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     }
-    setPickerIngesting(false)
+    setPendingName(null)
   }
 
   const handleIngest = async (colId: string) => {
@@ -497,7 +498,7 @@ function SectionMetadata({
   }
 
   useEffect(() => {
-    onIngestingChange?.(ingesting)
+    onIngestingChange?.(tab.tab_id, ingesting)
   }, [ingesting, onIngestingChange])
 
   const handleCancelIngest = async () => {
@@ -523,7 +524,7 @@ function SectionMetadata({
   return (
     <div ref={containerRef} className="px-6 py-3 pb-4 flex gap-4 group relative">
       {/* Left column: section title + description */}
-      <div className="flex-1 min-w-0 flex flex-col gap-1 relative">
+      <div className="flex-1 min-w-0 flex flex-col gap-1 relative items-start">
         {/* Edit button — appears on hover at top-right of left column */}
         {!editingMeta && (
           <button
@@ -588,7 +589,7 @@ function SectionMetadata({
         ) : (
           <>
             <div
-              className="min-w-0 truncate"
+              className="whitespace-normal break-words w-full"
               style={{
                 fontFamily: "var(--font-serif)",
                 fontSize: "clamp(20px, 2vw, 24px)",
@@ -596,6 +597,7 @@ function SectionMetadata({
                 letterSpacing: "-0.01em",
                 lineHeight: 1.35,
                 color: "var(--ze-ink)",
+                textAlign: "left",
               }}
             >
               {tabLabel} {sectionDisplayName}
@@ -609,7 +611,7 @@ function SectionMetadata({
 
       {/* Right column: collection buttons */}
       <div className={cn("shrink-0 flex flex-col gap-1.5 items-end", BUTTON_W)} ref={menuRef}>
-        {(hasAssociated || ingested) && (
+        {showTopButton && (
           <button
             type="button"
             disabled={ingesting}
@@ -620,15 +622,11 @@ function SectionMetadata({
             )}
             style={{
               fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
-              color: ingesting
-                ? "var(--color-primary)"
-                : displayActive
-                  ? "var(--color-primary)"
-                  : "var(--color-muted-foreground)",
+              color: topButtonIsActive ? "var(--color-primary)" : "var(--color-muted-foreground)",
             }}
           >
             <span className="relative z-10 whitespace-nowrap">
-              {ingesting ? "Ingesting..." : displayName || associatedName}
+              {topButtonLabel}
             </span>
             <span
               className={cn(
@@ -636,7 +634,7 @@ function SectionMetadata({
                 ingesting ? "bg-green-wash animate-pulse" : "bg-primary/10",
               )}
               style={{
-                transform: displayActive || ingesting ? "scaleX(1)" : "scaleX(0)",
+                transform: topButtonIsActive ? "scaleX(1)" : "scaleX(0)",
                 transformOrigin: "left",
               }}
             />
@@ -645,23 +643,18 @@ function SectionMetadata({
         <button
           type="button"
           ref={buttonRef}
-          disabled={ingesting || pickerIngesting}
+          disabled={ingesting}
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className={cn(
-            "group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
-            (ingesting || pickerIngesting) && "sk-thinking-flow",
-          )}
+          className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
           style={{
             fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
-            color: (ingesting || pickerIngesting)
-              ? "var(--color-primary)"
-              : dropdownOpen
-                ? "var(--color-primary-foreground)"
-                : "var(--color-muted-foreground)",
+            color: dropdownOpen
+              ? "var(--color-primary-foreground)"
+              : "var(--color-muted-foreground)",
           }}
         >
           <span className="relative z-10 whitespace-nowrap text-center">
-            {(ingesting || pickerIngesting) ? "Ingesting..." : dropdownOpen ? "Cancel" : "Choose a collection"}
+            {dropdownOpen ? "Cancel" : "Choose a collection"}
           </span>
           <span
             className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
@@ -693,7 +686,7 @@ function SectionMetadata({
                 key={col.id}
                 onClick={() => handleSelectCollection(col.id)}
                 className={`relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group ${
-                  pickerIngesting ? "pointer-events-none opacity-50" : ""
+                  pendingName ? "pointer-events-none opacity-50" : ""
                 }`}
               >
                 <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
@@ -708,7 +701,7 @@ function SectionMetadata({
                 <label
                   onClick={() => setCreating(true)}
                   className={`relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group ${
-                    pickerIngesting ? "pointer-events-none opacity-50" : ""
+                    pendingName ? "pointer-events-none opacity-50" : ""
                   }`}
                 >
                   <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
@@ -731,7 +724,7 @@ function SectionMetadata({
                   <button
                     className="shrink-0 text-[10px] font-medium uppercase tracking-[0.1em] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-50"
                     onClick={handleCreateAndSelect}
-                    disabled={!newName.trim() || pickerIngesting}
+                    disabled={!newName.trim() || !!pendingName}
                   >
                     Create
                   </button>
@@ -828,7 +821,7 @@ export function MeetingTabs({
   const transcriptBtnRef = useRef<HTMLButtonElement>(null)
   const speakerBtnRef = useRef<HTMLButtonElement>(null)
   const [tabIndicator, setTabIndicator] = useState({ left: 0, width: 0 })
-  const [sectionIngesting, setSectionIngesting] = useState(false)
+  const [ingestingTabs, setIngestingTabs] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     const container = tabContainerRef.current
@@ -905,6 +898,14 @@ export function MeetingTabs({
       loadTabContent(selectedSummaryId)
     }
   }, [selectedSummaryId, loadTabContent])
+
+  // Preload all section tab contents so Action Items aggregate without clicking into each section
+  useEffect(() => {
+    const sectionTabs = tabs.filter(t => t.type === "section" && t.md_file_path)
+    for (const t of sectionTabs) {
+      loadTabContent(t.tab_id)
+    }
+  }, [tabs])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Seed general tab from meeting.detail
   useEffect(() => {
@@ -1017,8 +1018,9 @@ export function MeetingTabs({
     setExtractOpen(false)
     setBusy(true)
     try {
-      // If on a section tab, overwrite it instead of creating a new one
-      const targetTabId = selectedSummaryId !== "tab_general" ? selectedSummaryId : undefined
+      // If on a section tab, overwrite it instead of creating a new one.
+      // Never overwrite "general" or "other" catch-all tabs.
+      const targetTabId = (selectedSummaryId !== "tab_general" && selectedSummaryId !== "other") ? selectedSummaryId : undefined
       await magicExtract(meetingId, validTopics, targetTabId)
       setExtractTopics([{ name: "", description: "" }])
       // Poll until extract completes
@@ -1188,8 +1190,8 @@ export function MeetingTabs({
   const aggregatedTodos: AggregatedTodo[] = useMemo(() => {
     const results: AggregatedTodo[] = []
     const seen = new Set<string>()
-    const todoRe = /^[-*+]\s+(.+?)\s+\[priority:\s*(high|medium|low)\s*\]/i
-    const spkLeadingRe = /^\[spk:(\d+)\]\s+/
+    // Match both [priority: high] and *(high)* priority formats
+    const todoRe = /^[-*+]\s+(.+?)\s+(?:\[priority:\s*(high|medium|low)\s*\]|\*\((high|medium|low)\)\*)\s*$/i
     for (const tab of tabs) {
       if (tab.type !== "section" || !tab.md_file_path) continue
       const md = tabMdContents[tab.tab_id]
@@ -1199,30 +1201,61 @@ export function MeetingTabs({
         const m = todoRe.exec(trimmed)
         if (!m) continue
         const rawBody = m[1].trim()
-        const priority = m[2].toLowerCase()
+        const priority = (m[2] || m[3]).toLowerCase()
+        // Strip markdown bold/italic: **Name** → Name, *Name* → Name
+        const cleanBody = rawBody
+          .replace(/\*\*([^*]+?)\*\*/g, "$1")
+          .replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, "$1")
+          .replace(/__/g, "").replace(/(?<!_)_(?!_)/g, "")
+          .trim()
+        // Try [spk:N] prefix first (handle optional space after colon: [spk: 0])
         let assignee = ""
-        let task = rawBody
-        const spkMatch = spkLeadingRe.exec(rawBody)
+        let task = cleanBody
+        const spkMatch = /^\[spk:\s*(\d+)\]\s*/u.exec(cleanBody)
         if (spkMatch) {
           assignee = speakerNames[spkMatch[1]] ?? `Speaker ${spkMatch[1]}`
-          task = rawBody.slice(spkMatch[0].length).trim()
+          let rest = cleanBody.slice(spkMatch[0].length).trim()
+          // Strip leading / Name, /Name, " / Ivy" → "" or "：获取美国..."
+          rest = rest.replace(/^[/／]\s*\S+\s*/u, "").trim()
+          // If rest still has more name after [spk:N] like "Herman：xxx"
+          const restColon = /^(.+?)[:：]\s*(.+)$/u.exec(rest)
+          if (restColon && restColon[1].length > 0 && restColon[1].length <= 30) {
+            assignee = `${assignee} / ${restColon[1].trim()}`
+            task = restColon[2].trim()
+          } else if (rest && restColon && restColon[1].length === 0) {
+            // rest starts with ：or : directly — treat rest after colon as task
+            task = restColon[2].trim()
+          } else if (rest) {
+            task = rest
+          }
         } else {
-          const nameMatch = /^(\S{1,8})\s+(.+)$/u.exec(rawBody)
-          if (nameMatch) {
-            assignee = nameMatch[1]
-            task = nameMatch[2]
+          // No [spk:N] — split by colon or space
+          const colonMatch = /^(.+?)[:：]\s*(.+)$/u.exec(cleanBody)
+          if (colonMatch && colonMatch[1].length <= 40) {
+            assignee = colonMatch[1].trim()
+            task = colonMatch[2].trim()
           } else {
-            assignee = "?"
+            const spaceMatch = /^(\S{1,30})\s+(.+)$/u.exec(cleanBody)
+            if (spaceMatch) {
+              assignee = spaceMatch[1]
+              task = spaceMatch[2]
+            } else {
+              assignee = "?"
+            }
           }
         }
+        // Clean trailing priority markers from task: *(high)* or [priority: high]
+        task = task.replace(/\s*\*\((high|medium|low)\)\*\s*$/i, "").replace(/\s*\[priority:\s*(high|medium|low)\]\s*$/i, "")
+        // Replace [spk:123] references with speaker names
         task = task.replace(
           /\[spk:(\d+)\]/g,
           (_, id: string) => speakerNames[id] ?? `Speaker ${id}`,
         )
-        task = task.replace(
-          /\[spk:\?\]\s*(?:\([^)]*\b(likely|possibly|maybe|probably)\s+(\w+)\))?/gi,
-          (_, _hint?: string, name?: string) => name ?? "?",
-        )
+        // Clean up [spk:?] noise
+        task = task
+          .replace(/\[spk:\?\]\s*(?:\([^)]*\b(likely|possibly|maybe|probably)\s+(\w+)\))?\s*/gi, "")
+          .trim()
+        if (!task) task = cleanBody
         const sig = `${assignee}|${task.slice(0, 60)}`
         if (seen.has(sig)) continue
         seen.add(sig)
@@ -1333,7 +1366,7 @@ export function MeetingTabs({
           >
             <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
               <span className={cn("sk-diamond", isGeneral && "on")} aria-hidden />
-              <span className="whitespace-normal break-words min-w-0 leading-snug">General</span>
+              <span className="whitespace-normal break-words min-w-0 leading-snug text-left">General</span>
             </span>
             <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
           </button>
@@ -1417,7 +1450,7 @@ export function MeetingTabs({
                 onSave={async (draft) => handleSaveSection(selectedSummaryId, draft)}
                 onRefClick={handleRefClick}
                 speakerNames={speakerNames}
-                actionsDisabled={sectionIngesting}
+                actionsDisabled={ingestingTabs.has(selectedSummaryId)}
                 title={
                   isGeneral
                     ? "General"
@@ -1429,7 +1462,7 @@ export function MeetingTabs({
                     <div className="flex items-center gap-2 px-6 pb-2">
                       <button
                         type="button"
-                        disabled={busy || sectionIngesting}
+                        disabled={busy || ingestingTabs.size > 0}
                         onClick={() => setReSummarizeOpen(true)}
                         title="Re-summarize"
                         className={cn(
@@ -1461,7 +1494,7 @@ export function MeetingTabs({
                             {/* Regenerate — AI-COMP-001 SEND idle; AI-COMP-120 flow border when generating */}
                             <button
                               type="button"
-                              disabled={busy || sectionIngesting}
+                              disabled={busy || ingestingTabs.has(selectedSummaryId)}
                               onClick={() => {
                                 // Check if section has ingested file — warn user it will be deleted
                                 const selectedTab = tabs.find(t => t.tab_id === selectedSummaryId)
@@ -1499,7 +1532,7 @@ export function MeetingTabs({
                                 className="inline-flex items-center justify-center gap-2 rounded-md h-8 px-4 text-[11px] font-medium tracking-[0.06em] uppercase shrink-0 select-none transition-all duration-300 bg-[rgba(140,46,46,0.08)] text-[#8C2E2E] border border-[rgba(140,46,46,0.2)] hover:bg-[rgba(140,46,46,0.14)] hover:border-[rgba(140,46,46,0.4)]"
                                 onClick={() => handleDeleteSection(selectedSummaryId)}
                                 title="Delete section"
-                                disabled={sectionIngesting}
+                                disabled={ingestingTabs.has(selectedSummaryId)}
                               >
                                 DELETE
                               </button>
@@ -1516,7 +1549,13 @@ export function MeetingTabs({
                       tabs={tabs}
                       meetingId={meetingId}
                       onMeetingUpdate={onMeetingUpdate}
-                      onIngestingChange={setSectionIngesting}
+                      onIngestingChange={(tabId, v) => {
+                        setIngestingTabs(prev => {
+                          const next = new Set(prev);
+                          if (v) { next.add(tabId); } else { next.delete(tabId); }
+                          return next;
+                        });
+                      }}
                     />
                   ) : undefined
                 }

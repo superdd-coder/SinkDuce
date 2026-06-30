@@ -912,6 +912,8 @@ class MeetingService:
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
         if not topics:
             raise ValueError("At least one topic is required")
+        if target_tab_id in ("tab_general", "other"):
+            raise ValueError(f"Cannot overwrite '{target_tab_id}' tab")
         if meeting.processing_state != ProcessingState.idle.value:
             raise RuntimeError(f"Meeting is busy: {meeting.processing_state}")
 
@@ -976,6 +978,23 @@ class MeetingService:
             ]
             existing_tabs = meeting.tabs or []
 
+            # Pre-allocate tab_ids before concurrent processing to avoid
+            # collision (all topics saw the same static existing_tabs snapshot).
+            import re as _re_tab
+            _max_n = 0
+            for t in existing_tabs:
+                m = _re_tab.match(r"tab_sec_(\d+)", t.get("tab_id", "") if isinstance(t, dict) else "")
+                if m:
+                    _max_n = max(_max_n, int(m.group(1)))
+            _next_n = _max_n + 1
+            topic_tab_ids: list[str] = []
+            for _t in topics:
+                if target_tab_id:
+                    topic_tab_ids.append(target_tab_id)
+                else:
+                    topic_tab_ids.append(f"tab_sec_{_next_n:02d}")
+                    _next_n += 1
+
             id_to_sentence: dict[str, Sentence] = {
                 s.sentence_id: s for s in sentences
             }
@@ -1014,14 +1033,12 @@ class MeetingService:
             MAX_CONCURRENT = 4
 
             def _rescan_chunks_for_topic(
-                topic: dict,
+                topic: dict, tab_id: str,
             ) -> tuple[set[str], dict[str, str]]:
                 """Re-scan all chunks for one topic → (tagged_ids, {sentence_id: tab_id})"""
                 topic_name = topic.get("name", "Untitled")
                 topic_desc = topic.get("description", "")
 
-                # Use target_tab_id if provided (overwrite mode), else generate new
-                extract_tab_id = target_tab_id or self._make_tab_id(existing_tabs)
                 tagged_ids: set[str] = set()
                 semaphore = threading.BoundedSemaphore(MAX_CONCURRENT)
                 lock = threading.Lock()
@@ -1135,7 +1152,7 @@ class MeetingService:
                     )
 
                 return tagged_ids, {
-                    "tab_id": extract_tab_id,
+                    "tab_id": tab_id,
                     "type": "section",
                     "name": topic_name,
                     "md_content": md_content,
@@ -1146,7 +1163,8 @@ class MeetingService:
             results: list[tuple[set[str], dict]] = []
             with ThreadPoolExecutor(max_workers=len(topics)) as pool:
                 futures = [
-                    pool.submit(_rescan_chunks_for_topic, t) for t in topics
+                    pool.submit(_rescan_chunks_for_topic, t, tid)
+                    for t, tid in zip(topics, topic_tab_ids)
                 ]
                 for f in as_completed(futures):
                     results.append(f.result())
