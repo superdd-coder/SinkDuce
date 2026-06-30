@@ -211,8 +211,8 @@ export const getFileChunks = (collection: string, source: string, limit = 100) =
 export const getFilePreviewUrl = (source: string) =>
   `/api/documents/preview/${encodeURIComponent(source)}`
 
-export const getExtractedText = (source: string) =>
-  request<{ text: string; format: string }>(`/documents/extracted/${encodeURIComponent(source)}`)
+export const getExtractedText = (source: string, collection?: string) =>
+  request<{ text: string; format: string }>(`/documents/extracted/${encodeURIComponent(source)}${collection ? `?collection=${encodeURIComponent(collection)}` : ""}`)
 
 export const isPreviewable = (filename: string) => {
   const ext = filename.split(".").pop()?.toLowerCase() ?? ""
@@ -743,7 +743,7 @@ export const createMeeting = (title?: string) =>
     body: JSON.stringify(title ? { title } : {}),
   })
 
-export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "detail" | "summary" | "speaker_names" | "hot_words_library_id"> & { notes?: string }>) =>
+export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "detail" | "summary" | "speaker_names" | "hot_words_library_id"> & { notes?: string; blueprint?: BlueprintItem[] }>) =>
   request<Meeting>(`/meetings/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
@@ -791,14 +791,6 @@ export const transcribeMeeting = (id: string, languageHints?: string[]) =>
 export const cancelTranscribeMeeting = (id: string) =>
   request<{ message: string }>(`/meetings/${id}/cancel-transcribe`, {
     method: "POST",
-  })
-
-// ── Meeting Ingest ──
-
-export const allocateToCollection = (meetingId: string, collection: string) =>
-  request<Meeting>(`/meetings/${meetingId}/allocate`, {
-    method: "POST",
-    body: JSON.stringify({ collection }),
   })
 
 export const generateMeetingSummary = (id: string) =>

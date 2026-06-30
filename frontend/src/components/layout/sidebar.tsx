@@ -21,7 +21,7 @@ const navItems: Array<{ view: SidebarView; label: string }> = [
   { view: "llm_provider", label: "Settings" },
 ]
 
-const COLLAPSE_DELAY_MS = 1500
+const COLLAPSE_DELAY_MS = 1000
 
 export function Sidebar() {
   const { sidebarView, setSidebarView, sidebarOpen, setSidebarOpen } = useAppStore()

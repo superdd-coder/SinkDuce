@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Pencil, Check, X } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
@@ -15,20 +16,21 @@ import {
 } from "@/api/client"
 import { toast } from "sonner"
 import { MeetingTabs } from "./meeting-tabs"
-import { AlertCircle, Settings } from "lucide-react"
+import { TranscriptTab } from "./transcript-panel"
+import { AlertCircle, Settings, X as XIcon } from "lucide-react"
 import { MeetingList } from "./meeting-list"
 import { MediaBar } from "./media-bar"
 import type { MediaBarHandle } from "./media-bar"
-import { TranscriptPanel } from "./transcript-panel"
-import { HotWordsSelector } from "./hot-words-selector"
-import { LanguageHintsSelector, DEFAULT_LANGUAGE_HINTS } from "./language-hints-selector"
+
+import { DEFAULT_LANGUAGE_HINTS } from "./language-hints-selector"
 
 export function MeetingView() {
-  const { activeMeeting, setActiveMeeting, setSidebarView, setActiveCollection, collections, fetchCollections } = useAppStore()
+  const { activeMeeting, setActiveMeeting, setSidebarView, fetchCollections, collections, setActiveCollection } = useAppStore()
 
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [meeting, setMeeting] = useState<Meeting | null>(null)
+  const meetingContentRef = useRef<HTMLDivElement>(null)
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([])
 
   // Guard against stale fetchMeeting results after activeMeeting changes
@@ -36,11 +38,9 @@ export function MeetingView() {
 
   // UI state
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
-  const [transcriptOpen, setTranscriptOpen] = useState(true)
   const [realtimeEnabled, setRealtimeEnabled] = useState(false)
   const [hasRealtimeProvider, setHasRealtimeProvider] = useState(false)
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
-  const [providerSupportsHotWords, setProviderSupportsHotWords] = useState(false)
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
   // Per-meeting language hints: keyed by meeting ID, persists across meeting switches during the session
   const perMeetingLanguageHints = useRef<Map<string, string[]>>(new Map())
@@ -51,6 +51,40 @@ export function MeetingView() {
   const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false)
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
+  const [floatingOpen, setFloatingOpen] = useState(false)
+
+  // When the main content area is wide enough, we left-shift the centered column
+  // and absolutely position the floating panel (current "balanced" design).
+  // When too narrow, the panel becomes a flex sibling so the content column
+  // can yield/compress instead of overflowing.
+  const mainAreaRef = useRef<HTMLDivElement>(null)
+  const [canShift, setCanShift] = useState(true)
+  // Hide the metadata block (CREATED/SPEAKERS/COLLECTIONS) when the main area
+  // is too narrow to fit it next to the title without crowding.
+  const [showMetadata, setShowMetadata] = useState(true)
+  useEffect(() => {
+    const el = mainAreaRef.current
+    if (!el) return
+    const update = () => {
+      const w = el.clientWidth
+      setCanShift(w >= 1000)
+      setShowMetadata(w >= 900)
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [meeting?.id])
+
+  // Open floating transcript when sentence reference is clicked
+  useEffect(() => {
+    if (focusRef) setFloatingOpen(true)
+  }, [focusRef?.ts])
+
+  // Close floating panel when switching meetings
+  useEffect(() => {
+    setFloatingOpen(false)
+  }, [activeMeeting])
 
   // Hooks
   const transcription = useTranscription(activeMeeting)
@@ -170,7 +204,6 @@ export function MeetingView() {
       // Refresh provider info in case active model was changed in Settings
       getActiveProviderInfo()
         .then((info) => {
-          setProviderSupportsHotWords(info.file.supports_hot_words)
           const hints = info.file.supported_language_hints
           setSupportedLanguageHints(hints)
           // Restore per-meeting language hints, or default filtered by supported codes
@@ -182,7 +215,6 @@ export function MeetingView() {
             setLanguageHints(DEFAULT_LANGUAGE_HINTS.filter((c) => supportedCodes.has(c)))
           }
         })
-        .catch(() => setProviderSupportsHotWords(false))
       setMeeting(null)
       setTranscript([])
       fetchMeeting(activeMeeting)
@@ -306,18 +338,6 @@ export function MeetingView() {
     setActiveMeeting(id)
   }, [setActiveMeeting])
 
-  const handleUpdateSpeakerName = async (speakerId: string, name: string) => {
-    if (!activeMeeting || !meeting) return
-    const updated = { ...(meeting.speaker_names ?? {}), [speakerId]: name }
-    try {
-      const m = await updateMeeting(activeMeeting, { speaker_names: updated })
-      setMeeting(m)
-      toast.success(`Speaker ${speakerId} renamed to "${name}"`)
-    } catch (err) {
-      toast.error(`Failed to update speaker name: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
   const handleStartEditTitle = () => {
     if (!meeting) return
     setTitleDraft(meeting.title)
@@ -356,11 +376,16 @@ export function MeetingView() {
         onDelete={handleDelete}
       />
 
-      <div className="flex-1 overflow-hidden" key={activeMeeting || "empty"}>
+      <div ref={mainAreaRef} className="flex-1 overflow-hidden" key={activeMeeting || "empty"}>
         {meeting ? (
           <div className="h-full flex flex-col animate-tab-in">
-            {/* Header */}
-            <div className="flex items-center justify-between px-4 h-12 border-b border-border">
+            {/* Header + Media Bar + Content share the same centered width and left-shift (wide mode only). */}
+            <div className={cn(
+              "flex-1 flex flex-col min-h-0 max-w-[800px] mx-auto w-full transition-transform duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+              floatingOpen && canShift ? "-translate-x-[196px]" : "translate-x-0",
+            )}>
+              {/* Header — title on the left, metadata (CREATED/SPEAKERS/COLLECTIONS) on the right */}
+              <div className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0">
               {editingTitle ? (
                 <div className="flex items-center gap-1 flex-1 min-w-0">
                   <input
@@ -381,64 +406,138 @@ export function MeetingView() {
                   </Button>
                 </div>
               ) : (
-                <div className="flex items-center gap-1 min-w-0">
+                <div className="flex items-start gap-1 min-w-0 flex-1">
                   <h2
-                    className="truncate"
                     style={{
                       fontFamily: "var(--font-serif)",
                       fontSize: "clamp(20px, 2vw, 24px)",
                       fontWeight: 300,
                       letterSpacing: "-0.01em",
-                      lineHeight: 1.2,
+                      lineHeight: 1.35,
                       color: "var(--ze-ink)",
                     }}
                   >
                     {meeting.title}
                   </h2>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 opacity-60 hover:opacity-100" onClick={handleStartEditTitle}>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 opacity-60 hover:opacity-100 mt-0.5" onClick={handleStartEditTitle}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                 </div>
               )}
-              <div className="flex items-center gap-2">
-                <HotWordsSelector
-                  meetingId={meeting.id}
-                  currentLibraryId={meeting.hot_words_library_id}
-                  hasTranscript={!!(meeting.transcript_path || transcript.length > 0)}
-                  providerSupportsHotWords={providerSupportsHotWords}
-                  onSelectLibrary={handleSelectHotWordsLibrary}
-                  onRetranscribe={handleTranscribe}
-                />
-                {meeting.audio_path && (
-                  <LanguageHintsSelector
-                    selected={languageHints}
-                    onChange={updateLanguageHints}
-                    options={supportedLanguageHints}
-                  />
-                )}
-                {meeting.allocated_collections?.length > 0 && (
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    In:
-                    {[...new Set(meeting.allocated_collections)].map((col) => (
-                      <button
-                        key={col}
-                        className="font-medium text-foreground hover:text-primary hover:underline"
-                        onClick={() => {
-                          setActiveCollection(col)
-                          setSidebarView("database")
-                          setTimeout(() => window.dispatchEvent(new CustomEvent("show-meeting-log")), 100)
-                        }}
-                      >
-                        {collections.find(c => c.id === col)?.name || col}
-                      </button>
-                    ))}
+
+              {/* Metadata stack on the right side of the title row */}
+              {showMetadata && (
+              <div className="flex flex-col gap-0.5 text-[11px] text-muted-foreground text-right shrink-0 pt-[8px]">
+                <div className="flex items-center justify-end gap-2">
+                  <span className="font-semibold uppercase tracking-[0.12em] text-foreground/50 text-[10px]">CREATED</span>
+                  <span>
+                    {meeting.created_at
+                      ? new Date(meeting.created_at).toLocaleDateString("en-US", {
+                          month: "short", day: "numeric", year: "numeric",
+                          hour: "2-digit", minute: "2-digit",
+                        })
+                      : "—"}
                   </span>
-                )}
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <span className="font-semibold uppercase tracking-[0.12em] text-foreground/50 text-[10px]">SPEAKERS</span>
+                  <span>
+                    {(() => {
+                      const named = meeting.speaker_names ? Object.values(meeting.speaker_names).filter(Boolean) : []
+                      if (named.length > 0) return named.join(", ")
+                      const count = new Set(transcript.map(s => s.speaker_id).filter(Boolean)).size
+                      return `${count || 0} speaker${count !== 1 ? "s" : ""}`
+                    })()}
+                  </span>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <span className="font-semibold uppercase tracking-[0.12em] text-foreground/50 text-[10px]">COLLECTIONS</span>
+                  <span>
+                    {(() => {
+                      const cols = meeting.allocated_collections
+                      if (!cols || cols.length === 0) return <span className="text-muted-foreground">—</span>
+                      return [...new Set(cols)].map((id, i) => (
+                        <span key={id}>
+                          <button
+                            className="hover:text-primary hover:underline"
+                            onClick={() => {
+                              setActiveCollection(id)
+                              setSidebarView("database")
+                              setTimeout(() => window.dispatchEvent(new CustomEvent("show-meeting-log")), 100)
+                            }}
+                          >
+                            {collections.find((x: any) => x.id === id)?.name || id}
+                          </button>
+                          {i < [...new Set(cols)].length - 1 ? ", " : ""}
+                        </span>
+                      ))
+                    })()}
+                  </span>
+                </div>
               </div>
+              )}
             </div>
 
-            {/* Media Bar */}
-            <div className="px-4 py-2">
+            {/* TOPICS — own row below the title row, left-aligned, width capped to heading+button */}
+            <div className="flex items-start justify-between gap-4 px-4 pb-1 pt-4 shrink-0 text-[11px] text-muted-foreground">
+              <span className="flex flex-wrap gap-x-1.5 gap-y-0.5 flex-1 min-w-0 text-left">
+                {(() => {
+                  const blueprint = meeting.blueprint ?? []
+                  const filtered = blueprint.filter((b: any) => b.tab_name?.toLowerCase() !== "other")
+                  if (filtered.length === 0) return <span className="text-muted-foreground">—</span>
+                  return filtered.map((b: any, i: number) => (
+                    <span key={b.tab_id} className="whitespace-nowrap">
+                      {b.tab_name}{i < filtered.length - 1 ? " |" : ""}
+                    </span>
+                  ))
+                })()}
+              </span>
+              {/* Invisible spacer matching metadata width so topics stays within heading+button area */}
+              {showMetadata && (
+                <div className="shrink-0 invisible flex flex-col gap-0.5 text-right" aria-hidden="true">
+                  <div className="flex items-center justify-end gap-2">
+                    <span className="font-semibold uppercase tracking-[0.12em] text-foreground/50 text-[10px]">CREATED</span>
+                    <span>
+                      {meeting.created_at
+                        ? new Date(meeting.created_at).toLocaleDateString("en-US", {
+                            month: "short", day: "numeric", year: "numeric",
+                            hour: "2-digit", minute: "2-digit",
+                          })
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <span className="font-semibold uppercase tracking-[0.12em] text-foreground/50 text-[10px]">SPEAKERS</span>
+                    <span>
+                      {(() => {
+                        const named = meeting.speaker_names ? Object.values(meeting.speaker_names).filter(Boolean) : []
+                        if (named.length > 0) return named.join(", ")
+                        const count = new Set(transcript.map(s => s.speaker_id).filter(Boolean)).size
+                        return `${count || 0} speaker${count !== 1 ? "s" : ""}`
+                      })()}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <span className="font-semibold uppercase tracking-[0.12em] text-foreground/50 text-[10px]">COLLECTIONS</span>
+                    <span>
+                      {(() => {
+                        const cols = meeting.allocated_collections
+                        if (!cols || cols.length === 0) return <span className="text-muted-foreground">—</span>
+                        return [...new Set(cols)].map((id, i) => (
+                          <span key={id}>
+                            {collections.find((x: any) => x.id === id)?.name || id}
+                            {i < [...new Set(cols)].length - 1 ? ", " : ""}
+                          </span>
+                        ))
+                      })()}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Media Bar — full width */}
+            <div className="px-4 pt-1 pb-2">
               <MediaBar
                 ref={mediaBarRef}
                 meetingId={meeting.id}
@@ -465,10 +564,16 @@ export function MeetingView() {
                 realtimeEnabled={realtimeEnabled}
                 onToggleRealtime={() => setRealtimeEnabled(v => !v)}
                 hasTranscript={transcript.length > 0 || transcription.segments.length > 0}
+                hotWordsLibraryId={meeting.hot_words_library_id}
+                onSelectHotWords={handleSelectHotWordsLibrary}
+                languageHints={languageHints}
+                languageHintOptions={supportedLanguageHints}
+                onChangeLanguageHints={updateLanguageHints}
+                showLanguageSelector={!!meeting.audio_path}
               />
             </div>
 
-            {/* Provider warning */}
+              {/* Provider warning */}
             {!hasFileProvider && meeting.audio_path && (
               <div className="mx-4 mt-1 flex items-center gap-2 px-3 py-2 text-sm border border-amber-200 dark:border-amber-800 rounded-lg text-amber-700 dark:text-amber-300">
                 <AlertCircle className="h-4 w-4 shrink-0" />
@@ -479,8 +584,8 @@ export function MeetingView() {
               </div>
             )}
 
-            {/* Content: MeetingTabs + transcript */}
-            <div className="flex-1 flex min-h-0">
+            {/* Content: MeetingTabs + (narrow mode) floating panel as flex sibling. */}
+            <div ref={meetingContentRef} className="flex-1 min-h-0 flex w-full">
               <MeetingTabs
                 key={meeting.id}
                 meetingId={meeting.id}
@@ -488,23 +593,78 @@ export function MeetingView() {
                 notesContent={meeting.notes_content ?? ""}
                 onMeetingUpdate={handleMeetingUpdate}
                 onSeekTo={handleSegmentClick}
-                onFocusSentence={(id) => setFocusRef({ id, ts: Date.now() })}
+                onFocusSentence={(id) => { setFocusRef({ id, ts: Date.now() }); setFloatingOpen(true) }}
                 onActiveTabChange={setActiveSectionTag}
                 transcriptSegments={transcription.segments.length > 0 ? transcription.segments : transcript}
-              />
-              <TranscriptPanel
-                key={meeting.id}
-                open={transcriptOpen}
-                onToggle={() => setTranscriptOpen(!transcriptOpen)}
-                segments={transcription.segments.length > 0 ? transcription.segments : transcript}
                 partialText={transcription.currentPartial}
-                onSegmentClick={handleSegmentClick}
                 focusRef={focusRef}
                 activeSectionTag={activeSectionTag}
-                speakerNames={meeting.speaker_names ?? {}}
-                onUpdateSpeakerName={handleUpdateSpeakerName}
-                isRealtime={transcription.isTranscribing}
+                floatingPanelOpen={floatingOpen}
+                canShift={canShift}
+                className="flex-1 min-w-0"
+                floatingPanelSlot={floatingOpen && canShift ? (
+                  <div className="relative pointer-events-none" style={{ width: "100%", height: 0, overflow: "visible" }}>
+                    <div
+                      className="absolute left-full top-0 pl-5 z-30 flex flex-col animate-slide-up py-5"
+                      style={{
+                        width: "min(320px, calc(100vw - 520px))",
+                        height: "calc(100vh - 200px)",
+                      }}
+                    >
+                      <div className="flex flex-col flex-1 min-h-0 border-l border-primary/45 bg-transparent pointer-events-auto">
+                        <div className="flex items-center justify-between px-3 h-9 pb-2 shrink-0">
+                          <span className="text-xs font-light uppercase tracking-[0.15em] text-muted-foreground whitespace-nowrap">Transcript</span>
+                          <button
+                            onClick={() => setFloatingOpen(false)}
+                            className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                          >
+                            <XIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <div className="flex-1 min-h-0 overflow-y-auto">
+                          <TranscriptTab
+                            segments={transcription.segments.length > 0 ? transcription.segments : transcript}
+                            partialText={transcription.currentPartial}
+                            onSegmentClick={handleSegmentClick}
+                            focusRef={focusRef}
+                            activeSectionTag={activeSectionTag}
+                            speakerNames={meeting.speaker_names ?? {}}
+                            showSearch={false}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               />
+              {/* Narrow mode: floating panel as a flex sibling so the content column yields. */}
+              {floatingOpen && !canShift && (
+                <div className="shrink-0 flex flex-col animate-slide-up py-5 pl-5" style={{ width: "min(320px, 55vw)" }}>
+                  <div className="flex flex-col flex-1 min-h-0 border-l border-primary/45 bg-transparent">
+                    <div className="flex items-center justify-between px-3 h-9 pb-2 shrink-0">
+                      <span className="text-xs font-light uppercase tracking-[0.15em] text-muted-foreground whitespace-nowrap">Transcript</span>
+                      <button
+                        onClick={() => setFloatingOpen(false)}
+                        className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                      >
+                        <XIcon className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="flex-1 min-h-0 overflow-y-auto">
+                      <TranscriptTab
+                        segments={transcription.segments.length > 0 ? transcription.segments : transcript}
+                        partialText={transcription.currentPartial}
+                        onSegmentClick={handleSegmentClick}
+                        focusRef={focusRef}
+                        activeSectionTag={activeSectionTag}
+                        speakerNames={meeting.speaker_names ?? {}}
+                        showSearch={false}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
             </div>
           </div>
         ) : (

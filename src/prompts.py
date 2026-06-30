@@ -276,6 +276,8 @@ mapping — prefer matching meeting topics to existing collections.
 
 TASK 1 — General Summary
 
+**Language**: Write in the same language as the transcript. Do not translate.
+
 Produce a comprehensive meeting-level Markdown document with these
 sections:
 
@@ -376,8 +378,7 @@ CRITICAL:
 - For non-speakers (people mentioned but NOT in the SPEAKERS list),
   use their name as it appears in conversation.  Do NOT invent [spk:ID].
 - Example: "[spk:0] proposed the budget. They suggested asking Finance
-  Director Li to approve." — [spk:0] is a speaker; Finance Director Zhang is a non-speaker.
-- Write in the same language as the transcript."""
+  Director Li to approve." — [spk:0] is a speaker; Finance Director Zhang is a non-speaker."""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -489,6 +490,8 @@ Source sentences (each has an id, speaker, and text):
 
 ---
 
+**Language**: Write in the same language as the source sentences. Do not translate.
+
 Produce a Markdown document with these sections:
 
 ## Summary
@@ -576,8 +579,7 @@ CRITICAL:
   Todo, Data & Facts, Detail) to link claims to source sentences.
   Each [stt_XXX] MUST point to a sentence whose text literally
   contains the claim being stated.  Verify by re-reading the sentence.
-  No ref is better than a wrong ref.
-- Write in the same language as the source sentences."""
+  No ref is better than a wrong ref."""
 
 
 # ═══════════════════════════════════════════════════════════════════════

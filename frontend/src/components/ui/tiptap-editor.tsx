@@ -2603,9 +2603,9 @@ const HIGHLIGHT_PRESETS = [
 
 const TEXT_COLOR_PRESETS = [
   { color: "#000000", label: "Black" },
-  { color: "#ef4444", label: "Red" },
+  { color: "#8C2E2E", label: "Red" },
+  { color: "#2D7A55", label: "Green" },
   { color: "#3b82f6", label: "Blue" },
-  { color: "#22c55e", label: "Green" },
   { color: "#a855f7", label: "Purple" },
   { color: "#f97316", label: "Orange" },
 ]
@@ -2620,13 +2620,13 @@ function ToolbarBtn({
     <button
       type="button"
       title={tooltip}
+      data-active={active || undefined}
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "h-7 w-7 p-0 flex items-center justify-center rounded-sm text-muted-foreground",
-        "hover:bg-accent hover:text-foreground transition-colors cursor-pointer",
+        "h-7 w-7 p-0 flex items-center justify-center rounded-sm",
+        "transition-colors cursor-pointer",
         "disabled:opacity-30 disabled:pointer-events-none",
-        active && "bg-accent text-foreground",
         className,
       )}
     >
@@ -2770,7 +2770,23 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
   })()
 
   return (
-    <div className="flex items-center gap-0.5 px-3 h-9 border-b border-border bg-muted/30 shrink-0">
+    <div
+      className="flex items-center gap-0.5 px-3 h-9 rounded-full mx-2 mt-2 mb-1 shrink-0
+        [&_button]:text-[#1C2E24] [&_button]:hover:text-[#1A5E3D] [&_button]:hover:bg-[rgba(26,94,61,0.06)]
+        [&_button]:active:bg-[rgba(26,94,61,0.10)] [&_button[data-active]]:text-[#1A5E3D] [&_button[data-active]]:bg-[rgba(26,94,61,0.08)]
+        [&_.w-px]:bg-[rgba(26,94,61,0.15)] [&_svg]:stroke-current
+        [&>.cursor-pointer]:text-[#1C2E24] [&>.cursor-pointer:hover]:text-[#1A5E3D]
+        [&_.relative_.cursor-pointer]:text-[#1C2E24] [&_.relative_.cursor-pointer:hover]:text-[#1A5E3D]
+        animate-toolbar-float"
+      style={{
+        backgroundColor: "#FAFAF7",
+        border: "1px solid rgba(26,94,61,0.30)",
+        boxShadow:
+          "0 12px 40px -6px rgba(10,18,14,0.22)," +
+          "0 4px 12px -3px rgba(10,18,14,0.12)," +
+          "0 0 0 1px rgba(26,94,61,0.06) inset",
+      }}
+    >
       {/* Text style */}
       <ToolbarBtn active={editor.isActive("bold")} tooltip="Bold (Ctrl+B)"
         onClick={() => editor.chain().focus().toggleBold().run()}>
@@ -2810,7 +2826,7 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
       </ToolbarBtn>
       <ColorDropdown
         trigger={
-          <div className="h-7 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer">
+          <div className="h-7 w-5 flex items-center justify-center cursor-pointer">
             <ChevronDown className="h-3 w-3" />
           </div>
         }
@@ -2843,7 +2859,7 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
       ))}
       <ColorDropdown
         trigger={
-          <div className="h-7 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer">
+          <div className="h-7 w-5 flex items-center justify-center cursor-pointer">
             <ChevronDown className="h-3 w-3" />
           </div>
         }

@@ -92,14 +92,14 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     if (!sourceKey) { setPreviewContent(null); return }
     let cancelled = false
     setPreviewLoading(true)
-    getExtractedText(sourceKey)
+    getExtractedText(sourceKey, collectionId)
       .then((res) => {
         if (!cancelled) { setPreviewContent(res.text); previewContentRef.current = res.text }
       })
       .catch(() => { if (!cancelled) setPreviewContent(null); previewContentRef.current = null })
       .finally(() => { if (!cancelled) setPreviewLoading(false) })
     return () => { cancelled = true }
-  }, [sourceKey])
+  }, [sourceKey, collectionId])
 
   // Load summary
   useEffect(() => {

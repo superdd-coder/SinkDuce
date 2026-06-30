@@ -120,7 +120,7 @@ async def delete_meeting(meeting_id: str):
 @router.put("/meetings/{meeting_id}")
 async def update_meeting(meeting_id: str, body: dict = Body()):
     logger.info("[UPDATE] Meeting %s fields=%s", meeting_id, list(body.keys()))
-    allowed_fields = {"title", "detail", "summary", "status", "mode", "speaker_names", "hot_words_library_id"}
+    allowed_fields = {"title", "detail", "summary", "status", "mode", "speaker_names", "hot_words_library_id", "blueprint", "tabs"}
     fields = {k: v for k, v in body.items() if k in allowed_fields}
     # Handle notes separately -- save to file
     if "notes" in body:
@@ -691,13 +691,3 @@ async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Bod
     return {"ok": True, "path": path}
 
 
-@router.post("/meetings/{meeting_id}/allocate")
-async def allocate_to_db(meeting_id: str, body: dict = Body()):
-    collection = body.get("collection")
-    logger.info("[ALLOCATE] Meeting %s -> collection '%s'", meeting_id, collection)
-    if not collection:
-        logger.warning("[ALLOCATE] No collection specified for meeting %s", meeting_id)
-        return {"error": "collection is required"}
-    updated = await meeting_service.allocate_to_collection(meeting_id, collection)
-    logger.info("[ALLOCATE] Meeting %s allocated to '%s'", meeting_id, collection)
-    return updated.model_dump()

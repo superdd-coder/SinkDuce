@@ -1,7 +1,8 @@
 import { useRef, useEffect, forwardRef, useImperativeHandle } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle } from "lucide-react"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
+import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages } from "lucide-react"
 import type { MeetingStatus } from "@/api/client"
 
 interface MediaBarProps {
@@ -28,6 +29,12 @@ interface MediaBarProps {
   realtimeEnabled?: boolean
   onToggleRealtime?: () => void
   hasTranscript?: boolean
+  hotWordsLibraryId?: string | null
+  onSelectHotWords?: (libraryId: string | null) => void
+  languageHints?: string[]
+  languageHintOptions?: any[]
+  onChangeLanguageHints?: (hints: string[]) => void
+  showLanguageSelector?: boolean
 }
 
 export interface MediaBarHandle {
@@ -57,6 +64,12 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   realtimeEnabled,
   onToggleRealtime,
   hasTranscript,
+  hotWordsLibraryId,
+  onSelectHotWords,
+  languageHints,
+  languageHintOptions,
+  onChangeLanguageHints,
+  showLanguageSelector,
 }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -197,6 +210,43 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                 Re-transcribe
               </Button>
             )}
+            {/* Hot Words & Language — icon-only with tooltips */}
+            <div className="flex items-center gap-1 ml-2">
+              {onSelectHotWords && (
+                <Tooltip>
+                  <TooltipTrigger className="inline-flex">
+                    <button
+                      type="button"
+                      onClick={() => onSelectHotWords?.(null)}
+                      className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    >
+                      <BookOpen className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
+                    Hot Words{hotWordsLibraryId ? " · customized" : ""}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {showLanguageSelector && (
+                <Tooltip>
+                  <TooltipTrigger className="inline-flex">
+                    <button
+                      type="button"
+                      onClick={() => onChangeLanguageHints?.(languageHints?.[0] === "auto"
+                        ? (languageHintOptions?.map(o => o.code).filter(c => c !== "auto") ?? [])
+                        : ["auto"])}
+                      className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    >
+                      <Languages className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
+                    Language · {languageHints?.[0] ?? "auto"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </div>
           </div>
         </div>
       </div>

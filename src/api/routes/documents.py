@@ -497,13 +497,38 @@ def preview_file(filename: str, collection: str | None = None):
 
 
 @router.get("/documents/extracted/{filename:path}")
-def get_extracted_text(filename: str):
+def get_extracted_text(filename: str, collection: str | None = None):
     """Return parsed/extracted text as JSON with format metadata.
 
     Response: { "text": "...", "format": "markdown" | "text" }
     """
     filename = Path(filename).name
-    file_path = _find_file_path(filename)
+    file_path = _find_file_path(filename, collection)
+
+    # Legacy fallback: source not in files.json → read from Qdrant
+    if not file_path and collection:
+        legacy_text = _read_legacy_text(filename, collection)
+        if legacy_text:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+            tmp.write(legacy_text)
+            tmp.close()
+            file_path = Path(tmp.name)
+
+    # Fallback: search all collections for legacy source
+    if not file_path:
+        for col_dir in COLLECTIONS_DIR.iterdir():
+            if not col_dir.is_dir():
+                continue
+            legacy_text = _read_legacy_text(filename, col_dir.name)
+            if legacy_text:
+                import tempfile
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+                tmp.write(legacy_text)
+                tmp.close()
+                file_path = Path(tmp.name)
+                break
+
     if not file_path:
         raise HTTPException(status_code=404, detail="File not found")
 

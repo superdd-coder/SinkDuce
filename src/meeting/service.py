@@ -1338,98 +1338,6 @@ class MeetingService:
 
     # -- Collection allocation ----------------------------------------------
 
-    async def allocate_to_collection(self, meeting_id: str, collection: str) -> dict:
-        """Allocate meeting content to a Database collection via the upload pipeline.
-
-        For same-collection re-ingest: deletes old allocation first, then creates new.
-        For cross-collection migrate: creates new allocation first, deletes old only after success.
-        """
-        import re as _re
-
-        meeting = store.get_meeting(meeting_id)
-        if meeting is None:
-            raise FileNotFoundError(f"Meeting {meeting_id} not found")
-
-        old_collection = meeting.allocated_collections[0] if meeting.allocated_collections else None
-        old_file_id = meeting.allocated_file_ids[0] if meeting.allocated_file_ids else None
-        is_migrate = old_collection and old_file_id and old_collection != collection
-
-        # For re-ingest (same collection): delete old first
-        if old_collection and old_file_id and not is_migrate:
-            self._delete_allocation(old_collection, old_file_id)
-
-        # 2. Build combined content
-        content_parts: list[str] = []
-        if meeting.detail:
-            content_parts.append(f"# General Summary\n\n{meeting.detail}")
-        if meeting.summary:
-            content_parts.append(f"# Summary\n\n{meeting.summary}")
-
-        # V2: include per-section breakdown content
-        if meeting.tabs:
-            for tab in meeting.tabs:
-                section_md = store.get_section_md(meeting_id, tab.tab_id)
-                if section_md:
-                    label = tab.tab_name or tab.tab_id
-                    content_parts.append(f"# {label}\n\n{section_md}")
-
-        notes = store.get_notes(meeting_id)
-        if notes:
-            content_parts.append(f"# Notes\n\n{notes}")
-
-        if not content_parts:
-            raise ValueError(
-                f"Meeting {meeting_id} has no content to allocate. "
-                "Add notes or generate a summary first."
-            )
-
-        combined = "\n\n---\n\n".join(content_parts)
-
-        # 3. Save meeting content with section-based identity
-        section_source = f"__meeting__:{meeting_id}_0"
-        alloc_file_id = uuid.uuid4().hex
-        file_dir = _files_dir(collection) / alloc_file_id
-        file_dir.mkdir(parents=True, exist_ok=True)
-        file_path = file_dir / "meeting.md"
-        file_path.write_text(combined, encoding="utf-8")
-
-        # 4. Call upload pipeline directly
-        from src.tasks.handlers import upload_handler
-
-        upload_task = Task(
-            id=str(uuid.uuid4()),
-            filename=f"meeting_{meeting_id}",
-            collection=collection,
-            status=TaskStatus.PROCESSING,
-            created_at=datetime.now(),
-        )
-
-        result = await upload_handler(upload_task, str(file_path), collection, section_source,
-                                      source_label=f"Meeting: {meeting.title}", file_id=alloc_file_id)
-
-        # 5. Track allocation in meeting metadata
-        store.update_meeting(
-            meeting_id,
-            allocated_collections=[collection],
-            allocated_file_ids=[alloc_file_id],
-        )
-
-        updated = store.get_meeting(meeting_id)
-        assert updated is not None
-
-        logger.info(
-            "Allocated meeting %s to collection '%s' (%d chunks)",
-            meeting_id,
-            collection,
-            result.get("chunks_count", 0),
-        )
-
-        # For migrate (different collection): delete old allocation AFTER success
-        if is_migrate and old_collection and old_file_id:
-            self._delete_allocation(old_collection, old_file_id)
-
-        return updated
-
     @staticmethod
     def _delete_allocation(collection: str, file_id: str) -> None:
         """Delete an allocation's chunks and file snapshot from a collection."""
@@ -1546,16 +1454,16 @@ class MeetingService:
         store.update_meeting(meeting_id, tabs=updated_tabs)
 
         # Also add to meeting-level allocated_collections so Meeting Log can find it
+        # Always append — a meeting may have multiple sections in the same collection
         existing_cols = list(meeting.allocated_collections or [])
         existing_fids = list(meeting.allocated_file_ids or [])
-        if collection_id not in existing_cols:
-            existing_cols.append(collection_id)
-            existing_fids.append(alloc_file_id)
-            store.update_meeting(
-                meeting_id,
-                allocated_collections=existing_cols,
-                allocated_file_ids=existing_fids,
-            )
+        existing_cols.append(collection_id)
+        existing_fids.append(alloc_file_id)
+        store.update_meeting(
+            meeting_id,
+            allocated_collections=existing_cols,
+            allocated_file_ids=existing_fids,
+        )
 
         updated = store.get_meeting(meeting_id)
         assert updated is not None

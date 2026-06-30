@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { cn } from "@/lib/utils"
-import { Loader2, X, RefreshCw, Plus, Pencil, Sparkles } from "lucide-react"
+import { Loader2, X, RefreshCw, Plus, Pencil, Sparkles, ChevronDown, Check } from "lucide-react"
 import {
   getMeeting, startBreakdown, magicExtract, deleteSection,
   regenerateSection, getSectionMd, generateMeetingSummary,
@@ -15,6 +15,7 @@ import {
 } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
 import { toast } from "sonner"
+import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 
 const SAVE_DELAY = 800
 
@@ -27,6 +28,13 @@ interface Props {
   onFocusSentence?: (refId: string) => void
   onActiveTabChange?: (tabId: string) => void
   transcriptSegments: TranscriptSegment[]
+  partialText?: string
+  focusRef?: { id: string; ts: number } | null
+  activeSectionTag?: string
+  floatingPanelOpen?: boolean
+  canShift?: boolean
+  floatingPanelSlot?: ReactNode
+  className?: string
 }
 
 interface ExtractedTopic {
@@ -187,6 +195,8 @@ function EditableSectionContent({
   actionButtons,
   title,
   metadata,
+  toolbar,
+  actionsDisabled,
 }: {
   content: string
   onSave: (updated: string) => Promise<void>
@@ -195,6 +205,8 @@ function EditableSectionContent({
   actionButtons?: ReactNode
   title?: ReactNode
   metadata?: ReactNode
+  toolbar?: ReactNode
+  actionsDisabled?: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(content)
@@ -220,26 +232,57 @@ function EditableSectionContent({
 
   return (
     <div className="relative min-h-full">
-      {/* Sticky top bar — title left, action buttons right */}
-      <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-2 -mx-2 bg-background/80 backdrop-blur-sm">
-        <div className="text-2xl font-bold min-w-0 truncate" style={{ fontFamily: "var(--font-serif)" }}>
+      {/* Sticky top bar — title left, action buttons right (only when content exists) */}
+      {(title || actionButtons) && (
+      <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-[14px] -mx-2 bg-background/80 backdrop-blur-sm">
+        <div
+          className="min-w-0 truncate"
+          style={{
+            fontFamily: "var(--font-serif)",
+            fontSize: "clamp(20px, 2vw, 24px)",
+            fontWeight: 400,
+            letterSpacing: "-0.01em",
+            lineHeight: 1.35,
+            color: "var(--ze-ink)",
+          }}
+        >
           {title}
         </div>
-        <div className="flex items-center gap-1 shrink-0 ml-2">
-          {!editing && (
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(true)} title="Edit">
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-          )}
+        <div className={cn(
+          "flex items-center gap-1 shrink-0 ml-2 transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+          actionsDisabled
+            ? "opacity-0 scale-90 pointer-events-none"
+            : "opacity-100 scale-100",
+        )}>
           {actionButtons}
         </div>
       </div>
+      )}
 
-      {/* Metadata slot (between title bar and content) */}
+      {/* Metadata slot (between title bar and divider) */}
       {metadata}
 
+      {/* Toolbar slot (own row above the divider) */}
+      {toolbar}
+
+      {/* Divider line + edit button — between toolbar and content */}
+      <div className="flex items-center justify-between px-6 pt-3">
+        <div className="flex-1 h-px bg-border" />
+        {!editing && !actionsDisabled && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 ml-2 shrink-0"
+            onClick={() => setEditing(true)}
+            title="Edit"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      </div>
+
       {/* Content area */}
-      <div className="px-6 pb-4">
+      <div className="px-6 pb-4 pt-4">
         {editing ? (
           <MarkdownEditor value={draft} onChange={setDraft} minHeight="250px" />
         ) : (
@@ -268,16 +311,21 @@ function EditableSectionContent({
 function SectionMetadata({
   tab,
   blueprint,
+  tabs,
   meetingId,
   onMeetingUpdate,
+  onIngestingChange,
 }: {
   tab: MeetingTab
   blueprint: Meeting["blueprint"]
+  tabs: MeetingTab[]
   meetingId: string
   onMeetingUpdate: (m: Meeting) => void
+  onIngestingChange?: (v: boolean) => void
 }) {
   const bpEntry = (blueprint ?? []).find((b) => b.tab_id === tab.tab_id)
   const description = bpEntry?.section_description ?? ""
+  const sectionDisplayName = bpEntry?.tab_name || tab.name
   const associatedName = tab.associated_collection_name || bpEntry?.associated_collection_name || ""
   const associatedId = tab.associated_collection_id || bpEntry?.associated_collection_id || ""
   const hasAssociated = !!associatedName
@@ -293,12 +341,62 @@ function SectionMetadata({
   const [cancelOpen, setCancelOpen] = useState(false)
   const [switchTarget, setSwitchTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const dropdownContentRef = useRef<HTMLDivElement>(null)
   const { collections, fetchCollections } = useAppStore()
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState(tab.name)
   const [pickerIngesting, setPickerIngesting] = useState(false)
+
+  // Inline editing for section name + description
+  const [editingMeta, setEditingMeta] = useState(false)
+  const [nameDraft, setNameDraft] = useState(sectionDisplayName)
+  const [descDraft, setDescDraft] = useState(description)
+  const [savingMeta, setSavingMeta] = useState(false)
+  const savingRef = useRef(false)  // sync guard: prevents double-save from blur + click
+
+  // Sync drafts when tab changes
+  useEffect(() => {
+    setNameDraft(sectionDisplayName)
+    setDescDraft(description)
+    setEditingMeta(false)
+  }, [tab.tab_id, sectionDisplayName, description])
+
+  const commitMeta = async () => {
+    if (!editingMeta) return
+    if (savingRef.current) return
+    if (nameDraft === sectionDisplayName && descDraft === description) {
+      setEditingMeta(false)
+      return
+    }
+    savingRef.current = true
+    setSavingMeta(true)
+    try {
+      const bp = blueprint ?? []
+      const m = await updateMeeting(meetingId, {
+        blueprint: bp.map((b) => {
+          if (b.tab_id === tab.tab_id) {
+            return { ...b, tab_name: nameDraft, section_description: descDraft }
+          }
+          return b
+        }),
+        tabs: (tabs ?? []).map((t) => {
+          if (t.tab_id === tab.tab_id) {
+            return { ...t, name: nameDraft }
+          }
+          return t
+        }),
+      } as any)
+      setEditingMeta(false)
+      onMeetingUpdate(m)
+    } catch (err) {
+      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      savingRef.current = false
+      setSavingMeta(false)
+    }
+  }
 
   // Dropdown click-outside (portal-based, check both container & dropdown)
   useEffect(() => {
@@ -335,6 +433,7 @@ function SectionMetadata({
   }
 
   const doIngest = async (colId: string) => {
+    setDropdownOpen(false)
     setPickerIngesting(true)
     setSwitchTarget(null)
     try {
@@ -361,6 +460,7 @@ function SectionMetadata({
   }
 
   const doCreateAndIngest = async () => {
+    setDropdownOpen(false)
     setPickerIngesting(true)
     setSwitchTarget(null)
     try {
@@ -396,6 +496,10 @@ function SectionMetadata({
     setIngesting(false)
   }
 
+  useEffect(() => {
+    onIngestingChange?.(ingesting)
+  }, [ingesting, onIngestingChange])
+
   const handleCancelIngest = async () => {
     setCancelOpen(false)
     setIngesting(true)
@@ -411,35 +515,128 @@ function SectionMetadata({
 
   const BUTTON_W = "w-[172px]"
 
+  const tabLabel = (() => {
+    const m = tab.tab_id.match(/^tab_sec_(\d+)$/)
+    return m ? `(Topic ${parseInt(m[1], 10)})` : tab.tab_id
+  })()
+
   return (
-    <div className="px-6 py-2 flex gap-4">
-      {/* Left: section description */}
-      <div className="flex-1 min-w-0">
-        {description && (
-          <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+    <div ref={containerRef} className="px-6 py-3 pb-4 flex gap-4 group relative">
+      {/* Left column: section title + description */}
+      <div className="flex-1 min-w-0 flex flex-col gap-1 relative">
+        {/* Edit button — appears on hover at top-right of left column */}
+        {!editingMeta && (
+          <button
+            className="absolute top-0 -right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+            onClick={() => setEditingMeta(true)}
+            title="Edit section"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {editingMeta ? (
+          <>
+            <div className="flex items-center gap-0">
+              <span
+                style={{
+                  fontFamily: "var(--font-serif)",
+                  fontSize: "clamp(20px, 2vw, 24px)",
+                  fontWeight: 400,
+                  letterSpacing: "-0.01em",
+                  lineHeight: 1.35,
+                  color: "var(--ze-ink)",
+                }}
+              >
+                {tabLabel}{" "}
+              </span>
+              <input
+                className="flex-1 text-current bg-transparent border-b border-primary outline-none px-0 py-0.5 min-w-0"
+                style={{
+                  fontFamily: "var(--font-serif)",
+                  fontSize: "clamp(20px, 2vw, 24px)",
+                  fontWeight: 400,
+                  letterSpacing: "-0.01em",
+                  lineHeight: 1.35,
+                  color: "var(--ze-ink)",
+                }}
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onBlur={commitMeta}
+                onKeyDown={(e) => { if (e.key === "Enter") commitMeta() }}
+                autoFocus
+              />
+            </div>
+            <div className="flex items-start gap-2">
+              <input
+                className="text-xs text-muted-foreground bg-transparent border-b border-border outline-none px-0 py-0.5 flex-1"
+                placeholder="Section description..."
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                onBlur={commitMeta}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitMeta() } }}
+              />
+              <button
+                className="shrink-0 h-6 w-6 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                onClick={commitMeta}
+                disabled={savingMeta}
+                title="Done"
+              >
+                <Check className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              className="min-w-0 truncate"
+              style={{
+                fontFamily: "var(--font-serif)",
+                fontSize: "clamp(20px, 2vw, 24px)",
+                fontWeight: 400,
+                letterSpacing: "-0.01em",
+                lineHeight: 1.35,
+                color: "var(--ze-ink)",
+              }}
+            >
+              {tabLabel} {sectionDisplayName}
+            </div>
+            {description && (
+              <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+            )}
+          </>
         )}
       </div>
 
-      {/* Right: collection buttons */}
+      {/* Right column: collection buttons */}
       <div className={cn("shrink-0 flex flex-col gap-1.5 items-end", BUTTON_W)} ref={menuRef}>
         {(hasAssociated || ingested) && (
           <button
             type="button"
             disabled={ingesting}
             onClick={displayActive ? () => setCancelOpen(true) : () => handleIngest(associatedId)}
-            className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+            className={cn(
+              "group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
+              ingesting && "sk-thinking-flow",
+            )}
             style={{
               fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
-              color: displayActive ? "var(--color-primary)" : "var(--color-muted-foreground)",
+              color: ingesting
+                ? "var(--color-primary)"
+                : displayActive
+                  ? "var(--color-primary)"
+                  : "var(--color-muted-foreground)",
             }}
           >
             <span className="relative z-10 whitespace-nowrap">
               {ingesting ? "Ingesting..." : displayName || associatedName}
             </span>
             <span
-              className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary/10"
+              className={cn(
+                "absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+                ingesting ? "bg-green-wash animate-pulse" : "bg-primary/10",
+              )}
               style={{
-                transform: displayActive ? "scaleX(1)" : "scaleX(0)",
+                transform: displayActive || ingesting ? "scaleX(1)" : "scaleX(0)",
                 transformOrigin: "left",
               }}
             />
@@ -448,15 +645,23 @@ function SectionMetadata({
         <button
           type="button"
           ref={buttonRef}
+          disabled={ingesting || pickerIngesting}
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+          className={cn(
+            "group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
+            (ingesting || pickerIngesting) && "sk-thinking-flow",
+          )}
           style={{
             fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
-            color: dropdownOpen ? "var(--color-primary-foreground)" : "var(--color-muted-foreground)",
+            color: (ingesting || pickerIngesting)
+              ? "var(--color-primary)"
+              : dropdownOpen
+                ? "var(--color-primary-foreground)"
+                : "var(--color-muted-foreground)",
           }}
         >
           <span className="relative z-10 whitespace-nowrap text-center">
-            {dropdownOpen ? "Cancel" : "Choose a collection"}
+            {(ingesting || pickerIngesting) ? "Ingesting..." : dropdownOpen ? "Cancel" : "Choose a collection"}
           </span>
           <span
             className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
@@ -586,6 +791,13 @@ function SectionMetadata({
 export function MeetingTabs({
   meetingId, meeting, notesContent,
   onMeetingUpdate, onSeekTo, onFocusSentence, onActiveTabChange, transcriptSegments,
+  partialText,
+  focusRef,
+  activeSectionTag,
+  floatingPanelOpen,
+  canShift = true,
+  floatingPanelSlot,
+  className,
 }: Props) {
   const tabs = meeting.tabs ?? []
   const blueprint = meeting.blueprint ?? []
@@ -606,6 +818,33 @@ export function MeetingTabs({
   const [busy, setBusy] = useState(!!(meeting.processing_state && meeting.processing_state !== "idle"))
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [reSummarizeOpen, setReSummarizeOpen] = useState(false)
+  const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
+  const [summaryHoverOpen, setSummaryHoverOpen] = useState(false)
+  const summaryHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const summaryBarRef = useRef<HTMLDivElement>(null)
+  const tabContainerRef = useRef<HTMLDivElement>(null)
+  const summaryBtnRef = useRef<HTMLButtonElement>(null)
+  const notesBtnRef = useRef<HTMLButtonElement>(null)
+  const transcriptBtnRef = useRef<HTMLButtonElement>(null)
+  const speakerBtnRef = useRef<HTMLButtonElement>(null)
+  const [tabIndicator, setTabIndicator] = useState({ left: 0, width: 0 })
+  const [sectionIngesting, setSectionIngesting] = useState(false)
+
+  useEffect(() => {
+    const container = tabContainerRef.current
+    const btn =
+      mainTab === "summary" ? summaryBtnRef.current :
+      mainTab === "notes" ? notesBtnRef.current :
+      mainTab === "transcript" ? transcriptBtnRef.current :
+      speakerBtnRef.current
+    if (!container || !btn) return
+    const containerRect = container.getBoundingClientRect()
+    const btnRect = btn.getBoundingClientRect()
+    setTabIndicator({
+      left: btnRect.left - containerRect.left,
+      width: btnRect.width,
+    })
+  }, [mainTab])
 
   // Clear polling on unmount (prevents stale meeting data leaking on switch)
   useEffect(() => {
@@ -632,6 +871,13 @@ export function MeetingTabs({
     toast.success("Processing complete")
   }, [onMeetingUpdate])
   useProcessingPoll(meetingId, meeting.processing_state, handleProcessingDone)
+
+  // If processing finished while tab was in background (poll killed), sync busy off.
+  useEffect(() => {
+    if (!meeting.processing_state || meeting.processing_state === "idle") {
+      setBusy(false)
+    }
+  }, [meeting.processing_state])
 
   // ── Load section markdown when tab is selected ─────────────
   const loadTabContent = useCallback(async (tabId: string) => {
@@ -813,6 +1059,11 @@ export function MeetingTabs({
   const handleRegenerate = async (tabId: string) => {
     setBusy(true)
     try {
+      // If this section has an ingested file, delete the allocation first
+      const targetTab = tabs.find(t => t.tab_id === tabId)
+      if ((targetTab as any)?.allocated_file_id) {
+        await deleteSectionAllocation(meetingId, tabId)
+      }
       await regenerateSection(meetingId, tabId)
       // Poll until regenerate completes (same pattern as handleMagicExtract)
       pollRef.current = setInterval(async () => {
@@ -982,87 +1233,167 @@ export function MeetingTabs({
   }, [tabs, tabMdContents, speakerNames])
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className={cn("flex-1 flex flex-col min-h-0", className)}>
 
-      {/* ── Tab bar: Summary | Notes (fixed width) ── */}
-      <div className="flex items-center border-b border-border px-2 shrink-0">
-        <div className="flex items-center">
+      {/* ── Tab bar: extends right when floating panel opens (wide mode only) ── */}
+      <div
+        ref={summaryBarRef}
+        className={cn(
+          "relative flex items-center border-b border-border px-2 shrink-0 transition-[margin-right] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+          floatingPanelOpen && canShift ? "-mr-[320px]" : "mr-0",
+        )}
+      >
+        <div ref={tabContainerRef} className="flex items-center relative">
           <button
+            ref={summaryBtnRef}
             className={cn(
-              "w-24 h-9 text-xs font-light uppercase tracking-wider border-b-2 transition-colors",
+              "flex items-center gap-1 w-24 h-9 text-xs font-light uppercase tracking-wider transition-colors duration-300",
               mainTab === "summary"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
             onClick={() => setMainTab("summary")}
+            onMouseEnter={() => {
+              if (summaryHoverTimer.current) { clearTimeout(summaryHoverTimer.current); summaryHoverTimer.current = null }
+              if (hasBlueprint) setSummaryHoverOpen(true)
+            }}
+            onMouseLeave={() => {
+              summaryHoverTimer.current = setTimeout(() => setSummaryHoverOpen(false), 150)
+            }}
           >
             Summary
+            {hasBlueprint && (
+              <ChevronDown className={cn("h-3 w-3 transition-transform duration-200", summaryHoverOpen && "rotate-180")} />
+            )}
           </button>
           <button
+            ref={notesBtnRef}
             className={cn(
-              "w-24 h-9 text-xs font-light uppercase tracking-wider border-b-2 transition-colors",
+              "h-9 px-3 text-xs font-light uppercase tracking-wider transition-colors duration-300",
+              mainTab === "summary" ? "w-24" : "",
               mainTab === "notes"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
             onClick={() => setMainTab("notes")}
           >
             Notes
           </button>
+          <button
+            ref={transcriptBtnRef}
+            className={cn(
+              "h-9 px-3 text-xs font-light uppercase tracking-wider transition-colors duration-300",
+              mainTab === "transcript"
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setMainTab("transcript")}
+          >
+            Transcript
+          </button>
+          <button
+            ref={speakerBtnRef}
+            className={cn(
+              "h-9 px-3 text-xs font-light uppercase tracking-wider transition-colors duration-300",
+              mainTab === "speaker"
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setMainTab("speaker")}
+          >
+            Speaker
+          </button>
+          {/* Sliding green underline */}
+          <div
+            className="absolute bottom-0 h-[2px] bg-primary pointer-events-none transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]"
+            style={{ left: tabIndicator.left, width: tabIndicator.width }}
+          />
         </div>
         {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground ml-2" />}
-      </div>
 
-      {/* ── Summary Tab ── */}
-      <div className={cn("flex-1 flex min-h-0", mainTab !== "summary" && "hidden")}>
-        {/* Secondary vertical menu */}
-        <div className="w-48 border-r border-border overflow-y-auto shrink-0 py-2 space-y-0.5">
-          {hasBlueprint && (
-            <>
-              <button
-                className={cn(
-                  "w-full text-left px-3 py-1.5 text-xs hover:bg-accent transition-colors truncate",
-                  isGeneral && "bg-accent font-medium",
-                )}
-                onClick={() => setSelectedSummaryId("tab_general")}
-              >
-                General
-              </button>
-              {sectionTabs.map((tab) => (
-                <button
-                  key={tab.tab_id}
-                  className={cn(
-                    "w-full text-left px-3 py-1.5 text-xs hover:bg-accent transition-colors truncate",
-                    selectedSummaryId === tab.tab_id && "bg-accent font-medium",
-                  )}
-                  onClick={() => setSelectedSummaryId(tab.tab_id)}
-                  title={tab.name}
-                >
-                  {tabShortLabel(tab)}: {tab.name}
-                </button>
-              ))}
-            </>
+      {/* Hover dropdown — section picker below the Summary tab */}
+        <div
+          className={cn(
+            "absolute z-50 top-full left-2 mt-0 w-56 overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+            summaryHoverOpen
+              ? "opacity-100 visible translate-y-0 pointer-events-auto"
+              : "opacity-0 invisible -translate-y-3 pointer-events-none",
           )}
+          onMouseEnter={() => {
+            if (summaryHoverTimer.current) { clearTimeout(summaryHoverTimer.current); summaryHoverTimer.current = null }
+            setSummaryHoverOpen(true)
+          }}
+          onMouseLeave={() => {
+            summaryHoverTimer.current = setTimeout(() => setSummaryHoverOpen(false), 150)
+          }}
+        >
+          <button
+            onClick={() => { setSelectedSummaryId("tab_general"); setMainTab("summary") }}
+            className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+          >
+            <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+              <span className={cn("sk-diamond", isGeneral && "on")} aria-hidden />
+              <span className="whitespace-normal break-words min-w-0 leading-snug">General</span>
+            </span>
+            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+          </button>
+          {sectionTabs.map((tab) => (
+            <button
+              key={tab.tab_id}
+              onClick={() => { setSelectedSummaryId(tab.tab_id); setMainTab("summary") }}
+              title={tab.name}
+              className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+            >
+              <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                <span className={cn("sk-diamond", selectedSummaryId === tab.tab_id && "on")} aria-hidden />
+                <span className="whitespace-normal break-words min-w-0 leading-snug">{tabShortLabel(tab)}: {(blueprint as any[]).find((b: any) => b.tab_id === tab.tab_id)?.tab_name || tab.name}</span>
+              </span>
+              <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+            </button>
+          ))}
 
           {/* Breakdown button */}
-          {hasBlueprint && !hasSections && !busy && (
-            <div className="px-2 pt-2">
-              <Button variant="outline" size="sm" className="w-full text-xs" onClick={handleBreakdown}>
-                Breakdown
-              </Button>
+          {!hasSections && !busy && (
+            <div className="border-t border-primary/20 w-full">
+              <button
+                onClick={() => { setSummaryHoverOpen(false); handleBreakdown() }}
+                className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+              >
+                <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                  <Sparkles className="h-3 w-3 shrink-0" />
+                  <span>Breakdown</span>
+                </span>
+                <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+              </button>
             </div>
           )}
 
-          {/* Add Section button (last item in secondary menu) */}
-          {hasBlueprint && !busy && (
-            <div className="px-2 pt-2">
-              <Button variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => setExtractOpen(true)}>
-                <Plus className="h-3 w-3 mr-1" /> Add Section
-              </Button>
+          {/* Add Section */}
+          {!busy && (
+            <div className="border-t border-primary/20 w-full">
+              <button
+                onClick={() => { setSummaryHoverOpen(false); setExtractOpen(true) }}
+                className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+              >
+                <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                  <Plus className="h-3 w-3 shrink-0" />
+                  <span>Add Section</span>
+                </span>
+                <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+              </button>
             </div>
           )}
         </div>
+      </div>
 
+      {floatingPanelSlot}
+      {/* ── Summary Tab ── */}
+      <div className={cn(
+        "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+        mainTab === "summary"
+          ? "flex-1 flex flex-col min-h-0 opacity-100"
+          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+      )}>
         {/* Content area */}
         <div className="flex-1 min-h-0 overflow-auto">
           {!hasBlueprint ? (
@@ -1086,50 +1417,106 @@ export function MeetingTabs({
                 onSave={async (draft) => handleSaveSection(selectedSummaryId, draft)}
                 onRefClick={handleRefClick}
                 speakerNames={speakerNames}
+                actionsDisabled={sectionIngesting}
                 title={
                   isGeneral
                     ? "General"
-                    : selectedTab
-                      ? `${tabShortLabel(selectedTab)}: ${selectedTab.name}`
-                      : ""
+                    : ""
                 }
-                actionButtons={
-                  <>
-                    {isGeneral ? (
-                      <Button
-                        variant="ghost" size="icon" className="h-7 w-7"
+                actionButtons={null}
+                toolbar={
+                  isGeneral ? (
+                    <div className="flex items-center gap-2 px-6 pb-2">
+                      <button
+                        type="button"
+                        disabled={busy || sectionIngesting}
                         onClick={() => setReSummarizeOpen(true)}
-                        title="Re-summarize" disabled={busy}
+                        title="Re-summarize"
+                        className={cn(
+                          "inline-flex items-center justify-center gap-2 rounded-md h-8 px-4 text-[11px] font-semibold tracking-[0.1em] uppercase flex-1 select-none transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+                          busy
+                            ? "sk-thinking-flow text-[var(--ze-green)]"
+                            : "sk-send-btn",
+                        )}
                       >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      </Button>
-                    ) : (
-                      <>
-                        <Button
-                          variant="ghost" size="icon" className="h-7 w-7"
-                          onClick={() => handleRegenerate(selectedSummaryId)}
-                          title="Regenerate" disabled={busy}
-                        >
-                          <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} />
-                        </Button>
-                        <Button
-                          variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive"
-                          onClick={() => handleDeleteSection(selectedSummaryId)}
-                          title="Delete section" disabled={busy}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </>
-                    )}
-                  </>
+                        <span className="relative z-10 flex items-center gap-2">
+                          {busy ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--ze-green)]" />
+                              Summarizing...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="h-3.5 w-3.5" />
+                              RE-SUMMARIZE
+                            </>
+                          )}
+                        </span>
+                      </button>
+                    </div>
+                  ) : (() => {
+                        const generating = busy && !isGeneral
+                        return (
+                          <div className="flex items-center gap-2 px-6 pb-2">
+                            {/* Regenerate — AI-COMP-001 SEND idle; AI-COMP-120 flow border when generating */}
+                            <button
+                              type="button"
+                              disabled={busy || sectionIngesting}
+                              onClick={() => {
+                                // Check if section has ingested file — warn user it will be deleted
+                                const selectedTab = tabs.find(t => t.tab_id === selectedSummaryId)
+                                if ((selectedTab as any)?.allocated_file_id) {
+                                  setRegenerateConfirmOpen(true)
+                                } else {
+                                  handleRegenerate(selectedSummaryId)
+                                }
+                              }}
+                              title="Regenerate"
+                              className={cn(
+                                "inline-flex items-center justify-center gap-2 rounded-md h-8 px-4 text-[11px] font-semibold tracking-[0.1em] uppercase flex-1 select-none transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+                                generating
+                                  ? "sk-thinking-flow text-[var(--ze-green)]"
+                                  : "sk-send-btn",
+                              )}
+                            >
+                              <span className="relative z-10 flex items-center gap-2">
+                                {generating ? (
+                                  <>
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--ze-green)]" />
+                                    Generating...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="h-3.5 w-3.5" />
+                                    RE-GENERATE
+                                  </>
+                                )}
+                              </span>
+                            </button>
+                            {!busy && (
+                              <button
+                                type="button"
+                                className="inline-flex items-center justify-center gap-2 rounded-md h-8 px-4 text-[11px] font-medium tracking-[0.06em] uppercase shrink-0 select-none transition-all duration-300 bg-[rgba(140,46,46,0.08)] text-[#8C2E2E] border border-[rgba(140,46,46,0.2)] hover:bg-[rgba(140,46,46,0.14)] hover:border-[rgba(140,46,46,0.4)]"
+                                onClick={() => handleDeleteSection(selectedSummaryId)}
+                                title="Delete section"
+                                disabled={sectionIngesting}
+                              >
+                                DELETE
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })()
                 }
                 metadata={
                   !isGeneral && selectedTab ? (
                     <SectionMetadata
                       tab={selectedTab}
                       blueprint={blueprint}
+                      tabs={tabs}
                       meetingId={meetingId}
                       onMeetingUpdate={onMeetingUpdate}
+                      onIngestingChange={setSectionIngesting}
                     />
                   ) : undefined
                 }
@@ -1167,14 +1554,61 @@ export function MeetingTabs({
       </div>
 
       {/* ── Notes Tab ── */}
-      <div className={cn("flex-1 min-h-0 flex flex-col", mainTab !== "notes" && "hidden")}>
-        <div className="flex-1 min-h-0 overflow-auto px-2 pt-2 pb-2">
+      <div className={cn(
+        "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+        mainTab === "notes"
+          ? "flex-1 flex flex-col min-h-0 opacity-100"
+          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+      )}>
+        <div className="flex-1 min-h-0 overflow-auto">
           <MarkdownEditor
             value={notesDraft}
             onChange={handleNotesChange}
             minHeight="250px"
             placeholder="Write your meeting notes here (Markdown supported)..."
           />
+        </div>
+      </div>
+
+      {/* ── Transcript Tab ── */}
+      <div className={cn(
+        "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+        mainTab === "transcript"
+          ? "flex-1 flex flex-col min-h-0"
+          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+      )}>
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <TranscriptTab
+            segments={transcriptSegments}
+            partialText={partialText}
+            onSegmentClick={onSeekTo}
+            focusRef={focusRef}
+            activeSectionTag={activeSectionTag}
+            speakerNames={speakerNames}
+          />
+        </div>
+      </div>
+
+      {/* ── Speaker Tab ── */}
+      <div className={cn(
+        "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+        mainTab === "speaker"
+          ? "flex-1 flex flex-col min-h-0"
+          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+      )}>
+        <div className="flex-1 min-h-0 overflow-y-auto">
+        <SpeakersTab
+          segments={transcriptSegments}
+          speakerNames={speakerNames}
+          onUpdateSpeakerName={(id, name) => {
+            const updated = { ...meeting.speaker_names, [id]: name }
+            updateMeeting(meetingId, { speaker_names: updated }).then((m) => {
+              onMeetingUpdate(m)
+            }).catch(() => {})
+          }}
+          onSegmentClick={onSeekTo}
+          activeSectionTag={activeSectionTag}
+        />
         </div>
       </div>
 
@@ -1242,6 +1676,29 @@ export function MeetingTabs({
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setReSummarizeOpen(false)}>Cancel</Button>
             <Button onClick={handleReSummarize}>Re-summarize</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Regenerate Section Confirmation Dialog */}
+      <Dialog open={regenerateConfirmOpen} onOpenChange={setRegenerateConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Regenerate Section</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Regenerating will delete the existing ingested file snapshot. The section will be re-extracted from the transcript. Continue?
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setRegenerateConfirmOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                setRegenerateConfirmOpen(false)
+                handleRegenerate(selectedSummaryId)
+              }}
+            >
+              Regenerate
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

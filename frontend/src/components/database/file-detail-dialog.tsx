@@ -200,9 +200,9 @@ export function FileDetailDialog({ collection, source, displayName, fileType, or
     if (!source) { setPreviewContent(null); return }
     let cancelled = false
     setPreviewLoading(true)
-    getExtractedText(source)
+    getExtractedText(source, collection)
       .then((res) => {
-        console.log("[FileDetail getExtractedText OK]", { source, textLen: res.text?.length, format: res.format })
+        console.log("[FileDetail getExtractedText OK]", { source, collection, textLen: res.text?.length, format: res.format })
         if (!cancelled) setPreviewContent(res.text)
       })
       .catch((err) => {

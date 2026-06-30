@@ -171,6 +171,29 @@ def get_collection_conflicts(collection: str):
     logger.info("[INFO] GET conflicts for collection='%s' (resolved='%s')", collection, collection_id)
     sm = _get_summary_manager()
     conflicts = sm.get_conflicts(collection_id)
+
+    # Resolve source identifiers → human-readable labels via files.json
+    try:
+        from src.collections.file_index import load as load_file_index
+        idx = load_file_index(collection_id)
+        # Build source → label map (cover both source string and file_id UUID)
+        label_map: dict[str, str] = {}
+        for fid, entry in idx.items():
+            src = entry.get("source", "")
+            label = entry.get("source_label", fid[:8])
+            if src:
+                label_map[src] = label
+            label_map[fid] = label  # UUID → label fallback
+        for c in conflicts:
+            for key in ("source1", "source2"):
+                src = c.get(key, "")
+                if src in label_map:
+                    c[key] = label_map[src]
+                else:
+                    logger.info("[INFO] Conflict source '%s' not in label_map (keys: %s)", src, list(label_map.keys())[:5])
+    except Exception:
+        pass
+
     logger.info("[INFO] Found %d conflicts for collection='%s'", len(conflicts), collection_id)
     return {"collection": collection_id, "conflicts": conflicts}
 
@@ -376,16 +399,19 @@ def get_meeting_log(collection: str):
                 alloc_file_ids = data.get("allocated_file_ids", [])
                 file_ids_for_collection = []
                 file_labels: dict[str, str] = {}
-                # Try to get display labels from files.json
+                # Try to get display labels and source identifiers from files.json
                 try:
                     from src.collections.file_index import load as load_file_index
                     idx = load_file_index(collection_id)
                     for col, fid in zip(alloc_collections, alloc_file_ids):
                         if col == collection_id:
-                            file_ids_for_collection.append(fid)
                             entry = idx.get(fid, {})
+                            # Use source (e.g. "__meeting__:mid:tab") for chunk lookup,
+                            # not the opaque file_id UUID
+                            source = entry.get("source", fid)
+                            file_ids_for_collection.append(source)
                             label = entry.get("source_label", fid[:8])
-                            file_labels[fid] = label
+                            file_labels[source] = label
                 except Exception:
                     for col, fid in zip(alloc_collections, alloc_file_ids):
                         if col == collection_id:

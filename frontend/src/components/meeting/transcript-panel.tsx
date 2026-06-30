@@ -35,7 +35,7 @@ export function TranscriptPanel({
     <div
       className={cn(
         "border-l border-border flex flex-col shrink-0 transition-all duration-200",
-        open ? "w-96" : "w-10"
+        open ? "w-72" : "w-10"
       )}
     >
       <button
@@ -98,13 +98,14 @@ export function TranscriptPanel({
 // Transcript tab
 // ---------------------------------------------------------------------------
 
-function TranscriptTab({
+export function TranscriptTab({
   segments,
   partialText,
   onSegmentClick,
   focusRef,
   activeSectionTag,
   speakerNames,
+  showSearch = true,
 }: {
   segments: TranscriptSegment[]
   partialText?: string
@@ -112,6 +113,7 @@ function TranscriptTab({
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
   speakerNames: Record<string, string>
+  showSearch?: boolean
 }) {
   const [search, setSearch] = useState("")
   const [focusedIdx, setFocusedIdx] = useState(-1)
@@ -130,18 +132,27 @@ function TranscriptTab({
   // Scroll to focused sentence when ref is clicked
   useEffect(() => {
     if (!focusRef?.id || !containerRef.current) return
+    const container = containerRef.current
     const idx = segments.findIndex((seg) => seg.sentence_id?.endsWith(focusRef.id))
     if (idx === -1) return
     setFocusedIdx(idx)
-    // Find the DOM element — segments are rendered flat in the container
-    const items = containerRef.current.querySelectorAll("[data-seg-idx]")
-    const el = items[idx] as HTMLElement | undefined
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" })
-    }
+    // Defer slightly so the layout (especially the floating panel width
+    // transition) has a chance to settle before we measure positions.
+    const raf = requestAnimationFrame(() => {
+      const items = container.querySelectorAll("[data-seg-idx]")
+      const el = items[idx] as HTMLElement | undefined
+      if (!el) return
+      // Manual scrollTop — never propagates to document viewport,
+      // unlike scrollIntoView which can leak when the container is mid-animation.
+      const containerTop = container.getBoundingClientRect().top
+      const elTop = el.getBoundingClientRect().top
+      const offset = elTop - containerTop + container.scrollTop
+        - container.clientHeight / 2 + el.offsetHeight / 2
+      container.scrollTo({ top: offset, behavior: "smooth" })
+    })
     // Clear highlight after 2s
     const timer = setTimeout(() => setFocusedIdx(-1), 2000)
-    return () => clearTimeout(timer)
+    return () => { cancelAnimationFrame(raf); clearTimeout(timer) }
   }, [focusRef?.ts, focusRef?.id, segments])
 
   const highlight = (text: string) => {
@@ -160,23 +171,25 @@ function TranscriptTab({
   return (
     <div className="flex flex-col h-full">
       {/* Search bar */}
-      <div className="px-2 pt-2 pb-1">
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Search transcript..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full h-7 pl-7 pr-2 text-xs rounded-md border border-input bg-background"
-          />
+      {showSearch && (
+        <div className="px-2 pt-2 pb-1">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search transcript..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full h-7 pl-7 pr-2 text-xs rounded-md border border-input bg-background"
+            />
+          </div>
+          {query && (
+            <p className="text-[10px] text-muted-foreground mt-1">{filtered.length} of {segments.length} segments</p>
+          )}
         </div>
-        {query && (
-          <p className="text-[10px] text-muted-foreground mt-1">{filtered.length} of {segments.length} segments</p>
-        )}
-      </div>
+      )}
 
-      <div ref={containerRef} className="flex-1 overflow-auto p-2 space-y-3">
+      <div ref={containerRef} className="flex-1 overflow-auto p-2 space-y-2.5">
         {filtered.length === 0 && !partialText && (
           <p className="text-xs text-muted-foreground text-center py-8">
             {query ? "No matching segments" : "No transcript yet"}
@@ -232,7 +245,7 @@ function TranscriptTab({
                   {formatTime(seg.start)} – {formatTime(seg.end)}
                 </span>
               </div>
-              <p className="text-sm text-foreground leading-relaxed pl-0">
+              <p className="text-xs text-foreground leading-relaxed pl-0">
                 {highlight(seg.text)}
               </p>
             </div>
@@ -240,7 +253,7 @@ function TranscriptTab({
         })}
         {partialText && (
           <div className="rounded-md px-2 py-1.5 -mx-1 border border-primary/20">
-            <p className="text-sm text-foreground/80 italic">{partialText}</p>
+            <p className="text-xs text-foreground/80 italic">{partialText}</p>
           </div>
         )}
       </div>
@@ -252,7 +265,7 @@ function TranscriptTab({
 // Speakers tab
 // ---------------------------------------------------------------------------
 
-function SpeakersTab({
+export function SpeakersTab({
   segments,
   speakerNames,
   onUpdateSpeakerName,
@@ -427,14 +440,14 @@ function SpeakerCard({
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatTime(seconds: number): string {
+export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
   return `${m}:${s.toString().padStart(2, "0")}`
 }
 
 /** Convert tab_sec_01 → T1, tab_sec_02 → T2 */
-function sectionTagLabel(tag: string): string {
+export function sectionTagLabel(tag: string): string {
   const m = tag.match(/^tab_sec_(\d+)$/)
   if (m) return `T${parseInt(m[1], 10)}`
   return tag
