@@ -88,11 +88,18 @@ export function ChatView() {
 
         {/* Main chat area */}
         <div className={`flex flex-col flex-1 min-w-0 relative ${selectedSource ? "hidden sm:flex" : ""}`}>
-          {/* Session title header */}
-          <div className="shrink-0 px-12 pt-5 pb-3 border-b border-border/30">
+          {/* Session title header — h-12 (48px) matches Collections/Sessions headers */}
+          <div className="shrink-0 px-12 h-12 flex items-center border-b border-border/30">
             <h1
-              className="text-[15px] font-[400] tracking-[-0.01em] text-foreground/80 truncate"
-              style={{ fontFamily: "var(--font-serif)" }}
+              className="truncate"
+              style={{
+                fontFamily: "var(--font-serif)",
+                fontSize: "clamp(20px, 2vw, 24px)",
+                fontWeight: 300,
+                letterSpacing: "-0.01em",
+                lineHeight: 1.2,
+                color: "var(--ze-ink)",
+              }}
             >
               {sessionTitle}
             </h1>

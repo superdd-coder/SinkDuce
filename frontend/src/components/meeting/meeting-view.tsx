@@ -382,7 +382,19 @@ export function MeetingView() {
                 </div>
               ) : (
                 <div className="flex items-center gap-1 min-w-0">
-                  <h2 className="text-sm font-light truncate">{meeting.title}</h2>
+                  <h2
+                    className="truncate"
+                    style={{
+                      fontFamily: "var(--font-serif)",
+                      fontSize: "clamp(20px, 2vw, 24px)",
+                      fontWeight: 300,
+                      letterSpacing: "-0.01em",
+                      lineHeight: 1.2,
+                      color: "var(--ze-ink)",
+                    }}
+                  >
+                    {meeting.title}
+                  </h2>
                   <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 opacity-60 hover:opacity-100" onClick={handleStartEditTitle}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>

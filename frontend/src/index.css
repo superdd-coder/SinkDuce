@@ -675,61 +675,79 @@ input[type="checkbox"] {
    ============================================================ */
 /* @sk-input-probe:start */
 
-/* ── AI-COMP-111 · chat-input · static box-shadow + ::before scale breathe ── */
-/* Persistent breathing lives on ::before (scale 1 ↔ 1.018 only) so it never
-   fights with box-shadow transitions. The host's box-shadow values are static
-   and transition smoothly between idle and focused states — no flicker. */
-@keyframes sk-input-breathe {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.018); }
-}
+/* ── AI-COMP-070 · chat-input · dual-layer crossfade breath (no var() in keyframes) ── */
+/* Two stacked pseudo-elements, each running its OWN static breath animation
+   (3.6s idle / 2.4s focus). No var() inside keyframes — the breath values
+   are fixed, so the animation interpolates cleanly with no per-frame
+   re-keyframe cost. Crossfade between layers is handled by a simple opacity
+   transition on the pseudo, which is the most reliable thing CSS can animate.
+   The host only carries the static dark drop-shadow + border. */
 .sk-input-frame {
   position: relative;
-  overflow: visible;
+  border-radius: 4px;
   border: 1.5px solid oklch(0.38 0.08 160 / 0.30);
-  /* idle baseline box-shadow */
+  /* static base shadow (the dark drop, not the glow) */
   box-shadow:
-    0 -8px 30px -4px rgba(0,0,0,0.06),
-    0 2px 8px -2px rgba(0,0,0,0.03),
-    0 0 0 2px oklch(0.38 0.08 160 / 0.10),
-    0 0 18px -4px oklch(0.38 0.08 160 / 0.25);
-  transition:
-    border-color 1.4s cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow   1.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-/* breathing halo — sits behind, uses transform only so it never interferes
-   with the host's box-shadow transition */
-.sk-input-frame::before {
-  content: '';
-  position: absolute;
-  inset: -6px;
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: -1;
-  box-shadow:
-    0 0 0 2px oklch(0.38 0.08 160 / 0.08),
-    0 0 24px -4px oklch(0.38 0.08 160 / 0.20);
-  animation: sk-input-breathe 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  transition:
-    box-shadow 1.4s cubic-bezier(0.4, 0, 0.2, 1),
-    animation-duration 1.4s cubic-bezier(0.4, 0, 0.2, 1);
+    0 -8px 30px -4px rgba(0, 0, 0, 0.06),
+    0 2px 8px -2px rgba(0, 0, 0, 0.03);
+  transition: border-color 800ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .sk-input-frame:focus-within {
   border-color: var(--ze-green);
-  box-shadow:
-    0 -8px 30px -4px rgba(0,0,0,0.06),
-    0 2px 8px -2px rgba(0,0,0,0.03),
-    0 0 0 1px oklch(0.38 0.08 160),
-    0 0 0 5px oklch(0.38 0.08 160 / 0.20),
-    0 0 32px -2px oklch(0.38 0.08 160 / 0.50),
-    0 0 80px -8px oklch(0.38 0.08 160 / 0.30);
 }
-.sk-input-frame:focus-within::before {
-  box-shadow:
-    0 0 0 6px oklch(0.38 0.08 160 / 0.18),
-    0 0 40px -2px oklch(0.38 0.08 160 / 0.45),
-    0 0 100px -8px oklch(0.38 0.08 160 / 0.35);
-  animation-duration: 2.4s;
+
+/* Both glow layers live on pseudos stacked behind the host (z-index: -1).
+   Each carries its own breath animation, no shared state. */
+.sk-input-frame::before,
+.sk-input-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  will-change: opacity, box-shadow;
+}
+.sk-input-frame::before {
+  /* idle layer · visible by default, fades out on focus */
+  animation: sk-input-breathe-idle 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  opacity: 1;
+  transition: opacity 800ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.sk-input-frame::after {
+  /* focus layer · hidden by default, fades in on focus */
+  animation: sk-input-breathe-focus 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  opacity: 0;
+  transition: opacity 800ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.sk-input-frame:focus-within::before { opacity: 0; }
+.sk-input-frame:focus-within::after  { opacity: 1; }
+
+@keyframes sk-input-breathe-idle {
+  0%, 100% {
+    box-shadow:
+      0 0 10px 0   oklch(0.38 0.08 160 / 0.12),
+      0 0 24px 4px oklch(0.38 0.08 160 / 0.05);
+  }
+  50% {
+    box-shadow:
+      0 0 22px 2px oklch(0.38 0.08 160 / 0.24),
+      0 0 50px 8px oklch(0.38 0.08 160 / 0.10);
+  }
+}
+@keyframes sk-input-breathe-focus {
+  0%, 100% {
+    box-shadow:
+      0 0 18px 0   oklch(0.38 0.08 160 / 0.38),
+      0 0 40px 4px  oklch(0.38 0.08 160 / 0.20),
+      0 0 80px 12px oklch(0.38 0.08 160 / 0.10);
+  }
+  50% {
+    box-shadow:
+      0 0 28px 2px  oklch(0.38 0.08 160 / 0.42),
+      0 0 64px 8px  oklch(0.38 0.08 160 / 0.22),
+      0 0 120px 18px oklch(0.38 0.08 160 / 0.10);
+  }
 }
 
 /* ── AI-COMP-001 · btn-default expanding ring (jelly halo) ── */
@@ -802,17 +820,37 @@ input[type="checkbox"] {
   transition: background-color 200ms cubic-bezier(0.25, 1, 0.5, 1),
               border-color 200ms cubic-bezier(0.25, 1, 0.5, 1),
               color 200ms cubic-bezier(0.25, 1, 0.5, 1),
-              transform 200ms cubic-bezier(0.25, 1, 0.5, 1);
+              transform 200ms cubic-bezier(0.25, 1, 0.5, 1),
+              box-shadow 200ms cubic-bezier(0.25, 1, 0.5, 1);
   position: relative;
   overflow: hidden;
+  isolation: isolate;
 }
 .sk-stop-btn:hover {
   background: oklch(0.38 0.08 160 / 0.04);
   border-color: var(--ze-green);
   color: var(--ze-green);
   transform: translateY(-1px);
+  box-shadow:
+    0 2px 6px rgba(10, 18, 14, 0.10),
+    0 0 0 5px oklch(0.38 0.08 160 / 0.08),
+    0 0 24px -4px oklch(0.38 0.08 160 / 0.40);
 }
 .sk-stop-btn:active { transform: translateY(0); }
+/* Subtle expanding ring on hover — calmer than btn-default's jelly halo */
+.sk-stop-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid oklch(0.72 0.10 160);
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+.sk-stop-btn:hover::after {
+  animation: sk-btn-ring 2.4s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
 
 /* ── AI-COMP-121 · streaming cursor ── */
 @keyframes sk-cursor-blink {
@@ -833,10 +871,10 @@ input[type="checkbox"] {
 
 /* ── AI-COMP-010 · checkbox-diamond ── */
 .sk-diamond {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   flex-shrink: 0;
-  border: 1.5px solid var(--line-section, oklch(0.42 0.04 160 / 0.55));
+  border: 1px solid var(--line-section, oklch(0.42 0.04 160 / 0.55));
   background: transparent;
   transform: rotate(45deg);
   position: relative;
@@ -860,6 +898,16 @@ input[type="checkbox"] {
   pointer-events: none;
   animation: sk-check-ring 1.8s cubic-bezier(0.25, 1, 0.5, 1) infinite;
 }
+/* When the parent .group is hovered, the green sweep covers the row.
+   Diamonds flip to on-green so they stay visible against the green fill:
+   · Unchecked → only the border color flips (fill stays transparent)
+   · Checked (.on) → both border and fill flip (was green, now light) */
+.group:hover .sk-diamond {
+  border-color: var(--on-green, #E8F0EB);
+}
+.group:hover .sk-diamond.on {
+  background: var(--on-green, #E8F0EB);
+}
 @keyframes sk-check-ring {
   0%   { opacity: 0.55; transform: scale(1); }
   100% { opacity: 0;    transform: scale(1.4); }
@@ -876,7 +924,9 @@ input[type="checkbox"] {
   position: relative;
   border: 1.5px solid transparent;
   background:
-    linear-gradient(var(--bg), var(--bg)) padding-box,
+    /* inner fill — uses project --ze-bg token (with hex fallback) */
+    linear-gradient(var(--ze-bg, #FAFAF7), var(--ze-bg, #FAFAF7)) padding-box,
+    /* moving green highlight on the border */
     linear-gradient(115deg,
       transparent 0%,
       transparent 30%,
@@ -888,4 +938,71 @@ input[type="checkbox"] {
   background-position: 0 0, 100% 0;
   animation: sk-reasoning-flow 2.2s linear infinite;
 }
+
+/* ── AI-COMP-060 · thinking state · full-body green flow ── */
+/* Matches the "Reasoning over 18 chunks…" pill: soft blurred green glow
+   sweeps across the entire interior, plus a sharp 1px accent line rides
+   the bottom edge. Two layers, same animation, different visual weights. */
+@keyframes sk-green-flow {
+  0%   { background-position: 100% 50%; }
+  100% { background-position: -100% 50%; }
+}
+.sk-thinking-flow {
+  position: relative;
+  overflow: hidden;
+  background: oklch(0.38 0.08 160 / 0.06);
+  border: 1px solid oklch(0.38 0.08 160 / 0.18);
+}
+/* layer 1 · soft blurred green glow across the whole body */
+.sk-thinking-flow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    oklch(0.38 0.08 160 / 0.50) 50%,
+    transparent 100%);
+  background-size: 200% 100%;
+  animation: sk-green-flow 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  z-index: -1;          /* sits behind in-flow content, in front of bg */
+  opacity: 0.4;
+  filter: blur(6px);
+  pointer-events: none;
+}
+/* layer 2 · sharp 1px accent line at the bottom edge */
+.sk-thinking-flow::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--ze-green) 50%,
+    transparent 100%);
+  background-size: 200% 100%;
+  animation: sk-green-flow 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  z-index: 1;
+  pointer-events: none;
+}
 /* @sk-input-probe:end */
+/* -----------------------------------------------------------
+   Hide scrollbars globally — keep overflow scroll functionality
+   but remove the visible track & thumb for a cleaner editorial
+   aesthetic. V3.1 design philosophy: content-first, no chrome.
+   ----------------------------------------------------------- */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* Radix ScrollArea thumb/track also hidden */
+[data-slot="scroll-area-scrollbar"],
+[data-slot="scroll-area-thumb"] {
+  display: none !important;
+}

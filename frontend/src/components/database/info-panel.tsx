@@ -210,28 +210,45 @@ export function InfoPanel({ collection }: InfoPanelProps) {
 
   return (
     <div className="space-y-8">
-      {/* Stats row */}
-      <div className="flex gap-10 pb-5 border-b border-dashed border-border">
-        <div className="flex flex-col">
-          <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{docCount}</span>
-          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Documents</span>
+      {/* Stats row + Consolidate action */}
+      <div className="flex items-end justify-between pb-5 border-b border-dashed border-border">
+        <div className="flex gap-10">
+          <div className="flex flex-col">
+            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{docCount}</span>
+            <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Documents</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{meetings.length > 0 || meetingsLoading ? meetings.length : "—"}</span>
+            <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Meetings</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>
+              {notesCount > 0 ? `${ingestedNotesCount}/${notesCount}` : "—"}
+            </span>
+            <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">
+              Notes{ingestedNotesCount > 0 ? ` · ${ingestedNotesCount} ingested` : ""}
+            </span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{conflicts.length}</span>
+            <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Conflicts</span>
+          </div>
         </div>
-        <div className="flex flex-col">
-          <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{meetings.length > 0 || meetingsLoading ? meetings.length : "—"}</span>
-          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Meetings</span>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>
-            {notesCount > 0 ? `${ingestedNotesCount}/${notesCount}` : "—"}
-          </span>
-          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">
-            Notes{ingestedNotesCount > 0 ? ` · ${ingestedNotesCount} ingested` : ""}
-          </span>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{conflicts.length}</span>
-          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Conflicts</span>
-        </div>
+
+        <button
+          type="button"
+          onClick={handleConsolidate}
+          disabled={consolidating && consolidatingCollection === collection}
+          className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 bg-primary text-primary-foreground border-none"
+          style={{
+            padding: "4px 10px",
+            borderRadius: "2px",
+            fontFamily: "var(--font-sans)",
+          }}
+        >
+          {consolidating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          Consolidate
+        </button>
       </div>
 
       {/* Project Description */}
@@ -251,23 +268,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
 
       {/* Summary */}
       <div>
-        <div className="flex items-center justify-between mb-2.5">
-          <SectionLabel>Summary</SectionLabel>
-          <button
-            type="button"
-            onClick={handleConsolidate}
-            disabled={consolidating && consolidatingCollection === collection}
-            className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 bg-primary text-primary-foreground border-none"
-            style={{
-              padding: "4px 10px",
-              borderRadius: "2px",
-              fontFamily: "var(--font-sans)",
-            }}
-          >
-            {consolidating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-            Consolidate
-          </button>
-        </div>
+        <SectionLabel className="mb-2.5">Summary</SectionLabel>
 
         {consolidating ? (
           <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground">
@@ -363,7 +364,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
                           style={{ background: "none", border: "none" }}
                           onClick={() => setPendingOpenFile(fid)}
                         >
-                          {fid}
+                          {meeting.file_labels?.[fid] || fid}
                         </button>
                       ))}
                     </div>

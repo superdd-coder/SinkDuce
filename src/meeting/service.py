@@ -171,6 +171,19 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
 
     # 5. Mark meeting as completed
     store.update_meeting(meeting_id, status=MeetingStatus.completed)
+    update(95, "Starting summary generation...")
+
+    # 6. Auto-trigger summary generation (same path as the Summarize button)
+    try:
+        task_manager.create_task(
+            filename=f"meeting_summary:{meeting_id}",
+            task_type="meeting_summary",
+            meeting_id=meeting_id,
+        )
+        logger.info("[TRANSCRIBE-HANDLER] Auto-triggered meeting_summary for %s", meeting_id)
+    except Exception as e:
+        logger.warning("[TRANSCRIBE-HANDLER] Failed to auto-trigger summary (non-fatal): %s", e)
+
     update(100, "Transcription complete")
 
     logger.info("[TRANSCRIBE-HANDLER] DONE for meeting %s", meeting_id)

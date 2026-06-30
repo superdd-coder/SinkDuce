@@ -228,6 +228,14 @@ async def delete_document(collection: str, doc_source: str):
     except Exception as e:
         logger.warning("[DELETE] File index cleanup failed (non-fatal): %s", e)
 
+    # Take snapshot BEFORE doc summary cleanup (for debounce net-change detection)
+    pre_snapshot: dict[str, bool] = {}
+    try:
+        from src.api.routes.info import _snapshot_includes
+        pre_snapshot = _snapshot_includes(collection_id)
+    except Exception:
+        pass
+
     # Clean up doc summary for this document (non-blocking, best effort)
     try:
         logger.info("[DELETE] Cleaning up doc_summary for '%s'", doc_source)
@@ -286,24 +294,12 @@ async def delete_document(collection: str, doc_source: str):
     except Exception as e:
         logger.warning("[DELETE] Meeting allocation cleanup failed (non-fatal): %s", e)
 
-    # Increment summary change counter
+    # Schedule debounced consolidation (replaces old counter-based trigger)
     try:
-        col_config = services.db.get_collection_config(collection_id)
-        counter = col_config.get("summary_change_counter", 0) + 1
-        threshold = col_config.get("summary_consolidate_threshold", 10)
-        services.db.update_collection_config(collection_id, {"summary_change_counter": counter})
-        logger.info("[DELETE] summary_change_counter updated to %d (threshold=%d)", counter, threshold)
-
-        # Auto-trigger consolidation when threshold is reached
-        if counter >= threshold:
-            logger.info("[DELETE] Counter %d >= threshold %d, triggering consolidation", counter, threshold)
-            task_manager.create_task(
-                filename=f"consolidate:{collection_id}",
-                task_type="consolidate",
-                collection=collection_id,
-            )
+        from src.api.routes.info import schedule_debounced_consolidate
+        schedule_debounced_consolidate(collection_id, pre_snapshot)
     except Exception as e:
-        logger.warning("[DELETE] Counter update failed (non-fatal): %s", e)
+        logger.warning("[DELETE] Debounce schedule failed (non-fatal): %s", e)
 
     # Trigger coverage refresh after deletion.
     # If upload tasks are running, skip — the last upload will trigger
@@ -616,6 +612,21 @@ async def list_files(collection: str):
                     "file_type": "",
                     "display_name": src,
                 })
+
+        # Attach summary status for each file (definitive toggle state)
+        try:
+            from src.rag.summary_manager import SummaryManager
+            sm = SummaryManager(db=services.db)
+            summaries = sm.get_doc_summaries(collection, included_only=False)
+            summary_map: dict[str, dict] = {s["source"]: s for s in summaries}
+            for f in files:
+                ds = summary_map.get(f["source"])
+                f["has_summary"] = ds is not None
+                f["include_in_summary"] = ds.get("include_in_summary", True) is not False if ds else None
+        except Exception:
+            for f in files:
+                f["has_summary"] = None
+                f["include_in_summary"] = None
 
         return {"collection": collection, "files": files}
 

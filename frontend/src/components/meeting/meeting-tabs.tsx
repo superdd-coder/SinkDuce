@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { cn } from "@/lib/utils"
-import { Loader2, X, RefreshCw, Plus, Pencil, Sparkles, Check, Database, FolderPlus } from "lucide-react"
+import { Loader2, X, RefreshCw, Plus, Pencil, Sparkles } from "lucide-react"
 import {
   getMeeting, startBreakdown, magicExtract, deleteSection,
   regenerateSection, getSectionMd, generateMeetingSummary,
@@ -288,8 +289,99 @@ function SectionMetadata({
   const displayActive = ingested
 
   const [ingesting, setIngesting] = useState(false)
-  const [pickerOpen, setPickerOpen] = useState(false)
+  const [dropdownOpen, setDropdownOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
+  const [switchTarget, setSwitchTarget] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const dropdownContentRef = useRef<HTMLDivElement>(null)
+  const { collections, fetchCollections } = useAppStore()
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState(tab.name)
+  const [pickerIngesting, setPickerIngesting] = useState(false)
+
+  // Dropdown click-outside (portal-based, check both container & dropdown)
+  useEffect(() => {
+    if (!dropdownOpen) return
+    const handler = (e: MouseEvent) => {
+      if (
+        menuRef.current && !menuRef.current.contains(e.target as Node) &&
+        dropdownContentRef.current && !dropdownContentRef.current.contains(e.target as Node)
+      ) {
+        setDropdownOpen(false)
+        setCreating(false)
+      }
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [dropdownOpen])
+
+  // Fetch collections when dropdown opens
+  useEffect(() => {
+    if (dropdownOpen) {
+      fetchCollections()
+      setNewName(tab.name)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dropdownOpen, tab.name])
+
+  const handleSelectCollection = (colId: string) => {
+    // If already ingested to a different collection, confirm before switching
+    if (ingested && colId !== associatedId) {
+      setSwitchTarget(colId)
+      return
+    }
+    doIngest(colId)
+  }
+
+  const doIngest = async (colId: string) => {
+    setPickerIngesting(true)
+    setSwitchTarget(null)
+    try {
+      // Delete old ingestion if switching
+      if (ingested && colId !== associatedId) {
+        await deleteSectionAllocation(meetingId, tab.tab_id)
+      }
+      await handleIngest(colId)
+      setDropdownOpen(false)
+      setCreating(false)
+      fetchCollections()
+    } catch { /* error handled in parent */ }
+    setPickerIngesting(false)
+  }
+
+  const handleCreateAndSelect = async () => {
+    if (!newName.trim() || pickerIngesting) return
+    // If switching, confirm first
+    if (ingested) {
+      setSwitchTarget("__new__")
+      return
+    }
+    doCreateAndIngest()
+  }
+
+  const doCreateAndIngest = async () => {
+    setPickerIngesting(true)
+    setSwitchTarget(null)
+    try {
+      // Delete old ingestion if switching
+      if (ingested) {
+        await deleteSectionAllocation(meetingId, tab.tab_id)
+      }
+      const res = await createCollection(newName.trim())
+      if (res.error) throw new Error(res.error)
+      const colId = res.id
+      if (!colId) throw new Error("No collection ID returned")
+      await handleIngest(colId)
+      await fetchCollections()
+      setDropdownOpen(false)
+      setCreating(false)
+      toast.success(`Created "${newName.trim()}" and ingested`)
+    } catch (err) {
+      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    setPickerIngesting(false)
+  }
 
   const handleIngest = async (colId: string) => {
     if (ingesting) return
@@ -329,44 +421,122 @@ function SectionMetadata({
       </div>
 
       {/* Right: collection buttons */}
-      <div className={cn("shrink-0 flex flex-col gap-1.5 items-end", BUTTON_W)}>
+      <div className={cn("shrink-0 flex flex-col gap-1.5 items-end", BUTTON_W)} ref={menuRef}>
         {(hasAssociated || ingested) && (
-          <Button
-            variant={displayActive ? "default" : "outline"}
-            size="sm"
-            className={cn("h-7 text-xs w-full justify-start", ingesting && "opacity-50")}
+          <button
+            type="button"
             disabled={ingesting}
             onClick={displayActive ? () => setCancelOpen(true) : () => handleIngest(associatedId)}
+            className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+            style={{
+              fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
+              color: displayActive ? "var(--color-primary)" : "var(--color-muted-foreground)",
+            }}
           >
-            {ingesting ? (
-              <Loader2 className="h-3 w-3 animate-spin mr-1 shrink-0" />
-            ) : displayActive ? (
-              <Check className="h-3 w-3 mr-1 shrink-0" />
-            ) : (
-              <Database className="h-3 w-3 mr-1 shrink-0" />
-            )}
-            <span className="truncate">{displayName || associatedName}</span>
-          </Button>
+            <span className="relative z-10 whitespace-nowrap">
+              {ingesting ? "Ingesting..." : displayName || associatedName}
+            </span>
+            <span
+              className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary/10"
+              style={{
+                transform: displayActive ? "scaleX(1)" : "scaleX(0)",
+                transformOrigin: "left",
+              }}
+            />
+          </button>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 text-xs w-full justify-start"
-          onClick={() => setPickerOpen(true)}
+        <button
+          type="button"
+          ref={buttonRef}
+          onClick={() => setDropdownOpen(!dropdownOpen)}
+          className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+          style={{
+            fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
+            color: dropdownOpen ? "var(--color-primary-foreground)" : "var(--color-muted-foreground)",
+          }}
         >
-          <FolderPlus className="h-3 w-3 mr-1 shrink-0" />
-          Choose a collection
-        </Button>
+          <span className="relative z-10 whitespace-nowrap text-center">
+            {dropdownOpen ? "Cancel" : "Choose a collection"}
+          </span>
+          <span
+            className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
+            style={{
+              transform: dropdownOpen ? "scaleX(1)" : "scaleX(0)",
+              transformOrigin: dropdownOpen ? "right" : "left",
+            }}
+          />
+        </button>
+        {createPortal(
+          <div
+            ref={dropdownContentRef}
+            className={`fixed z-[100] flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+              dropdownOpen
+                ? "opacity-100 visible translate-y-0 pointer-events-auto"
+                : "opacity-0 invisible translate-y-3 pointer-events-none"
+            }`}
+            style={{
+              width: buttonRef.current ? buttonRef.current.getBoundingClientRect().width : "auto",
+              top: menuRef.current ? menuRef.current.getBoundingClientRect().bottom + 4 : 0,
+              left: menuRef.current ? menuRef.current.getBoundingClientRect().left : 0,
+            }}
+          >
+            {collections.length === 0 && (
+              <div className="px-2 py-3 text-[10px] text-muted-foreground text-center">No collections yet</div>
+            )}
+            {collections.map((col) => (
+              <label
+                key={col.id}
+                onClick={() => handleSelectCollection(col.id)}
+                className={`relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group ${
+                  pickerIngesting ? "pointer-events-none opacity-50" : ""
+                }`}
+              >
+                <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                  <span className={`sk-diamond ${col.id === associatedId ? "on" : ""}`} aria-hidden />
+                  <span className="whitespace-normal break-words min-w-0 leading-snug">{col.name}</span>
+                </span>
+                <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+              </label>
+            ))}
+            <div className="border-t border-primary/20 w-full">
+              {!creating ? (
+                <label
+                  onClick={() => setCreating(true)}
+                  className={`relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group ${
+                    pickerIngesting ? "pointer-events-none opacity-50" : ""
+                  }`}
+                >
+                  <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                    <Plus className="h-3 w-3 shrink-0" />
+                    <span>{hasAssociated ? "Create new collection" : `+ ${tab.name}`}</span>
+                  </span>
+                  <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                </label>
+              ) : (
+                <div className="px-2 py-2 flex items-center gap-1.5">
+                  <input
+                    className="flex-1 border border-border rounded px-2 py-1 text-[10px] bg-background"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Collection name"
+                    autoFocus
+                    onKeyDown={(e) => { if (e.key === "Enter") handleCreateAndSelect() }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <button
+                    className="shrink-0 text-[10px] font-medium uppercase tracking-[0.1em] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-50"
+                    onClick={handleCreateAndSelect}
+                    disabled={!newName.trim() || pickerIngesting}
+                  >
+                    Create
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
       </div>
-
-      {/* Collection Picker Dialog */}
-      <CollectionPickerDialog
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        tabName={tab.name}
-        hasAssociated={hasAssociated}
-        onIngested={handleIngest}
-      />
 
       {/* Cancel Ingestion Confirm Dialog */}
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
@@ -383,129 +553,31 @@ function SectionMetadata({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Switch Ingestion Confirm Dialog */}
+      <Dialog open={!!switchTarget} onOpenChange={(v) => { if (!v) setSwitchTarget(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Switch Collection</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This section is already ingested to <span className="font-medium text-foreground">"{associatedName}"</span>.
+            {switchTarget === "__new__" ? (
+              <>Creating a new collection will delete the existing file snapshot and re-ingest.</>
+            ) : (
+              <>Switching to <span className="font-medium text-foreground">"{collections.find(c => c.id === switchTarget)?.name || switchTarget}"</span> will delete the existing file snapshot and re-ingest.</>
+            )}
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setSwitchTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => {
+              if (switchTarget === "__new__") doCreateAndIngest()
+              else if (switchTarget) doIngest(switchTarget)
+            }}>Switch</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
-  )
-}
-
-// ── Collection picker / creator dialog ───────────────────────────
-
-function CollectionPickerDialog({
-  open,
-  onOpenChange,
-  tabName,
-  hasAssociated,
-  onIngested,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  tabName: string
-  hasAssociated: boolean
-  onIngested: (colId: string) => Promise<void>
-}) {
-  const { collections, fetchCollections } = useAppStore()
-  const [creating, setCreating] = useState(false)
-  const [newName, setNewName] = useState(tabName)
-  const [ingesting, setIngesting] = useState(false)
-
-  useEffect(() => {
-    if (open) {
-      fetchCollections()
-      setCreating(false)
-      setNewName(tabName)
-    }
-  }, [open, fetchCollections, tabName])
-
-  const handleSelectExisting = async (colId: string) => {
-    setIngesting(true)
-    try {
-      await onIngested(colId)
-      onOpenChange(false)
-    } catch { /* error handled in parent */ }
-    setIngesting(false)
-  }
-
-  const handleCreateAndIngest = async () => {
-    if (!newName.trim()) return
-    setIngesting(true)
-    try {
-      const res = await createCollection(newName.trim())
-      if (res.error) throw new Error(res.error)
-      const colId = res.id
-      if (!colId) throw new Error("No collection ID returned")
-      await onIngested(colId)
-      await fetchCollections()
-      onOpenChange(false)
-      toast.success(`Created "${newName.trim()}" and ingested`)
-    } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    setIngesting(false)
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Choose a collection</DialogTitle>
-        </DialogHeader>
-
-        {!creating ? (
-          <>
-            <div className="max-h-48 overflow-y-auto space-y-0.5 -mx-1">
-              {collections.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-4">No collections yet</p>
-              )}
-              {collections.map((col) => (
-                <button
-                  key={col.id}
-                  className="w-full text-left px-3 py-2 text-sm rounded hover:bg-accent transition-colors flex items-center gap-2"
-                  onClick={() => handleSelectExisting(col.id)}
-                  disabled={ingesting}
-                >
-                  <Database className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="truncate">{col.name}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="pt-2 border-t border-border">
-              {hasAssociated ? (
-                <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => setCreating(true)}>
-                  <Plus className="h-3 w-3 mr-1" /> Create new collection
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" className="w-full text-xs border-dashed" onClick={() => setCreating(true)}>
-                  <Plus className="h-3 w-3 mr-1" />+ {tabName}
-                </Button>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="space-y-2">
-              <label className="text-xs text-muted-foreground">Collection name</label>
-              <input
-                className="w-full border border-border rounded px-2 py-1.5 text-sm bg-background"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Collection name"
-                autoFocus
-                onKeyDown={(e) => { if (e.key === "Enter") handleCreateAndIngest() }}
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" size="sm" onClick={() => setCreating(false)} disabled={ingesting}>
-                Back
-              </Button>
-              <Button size="sm" onClick={handleCreateAndIngest} disabled={ingesting || !newName.trim()}>
-                {ingesting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                Create & Ingest
-              </Button>
-            </div>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -519,7 +591,8 @@ export function MeetingTabs({
   const blueprint = meeting.blueprint ?? []
   const speakerNames: Record<string, string> = meeting.speaker_names ?? {}
 
-  const [mainTab, setMainTab] = useState("summary")
+  const hasSummary = !!(meeting.detail || tabs.some(t => t.type === "section" && t.md_file_path))
+  const [mainTab, setMainTab] = useState(hasSummary ? "summary" : "notes")
   const [selectedSummaryId, setSelectedSummaryId] = useState("tab_general")
   const [tabMdContents, setTabMdContents] = useState<Record<string, string>>({})
 
@@ -1095,10 +1168,7 @@ export function MeetingTabs({
 
       {/* ── Notes Tab ── */}
       <div className={cn("flex-1 min-h-0 flex flex-col", mainTab !== "notes" && "hidden")}>
-        <div className="flex items-center px-3 pt-2 pb-1 shrink-0">
-          <span className="text-xs text-muted-foreground uppercase tracking-wider">Notes</span>
-        </div>
-        <div className="flex-1 min-h-0 overflow-auto px-2 pb-2">
+        <div className="flex-1 min-h-0 overflow-auto px-2 pt-2 pb-2">
           <MarkdownEditor
             value={notesDraft}
             onChange={handleNotesChange}

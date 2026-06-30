@@ -116,6 +116,7 @@ interface AppState {
   sidebarView: SidebarView
   sidebarOpen: boolean
   setSidebarView: (view: SidebarView) => void
+  setSidebarOpen: (open: boolean) => void
   toggleSidebar: () => void
 
   activeCollection: string  // Now stores collection ID
@@ -223,7 +224,7 @@ function _saveActiveToCache() {
 
 export const useAppStore = create<AppState>((set) => ({
   sidebarView: loadPersisted<SidebarView>("sidebarView", "chat"),
-  sidebarOpen: true,
+  sidebarOpen: false,
   setSidebarView: (view) => {
     const state = useAppStore.getState()
     // Only guard if navigating away from meeting view
@@ -233,6 +234,7 @@ export const useAppStore = create<AppState>((set) => ({
     set({ sidebarView: view })
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
   activeCollection: "",
   setActiveCollection: (id) => set({ activeCollection: id }),

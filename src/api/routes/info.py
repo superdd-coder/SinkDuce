@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -21,6 +22,96 @@ router = APIRouter()
 
 # Resolve meetings directory (same convention as src/meeting/store.py)
 MEETINGS_DIR = Path("data").resolve() / "meetings"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Debounced consolidate — 10 s timer, net-change detection
+# ═══════════════════════════════════════════════════════════════
+
+_debounce: dict[str, dict] = {}  # collection_id -> {"timer": Timer, "snapshot": {source: bool}}
+
+
+def _snapshot_includes(collection_id: str) -> dict[str, bool]:
+    """Take a snapshot of include_in_summary for every doc-summary in a collection."""
+    sm = _get_summary_manager()
+    summaries = sm.get_doc_summaries(collection_id, included_only=False)
+    return {
+        s["source"]: s.get("include_in_summary", True) is not False
+        for s in summaries
+    }
+
+
+def _do_consolidate(collection_id: str) -> None:
+    """Timer callback: compare current state with snapshot, trigger consolidate on net change."""
+    logger.info("[DEBOUNCE] Timer fired for collection='%s', checking net change...", collection_id)
+    state = _debounce.pop(collection_id, None)
+    if state is None:
+        return
+
+    # Skip if consolidation is already running
+    if task_manager.has_active_task(collection_id, "consolidate"):
+        logger.info("[DEBOUNCE] Consolidation already running for '%s', skipping", collection_id)
+        return
+
+    try:
+        current = _snapshot_includes(collection_id)
+    except Exception:
+        logger.warning("[DEBOUNCE] Failed to snapshot current state for '%s', bailing out", collection_id, exc_info=True)
+        return
+
+    snapshot = state["snapshot"]
+    all_sources = set(snapshot.keys()) | set(current.keys())
+    has_change = any(snapshot.get(src) != current.get(src) for src in all_sources)
+
+    if not has_change:
+        logger.info("[DEBOUNCE] No net change for collection='%s', skipping consolidation", collection_id)
+        return
+
+    logger.info("[DEBOUNCE] Net change detected for collection='%s', triggering consolidation", collection_id)
+    task_manager.create_task(
+        filename=f"consolidate:{collection_id}",
+        task_type="consolidate",
+        collection=collection_id,
+    )
+
+
+def schedule_debounced_consolidate(collection_id: str, pre_change_snapshot: dict[str, bool] | None = None) -> None:
+    """Schedule a debounced consolidation check after an include_in_summary change.
+
+    Must be called with a snapshot taken BEFORE the change was applied.
+    On the first call within a debounce window, the snapshot is stored.
+    Subsequent calls only reset the timer — the original snapshot is kept.
+
+    If *pre_change_snapshot* is not provided, a snapshot is taken now
+    (which reflects the post-change state, only safe when the change is
+    additive, e.g. a new summary that didn't exist before).
+    """
+    if collection_id not in _debounce:
+        snap = pre_change_snapshot if pre_change_snapshot is not None else _snapshot_includes(collection_id)
+        _debounce[collection_id] = {"timer": None, "snapshot": snap}
+        logger.info("[DEBOUNCE] First change for collection='%s', snapshot has %d sources",
+                    collection_id, len(snap))
+
+    state = _debounce[collection_id]
+
+    # Cancel existing timer
+    if state["timer"] is not None:
+        state["timer"].cancel()
+        logger.info("[DEBOUNCE] Reset timer for collection='%s'", collection_id)
+
+    # Start new 10-second timer
+    timer = threading.Timer(10.0, _do_consolidate, args=[collection_id])
+    state["timer"] = timer
+    timer.start()
+    logger.info("[DEBOUNCE] Scheduled consolidation check for collection='%s' in 10s", collection_id)
+
+
+def clear_debounce(collection_id: str) -> None:
+    """Clear debounce state for a collection (called after successful consolidation)."""
+    state = _debounce.pop(collection_id, None)
+    if state and state["timer"] is not None:
+        state["timer"].cancel()
+    logger.info("[DEBOUNCE] Cleared debounce state for collection='%s'", collection_id)
 
 
 def _get_summary_manager() -> SummaryManager:
@@ -109,9 +200,17 @@ async def set_doc_summary_include(collection: str, source: str, body: dict):
     include = body.get("include", True)
     logger.info("[INFO] SET include_in_summary=%s for source='%s' in collection='%s'", include, source, collection_id)
     sm = _get_summary_manager()
+
+    # Take snapshot BEFORE applying the change (for debounce net-change detection)
+    pre_snapshot = _snapshot_includes(collection_id)
+
     found = sm.set_doc_summary_include(collection_id, source, include)
     if not found:
         raise HTTPException(status_code=404, detail=f"No summary found for document '{source}'")
+
+    # Schedule debounced consolidation (auto-trigger on any include change)
+    schedule_debounced_consolidate(collection_id, pre_snapshot)
+
     return {"source": source, "include_in_summary": include}
 
 

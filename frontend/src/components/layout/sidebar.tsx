@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { cn } from "@/lib/utils"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
 import { Button } from "@/components/ui/button"
@@ -21,11 +21,14 @@ const navItems: Array<{ view: SidebarView; label: string }> = [
   { view: "llm_provider", label: "Settings" },
 ]
 
+const COLLAPSE_DELAY_MS = 1500
+
 export function Sidebar() {
-  const { sidebarView, setSidebarView } = useAppStore()
+  const { sidebarView, setSidebarView, sidebarOpen, setSidebarOpen } = useAppStore()
   const { update, ignored, ignoreVersion, currentVersion } = useUpdateCheck()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [leaving, setLeaving] = useState(false)
+  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const showCard = update && !ignored && !leaving
   const showDot = update !== null
@@ -38,13 +41,44 @@ export function Sidebar() {
     }, 250)
   }
 
+  /* Hover-driven expand: enter → expand immediately, leave → wait then collapse.
+     Header watches the same `sidebarOpen` so the logo block tracks the width. */
+  const clearCollapseTimer = () => {
+    if (collapseTimerRef.current) {
+      clearTimeout(collapseTimerRef.current)
+      collapseTimerRef.current = null
+    }
+  }
+  const handleMouseEnter = () => {
+    clearCollapseTimer()
+    if (!sidebarOpen) setSidebarOpen(true)
+  }
+  const handleMouseLeave = () => {
+    clearCollapseTimer()
+    collapseTimerRef.current = setTimeout(() => {
+      setSidebarOpen(false)
+      collapseTimerRef.current = null
+    }, COLLAPSE_DELAY_MS)
+  }
+  /* Clean up pending timer on unmount */
+  useEffect(() => () => clearCollapseTimer(), [])
+
   return (
     <>
       <aside
-        className="w-[172px] border-r border-border flex flex-col shrink-0 py-6 px-4 bg-background"
+        className={cn(
+          "border-r border-border flex flex-col shrink-0 bg-background overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+          sidebarOpen ? "w-[172px] py-6 px-4" : "w-[28px] py-6"
+        )}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
+        {sidebarOpen ? (
         <nav className="flex flex-col flex-1">
-          <div className="text-[14px] font-[300] uppercase tracking-[0.25em] text-muted-foreground mb-4">
+          <div
+            className="text-[14px] font-[300] uppercase tracking-[0.25em] text-muted-foreground mb-4 select-none"
+            title="Navigation"
+          >
             Navigate
           </div>
 
@@ -165,6 +199,24 @@ export function Sidebar() {
           </div>
           </div>
         </nav>
+        ) : (
+          /* Collapsed: vertical "Navigate" hint — hover the bar to expand */
+          <div
+            className="flex-1 flex items-center justify-center group"
+            title="Hover to open navigation"
+          >
+            <span
+              className="text-[10px] font-[300] uppercase tracking-[0.25em] text-muted-foreground group-hover:text-primary transition-colors select-none whitespace-nowrap"
+              style={{
+                writingMode: "vertical-rl",
+                transform: "rotate(180deg)",
+                fontFamily: "var(--font-serif)",
+              }}
+            >
+              Navigate
+            </span>
+          </div>
+        )}
       </aside>
 
       {/* ── Update detail dialog ── */}

@@ -22,7 +22,14 @@ export function CollectionList({ collections, activeCollection, onSelect, onCrea
         className="flex items-center justify-between px-4 h-12 border-b border-border"
       >
         <span
-          className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground"
+          className="uppercase"
+          style={{
+            fontFamily: "var(--font-serif)",
+            fontSize: "14px",
+            fontWeight: 300,
+            letterSpacing: "-0.015em",
+            color: "var(--muted-foreground)",
+          }}
         >
           Collections
         </span>

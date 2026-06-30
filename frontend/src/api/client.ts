@@ -174,6 +174,8 @@ export interface FileListItem {
   note_title?: string
   has_meeting?: boolean
   display_name?: string
+  has_summary?: boolean | null
+  include_in_summary?: boolean | null
 }
 
 export const getFiles = (collection: string) =>
@@ -471,6 +473,7 @@ export interface MeetingLogItem {
   title: string
   created_at: string
   file_ids?: string[]
+  file_labels?: Record<string, string>
 }
 
 export const getCollectionSummary = (collectionId: string) =>

@@ -116,14 +116,11 @@ export function ChatInput() {
   return (
     <div className="px-6 sm:px-12 pb-5 pt-1">
       <div
-        className="max-w-3xl mx-auto w-full space-y-2.5 bg-background/60 backdrop-blur-md border px-5 py-3 sk-input-frame"
-        style={{
-          borderRadius: "4px",
-          boxShadow: "0 -8px 30px -4px rgba(0,0,0,0.06), 0 2px 8px -2px rgba(0,0,0,0.03)",
-        }}
+        className="max-w-3xl mx-auto w-full space-y-2.5 bg-background/70 backdrop-blur-lg border px-5 py-3 sk-input-frame"
+        style={{ borderRadius: "4px" }}
       >
         {/* Toolbar */}
-        <div className="flex items-center gap-4 overflow-hidden text-[10px] font-medium uppercase tracking-[0.1em]">
+        <div className="flex items-center justify-center gap-4 overflow-hidden text-[10px] font-medium uppercase tracking-[0.1em]">
           {/* Collection selector */}
           <div className="relative" ref={collectionMenuRef}>
             <button
@@ -181,11 +178,11 @@ export function ChatInput() {
 
           <div className="w-px h-3 bg-border" />
 
-          {/* Thinking toggle — solid when ON */}
+          {/* Thinking toggle — AI-COMP-060 full-body green flow when ON */}
           <button
             type="button"
-            className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${thinking ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
-            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: thinking ? "3px 8px" : "0", borderRadius: "2px" }}
+            className={`flex items-center gap-1.5 cursor-pointer font-sans transition-all ${thinking ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
+            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: thinking ? "2px 7px" : "0", borderRadius: "2px" }}
             onClick={() => setThinking(!thinking)}
             title={thinking ? "Deep thinking ON — slower, more thorough" : "Deep thinking OFF — faster responses"}
           >
@@ -345,7 +342,7 @@ export function ChatInput() {
               style={{
                 fontSize: "10px", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.12em",
-                padding: "8px 16px", borderRadius: "2px",
+                padding: "5px 14px", borderRadius: "2px",
               }}
               onClick={stopGeneration}
             >
@@ -359,7 +356,7 @@ export function ChatInput() {
               style={{
                 fontSize: "10px", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.12em",
-                padding: "8px 16px", borderRadius: "2px",
+                padding: "5px 14px", borderRadius: "2px",
                 opacity: !input.trim() ? 0.32 : 1,
               }}
               onClick={handleSend}

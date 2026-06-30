@@ -490,9 +490,11 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
         logger.info("[CONSOLIDATE] Project description stored")
     logger.info("[CONSOLIDATE] Storage done")
 
-    # 6. Reset counter
+    # 6. Reset counter and clear debounce state
     services.db.update_collection_config(collection, {"summary_change_counter": 0})
-    logger.info("[CONSOLIDATE] Counter reset to 0 for collection='%s'", collection)
+    from src.api.routes.info import clear_debounce
+    clear_debounce(collection)
+    logger.info("[CONSOLIDATE] Counter reset & debounce cleared for collection='%s'", collection)
     logger.info("[CONSOLIDATE] Consolidation complete for collection='%s' (summary=%d chars, conflicts=%d, desc=%d chars)",
                 collection, len(collection_summary), len(conflicts), len(project_desc))
     return {"message": "Consolidation done", "conflicts_count": len(conflicts)}
@@ -858,6 +860,10 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     logger.info("[DOC_SUMMARY] Generated: data=%d, facts=%d, insights=%d",
                 len(doc_summary.get("data", [])), len(doc_summary.get("facts", [])), len(doc_summary.get("insights", [])))
 
+    # Take snapshot before storing (for debounce net-change detection)
+    from src.api.routes.info import _snapshot_includes, schedule_debounced_consolidate
+    pre_snapshot = _snapshot_includes(collection)
+
     sm = _get_summary_manager()
     sm.ensure_collection()
     sm.store_doc_summary(
@@ -868,11 +874,8 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
         include_in_summary=True,
     )
 
-    counter = config.get("summary_change_counter", 0) + 1
-    services.db.update_collection_config(collection, {"summary_change_counter": counter})
-    if counter >= config.get("summary_consolidate_threshold", 10):
-        from src.tasks import task_manager as _tm
-        _tm.create_task(filename=f"consolidate:{collection}", task_type="consolidate", collection=collection)
+    # Schedule debounced consolidation (replaces old counter-based trigger)
+    schedule_debounced_consolidate(collection, pre_snapshot)
 
     # ── Catalog coverage refresh ──────────────────────────────────
     try:

@@ -285,6 +285,9 @@ Use [spk:ID] for every meeting speaker reference (see Speaker rules
 in Task 2).
 Use [stt_XXX] to link key claims to source sentences when appropriate.
 
+Additionally, provide a ``title`` — a single sentence (max 120 characters)
+that captures the meeting's core topic, key decision, or outcome.
+
 ## Data & Facts
 Key data points, figures, metrics, decisions, deadlines mentioned.
 Present as bulleted blocks.  For each fact block, append a reference
@@ -305,10 +308,14 @@ REF ACCURACY — CRITICAL:
 
 ## Detail
 A thorough, structured Markdown account of the entire meeting, organised
-by topic flow.  Use headings (###), bullet points, and bold for emphasis.
+by topic flow.  Do NOT be brief — this is the main body of the summary.
+Cover every topic discussed, including what each speaker said, the context,
+reactions, and any follow-up actions.  Write in flowing prose with
+paragraphs; do not reduce the content to a bullet-point list.
+Use headings, bullet points, and bold for emphasis as appropriate.
+Link claims to source sentences with [stt_XXX] refs whenever possible.
 Use [spk:ID] for all meeting speakers.  Use the person's name as
 mentioned for non-speakers.
-Use [stt_XXX] to link factual claims to source sentences when appropriate.
 
 ---
 
@@ -333,6 +340,7 @@ Rules:
 Output EXACTLY this JSON object (no markdown fences, no extra text):
 
 {{
+  "title": "One-sentence meeting title capturing the core topic and outcome",
   "general_md_content": "## Summary\\n...\\n\\n## Data & Facts\\n...\\n\\n## Detail\\n...",
   "blueprint": [
     {{

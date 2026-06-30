@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/stores/app-store"
-import { getCollectionConfig, getFiles, getFileChunks, deleteDocument, uploadFiles, getTasks, clearCompletedTasks, cancelTask, retryTask, type FileListItem, type ChunkDetail, type TaskInfo } from "@/api/client"
+import { getCollectionConfig, getFiles, getFileChunks, deleteDocument, uploadFiles, getTasks, clearCompletedTasks, cancelTask, retryTask, getDocSummary, setDocSummaryInclude, generateDocSummary, type FileListItem, type ChunkDetail, type TaskInfo } from "@/api/client"
 import { toast } from "sonner"
 import { CollectionList } from "./collection-list"
 import { CreateCollectionDialog } from "./create-collection-dialog"
@@ -41,6 +42,7 @@ export function DatabaseView() {
   const deleteFileDisplay = files.find(f => f.source === deleteFileTarget)?.display_name || deleteFileTarget
   const [allowedFileTypes, setAllowedFileTypes] = useState<string[]>([])
   const [coverage, setCoverage] = useState<string>("")
+  const [generatingSummaries, setGeneratingSummaries] = useState<Set<string>>(new Set())
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -195,6 +197,63 @@ export function DatabaseView() {
     }
   }
 
+  const handleToggleDefinitive = async (file: FileListItem, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!activeCollection) return
+
+    const src = file.source
+    const currentInclude = file.include_in_summary !== false
+
+    if (!file.has_summary) {
+      // No summary yet — generate one (auto-checks include_in_summary)
+      setGeneratingSummaries(prev => new Set(prev).add(src))
+      try {
+        await generateDocSummary(activeCollection, src)
+        // Poll for completion
+        const start = Date.now()
+        while (Date.now() - start < 300_000) {
+          await new Promise(r => setTimeout(r, 2000))
+          try {
+            const ds = await getDocSummary(activeCollection, src)
+            if (ds) {
+              // Update local file state
+              setFiles(prev => prev.map(f =>
+                f.source === src
+                  ? { ...f, has_summary: true, include_in_summary: true }
+                  : f
+              ))
+              break
+            }
+          } catch { /* still generating */ }
+        }
+      } catch (err) {
+        toast.error(`Summary generation failed: ${err instanceof Error ? err.message : String(err)}`)
+      } finally {
+        setGeneratingSummaries(prev => {
+          const next = new Set(prev)
+          next.delete(src)
+          return next
+        })
+      }
+    } else {
+      // Summary exists — toggle include_in_summary
+      const newInclude = !currentInclude
+      // Optimistic update
+      setFiles(prev => prev.map(f =>
+        f.source === src ? { ...f, include_in_summary: newInclude } : f
+      ))
+      try {
+        await setDocSummaryInclude(activeCollection, src, newInclude)
+      } catch (err) {
+        // Revert on error
+        setFiles(prev => prev.map(f =>
+          f.source === src ? { ...f, include_in_summary: currentInclude } : f
+        ))
+        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+
   return (
     <div className="h-full flex">
       <CollectionList
@@ -209,9 +268,19 @@ export function DatabaseView() {
       <div className="flex-1 overflow-hidden" key={activeCollection || "empty"}>
         {activeCollection ? (
           <div className="h-full flex flex-col px-10 py-8 animate-tab-in">
-            {/* Collection name header */}
+            {/* Collection name header — AI-COMP-001 Heading LG */}
             <div className="flex items-baseline justify-between mb-5">
-              <span className="text-[18px] font-[350] tracking-tight text-foreground">
+              <span
+                className="truncate"
+                style={{
+                  fontFamily: "var(--font-serif)",
+                  fontSize: "24px",
+                  fontWeight: 300,
+                  letterSpacing: "-0.01em",
+                  lineHeight: 1.2,
+                  color: "var(--ze-ink)",
+                }}
+              >
                 {collections.find(c => c.id === activeCollection)?.name || activeCollection}
               </span>
               <span className="text-[10px] text-muted-foreground">
@@ -314,6 +383,36 @@ export function DatabaseView() {
                               <span className="truncate text-xs">{file.display_name || file.source}</span>
                             </div>
                             <span className="text-[10px] font-medium text-muted-foreground">{file.chunk_count} chunks</span>
+                            {/* Definitive toggle */}
+                            {file.has_summary !== null && (
+                              <button
+                                className="shrink-0 flex items-center gap-1.5 cursor-pointer"
+                                style={{ background: "none", border: "none" }}
+                                onClick={(e) => handleToggleDefinitive(file, e)}
+                                title={file.include_in_summary !== false ? "Included in collection summary — click to exclude" : "Not included in collection summary — click to include"}
+                              >
+                                {generatingSummaries.has(file.source) ? (
+                                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                                ) : (
+                                  <span className={`flex items-center justify-center w-3.5 h-3.5 rounded-sm border transition-colors ${
+                                    file.include_in_summary !== false
+                                      ? "border-primary bg-primary text-primary-foreground"
+                                      : "border-muted-foreground/30 bg-transparent"
+                                  }`}>
+                                    {file.include_in_summary !== false && (
+                                      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                      </svg>
+                                    )}
+                                  </span>
+                                )}
+                                <span className={`text-[10px] font-medium uppercase tracking-[0.1em] ${
+                                  file.include_in_summary !== false ? "text-foreground" : "text-muted-foreground"
+                                }`}>
+                                  Definitive
+                                </span>
+                              </button>
+                            )}
                             <button
                               className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
                               style={{ background: "none", border: "none" }}
@@ -372,7 +471,7 @@ export function DatabaseView() {
         chunks={chunks}
         chunksTotal={chunksTotal}
         loading={chunksLoading}
-        onOpenChange={(v) => !v && setSelectedFile(null)}
+        onOpenChange={(v) => { if (!v) { setSelectedFile(null); fetchFiles() } }}
       />
 
       {/* File deletion confirmation */}

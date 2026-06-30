@@ -1130,7 +1130,16 @@ export function RecallView() {
     <div className="h-full overflow-auto p-6">
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="mb-5">
-          <span className="text-[18px] font-[350] tracking-tight uppercase">
+          <span
+            className="uppercase"
+            style={{
+              fontFamily: "var(--font-serif)",
+              fontSize: "20px",
+              fontWeight: 300,
+              letterSpacing: "-0.015em",
+              color: "var(--ze-ink)",
+            }}
+          >
             Recall
           </span>
           <p className="text-[10px] text-muted-foreground mt-0.5">
