@@ -1006,3 +1006,81 @@ input[type="checkbox"] {
 [data-slot="scroll-area-thumb"] {
   display: none !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Typography Token System · 9 layers · single source of truth
+   ─────────────────────────────────────────────────────────────────
+   Every text element in the project comes from one of these nine
+   utility classes. Adjusting the :root variables below cascades
+   to every component on every page.
+
+   See: /typography-preview.html for the live preview and review grid.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Family stacks ── */
+  --ff-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  --ff-sans:  'Geist Variable', 'Geist', system-ui, -apple-system, sans-serif;
+  --ff-mono:  ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+
+  /* ── Tier 1 · display · hero numbers, large serif anchors ── */
+  --t-display:        clamp(32px, 4.5vw, 48px);
+  --t-display-w:      300;
+  --t-display-tr:     -0.02em;
+  --t-display-lh:     1.05;
+
+  /* ── Tier 2 · heading-lg · serif titles (view/dialog/sheet) ── */
+  --t-heading-lg:     clamp(22px, 2.5vw, 24px);
+  --t-heading-lg-w:   300;
+  --t-heading-lg-tr:  -0.015em;
+  --t-heading-lg-lh:  1.2;
+
+  /* ── Tier 3 · heading-md · sans card/sidebar section titles ── */
+  --t-heading-md:     18px;
+  --t-heading-md-w:   600;
+  --t-heading-md-lh:  1.35;
+
+  /* ── Tier 4 · body · long-form prose (AI replies, Markdown) ── */
+  --t-body:           15px;
+  --t-body-w:         300;
+  --t-body-lh:        1.7;
+
+  /* ── Tier 5 · body-italic · input fields, disclaimer, empty hint ── */
+  --t-body-italic:    15px;        /* uses --t-body-w + font-style: italic */
+
+  /* ── Tier 6 · caption · label system · small uppercase ── */
+  --t-caption:        10px;
+  --t-caption-w:      600;
+  --t-caption-tr:     0.1em;
+  --t-caption-lh:     1.4;
+
+  /* ── Tier 7 · meta · label system · medium uppercase ── */
+  --t-meta:           11px;
+  --t-meta-w:         500;
+  --t-meta-tr:        0.12em;
+  --t-meta-lh:        1.55;
+
+  /* ── Tier 8 · micro · label system · tiny uppercase ── */
+  --t-micro:          9px;
+  --t-micro-w:        500;
+  --t-micro-tr:       0.12em;
+  --t-micro-lh:       1.3;
+
+  /* ── Tier 9 · mono · technical identifiers (id, model name, score) ── */
+  --t-mono:           11px;
+  --t-mono-w:         400;
+  --t-mono-tr:        0.02em;
+  --t-mono-lh:        1.5;
+}
+
+@layer utilities {
+  .t-display      { font: var(--t-display-w) var(--t-display)/var(--t-display-lh) var(--ff-serif); letter-spacing: var(--t-display-tr); color: var(--ink); }
+  .t-heading-lg   { font: var(--t-heading-lg-w) var(--t-heading-lg)/var(--t-heading-lg-lh) var(--ff-serif); letter-spacing: var(--t-heading-lg-tr); color: var(--ink); }
+  .t-heading-md   { font: var(--t-heading-md-w) var(--t-heading-md)/var(--t-heading-md-lh) var(--ff-sans); color: var(--ink); }
+  .t-body         { font: var(--t-body-w) var(--t-body)/var(--t-body-lh) var(--ff-serif); color: var(--ink); }
+  .t-body-italic  { font: var(--t-body-w) var(--t-body-italic)/var(--t-body-lh) var(--ff-serif); font-style: italic; color: var(--ink); }
+  .t-caption      { font: var(--t-caption-w) var(--t-caption)/var(--t-caption-lh) var(--ff-sans); letter-spacing: var(--t-caption-tr); text-transform: uppercase; color: var(--ink); }
+  .t-meta         { font: var(--t-meta-w) var(--t-meta)/var(--t-meta-lh) var(--ff-sans); letter-spacing: var(--t-meta-tr); text-transform: uppercase; color: var(--muted); }
+  .t-micro        { font: var(--t-micro-w) var(--t-micro)/var(--t-micro-lh) var(--ff-sans); letter-spacing: var(--t-micro-tr); text-transform: uppercase; color: var(--muted); }
+  .t-mono         { font: var(--t-mono-w) var(--t-mono)/var(--t-mono-lh) var(--ff-mono); letter-spacing: var(--t-mono-tr); color: var(--text); }
+}

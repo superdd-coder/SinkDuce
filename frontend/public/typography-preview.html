@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SinkDuce · Typography Token Preview</title>
+
+<!-- Fonts: same as project (frontend/index.css) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@200;300;400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,200;0,8..60,300;0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,300;1,8..60,400&display=swap" rel="stylesheet">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   SinkDuce Typography Token Preview
+   ─────────────────────────────────────────────────────────────────
+   This file is the SINGLE SOURCE OF TRUTH for the project's type system.
+   When you change any value in the @theme block below, every mock
+   component on this page re-renders via plain CSS (no JS).
+
+   The values you finalize here will be copied into
+   frontend/src/index.css as `@theme` tokens + `@layer utilities`.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Family stacks ── */
+:root {
+  --ff-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  --ff-sans:  'Geist Variable', 'Geist', system-ui, -apple-system, sans-serif;
+  --ff-mono:  ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+
+  /* ── 9 type tokens · ONE place to change global typography ── */
+  --t-display:       clamp(32px, 4.5vw, 48px);
+  --t-display-w:     300;
+  --t-display-tr:    -0.02em;
+  --t-display-lh:    1.05;
+
+  --t-heading-lg:    clamp(22px, 2.5vw, 24px);
+  --t-heading-lg-w:  300;
+  --t-heading-lg-tr: -0.015em;
+  --t-heading-lg-lh: 1.2;
+
+  --t-heading-md:    18px;
+  --t-heading-md-w:  600;
+  --t-heading-md-lh: 1.35;
+
+  --t-body:          15px;
+  --t-body-w:        300;
+  --t-body-lh:       1.7;
+
+  --t-body-italic:   15px;        /* uses --t-body-w + font-style: italic */
+
+  --t-caption:       10px;
+  --t-caption-w:     600;
+  --t-caption-tr:    0.1em;
+  --t-caption-lh:    1.4;
+
+  --t-meta:          11px;
+  --t-meta-w:        500;
+  --t-meta-tr:       0.12em;
+  --t-meta-lh:       1.55;
+  /* t-meta follows the same letter-form family as t-micro (uppercase + wide
+     tracking). Use Tailwind's `normal-case` utility to drop back to sentence
+     case when needed (e.g. session item titles). */
+
+  --t-micro:         9px;
+  --t-micro-w:       500;
+  --t-micro-tr:      0.12em;
+  --t-micro-lh:      1.3;
+
+  --t-mono:          11px;
+  --t-mono-w:        400;
+  --t-mono-tr:       0.02em;
+  --t-mono-lh:       1.5;
+
+  /* ── Color tokens · mirror design v3.1 + index.css ── */
+  --bg: #FAFAF7;
+  --ink: #0A120E;
+  --text: #1C2E24;
+  --muted: rgba(10, 18, 14, 0.62);
+  --whisper: rgba(10, 18, 14, 0.42);
+  --line-structural: rgba(42, 77, 62, 0.12);
+  --line-section: rgba(42, 77, 62, 0.55);
+  --green: #1A5E3D;
+  --green-deep: #0F4A2D;
+  --green-soft: #2D7A55;
+  --green-wash: rgba(26, 94, 61, 0.08);
+  --on-green: #E8F0EB;
+}
+
+/* ═════════════ UTILITY CLASSES · these mirror what will live in index.css ═════════════ */
+.t-display      { font: var(--t-display-w) var(--t-display)/var(--t-display-lh) var(--ff-serif); letter-spacing: var(--t-display-tr); color: var(--ink); }
+.t-heading-lg   { font: var(--t-heading-lg-w) var(--t-heading-lg)/var(--t-heading-lg-lh) var(--ff-serif); letter-spacing: var(--t-heading-lg-tr); color: var(--ink); }
+.t-heading-md   { font: var(--t-heading-md-w) var(--t-heading-md)/var(--t-heading-md-lh) var(--ff-sans); color: var(--ink); }
+.t-body         { font: var(--t-body-w) var(--t-body)/var(--t-body-lh) var(--ff-serif); color: var(--ink); }
+.t-body-italic  { font: var(--t-body-w) var(--t-body-italic)/var(--t-body-lh) var(--ff-serif); font-style: italic; color: var(--ink); }
+.t-caption      { font: var(--t-caption-w) var(--t-caption)/var(--t-caption-lh) var(--ff-sans); letter-spacing: var(--t-caption-tr); text-transform: uppercase; color: var(--ink); }
+.t-meta         { font: var(--t-meta-w) var(--t-meta)/var(--t-meta-lh) var(--ff-sans); letter-spacing: var(--t-meta-tr); text-transform: uppercase; color: var(--muted); }
+.t-micro        { font: var(--t-micro-w) var(--t-micro)/var(--t-micro-lh) var(--ff-sans); letter-spacing: var(--t-micro-tr); text-transform: uppercase; color: var(--muted); }
+.t-mono         { font: var(--t-mono-w) var(--t-mono)/var(--t-mono-lh) var(--ff-mono); letter-spacing: var(--t-mono-tr); color: var(--text); }
+
+/* Reset & base */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ff-serif);
+  font-weight: 300;
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  padding: 56px 72px 160px;
+}
+a { color: inherit; text-decoration: none; }
+em.prose { font-style: italic; color: var(--green); }
+
+/* Layout */
+.page { max-width: 1320px; margin: 0 auto; }
+
+/* Header */
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 24px;
+  margin-bottom: 48px;
+  border-bottom: 1px solid var(--line-structural);
+}
+.preview-eyebrow {
+  font-family: var(--ff-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+.preview-title { font-family: var(--ff-serif); font-weight: 300; font-size: 48px; letter-spacing: -0.025em; color: var(--ink); }
+.preview-title em { font-style: italic; color: var(--green); }
+.preview-meta {
+  font-family: var(--ff-sans);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Section title */
+.section { margin-bottom: 96px; }
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 28px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line-structural);
+}
+.section-id {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--green);
+  letter-spacing: 0.04em;
+  background: var(--green-wash);
+  border: 1px solid rgba(26, 94, 61, 0.18);
+  padding: 2px 8px;
+}
+.section-rule {
+  width: 28px;
+  height: 1px;
+  background: var(--green);
+}
+.section-title { font-family: var(--ff-serif); font-weight: 300; font-size: 32px; letter-spacing: -0.015em; color: var(--ink); }
+.section-title em { font-style: italic; color: var(--green); }
+.section-sub {
+  font-family: var(--ff-serif);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 32px;
+  max-width: 60ch;
+}
+
+/* ═════ 9-grid token overview ═════ */
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+.token-card {
+  border: 1px solid var(--line-structural);
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+  transition: border-color 200ms, box-shadow 200ms;
+}
+.token-card:hover { border-color: var(--line-section); box-shadow: 0 2px 12px -4px rgba(10,18,14,0.08); }
+
+.token-meta {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  padding: 14px 18px 10px;
+  border-bottom: 1px dashed var(--line-structural);
+  background: rgba(26, 94, 61, 0.025);
+}
+.token-name { font-family: var(--ff-mono); font-size: 12px; font-weight: 500; color: var(--green); }
+.token-spec { font-family: var(--ff-mono); font-size: 10px; color: var(--muted); }
+.token-spec b { color: var(--ink); font-weight: 500; }
+.token-sample {
+  padding: 24px 18px;
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px dashed var(--line-structural);
+}
+.token-sample.tall { min-height: 140px; }
+.token-sample.balanced { min-height: 90px; padding: 16px; }
+.token-usage {
+  padding: 12px 18px;
+  font-family: var(--ff-serif);
+  font-style: italic;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ═════ Component previews ═════ */
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+.comp-card {
+  border: 1px solid var(--line-structural);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.comp-head {
+  padding: 14px 20px;
+  border-bottom: 1px dashed var(--line-structural);
+  background: rgba(26, 94, 61, 0.04);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.comp-name { font-family: var(--ff-serif); font-style: italic; font-size: 16px; color: var(--ink); }
+.comp-tags { display: flex; gap: 6px; }
+.comp-tag {
+  font-family: var(--ff-sans);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--line-structural);
+  border-radius: 2px;
+  padding: 1px 6px;
+  background: #fff;
+}
+.comp-tag.green { color: var(--green); border-color: rgba(26,94,61,0.22); background: var(--green-wash); }
+.comp-tag.italic { font-family: var(--ff-serif); font-style: italic; text-transform: none; font-size: 11px; }
+.comp-body { padding: 24px; }
+
+/* Hero metric (info-panel) */
+.metric {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  padding: 20px;
+  border: 1px solid var(--line-structural);
+}
+.metric-cell { display: flex; flex-direction: column; gap: 6px; }
+.metric-num { /* .t-display */ }
+.metric-lbl { /* .t-meta uppercase tracking */ }
+
+/* Sheet mock */
+.sheet {
+  border: 1px solid var(--line-structural);
+  border-radius: 8px;
+  background: #fff;
+  max-width: 420px;
+  overflow: hidden;
+  margin: 0 auto;
+}
+.sheet-head {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--line-structural);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sheet-title { /* .t-heading-lg serif */ }
+.sheet-close { /* .t-caption */ background: none; border: none; cursor: pointer; }
+.sheet-body { padding: 24px; }
+.sheet-body p { /* .t-body */ }
+.sheet-body p.disclaimer { /* .t-body-italic */ }
+.sheet-foot {
+  padding: 16px 24px;
+  border-top: 1px solid var(--line-structural);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Dialog mock */
+.dialog {
+  border: 1px solid var(--line-structural);
+  border-radius: 8px;
+  background: #fff;
+  padding: 28px;
+  max-width: 440px;
+  box-shadow: 0 24px 60px -12px rgba(10,18,14,0.14);
+  margin: 0 auto;
+}
+.dialog-title { /* .t-heading-lg */ margin-bottom: 8px; }
+.dialog-desc { /* .t-body-italic */ margin-bottom: 24px; opacity: 0.85; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Toolbar mock */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 10px 14px;
+  background: rgba(26, 94, 61, 0.04);
+  border: 1px solid rgba(26, 94, 61, 0.18);
+  border-radius: 4px;
+}
+.toolbar-divider { width: 1px; height: 12px; background: var(--line-structural); }
+
+/* Chat input mock */
+.chat-input {
+  border: 1px solid rgba(26, 94, 61, 0.22);
+  border-radius: 4px;
+  padding: 14px 16px;
+  background: rgba(250, 250, 247, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 560px;
+  margin: 0 auto;
+}
+.chat-input textarea {
+  width: 100%;
+  min-height: 36px;
+  border: none;
+  border-bottom: 1px solid var(--line-hairline);
+  outline: none;
+  resize: none;
+  background: transparent;
+  /* .t-body-italic */
+  font-family: var(--ff-serif);
+  font-size: 15px;
+  font-style: italic;
+  color: var(--text);
+  line-height: 1.6;
+}
+.chat-input-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.chat-disclaimer { /* .t-body-italic at small size */ font-size: 11px; }
+
+/* Sidebar mock */
+.sidebar {
+  width: 240px;
+  border: 1px solid var(--line-structural);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+  margin: 0 auto;
+}
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-structural);
+}
+.sidebar-head-text { /* .t-body-italic */ font-family: var(--ff-serif); font-style: italic; color: var(--muted); }
+.sidebar-list { padding: 8px; }
+.sidebar-item {
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar-item:hover { background: var(--green-wash); }
+.sidebar-item-title { /* .t-meta */ font-family: var(--ff-sans); font-size: 11px; }
+.sidebar-item-meta { /* .t-micro */ font-family: var(--ff-sans); font-size: 9px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+
+/* Button mocks */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  padding: 0 14px;
+  height: 32px;
+  /* .t-caption */
+}
+.btn-default { background: var(--green); color: var(--on-green); font-weight: 600; }
+.btn-outline { background: #fff; border-color: var(--line-section); color: var(--text); }
+.btn-ghost { background: transparent; color: var(--muted); }
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line-structural);
+  border-radius: 999px;
+  /* .t-caption */
+}
+.badge.green { color: var(--green); border-color: rgba(26,94,61,0.25); background: var(--green-wash); }
+.badge.warn { color: #8a6500; border-color: rgba(138,101,0,0.25); background: rgba(138,101,0,0.04); }
+.badge.err  { color: #8c2e2e; border-color: rgba(140,46,46,0.25); background: rgba(140,46,46,0.04); }
+
+/* Toggle group: on/off pill */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line-structural);
+  border-radius: 999px;
+  background: #fff;
+  /* .t-caption */
+}
+.toggle.on { background: var(--green); color: var(--on-green); border-color: var(--green); }
+
+/* Tab list (line variant) */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line-structural);
+}
+.tab {
+  padding: 10px 14px;
+  background: none; border: none; cursor: pointer;
+  color: var(--muted);
+  /* .t-caption */
+  border-bottom: 2px solid transparent;
+  font-family: var(--ff-sans); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  margin-bottom: -1px;
+}
+.tab.active { color: var(--green); border-bottom-color: var(--green); }
+
+/* Table */
+.tbl { width: 100%; border-collapse: collapse; font-family: var(--ff-sans); }
+.tbl thead th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); border-bottom: 1.5px solid var(--line-section); }
+.tbl td { padding: 12px 14px; border-bottom: 1px solid var(--line-hairline); font-size: 13px; }
+.tbl tbody tr:hover td { background: var(--green-wash); }
+
+/* Mono box */
+.mono-box {
+  font-family: var(--ff-mono);
+  font-size: 11px;
+  background: rgba(10, 18, 14, 0.04);
+  padding: 10px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--line-structural);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.mono-box .id { color: var(--green); }
+.mono-box .num { color: #8a6500; font-weight: 500; }
+
+/* Section: Vertical rhythm comparison (token heights in px) */
+.rhythm-row {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--line-hairline);
+}
+.rhythm-label { width: 180px; font-family: var(--ff-sans); font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.rhythm-bar { height: 1px; background: var(--line-section); }
+.rhythm-sample {
+  font-family: var(--ff-serif);
+  color: var(--ink);
+  display: inline-block;
+}
+.rhythm-spec { width: 220px; font-family: var(--ff-mono); font-size: 10px; color: var(--muted); }
+
+/* Color palette hint */
+.color-strip { display: flex; gap: 6px; margin-top: 12px; }
+.color-strip span { width: 12px; height: 12px; border-radius: 2px; }
+
+/* Sticky sidebar (review guide) */
+.review-rail {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 280px;
+  background: var(--ink);
+  color: var(--on-green);
+  padding: 16px 18px;
+  border-radius: 8px;
+  box-shadow: 0 12px 36px -6px rgba(10,18,14,0.30);
+  font-family: var(--ff-sans);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.review-rail strong { color: #B6E0C5; font-weight: 600; }
+.review-rail h6 {
+  font-family: var(--ff-sans);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #B6E0C5;
+  margin-bottom: 10px;
+}
+.review-rail ol { padding-left: 16px; }
+.review-rail li { margin-bottom: 4px; }
+
+@media (max-width: 1100px) {
+  .token-grid { grid-template-columns: repeat(2, 1fr); }
+  .preview-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="preview-head">
+    <div class="preview-eyebrow">SinkDuce · Design Token Preview · v0.1</div>
+    <h1 class="preview-title">Typography <em>token</em> system</h1>
+    <div class="preview-meta">9 layers · 3 families · single source of truth</div>
+  </header>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       SECTION 01 · The 9 tokens at a glance
+       ════════════════════════════════════════════════════════════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <span class="section-id">01</span>
+      <span class="section-rule"></span>
+      <h2 class="section-title">The <em>nine</em> tokens</h2>
+    </div>
+    <p class="section-sub">
+      Every text element in the entire project comes from one of these nine
+      classes. Adjusting the @theme variables at the top of this file cascades
+      to every component on this page — and (after PR2) to every component in
+      your codebase.
+    </p>
+
+    <div class="token-grid">
+
+      <!-- t-display -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-display</div>
+          <div class="token-spec">clamp(32–48px) <b>·</b> serif 300</div>
+        </div>
+        <div class="token-sample tall">
+          <span class="t-display">128</span>
+        </div>
+        <div class="token-usage">hero metrics, big stat numbers, "empty state" anchor</div>
+      </div>
+
+      <!-- t-heading-lg -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-heading-lg</div>
+          <div class="token-spec">clamp(22–24px) <b>·</b> serif 300</div>
+        </div>
+        <div class="token-sample tall">
+          <span class="t-heading-lg">View title</span>
+        </div>
+        <div class="token-usage">database view title, dialog title, big serif headline</div>
+      </div>
+
+      <!-- t-heading-md -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-heading-md</div>
+          <div class="token-spec">18px <b>·</b> sans 600</div>
+        </div>
+        <div class="token-sample balanced">
+          <span class="t-heading-md">Sidebar section</span>
+        </div>
+        <div class="token-usage">sidebar section header, card title, table heading</div>
+      </div>
+
+      <!-- t-body -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-body</div>
+          <div class="token-spec">15px <b>·</b> serif 300 <b>·</b> line 1.7</div>
+        </div>
+        <div class="token-sample">
+          <span class="t-body">Long-form prose. Used for AI replies, Markdown rendered output, prose.js blocks. Reading-oriented.</span>
+        </div>
+        <div class="token-usage">AI chat replies, Markdown body, long prose</div>
+      </div>
+
+      <!-- t-body-italic -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-body-italic</div>
+          <div class="token-spec">15px <b>·</b> serif 300 <b>·</b> italic</div>
+        </div>
+        <div class="token-sample">
+          <span class="t-body-italic">"Ask about your documents…"</span>
+        </div>
+        <div class="token-usage">chat input, recall query, disclaimer, empty hint</div>
+      </div>
+
+      <!-- t-caption -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-caption</div>
+          <div class="token-spec">10px <b>·</b> sans 600 <b>·</b> 0.1em UPPER</div>
+        </div>
+        <div class="token-sample balanced">
+          <span class="t-caption">Default · Loading · Send</span>
+        </div>
+        <div class="token-usage">button, badge, pill, tab, toolbar chip, dialog action</div>
+      </div>
+
+      <!-- t-meta -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-meta</div>
+          <div class="token-spec">11px <b>·</b> sans 500 <b>·</b> 0.12em UPPER</div>
+        </div>
+        <div class="token-sample balanced">
+          <span class="t-meta">13 documents · 4 meetings · 2 conflicts</span>
+        </div>
+        <div class="token-usage">metric label, info-panel row label, sidebar section header, info caption</div>
+      </div>
+
+      <!-- t-micro -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-micro</div>
+          <div class="token-spec">9px <b>·</b> sans 500 <b>·</b> 0.12em UPPER</div>
+        </div>
+        <div class="token-sample balanced">
+          <span class="t-micro">2 hours ago · 18 msgs · 11:42</span>
+        </div>
+        <div class="token-usage">session meta (count/time), decorative chip, speaker</div>
+      </div>
+
+      <!-- t-mono -->
+      <div class="token-card">
+        <div class="token-meta">
+          <div class="token-name">.t-mono</div>
+          <div class="token-spec">11px <b>·</b> mono 400</div>
+        </div>
+        <div class="token-sample balanced">
+          <span class="t-mono">deepseek-r1-distill-qwen-7b · Q: 0.85</span>
+        </div>
+        <div class="token-usage">model name, chunk id, score, log line, code</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       SECTION 02 · Vertical rhythm: how the 9 tokens scale against each other
+       ════════════════════════════════════════════════════════════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <span class="section-id">02</span>
+      <span class="section-rule"></span>
+      <h2 class="section-title">Vertical <em>rhythm</em></h2>
+    </div>
+    <p class="section-sub">
+      Each row shows the literal size + line-height the token resolves to.
+      Use this to check whether the steps between tiers feel right — too
+      tight and tokens blur into each other; too loose and the page feels
+      scattered.
+    </p>
+
+    <div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-display</div>
+        <div class="rhythm-sample t-display">Editorial Intelligence</div>
+        <div class="rhythm-spec">clamp(32–48px) · serif 300</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-heading-lg</div>
+        <div class="rhythm-sample t-heading-lg">Database view title</div>
+        <div class="rhythm-spec">clamp(22–24px) · serif 300</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-heading-md</div>
+        <div class="rhythm-sample t-heading-md">Sidebar section header</div>
+        <div class="rhythm-spec">18px · sans 600</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-body</div>
+        <div class="rhythm-sample t-body">The long-form prose body. Reads like an essay, breathes like prose.</div>
+        <div class="rhythm-spec">15px · serif 300 · line 1.7</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-body-italic</div>
+        <div class="rhythm-sample t-body-italic">"Ask about your documents…"</div>
+        <div class="rhythm-spec">15px · serif 300 · italic</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-caption</div>
+        <div class="rhythm-sample t-caption">Send · Default · Loading</div>
+        <div class="rhythm-spec">10px · sans 600 · 0.1em UPPER</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-meta</div>
+        <div class="rhythm-sample t-meta">13 documents · 4 meetings · 2 conflicts</div>
+        <div class="rhythm-spec">11px · sans 500 · 0.12em UPPER</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-micro</div>
+        <div class="rhythm-sample t-micro">2 hours ago · 18 msgs</div>
+        <div class="rhythm-spec">9px · sans 500 · 0.12em UPPER</div>
+      </div>
+      <div class="rhythm-row">
+        <div class="rhythm-label">t-mono</div>
+        <div class="rhythm-sample t-mono">deepseek-r1-distill-qwen-7b</div>
+        <div class="rhythm-spec">11px · mono 400 · 0.02em</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       SECTION 03 · Real components
+       ════════════════════════════════════════════════════════════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <span class="section-id">03</span>
+      <span class="section-rule"></span>
+      <h2 class="section-title">Real <em>components</em></h2>
+    </div>
+    <p class="section-sub">
+      The same component patterns from your codebase, rendered here with
+      token classes only. If a card looks "off" — wrong size, wrong family,
+      wrong weight — that's the token to tune.
+    </p>
+
+    <div class="preview-grid">
+
+      <!-- Card 1: Hero metric (info-panel) -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Info panel · metric row</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-display</span>
+            <span class="comp-tag">.t-meta</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div class="metric">
+            <div class="metric-cell">
+              <span class="metric-num t-display">128</span>
+              <span class="metric-lbl t-meta">Documents</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-num t-display">42</span>
+              <span class="metric-lbl t-meta">Meetings</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-num t-display">7</span>
+              <span class="metric-lbl t-meta">Conflicts</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-num t-display">12/18</span>
+              <span class="metric-lbl t-meta">Notes ingested</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 2: Sheet -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Drawer / Sheet</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-heading-lg</span>
+            <span class="comp-tag">.t-body</span>
+            <span class="comp-tag">.t-body-italic</span>
+            <span class="comp-tag">.t-caption</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div class="sheet">
+            <div class="sheet-head">
+              <span class="sheet-title t-heading-lg">Source detail</span>
+              <button class="sheet-close t-caption">Close</button>
+            </div>
+            <div class="sheet-body">
+              <p class="t-body">
+                The passage below was retrieved from your collection with a
+                relevance score of <em class="prose">0.85</em>.
+              </p>
+              <p class="t-body-italic disclaimer">
+                Re-rank confidence: high · retrieval latency: 142ms
+              </p>
+            </div>
+            <div class="sheet-foot">
+              <button class="btn btn-outline t-caption">Cancel</button>
+              <button class="btn btn-default t-caption">Open source</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 3: Dialog -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Dialog</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-heading-lg</span>
+            <span class="comp-tag">.t-body-italic</span>
+            <span class="comp-tag">.t-caption</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div class="dialog">
+            <h3 class="dialog-title t-heading-lg">Delete this <em>collection</em>?</h3>
+            <p class="dialog-desc t-body-italic">
+              This action cannot be undone. 128 documents across 4 folders
+              will be removed from the vector store.
+            </p>
+            <div class="dialog-actions">
+              <button class="btn btn-outline t-caption">Cancel</button>
+              <button class="btn btn-default t-caption" style="background:#8c2e2e">Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 4: Chat input -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Chat input</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-caption</span>
+            <span class="comp-tag italic">.t-body-italic · textarea</span>
+            <span class="comp-tag italic">.t-body-italic · disclaimer</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div class="chat-input">
+            <div class="toolbar">
+              <span class="t-caption" style="color:var(--green)">All collections</span>
+              <span class="toolbar-divider"></span>
+              <span class="t-caption">Think</span>
+              <span class="toolbar-divider"></span>
+              <span class="t-caption">deepseek-r1</span>
+            </div>
+            <textarea>Ask about your documents…</textarea>
+            <div class="chat-input-foot">
+              <span class="chat-disclaimer t-body-italic">
+                AI-generated answers may contain errors. Verify critical info.
+              </span>
+              <button class="btn btn-default t-caption" style="height:24px;padding:0 10px">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 5: Sidebar (sessions) -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Sidebar · session list</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-body-italic</span>
+            <span class="comp-tag">.t-caption</span>
+            <span class="comp-tag">.t-meta</span>
+            <span class="comp-tag">.t-micro</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div class="sidebar">
+            <div class="sidebar-head">
+              <span class="sidebar-head-text t-body-italic">Sessions</span>
+            </div>
+            <div class="sidebar-list">
+              <div class="sidebar-item" style="background:var(--green-wash)">
+                <span class="sidebar-item-title t-meta normal-case" style="color:var(--ink)">
+                  Q3 review of Vector RAG pipeline
+                </span>
+                <span class="sidebar-item-meta t-micro">18 msgs · 2h ago</span>
+              </div>
+              <div class="sidebar-item">
+                <span class="sidebar-item-title t-meta normal-case">Untitled session</span>
+                <span class="sidebar-item-meta t-micro">6 msgs · yesterday</span>
+              </div>
+              <div class="sidebar-item">
+                <span class="sidebar-item-title t-meta normal-case">Best model for distillation?</span>
+                <span class="sidebar-item-meta t-micro">11 msgs · 3d ago</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 6: Toolbar with model + toggles -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Control bar · buttons, badges, toggles</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-caption</span>
+            <span class="comp-tag">.t-mono</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div style="display:flex; flex-direction:column; gap:14px;">
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button class="btn btn-default t-caption">Send</button>
+              <button class="btn btn-outline t-caption">Cancel</button>
+              <button class="btn btn-ghost t-caption">Forget</button>
+              <span class="badge green t-caption">● Default</span>
+              <span class="badge warn t-caption">● Loading</span>
+              <span class="badge err t-caption">● Error</span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <span class="toggle on t-caption">Deep thinking ON</span>
+              <span class="toggle t-caption">Rerank OFF</span>
+              <span class="badge t-caption">Hybrid mode</span>
+            </div>
+            <div class="mono-box">
+<span class="t-mono"><span class="id">deepseek-r1-distill-qwen-7b</span> · context: <span class="id">ch_abc123</span> · Q: <span class="num">+0.85</span> · latency: <span class="num">142ms</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 7: Tabs + table -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Tabs + table</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-caption</span>
+            <span class="comp-tag">.t-meta</span>
+            <span class="comp-tag">.t-mono</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div class="tabs">
+            <button class="tab active">Info</button>
+            <button class="tab">Files</button>
+            <button class="tab">Config</button>
+          </div>
+          <table class="tbl" style="margin-top:8px">
+            <thead>
+              <tr><th>Document</th><th>Chunks</th><th>Score</th><th>Updated</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="t-meta normal-case">Q3-financial-review.pdf</span></td>
+                <td><span class="t-mono">142</span></td>
+                <td><span class="t-mono">0.91</span></td>
+                <td><span class="t-micro">2 hours ago</span></td>
+              </tr>
+              <tr>
+                <td><span class="t-meta normal-case">design-spec-v3.markdown</span></td>
+                <td><span class="t-mono">88</span></td>
+                <td><span class="t-mono">0.84</span></td>
+                <td><span class="t-micro">yesterday</span></td>
+              </tr>
+              <tr>
+                <td><span class="t-meta normal-case">meeting-notes.md</span></td>
+                <td><span class="t-mono">23</span></td>
+                <td><span class="t-mono">0.76</span></td>
+                <td><span class="t-micro">3 days ago</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Card 8: Toast -->
+      <div class="comp-card">
+        <div class="comp-head">
+          <span class="comp-name">Toast · sonner</span>
+          <div class="comp-tags">
+            <span class="comp-tag">.t-body-italic</span>
+          </div>
+        </div>
+        <div class="comp-body">
+          <div style="background:#fafaf5; border:1px solid rgba(4,120,87,0.45); border-radius:4px; padding:10px 14px; font-style:italic; font-size:13px; max-width:360px; font-family:var(--ff-serif);">
+            Document <strong style="font-style:normal;font-weight:600;color:var(--ink);">Q3-financial-review.pdf</strong> uploaded · 142 chunks in 3.8s
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       SECTION 04 · Dark mode verification
+       ════════════════════════════════════════════════════════════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <span class="section-id">04</span>
+      <span class="section-rule"></span>
+      <h2 class="section-title">Dark <em>mode</em></h2>
+    </div>
+    <p class="section-sub">
+      Project has a dark mode (see index.css .dark block). Tokens should
+      feel right on dark too. We've only tokenized color in dark, so sizes
+      and families stay identical — verification is mostly about contrast.
+    </p>
+    <div style="background:#141E18; padding:36px; border-radius:10px; color:#E8F0EB;">
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 36px;">
+        <div>
+          <div class="t-micro" style="color:rgba(232,240,235,0.5); margin-bottom:14px;">METRICS</div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:18px;">
+            <div class="metric-cell">
+              <span class="t-display" style="color:#E8F0EB">128</span>
+              <span class="t-meta" style="color:rgba(232,240,235,0.6)">Documents</span>
+            </div>
+            <div class="metric-cell">
+              <span class="t-display" style="color:#E8F0EB">42</span>
+              <span class="t-meta" style="color:rgba(232,240,235,0.6)">Meetings</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="t-micro" style="color:rgba(232,240,235,0.5); margin-bottom:14px;">CHAT INPUT</div>
+          <div style="border:1px solid rgba(232,240,235,0.18); padding:14px 16px; border-radius:4px;">
+            <div class="toolbar" style="background:rgba(61,175,115,0.08); border-color:rgba(61,175,115,0.2);">
+              <span class="t-caption" style="color:#3DAF73">All collections</span>
+              <span class="toolbar-divider" style="background:rgba(232,240,235,0.2)"></span>
+              <span class="t-caption" style="color:#E8F0EB">Think</span>
+            </div>
+            <div class="t-body-italic" style="color:#C8D8CE; margin-top:10px; padding-bottom:10px; border-bottom:1px solid rgba(232,240,235,0.06);">
+              Ask about your documents…
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+              <span class="chat-disclaimer t-body-italic" style="color:rgba(232,240,235,0.4); font-size:10px">
+                AI-generated answers may contain errors.
+              </span>
+              <button class="btn btn-default t-caption" style="height:24px;padding:0 10px;background:#3DAF73;color:#141E18">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- Sticky review rail -->
+<aside class="review-rail">
+  <h6>How to review</h6>
+  <ol>
+    <li><strong>Section 01</strong> — each token card shows size + family + sample text. Click into any token name to see real usage in components below.</li>
+    <li><strong>Section 02</strong> — vertical rhythm: check whether the size steps between tiers feel right (not too tight, not too sparse).</li>
+    <li><strong>Section 03</strong> — real components (sheet, dialog, chat input, sidebar, toast). If something feels <em>off</em>, that's the token to tune.</li>
+    <li><strong>Section 04</strong> — verify dark mode contrast and family legibility (Source Serif 4 italic reads slightly differently on dark — flag if so).</li>
+  </ol>
+  <p style="margin-top:10px; font-style:italic; opacity:0.7;">
+    To change a token, edit the value in the <strong>:root</strong> block at the top of this file. The page re-renders via native CSS — no reload needed.
+  </p>
+</aside>
+
+</body>
+</html>
