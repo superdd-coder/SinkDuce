@@ -4,6 +4,12 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/source-serif-4";
 
+/* ── Text selection · Design System v3.1 ── */
+::selection {
+  background: #1A5E3D;
+  color: #E8F0EB;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme {
@@ -889,6 +895,8 @@ input[type="checkbox"] {
   transform: rotate(135deg);
   box-shadow: 0 0 0 5px oklch(0.38 0.08 160 / 0.10), 0 0 16px -2px oklch(0.38 0.08 160 / 0.45);
 }
+.group:hover .sk-diamond { transform: rotate(225deg); background: var(--ze-green); border-color: var(--ze-green); }
+.group:hover .sk-diamond.on { transform: rotate(315deg); }
 .sk-diamond.on::after {
   content: "";
   position: absolute;
@@ -983,6 +991,26 @@ input[type="checkbox"] {
   background-size: 200% 100%;
   animation: sk-green-flow 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   z-index: 1;
+  pointer-events: none;
+}
+/* Full-border flowing variant — for textarea generation state */
+.sk-flow-full {
+  position: relative;
+  overflow: hidden;
+  border-color: oklch(0.38 0.08 160 / 0.18);
+}
+.sk-flow-full::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border: 1.5px solid transparent;
+  background: linear-gradient(90deg, transparent 25%, var(--ze-green) 50%, transparent 75%) border-box;
+  -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  background-size: 300% 100%;
+  animation: sk-green-flow 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   pointer-events: none;
 }
 /* @sk-input-probe:end */

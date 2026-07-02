@@ -11,8 +11,8 @@ import {
   uploadMeetingAudio, transcribeMeeting, cancelTranscribeMeeting,
   getMeetingTranscript, updateMeeting,
   getRealtimeTranscriptionProviders, getFileTranscriptionProviders,
-  getActiveProviderInfo,
-  type Meeting, type TranscriptSegment, type LanguageHintOption,
+  getActiveProviderInfo, getHotWordsLibraries,
+  type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary,
 } from "@/api/client"
 import { toast } from "sonner"
 import { MeetingTabs } from "./meeting-tabs"
@@ -42,6 +42,7 @@ export function MeetingView() {
   const [hasRealtimeProvider, setHasRealtimeProvider] = useState(false)
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
+  const [hotWordsLibraries, setHotWordsLibraries] = useState<HotWordsLibrarySummary[]>([])
   // Per-meeting language hints: keyed by meeting ID, persists across meeting switches during the session
   const perMeetingLanguageHints = useRef<Map<string, string[]>>(new Map())
   const [languageHints, setLanguageHints] = useState<string[]>([...DEFAULT_LANGUAGE_HINTS])
@@ -52,6 +53,7 @@ export function MeetingView() {
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
   const [floatingOpen, setFloatingOpen] = useState(false)
+  const [playbackTime, setPlaybackTime] = useState(0)
 
   // When the main content area is wide enough, we left-shift the centered column
   // and absolutely position the floating panel (current "balanced" design).
@@ -153,19 +155,24 @@ export function MeetingView() {
       // Guard: if activeMeeting changed while fetching, discard stale result
       if (fetchMeetingIdRef.current !== id) return
       setMeeting(m)
-      // If a background task is in progress, resume polling
+      // If a background task is in progress, resume polling.
+      // Update meeting on every poll tick so children (MeetingTabs) stay in sync.
       const busy = m.processing_state && m.processing_state !== "idle"
       if (busy) {
-        const poll = setInterval(async () => {
+        if (pollingRef.current) clearInterval(pollingRef.current)
+        pollingRef.current = setInterval(async () => {
           try {
             const updated = await getMeeting(id)
             // Guard: user may have switched meetings while polling
-            if (fetchMeetingIdRef.current !== id) { clearInterval(poll); return }
+            if (fetchMeetingIdRef.current !== id) { clearInterval(pollingRef.current!); return }
+            setMeeting(updated)
             const stillBusy = updated.processing_state && updated.processing_state !== "idle"
             if (!stillBusy) {
-              clearInterval(poll)
-              setMeeting(updated)
+              clearInterval(pollingRef.current!)
+              pollingRef.current = null
               fetchMeetings()
+              // Re-fetch transcript to pick up section_tags from extract
+              fetchTranscript(id)
             }
           } catch { /* ignore */ }
         }, 2000)
@@ -193,9 +200,12 @@ export function MeetingView() {
       .catch(() => setHasFileProvider(false))
   }, [])
 
-  // Load meetings on mount
+  // Load meetings and hot words on mount
   useEffect(() => {
     fetchMeetings()
+    getHotWordsLibraries()
+      .then(setHotWordsLibraries)
+      .catch(() => setHotWordsLibraries([]))
   }, [fetchMeetings])
 
   // Load meeting detail when active changes
@@ -246,6 +256,18 @@ export function MeetingView() {
       fetchTranscript(activeMeeting)
     }
   }, [meeting?.status, activeMeeting, fetchTranscript])
+
+  // Re-fetch transcript when processing_state goes idle (extract/regenerate complete)
+  // so section_tags from sentences.json appear on transcript sentences.
+  const prevProcessingRef = useRef(meeting?.processing_state)
+  useEffect(() => {
+    const prev = prevProcessingRef.current
+    const curr = meeting?.processing_state
+    prevProcessingRef.current = curr
+    if (prev && prev !== "idle" && curr === "idle" && activeMeeting) {
+      fetchTranscript(activeMeeting)
+    }
+  }, [meeting?.processing_state, activeMeeting, fetchTranscript])
 
   // When recording stops, upload audio
   useEffect(() => {
@@ -331,8 +353,14 @@ export function MeetingView() {
 
   const handleMeetingUpdate = useCallback((m: Meeting) => {
     setMeeting(m)
-    if (activeMeeting) fetchMeetings()
-  }, [activeMeeting, fetchMeetings])
+    if (activeMeeting) {
+      fetchMeetings()
+      // If meeting just became busy (Summarize/Extract/Regenerate triggered),
+      // start polling so children (MeetingTabs) receive updates without manual refresh.
+      const busy = m.processing_state && m.processing_state !== "idle"
+      if (busy) fetchMeeting(activeMeeting)
+    }
+  }, [activeMeeting, fetchMeetings, fetchMeeting])
 
   const handleSelectMeeting = useCallback((id: string) => {
     setActiveMeeting(id)
@@ -486,7 +514,7 @@ export function MeetingView() {
                   const filtered = blueprint.filter((b: any) => b.tab_name?.toLowerCase() !== "other")
                   if (filtered.length === 0) return <span className="text-muted-foreground">—</span>
                   return filtered.map((b: any, i: number) => (
-                    <span key={b.tab_id} className="whitespace-nowrap">
+                    <span key={b.blueprint_id} className="whitespace-nowrap">
                       {b.tab_name}{i < filtered.length - 1 ? " |" : ""}
                     </span>
                   ))
@@ -565,11 +593,13 @@ export function MeetingView() {
                 onToggleRealtime={() => setRealtimeEnabled(v => !v)}
                 hasTranscript={transcript.length > 0 || transcription.segments.length > 0}
                 hotWordsLibraryId={meeting.hot_words_library_id}
+                hotWordsLibraries={hotWordsLibraries}
                 onSelectHotWords={handleSelectHotWordsLibrary}
                 languageHints={languageHints}
                 languageHintOptions={supportedLanguageHints}
                 onChangeLanguageHints={updateLanguageHints}
                 showLanguageSelector={!!meeting.audio_path}
+                onTimeUpdate={setPlaybackTime}
               />
             </div>
 
@@ -601,6 +631,7 @@ export function MeetingView() {
                 activeSectionTag={activeSectionTag}
                 floatingPanelOpen={floatingOpen}
                 canShift={canShift}
+                playbackTime={playbackTime}
                 className="flex-1 min-w-0"
                 floatingPanelSlot={floatingOpen && canShift ? (
                   <div className="relative pointer-events-none" style={{ width: "100%", height: 0, overflow: "visible" }}>
@@ -629,7 +660,9 @@ export function MeetingView() {
                             focusRef={focusRef}
                             activeSectionTag={activeSectionTag}
                             speakerNames={meeting.speaker_names ?? {}}
+                            tabs={meeting?.tabs}
                             showSearch={false}
+                            playbackTime={playbackTime}
                           />
                         </div>
                       </div>
@@ -658,7 +691,9 @@ export function MeetingView() {
                         focusRef={focusRef}
                         activeSectionTag={activeSectionTag}
                         speakerNames={meeting.speaker_names ?? {}}
+                        tabs={meeting?.tabs}
                         showSearch={false}
+                        playbackTime={playbackTime}
                       />
                     </div>
                   </div>

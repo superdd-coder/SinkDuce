@@ -21,8 +21,19 @@ class MeetingMode(str, Enum):
 class ProcessingState(str, Enum):
     idle = "idle"
     summarizing = "summarizing"
-    breaking_down = "breaking_down"
     extracting = "extracting"
+
+
+class GenerationState(str, Enum):
+    """Per-tab LLM generation lifecycle.
+
+    idle       — no generation running
+    prefilling — LLM is processing input (prefill phase), no token output yet
+    streaming  — LLM is emitting tokens (post-prefill decode phase)
+    """
+    idle = "idle"
+    prefilling = "prefilling"
+    streaming = "streaming"
 
 
 class TranscriptSegment(BaseModel):
@@ -50,7 +61,10 @@ class Meeting(BaseModel):
     summary: str | None = None
     transcription_error: str | None = None
     processing_state: str = ProcessingState.idle.value
+    summary_gen_state: str = GenerationState.idle.value
+    blueprint_gen_state: str = GenerationState.idle.value
     blueprint: list[dict] | None = None
+    blueprint_taxonomy: dict | None = None
     tabs: list[dict] | None = None
     allocated_collections: list[str] = Field(default_factory=list)
     allocated_file_ids: list[str] = Field(default_factory=list)

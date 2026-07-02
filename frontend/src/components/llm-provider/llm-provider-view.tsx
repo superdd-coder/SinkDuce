@@ -499,8 +499,10 @@ export function LLMProviderView() {
   const [ragTopK,setRagTopK]=useState("20");const [ragRerankTopK,setRagRerankTopK]=useState("5");const [ragMaxParallel,setRagMaxParallel]=useState("10");const [ragMaxIter,setRagMaxIter]=useState("8");const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState("0")
   const [dirTopK,setDirTopK]=useState("20");const [dirRerankTopK,setDirRerankTopK]=useState("5");const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState("0")
   const [enrichMaxParallel,setEnrichMaxParallel]=useState("50");const [enrichModel,setEnrichModel]=useState("")
+  const [meetingModel,setMeetingModel]=useState("");const [meetingThinking,setMeetingThinking]=useState(false)
   const [showAdvanced,setShowAdvanced]=useState(false)
   const enrichModelBtnRef=useRef<HTMLButtonElement>(null);const enrichModelMenuRef=useRef<HTMLDivElement>(null);const [showEnrichModelDropdown,setShowEnrichModelDropdown]=useState(false);const [enrichModelPos,setEnrichModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
+  const meetingModelBtnRef=useRef<HTMLButtonElement>(null);const meetingModelMenuRef=useRef<HTMLDivElement>(null);const [showMeetingModelDropdown,setShowMeetingModelDropdown]=useState(false);const [meetingModelPos,setMeetingModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
   const _saveRag=(mode?:string)=>updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:mode??ragSearchMode,min_score:parseFloat(ragMinScore)||0}).catch(()=>{})
   const _saveDir=(mode?:string)=>updateConfig("direct_rag",{top_k:parseInt(dirTopK)||20,rerank_top_k:parseInt(dirRerankTopK)||5,use_reranker:dirRerankEnabled,default_search_mode:mode??dirSearchMode,min_score:parseFloat(dirMinScore)||0}).catch(()=>{})
   // MinerU cloud parsing settings
@@ -715,7 +717,7 @@ export function LLMProviderView() {
       if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
       if(c.rag){if(typeof c.rag.top_k==="number")setRagTopK(String(c.rag.top_k));if(typeof c.rag.rerank_top_k==="number")setRagRerankTopK(String(c.rag.rerank_top_k));if(typeof c.rag.max_parallel_queries==="number")setRagMaxParallel(String(c.rag.max_parallel_queries));if(typeof c.rag.max_iterations==="number")setRagMaxIter(String(c.rag.max_iterations));if(typeof c.rag.default_search_mode==="string")setRagSearchMode(c.rag.default_search_mode);if(typeof c.rag.min_score==="number")setRagMinScore(String(c.rag.min_score))}
       if(c.direct_rag){if(typeof c.direct_rag.top_k==="number")setDirTopK(String(c.direct_rag.top_k));if(typeof c.direct_rag.rerank_top_k==="number")setDirRerankTopK(String(c.direct_rag.rerank_top_k));if(typeof c.direct_rag.default_search_mode==="string")setDirSearchMode(c.direct_rag.default_search_mode);setDirRerankEnabled(c.direct_rag.use_reranker!==false);if(typeof c.direct_rag.min_score==="number")setDirMinScore(String(c.direct_rag.min_score))}
-      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(String(c.enrichment.max_parallel_context));if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model)}
+      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(String(c.enrichment.max_parallel_context));if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model);if(typeof c.enrichment.meeting_model==="string")setMeetingModel(c.enrichment.meeting_model);if(typeof c.enrichment.meeting_thinking==="boolean")setMeetingThinking(c.enrichment.meeting_thinking)}
       // Load MinerU config
       if (c.mineru) {
         setMineruEnabled(!!c.mineru.enabled)
@@ -1035,6 +1037,58 @@ export function LLMProviderView() {
               </div>
             )
           })()}
+          </div>
+        </section>
+
+        {/* ── Meeting Summary Model ── */}
+        <section className="border-b border-border pb-6">
+          <div className="pt-4">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-[18px] font-[350] tracking-tight uppercase">MEETING SUMMARY MODEL</h2>
+                <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed mt-1">
+                  LLM used for meeting blueprint, section tagging, and summary generation. Choose a stronger model for more stable results.
+                </p>
+              </div>
+            </div>
+            {(() => {
+              const meetingModels = providers.flatMap((p) =>
+                (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
+                  model: m,
+                  providerName: p.name || p.id,
+                  providerId: p.id,
+                }))
+              )
+              if (meetingModels.length === 0) {
+                return (
+                  <div className="border border-dashed border-muted-foreground/30 rounded-lg p-6 text-center">
+                    <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+                      No LLM providers configured. Add one above first.
+                    </p>
+                  </div>
+                )
+              }
+              return (
+                <>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
+                    <div className="flex-1 max-w-md relative" ref={meetingModelMenuRef}>
+                      <button type="button" ref={meetingModelBtnRef} onClick={()=>{const r=meetingModelMenuRef.current?.getBoundingClientRect();if(r)setMeetingModelPos({top:r.bottom+4,left:r.left,width:meetingModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowMeetingModelDropdown(!showMeetingModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showMeetingModelDropdown?"var(--color-primary-foreground)":meetingModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
+                        <span className="relative z-10 whitespace-nowrap">{meetingModel?(()=>{const [pid,mid]=meetingModel.split("|");const p=providers.find(x=>x.id===pid);return p?(p.name||p.id)+" / "+mid:meetingModel})():"Same as default LLM"}</span>
+                        <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{transform:showMeetingModelDropdown?"scaleX(1)":"scaleX(0)",transformOrigin:showMeetingModelDropdown?"right":"left"}}/>
+                      </button>
+                      <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showMeetingModelDropdown?"opacity-100 visible translate-y-0 pointer-events-auto":"opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{width:meetingModelPos.width,top:meetingModelPos.top,left:meetingModelPos.left}}>
+                        {[{value:"",label:"Same as default LLM",providerId:"",model:""},...meetingModels.map(m=>({value:`${m.providerId}|${m.model}`,label:`${m.providerName} / ${m.model}`,providerId:m.providerId,model:m.model}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setMeetingModel(opt.value);setShowMeetingModelDropdown(false);try{await updateConfig("enrichment",{meeting_model:opt.value,meeting_thinking:meetingThinking});toast.success("Meeting model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{meetingModel===opt.value||(!meetingModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
+                      </div>
+                    </div>
+                    {/* Thinking toggle — same style as chat toolbar */}
+                    <button type="button" onClick={async()=>{const v=!meetingThinking;setMeetingThinking(v);try{await updateConfig("enrichment",{meeting_model:meetingModel,meeting_thinking:v})}catch{toast.error("Failed to update")}}} className={`flex items-center gap-1.5 cursor-pointer font-sans transition-all ${meetingThinking?"sk-thinking-flow text-primary":"border-none bg-transparent text-muted-foreground hover:text-primary"}`} style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:meetingThinking?"2px 7px":"0",borderRadius:"2px"}} title={meetingThinking?"Deep thinking ON":"Deep thinking OFF"}>
+                      THINKING {meetingThinking?"ON":"OFF"}
+                    </button>
+                  </div>
+                </>
+              )
+            })()}
           </div>
         </section>
 

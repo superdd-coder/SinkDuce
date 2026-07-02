@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,18 @@ from .webm_fixer import fix_webm_duration
 logger = logging.getLogger("meeting.store")
 MEETINGS_DIR = Path("data").resolve() / "meetings"
 
+# Per-meeting file lock to prevent concurrent read-modify-write races
+# when multiple section streams write to the same meta.json.
+_locks: dict[str, threading.Lock] = {}
+_locks_lock = threading.Lock()
+
+
+def _get_lock(meeting_id: str) -> threading.Lock:
+    with _locks_lock:
+        if meeting_id not in _locks:
+            _locks[meeting_id] = threading.Lock()
+        return _locks[meeting_id]
+
 
 def _meeting_dir(meeting_id: str) -> Path:
     return MEETINGS_DIR / meeting_id
@@ -20,7 +33,10 @@ def _meeting_dir(meeting_id: str) -> Path:
 
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Write to temp file then atomic rename to prevent partial writes
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -75,7 +91,11 @@ def list_meetings() -> list[Meeting]:
     for entry in MEETINGS_DIR.iterdir():
         if not entry.is_dir():
             continue
-        data = _read_json(entry / "meta.json")
+        try:
+            data = _read_json(entry / "meta.json")
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Skipping corrupted meeting %s: %s", entry.name, exc)
+            continue
         if data is not None:
             meetings.append(_dict_to_meeting(data))
     meetings.sort(key=lambda m: m.updated_at, reverse=True)
@@ -83,13 +103,14 @@ def list_meetings() -> list[Meeting]:
 
 
 def update_meeting(meeting_id: str, **fields) -> Meeting:
-    meeting = get_meeting(meeting_id)
-    if meeting is None:
-        raise FileNotFoundError(f"Meeting {meeting_id} not found")
-    for key, value in fields.items():
-        setattr(meeting, key, value)
-    meeting.updated_at = datetime.now()
-    _write_json(_meeting_dir(meeting_id) / "meta.json", _meeting_to_dict(meeting))
+    with _get_lock(meeting_id):
+        meeting = get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+        for key, value in fields.items():
+            setattr(meeting, key, value)
+        meeting.updated_at = datetime.now()
+        _write_json(_meeting_dir(meeting_id) / "meta.json", _meeting_to_dict(meeting))
     return meeting
 
 
@@ -174,10 +195,6 @@ def sentences_path(meeting_id: str) -> Path:
     return _meeting_dir(meeting_id) / "sentences.json"
 
 
-def chunks_path(meeting_id: str) -> Path:
-    return _meeting_dir(meeting_id) / "chunks.json"
-
-
 def save_sentences(meeting_id: str, sentences: list[dict]) -> str:
     """Persist Sentence array (metadata only, no embedding vectors)."""
     path = sentences_path(meeting_id)
@@ -191,21 +208,6 @@ def get_sentences(meeting_id: str) -> list[dict] | None:
     if data is None:
         return None
     return data.get("sentences", [])
-
-
-def save_chunks(meeting_id: str, chunks: list[dict]) -> str:
-    """Persist Chunk array."""
-    path = chunks_path(meeting_id)
-    _write_json(path, {"chunks": chunks})
-    return str(path)
-
-
-def get_chunks(meeting_id: str) -> list[dict] | None:
-    """Return raw Chunk dicts or None if not yet computed."""
-    data = _read_json(chunks_path(meeting_id))
-    if data is None:
-        return None
-    return data.get("chunks", [])
 
 
 def section_md_path(meeting_id: str, tab_id: str) -> Path:
@@ -228,7 +230,7 @@ def get_section_md(meeting_id: str, tab_id: str) -> str | None:
 
 
 def delete_pipeline_data(meeting_id: str) -> None:
-    """Remove all derived pipeline data (sentences, chunks, section mds).
+    """Remove all derived pipeline data (sentences, section mds).
 
     Called before re-running pipeline after re-transcription.
     Keeps transcript.json and meta.json intact.
@@ -236,7 +238,7 @@ def delete_pipeline_data(meeting_id: str) -> None:
     import os as _os
 
     _meeting_dir(meeting_id)
-    for name in ("sentences.json", "chunks.json"):
+    for name in ("sentences.json",):
         p = _meeting_dir(meeting_id) / name
         if p.exists():
             p.unlink()

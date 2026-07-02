@@ -2517,6 +2517,10 @@ interface MarkdownEditorProps {
   showToolbar?: boolean
   /** Called when user clicks Visual Translate on an image. Receives image URL, returns description string. */
   onVisualTranslate?: (imageUrl: string) => Promise<string>
+  /** Top offset for sticky toolbar (px). */
+  stickyToolbarOffset?: number
+  /** Extra toolbar actions on the right side. */
+  toolbarActions?: ReactNode
 }
 
 // ──────────────────────────────────────────────
@@ -2747,7 +2751,7 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
   )
 }
 
-export function EditorToolbar({ editor }: { editor: Editor }) {
+export function EditorToolbar({ editor, stickyOffset = 0, actions }: { editor: Editor; stickyOffset?: number; actions?: ReactNode }) {
   // Force re-render on selection/content changes so active states stay in sync
   const [, setTick] = useState(0)
   useEffect(() => {
@@ -2771,7 +2775,7 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
 
   return (
     <div
-      className="flex items-center gap-0.5 px-3 h-9 rounded-full mx-2 mt-2 mb-1 shrink-0
+      className="flex items-center gap-0.5 px-3 h-9 rounded-full mx-2 mt-2 mb-1 shrink-0 sticky z-10
         [&_button]:text-[#1C2E24] [&_button]:hover:text-[#1A5E3D] [&_button]:hover:bg-[rgba(26,94,61,0.06)]
         [&_button]:active:bg-[rgba(26,94,61,0.10)] [&_button[data-active]]:text-[#1A5E3D] [&_button[data-active]]:bg-[rgba(26,94,61,0.08)]
         [&_.w-px]:bg-[rgba(26,94,61,0.15)] [&_svg]:stroke-current
@@ -2785,6 +2789,7 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
           "0 12px 40px -6px rgba(10,18,14,0.22)," +
           "0 4px 12px -3px rgba(10,18,14,0.12)," +
           "0 0 0 1px rgba(26,94,61,0.06) inset",
+        top: stickyOffset ?? 0,
       }}
     >
       {/* Text style */}
@@ -2894,6 +2899,14 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
         onClick={() => editor.chain().focus().toggleTaskList().run()}>
         <ListTodo className="h-4 w-4" />
       </ToolbarBtn>
+      {actions && (
+        <>
+          <div className="w-px h-5 bg-border mx-1" />
+          <div className="flex items-center gap-1 ml-auto">
+            {actions}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -2902,6 +2915,7 @@ export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
   showToolbar = true, onVisualTranslate,
+  stickyToolbarOffset, toolbarActions,
 }: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
@@ -3253,7 +3267,7 @@ export function TiptapEditor({
           background: transparent !important;
         }
       `}</style>
-      {!readonly && showToolbar && <EditorToolbar editor={editor} />}
+      {!readonly && showToolbar && <EditorToolbar editor={editor} stickyOffset={stickyToolbarOffset} actions={toolbarActions} />}
       <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4 min-h-full flex-1" />
     </div>
   )

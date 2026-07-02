@@ -29,6 +29,10 @@ interface MarkdownEditorProps {
   showToolbar?: boolean
   /** Called when user clicks Visual Translate on an image. Receives image URL, returns description string. */
   onVisualTranslate?: (imageUrl: string) => Promise<string>
+  /** Top offset for sticky toolbar (px). Default 0. */
+  stickyToolbarOffset?: number
+  /** Extra toolbar actions rendered at the right side. */
+  toolbarActions?: ReactNode
 }
 
 // ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
@@ -48,6 +52,8 @@ function TyporaEditor({
   onEditorReady,
   showToolbar,
   onVisualTranslate,
+  stickyToolbarOffset,
+  toolbarActions,
 }: Omit<MarkdownEditorProps, "variant">) {
   return (
     <TiptapEditor
@@ -64,6 +70,8 @@ function TyporaEditor({
       onEditorReady={onEditorReady}
       showToolbar={showToolbar}
       onVisualTranslate={onVisualTranslate}
+      stickyToolbarOffset={stickyToolbarOffset}
+      toolbarActions={toolbarActions}
     />
   )
 }

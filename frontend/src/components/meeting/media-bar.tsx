@@ -1,9 +1,10 @@
-import { useRef, useEffect, forwardRef, useImperativeHandle } from "react"
+import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from "react"
+import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages } from "lucide-react"
-import type { MeetingStatus } from "@/api/client"
+import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages, Check } from "lucide-react"
+import type { MeetingStatus, HotWordsLibrarySummary, LanguageHintOption } from "@/api/client"
 
 interface MediaBarProps {
   meetingId: string
@@ -30,11 +31,13 @@ interface MediaBarProps {
   onToggleRealtime?: () => void
   hasTranscript?: boolean
   hotWordsLibraryId?: string | null
+  hotWordsLibraries?: HotWordsLibrarySummary[]
   onSelectHotWords?: (libraryId: string | null) => void
   languageHints?: string[]
-  languageHintOptions?: any[]
+  languageHintOptions?: LanguageHintOption[]
   onChangeLanguageHints?: (hints: string[]) => void
   showLanguageSelector?: boolean
+  onTimeUpdate?: (time: number) => void
 }
 
 export interface MediaBarHandle {
@@ -65,14 +68,47 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   onToggleRealtime,
   hasTranscript,
   hotWordsLibraryId,
+  hotWordsLibraries = [],
   onSelectHotWords,
-  languageHints,
-  languageHintOptions,
+  languageHints = [],
+  languageHintOptions = [],
   onChangeLanguageHints,
   showLanguageSelector,
+  onTimeUpdate,
 }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+
+  // Hot Words dropdown
+  const [hwOpen, setHwOpen] = useState(false)
+  const hwBtnRef = useRef<HTMLButtonElement>(null)
+  const hwDropdownRef = useRef<HTMLDivElement>(null)
+  const hwMenuRef = useRef<HTMLDivElement>(null)
+
+  // Language dropdown
+  const [langOpen, setLangOpen] = useState(false)
+  const langBtnRef = useRef<HTMLButtonElement>(null)
+  const langDropdownRef = useRef<HTMLDivElement>(null)
+  const langMenuRef = useRef<HTMLDivElement>(null)
+
+  // Click outside to close dropdowns (portal-aware)
+  useEffect(() => {
+    if (!hwOpen && !langOpen) return
+    const handler = (e: MouseEvent) => {
+      if (hwOpen) {
+        const hitMenu = hwMenuRef.current?.contains(e.target as Node)
+        const hitDropdown = hwDropdownRef.current?.contains(e.target as Node)
+        if (!hitMenu && !hitDropdown) setHwOpen(false)
+      }
+      if (langOpen) {
+        const hitMenu = langMenuRef.current?.contains(e.target as Node)
+        const hitDropdown = langDropdownRef.current?.contains(e.target as Node)
+        if (!hitMenu && !hitDropdown) setLangOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [hwOpen, langOpen])
 
   // Pause audio when meeting changes to prevent crackling
   useEffect(() => {
@@ -84,6 +120,15 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
     }
   }, [meetingId])
 
+  // Emit timeupdate for transcript auto-scroll
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el || !onTimeUpdate) return
+    const handler = () => onTimeUpdate(el.currentTime)
+    el.addEventListener("timeupdate", handler)
+    return () => el.removeEventListener("timeupdate", handler)
+  }, [onTimeUpdate, audioUrl])
+
   useImperativeHandle(ref, () => ({
     seekTo(time: number) {
       const el = audioRef.current
@@ -93,6 +138,21 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
       }
     },
   }))
+
+  // --- Dropdown position helpers ---
+  const hwDropdownStyle = hwBtnRef.current
+    ? {
+        top: hwBtnRef.current.getBoundingClientRect().bottom + 4,
+        left: hwBtnRef.current.getBoundingClientRect().right - 180,
+      }
+    : {}
+
+  const langDropdownStyle = langBtnRef.current
+    ? {
+        top: langBtnRef.current.getBoundingClientRect().bottom + 4,
+        left: langBtnRef.current.getBoundingClientRect().right - 200,
+      }
+    : {}
 
   // Recording state
   if (isRecording || isPaused) {
@@ -158,6 +218,10 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 
   // Has audio — always show player + action buttons
   if (hasAudio) {
+    const hwSelectedLabel = hotWordsLibraries.find((l) => l.id === hotWordsLibraryId)?.name
+    const langCount = languageHints.length
+    const langCustomized = langCount > 0 && !(langCount === 1 && languageHints[0] === "auto")
+
     return (
       <div className="flex flex-col gap-2">
         {transcriptionError && (
@@ -210,43 +274,160 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                 Re-transcribe
               </Button>
             )}
-            {/* Hot Words & Language — icon-only with tooltips */}
-            <div className="flex items-center gap-1 ml-2">
-              {onSelectHotWords && (
+
+            {/* Hot Words — dropdown */}
+            {onSelectHotWords && (
+              <div ref={hwMenuRef} className="relative">
                 <Tooltip>
-                  <TooltipTrigger className="inline-flex">
-                    <button
-                      type="button"
-                      onClick={() => onSelectHotWords?.(null)}
-                      className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    >
-                      <BookOpen className="h-3.5 w-3.5" />
-                    </button>
-                  </TooltipTrigger>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        ref={hwBtnRef}
+                        type="button"
+                        onClick={() => { setHwOpen(!hwOpen); setLangOpen(false) }}
+                        className={cn(
+                          "h-7 w-7 flex items-center justify-center rounded-sm transition-colors",
+                          hotWordsLibraryId
+                            ? "text-primary hover:bg-primary/10"
+                            : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                        )}
+                      >
+                        <BookOpen className="h-3.5 w-3.5" />
+                      </button>
+                    }
+                  />
                   <TooltipContent side="top" className="px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
-                    Hot Words{hotWordsLibraryId ? " · customized" : ""}
+                    Hot Words{hotWordsLibraryId ? ` · ${hwSelectedLabel}` : ""}
                   </TooltipContent>
                 </Tooltip>
-              )}
-              {showLanguageSelector && (
-                <Tooltip>
-                  <TooltipTrigger className="inline-flex">
+
+                {createPortal(
+                  <div
+                    ref={hwDropdownRef}
+                    className={`fixed z-[100] flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                      hwOpen
+                        ? "opacity-100 visible translate-y-0 pointer-events-auto"
+                        : "opacity-0 invisible translate-y-3 pointer-events-none"
+                    }`}
+                    style={{
+                      width: 180,
+                      top: hwDropdownStyle.top ?? 0,
+                      left: hwDropdownStyle.left ?? 0,
+                    }}
+                  >
                     <button
                       type="button"
-                      onClick={() => onChangeLanguageHints?.(languageHints?.[0] === "auto"
-                        ? (languageHintOptions?.map(o => o.code).filter(c => c !== "auto") ?? [])
-                        : ["auto"])}
-                      className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                      onClick={() => { onSelectHotWords(null); setHwOpen(false) }}
+                      className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
                     >
-                      <Languages className="h-3.5 w-3.5" />
+                      <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                        <span className={`sk-diamond ${!hotWordsLibraryId ? "on" : ""}`} aria-hidden />
+                        <span>None</span>
+                      </span>
+                      <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
                     </button>
-                  </TooltipTrigger>
+                    {hotWordsLibraries.map((lib) => (
+                      <button
+                        key={lib.id}
+                        type="button"
+                        onClick={() => { onSelectHotWords(lib.id); setHwOpen(false) }}
+                        className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+                      >
+                        <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                          <span className={`sk-diamond ${hotWordsLibraryId === lib.id ? "on" : ""}`} aria-hidden />
+                          <span className="flex-1 whitespace-normal break-words min-w-0 leading-snug">{lib.name}</span>
+                          <span className="text-[9px] text-muted-foreground/60 shrink-0 ml-1">{lib.word_count}w</span>
+                        </span>
+                        <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                      </button>
+                    ))}
+                    {hotWordsLibraries.length === 0 && (
+                      <div className="px-2 py-3 text-[10px] text-muted-foreground text-center">No hot word libraries</div>
+                    )}
+                  </div>,
+                  document.body
+                )}
+              </div>
+            )}
+
+            {/* Language — multi-select dropdown */}
+            {showLanguageSelector && (
+              <div ref={langMenuRef} className="relative">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        ref={langBtnRef}
+                        type="button"
+                        onClick={() => { setLangOpen(!langOpen); setHwOpen(false) }}
+                        className={cn(
+                          "h-7 w-7 flex items-center justify-center rounded-sm transition-colors",
+                          langCustomized
+                            ? "text-primary hover:bg-primary/10"
+                            : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                        )}
+                      >
+                        <Languages className="h-3.5 w-3.5" />
+                      </button>
+                    }
+                  />
                   <TooltipContent side="top" className="px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
-                    Language · {languageHints?.[0] ?? "auto"}
+                    Language{langCustomized ? ` · ${langCount} selected` : " · auto"}
                   </TooltipContent>
                 </Tooltip>
-              )}
-            </div>
+
+                {createPortal(
+                  <div
+                    ref={langDropdownRef}
+                    className={`fixed z-[100] flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                      langOpen
+                        ? "opacity-100 visible translate-y-0 pointer-events-auto"
+                        : "opacity-0 invisible translate-y-3 pointer-events-none"
+                    }`}
+                    style={{
+                      width: 200,
+                      top: langDropdownStyle.top ?? 0,
+                      left: langDropdownStyle.left ?? 0,
+                    }}
+                  >
+                    {languageHintOptions.map(({ code, label }) => {
+                      const isSelected = languageHints.includes(code)
+                      return (
+                        <button
+                          key={code}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              onChangeLanguageHints?.(languageHints.filter((c) => c !== code))
+                            } else {
+                              onChangeLanguageHints?.([...languageHints, code])
+                            }
+                          }}
+                          className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+                        >
+                          <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
+                            <span className={cn(
+                              "h-3.5 w-3.5 rounded border-2 flex items-center justify-center shrink-0 transition-colors",
+                              isSelected
+                                ? "bg-primary border-primary"
+                                : "border-muted-foreground/40"
+                            )}>
+                              {isSelected && (
+                                <Check className="h-2.5 w-2.5 text-primary-foreground" strokeWidth={4} />
+                              )}
+                            </span>
+                            <span className="flex-1 whitespace-normal break-words min-w-0 leading-snug">{label}</span>
+                            <span className="text-[9px] text-muted-foreground/60 shrink-0 ml-1 font-mono">{code}</span>
+                          </span>
+                          <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                        </button>
+                      )
+                    })}
+                  </div>,
+                  document.body
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

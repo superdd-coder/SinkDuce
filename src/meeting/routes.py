@@ -9,11 +9,11 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Body, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, StreamingResponse
 
 from src.meeting import store
-from src.meeting.models import MeetingMode, MeetingStatus, ProcessingState, TranscriptSegment, TranscriptionResult
+from src.meeting.models import MeetingMode, MeetingStatus, ProcessingState, GenerationState, TranscriptSegment, TranscriptionResult
 from src.meeting.service import meeting_service
 from src.tasks.task_manager import task_manager
 
@@ -120,7 +120,7 @@ async def delete_meeting(meeting_id: str):
 @router.put("/meetings/{meeting_id}")
 async def update_meeting(meeting_id: str, body: dict = Body()):
     logger.info("[UPDATE] Meeting %s fields=%s", meeting_id, list(body.keys()))
-    allowed_fields = {"title", "detail", "summary", "status", "mode", "speaker_names", "hot_words_library_id", "blueprint", "tabs"}
+    allowed_fields = {"title", "status", "mode", "speaker_names", "hot_words_library_id", "blueprint", "tabs"}
     fields = {k: v for k, v in body.items() if k in allowed_fields}
     # Handle notes separately -- save to file
     if "notes" in body:
@@ -310,6 +310,31 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
         "[SAVE-TRANSCRIPT] Saved %d segments (%d chars) for meeting %s",
         len(segments), len(text), meeting_id,
     )
+
+    # Phase 0: clean old pipeline data, normalize sentences and auto-trigger summary
+    try:
+        from src.meeting.pipeline import normalize_sentences
+
+        store.delete_pipeline_data(meeting_id)
+
+        sentences = normalize_sentences(meeting_id, segments)
+        store.save_sentences(meeting_id, [s.model_dump() for s in sentences])
+
+        logger.info(
+            "[SAVE-TRANSCRIPT] Normalized %d sentences for meeting %s",
+            len(sentences), meeting_id,
+        )
+
+        # Auto-trigger summary generation
+        task_manager.create_task(
+            filename=f"meeting_summary:{meeting_id}",
+            task_type="meeting_summary",
+            meeting_id=meeting_id,
+        )
+        logger.info("[SAVE-TRANSCRIPT] Auto-triggered meeting_summary for %s", meeting_id)
+    except Exception as e:
+        logger.warning("[SAVE-TRANSCRIPT] Failed to auto-trigger summary (non-fatal): %s", e)
+
     return {"message": "Transcript saved", "segments": len(segments)}
 
 
@@ -549,6 +574,9 @@ async def generate_summary(meeting_id: str):
     if not meeting:
         logger.warning("[SUMMARY] Meeting %s NOT FOUND", meeting_id)
         return {"error": "Meeting not found"}
+    if meeting.processing_state != ProcessingState.idle.value:
+        logger.warning("[SUMMARY] Meeting %s is busy: %s", meeting_id, meeting.processing_state)
+        return {"error": f"Meeting is busy: {meeting.processing_state}"}
     transcript = store.get_transcript(meeting_id)
     if not transcript:
         logger.warning("[SUMMARY] Meeting %s has NO TRANSCRIPT", meeting_id)
@@ -562,36 +590,92 @@ async def generate_summary(meeting_id: str):
         meeting_id=meeting_id,
     )
     logger.info("[SUMMARY] Task created for meeting %s: task_id=%s", meeting_id, task.id)
-    return {"message": "Generation started", "task": task.to_dict(), "meeting_id": meeting_id}
+    updated = store.get_meeting(meeting_id)
+    return updated.model_dump()
 
 
-@router.post("/meetings/{meeting_id}/breakdown")
-async def start_breakdown(meeting_id: str):
-    """Start the breakdown pipeline (Pipeline 2: tagging + section summarization)."""
-    logger.info("[BREAKDOWN] Request for meeting %s", meeting_id)
-    try:
-        meeting = await meeting_service.start_breakdown(meeting_id)
-    except FileNotFoundError as exc:
-        return {"error": str(exc)}
-    except ValueError as exc:
-        return {"error": str(exc)}
-    except RuntimeError as exc:
-        return {"error": str(exc)}
-    logger.info("[BREAKDOWN] Started for meeting %s", meeting_id)
-    return meeting.model_dump()
+def _sse_event(event: str, data: object) -> str:
+    """Format a dict as an SSE event string."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/meetings/{meeting_id}/magic-extract")
-async def magic_extract(meeting_id: str, body: dict = Body()):
-    """Start magic extract for one or more custom topics.
+@router.get("/meetings/{meeting_id}/blueprint/stream")
+async def stream_blueprint(meeting_id: str):
+    """Stream blueprint generation as SSE events.
 
-    Body: {"topics": [...], "target_tab_id": "tab_sec_01" (optional)}
+    Pass 1 — General Summary (streaming tokens):
+      event: state  → {"summary": "prefilling"|"streaming"|"idle"}
+      event: thinking → "reasoning text chunk"
+      event: token  → "markdown content chunk"
+      event: summary_done → {"title": "...", "general_md": "..."}
+
+    Pass 2 — Blueprint Decomposition:
+      event: state → {"blueprint": "prefilling"|"idle"}
+      event: blueprint_done → {"taxonomy": {...}, "blueprint": [...]}
+
+    Errors:
+      event: error → {"message": "..."}
     """
-    topics = body.get("topics", [])
-    target_tab_id = body.get("target_tab_id")
-    logger.info("[EXTRACT] Request for meeting %s: %d topics, target=%s", meeting_id, len(topics), target_tab_id)
+    logger.info("[SSE] Blueprint stream request for meeting %s", meeting_id)
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        def _err():
+            yield _sse_event("error", {"message": "Meeting not found"})
+        return StreamingResponse(_err(), media_type="text/event-stream")
+    if meeting.processing_state != ProcessingState.idle.value:
+        def _err():
+            yield _sse_event("error", {"message": f"Meeting is busy: {meeting.processing_state}"})
+        return StreamingResponse(_err(), media_type="text/event-stream")
+    transcript = store.get_transcript(meeting_id)
+    if not transcript:
+        def _err():
+            yield _sse_event("error", {"message": "No transcript available"})
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
+    def _stream():
+        for evt in meeting_service.generate_blueprint_stream(meeting_id):
+            yield _sse_event(evt["event"], evt["data"])
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.get("/meetings/{meeting_id}/sections/{tab_id}/generate-stream")
+async def stream_section_generation(meeting_id: str, tab_id: str):
+    """Stream single-section generation as SSE events.
+
+    Events:
+      event: state  → {"section_gen": "prefilling"|"streaming"|"idle"}
+      event: thinking → "reasoning text chunk"
+      event: token  → "markdown content chunk"
+      event: section_done → {"tab_id": "...", "md": "..."}
+      event: error → {"message": "..."}
+    """
+    logger.info("[SSE] Section stream request for meeting %s tab=%s", meeting_id, tab_id)
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        def _err():
+            yield _sse_event("error", {"message": "Meeting not found"})
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
+    def _stream():
+        for evt in meeting_service.generate_section_stream(meeting_id, tab_id):
+            yield _sse_event(evt["event"], evt["data"])
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.post("/meetings/{meeting_id}/extract")
+async def start_extract(meeting_id: str, body: dict = Body()):
+    """Start extract for one or more section receipts (v3).
+
+    Body: {"receipts": [{"source": "blueprint"|"custom", "tab_id"?: "...", "name": "...", "description": "..."}]}
+    """
+    receipts = body.get("receipts", [])
+    if not receipts:
+        return {"error": "receipts is required and must not be empty"}
+    logger.info("[EXTRACT] Request for meeting %s: %d receipts", meeting_id, len(receipts))
     try:
-        meeting = await meeting_service.start_magic_extract(meeting_id, topics, target_tab_id)
+        meeting = await meeting_service.start_extract(meeting_id, receipts)
     except FileNotFoundError as exc:
         return {"error": str(exc)}
     except ValueError as exc:
@@ -685,9 +769,24 @@ async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Bod
     """Save edited markdown content for a section tab."""
     content = body.get("content", "")
     path = store.save_section_md(meeting_id, tab_id, content)
-    if tab_id == "tab_general":
-        store.update_meeting(meeting_id, detail=content)
     logger.info("[SAVE-SECTION-MD] Saved %s/%s (%d chars)", meeting_id, tab_id, len(content))
     return {"ok": True, "path": path}
+
+
+@router.post("/meetings/{meeting_id}/generate-section-description")
+async def generate_section_description(meeting_id: str, body: dict = Body()):
+    """Generate a section description via LLM based on section name + General Summary."""
+    from src.meeting.service import meeting_service as _svc
+
+    section_name = (body.get("section_name") or "").strip()
+    if not section_name:
+        return {"error": "section_name is required"}
+    try:
+        result = await _svc.generate_section_description(meeting_id, section_name)
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return result
 
 

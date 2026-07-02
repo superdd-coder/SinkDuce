@@ -69,7 +69,20 @@ class OpenAICompatLLM(LLMProvider):
         response = self._client.chat.completions.create(**kwargs)
         if not response.choices:
             return ""
-        return _strip_think(response.choices[0].message.content or "")
+        msg = response.choices[0].message
+        text = msg.content or ""
+        # DeepSeek thinking mode: content may be empty while reasoning_content
+        # holds the actual response
+        if not text.strip():
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                logger.info("LLM generate: content empty, using reasoning_content (%d chars)", len(reasoning))
+                text = reasoning
+        if not text.strip():
+            logger.warning("LLM generate: empty response from model=%s (content=%r, reasoning=%r)",
+                           self._model, msg.content, getattr(msg, "reasoning_content", None))
+            return ""
+        return _strip_think(text)
 
     # Default visual description prompt — used when caller doesn't provide one
     _DEFAULT_VISUAL_PROMPT = (
@@ -118,7 +131,101 @@ class OpenAICompatLLM(LLMProvider):
             return ""
         return _strip_think(response.choices[0].message.content or "")
 
-    def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None) -> Generator[str, None, None]:
+    def generate_stream_tagged(
+        self, prompt: str, system: str = "",
+        temperature: float | None = None, max_tokens: int | None = None,
+        response_format: dict | None = None, thinking: bool | None = None,
+    ) -> Generator[tuple[str, bool], None, None]:
+        """Stream with thinking-mode awareness.
+
+        Yields (text, is_thinking) tuples.  The consumer can render thinking
+        text in a collapsible section, then hide it when real content begins.
+
+        When thinking mode is off or the model doesn't emit think tags,
+        all tuples are (text, False).
+        """
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = dict(
+            model=self._model,
+            messages=messages,
+            temperature=self._resolve_temperature(temperature),
+            stream=True,
+        )
+        resolved_mt = self._resolve_max_tokens(max_tokens)
+        if resolved_mt > 0:
+            kwargs["max_tokens"] = resolved_mt
+        if response_format:
+            kwargs["response_format"] = response_format
+        if thinking is not None:
+            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+
+        stream = self._client.chat.completions.create(**kwargs)
+        in_think = False
+        seen_non_think = False  # first non-think token → transition
+        buf = ""
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                text = buf + chunk.choices[0].delta.content
+                buf = ""
+
+                if in_think:
+                    end_idx = text.find("</think>")
+                    if end_idx != -1:
+                        # Emit the thinking text before </think>
+                        think_text = text[:end_idx]
+                        if think_text:
+                            yield (think_text, True)
+                        text = text[end_idx + 8:]  # len("</think>") = 8
+                        in_think = False
+                        seen_non_think = True
+                    else:
+                        # Partial </think> at end — buffer it
+                        for i in range(1, min(8, len(text) + 1)):
+                            if "</think>".startswith(text[-i:]):
+                                buf = text[-i:]
+                                text = text[:-i]
+                                break
+                        if text:
+                            yield (text, True)
+                        continue
+
+                # Not in think block — strip any complete <think>...</think> spans
+                while "<think>" in text:
+                    before, after = text.split("<think>", 1)
+                    if before:
+                        yield (before, False)
+                        if not seen_non_think:
+                            seen_non_think = True
+                    end_idx = after.find("</think>")
+                    if end_idx != -1:
+                        think_inner = after[:end_idx]
+                        if think_inner:
+                            yield (think_inner, True)
+                        text = after[end_idx + 8:]
+                    else:
+                        # </think> not yet received — enter thinking mode
+                        text = after
+                        in_think = True
+                        break
+
+                # Buffer partial "<think>" at end
+                if not in_think:
+                    for i in range(1, min(7, len(text) + 1)):
+                        if "<think>".startswith(text[-i:]):
+                            buf = text[-i:]
+                            text = text[:-i]
+                            break
+
+                if text:
+                    if not seen_non_think:
+                        seen_non_think = True
+                    yield (text, False)
+
+    def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None) -> Generator[str, None, None]:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})

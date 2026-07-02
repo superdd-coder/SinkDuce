@@ -806,6 +806,39 @@ def _do_meeting_summary(meeting_id: str):
     svc._do_blueprint_summary(meeting_id)
 
 
+async def meeting_extract_handler(task: Task, meeting_id: str, receipts: list, **kwargs) -> dict:
+    """Extract meeting sections via v3 pipeline (ThreadPoolExecutor 50)."""
+    from src.meeting import store
+    from src.meeting.models import ProcessingState
+    from src.meeting.service import MeetingService
+    logger.info("[MEETING_EXTRACT] Starting for meeting %s (%d receipts)", meeting_id, len(receipts))
+
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        raise FileNotFoundError(f"Meeting {meeting_id} not found")
+
+    store.update_meeting(
+        meeting_id,
+        processing_state=ProcessingState.extracting.value,
+    )
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, _do_meeting_extract, meeting_id, receipts)
+        return {"message": "Extract complete", "meeting_id": meeting_id}
+    except Exception:
+        store.update_meeting(
+            meeting_id,
+            processing_state=ProcessingState.idle.value,
+        )
+        raise
+
+
+def _do_meeting_extract(meeting_id: str, receipts: list):
+    from src.meeting.service import MeetingService
+    svc = MeetingService()
+    svc.extract_sections(meeting_id, receipts)
+
+
 # ---------------------------------------------------------------------------
 # Doc Summary handler
 # ---------------------------------------------------------------------------

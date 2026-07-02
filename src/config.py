@@ -99,6 +99,8 @@ class EnrichmentConfig(BaseModel):
     batch_poll_interval: int = 30
     max_parallel_context: int = 50
     enrichment_model: str = ""  # provider id for enrichment LLM; "" = use default LLM
+    meeting_model: str = ""     # provider id for meeting summary LLM; "" = use default LLM
+    meeting_thinking: bool = False  # enable thinking mode for meeting summary
 
 
 class QdrantConfig(BaseModel):

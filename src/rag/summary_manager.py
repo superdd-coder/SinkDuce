@@ -227,7 +227,13 @@ class SummaryManager:
             scroll_filter=scroll_filter,
             limit=1000,
         )
-        return [p["payload"] for p in points]
+        # Sort by collection_id for deterministic ordering.
+        # Qdrant scroll does NOT guarantee order; without sorting, the
+        # collection catalog fed to the Blueprint LLM changes every run,
+        # causing unstable section decomposition.
+        result = [p["payload"] for p in points]
+        result.sort(key=lambda p: p.get("collection_id", ""))
+        return result
 
     # ── Conflicts ───────────────────────────────────────────
 

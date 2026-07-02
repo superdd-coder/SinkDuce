@@ -245,52 +245,48 @@ async def delete_document(collection: str, doc_source: str):
     except Exception as e:
         logger.warning("[DELETE] Doc summary cleanup failed (non-fatal): %s", e)
 
-    # Clean up meeting allocation if this file came from a meeting
+    # Clean up meeting allocation if this file came from a meeting.
+    # Meeting-sourced files use the format __meeting__:{meeting_id}:{tab_id}.
     try:
-        from pathlib import Path as _Path
-        import json as _json
-        meetings_dir = _Path("data").resolve() / "meetings"
-        if meetings_dir.exists():
-            for entry in meetings_dir.iterdir():
-                if not entry.is_dir():
-                    continue
-                meta_path = entry / "meta.json"
-                if not meta_path.exists():
-                    continue
-                try:
-                    data = _json.loads(meta_path.read_text(encoding="utf-8"))
-                except (OSError, _json.JSONDecodeError):
-                    continue
+        import re as _re
 
-                # Check both old and new format
-                alloc_cols = data.get("allocated_collections", [])
-                file_ids = data.get("allocated_file_ids", [])
-                old_col = data.get("allocated_collection")
-                old_fid = data.get("allocated_file_id")
+        meeting_match = _re.match(r"^__meeting__:([a-f0-9]+):(tab_\w+)$", doc_source)
+        if meeting_match:
+            mid = meeting_match.group(1)
+            tid = meeting_match.group(2)
 
-                changed = False
+            from src.meeting import store as meeting_store
+            meeting = meeting_store.get_meeting(mid)
+            if meeting and meeting.tabs:
+                updated_tabs: list[dict] = []
+                for t in meeting.tabs:
+                    td = t if isinstance(t, dict) else t.model_dump()
+                    if td.get("tab_id") == tid:
+                        td["allocated_file_id"] = ""
+                        td["associated_collection_id"] = ""
+                        td["associated_collection_name"] = ""
+                    updated_tabs.append(td)
 
-                # New format: remove matching entry from parallel lists
-                if doc_source in file_ids:
-                    idx = file_ids.index(doc_source)
-                    file_ids.pop(idx)
-                    if idx < len(alloc_cols):
-                        alloc_cols.pop(idx)
-                    data["allocated_collections"] = alloc_cols
-                    data["allocated_file_ids"] = file_ids
-                    changed = True
+                # Rebuild meeting-level tracking arrays from tabs
+                alloc_cols: list[str] = []
+                alloc_fids: list[str] = []
+                for td in updated_tabs:
+                    cid = td.get("associated_collection_id", "")
+                    fid = td.get("allocated_file_id", "")
+                    if cid and fid:
+                        alloc_cols.append(cid)
+                        alloc_fids.append(fid)
 
-                # Old format: clear if matches
-                if old_fid == doc_source:
-                    data.pop("allocated_collection", None)
-                    data.pop("allocated_file_id", None)
-                    changed = True
-
-                if changed:
-                    meta_path.write_text(_json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-                    logger.info("[DELETE] Removed meeting allocation for '%s' from meeting %s (remaining: %d)",
-                                doc_source, data.get("id", "")[:12], len(data.get("allocated_file_ids", [])))
-                    break
+                meeting_store.update_meeting(
+                    mid,
+                    tabs=updated_tabs,
+                    allocated_collections=alloc_cols,
+                    allocated_file_ids=alloc_fids,
+                )
+                logger.info(
+                    "[DELETE] Cleaned meeting tab %s/%s allocation (remaining: %d)",
+                    mid[:12], tid, len(alloc_fids),
+                )
     except Exception as e:
         logger.warning("[DELETE] Meeting allocation cleanup failed (non-fatal): %s", e)
 

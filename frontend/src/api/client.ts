@@ -688,22 +688,27 @@ export interface TranscriptSegment {
 
 // ── Meeting v2 types ──
 
-export type ProcessingState = "idle" | "summarizing" | "breaking_down" | "extracting"
+export type ProcessingState = "idle" | "summarizing" | "extracting"  // v3: "breaking_down" removed
 
 export interface BlueprintItem {
-  tab_id: string
+  blueprint_id: string  // v3: "bp_01" format, code-assigned
   tab_name: string
+  tab_description: string  // v3: ~200-char description (was section_description)
   associated_collection_id: string
   associated_collection_name: string
-  section_description: string
 }
 
 export interface MeetingTab {
   tab_id: string
   type: "general" | "section"
+  blueprint_id: string  // v3: from blueprint item → "bp_01"; custom → ""; cleared on re-summarize
   name: string
+  description: string
+  processing_state: string  // v3: "idle" | "generating"
   associated_collection_id: string
   associated_collection_name: string
+  allocated_file_id: string  // v3: UUID after ingest
+  is_dirty: boolean  // v3: user edited name/description → true; regenerate resets to false
   md_file_path: string
   payload_ref: string[]
 }
@@ -722,6 +727,7 @@ export interface Meeting {
   transcription_error?: string
   processing_state?: ProcessingState
   blueprint?: BlueprintItem[]
+  blueprint_taxonomy?: { dimension: string; explanation: string }
   tabs?: MeetingTab[]
   allocated_collections: string[]
   allocated_file_ids: string[]
@@ -743,7 +749,7 @@ export const createMeeting = (title?: string) =>
     body: JSON.stringify(title ? { title } : {}),
   })
 
-export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "detail" | "summary" | "speaker_names" | "hot_words_library_id"> & { notes?: string; blueprint?: BlueprintItem[] }>) =>
+export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "speaker_names" | "hot_words_library_id"> & { notes?: string; blueprint?: BlueprintItem[]; tabs?: MeetingTab[] }>) =>
   request<Meeting>(`/meetings/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
@@ -798,6 +804,179 @@ export const generateMeetingSummary = (id: string) =>
     method: "POST",
   })
 
+// ── Blueprint SSE streaming ──────────────────────────────────
+
+export interface BlueprintStreamCallbacks {
+  onState?: (data: { summary?: string; blueprint?: string }) => void
+  onThinking?: (text: string) => void
+  onToken?: (text: string) => void
+  onSummaryDone?: (data: { general_md: string }) => void
+  onBlueprintDone?: (data: { taxonomy: Record<string, unknown>; blueprint: Array<Record<string, unknown>> }) => void
+  onError?: (message: string) => void
+}
+
+/** SSE parser state machine — handles partial chunks across fetch reads. */
+class SSEDecoder {
+  private buffer = ""
+  private eventType = ""
+  private dataBuffer = ""
+
+  /** Push a raw text chunk. Returns complete SSE messages as [event, data] tuples. */
+  push(chunk: string): Array<[string, string]> {
+    const results: Array<[string, string]> = []
+    this.buffer += chunk
+    const lines = this.buffer.split("\n")
+    // Keep last (potentially incomplete) line in buffer
+    this.buffer = lines.pop() ?? ""
+
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        this.eventType = line.slice(7).trim()
+      } else if (line.startsWith("data: ")) {
+        this.dataBuffer += line.slice(6)
+      } else if (line === "" && this.eventType) {
+        // Empty line = message boundary
+        results.push([this.eventType, this.dataBuffer])
+        this.eventType = ""
+        this.dataBuffer = ""
+      }
+    }
+    return results
+  }
+}
+
+/** Connect to the blueprint streaming endpoint and invoke callbacks. */
+export function streamBlueprint(
+  meetingId: string,
+  callbacks: BlueprintStreamCallbacks,
+): AbortController {
+  const controller = new AbortController()
+  const decoder = new SSEDecoder()
+
+  fetch(`/api/meetings/${meetingId}/blueprint/stream`, {
+    signal: controller.signal,
+  }).then(async (resp) => {
+    if (!resp.ok) {
+      callbacks.onError?.(`HTTP ${resp.status}: ${await resp.text()}`)
+      return
+    }
+    const reader = resp.body?.getReader()
+    if (!reader) return
+    const utf8 = new TextDecoder("utf-8")
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const text = utf8.decode(value, { stream: true })
+
+      for (const [event, data] of decoder.push(text)) {
+        switch (event) {
+          case "state": {
+            const parsed = JSON.parse(data) as { summary?: string; blueprint?: string }
+            callbacks.onState?.(parsed)
+            break
+          }
+          case "thinking":
+            callbacks.onThinking?.(JSON.parse(data) as string)
+            break
+          case "token":
+            callbacks.onToken?.(JSON.parse(data) as string)
+            break
+          case "summary_done": {
+            const parsed = JSON.parse(data) as { general_md: string }
+            callbacks.onSummaryDone?.(parsed)
+            break
+          }
+          case "blueprint_done": {
+            const parsed = JSON.parse(data) as { taxonomy: Record<string, unknown>; blueprint: Array<Record<string, unknown>> }
+            callbacks.onBlueprintDone?.(parsed)
+            break
+          }
+          case "error": {
+            const parsed = JSON.parse(data) as { message: string }
+            callbacks.onError?.(parsed.message)
+            break
+          }
+        }
+      }
+    }
+  }).catch((err: unknown) => {
+    if (err instanceof DOMException && err.name === "AbortError") return
+    callbacks.onError?.(err instanceof Error ? err.message : String(err))
+  })
+
+  return controller
+}
+
+// ── Section SSE streaming ────────────────────────────────────
+
+export interface SectionStreamCallbacks {
+  onState?: (data: { section_gen?: string }) => void
+  onThinking?: (text: string) => void
+  onToken?: (text: string) => void
+  onSectionDone?: (data: { tab_id: string; md: string }) => void
+  onError?: (message: string) => void
+}
+
+/** Connect to the section generation streaming endpoint and invoke callbacks. */
+export function streamSectionGenerate(
+  meetingId: string,
+  tabId: string,
+  callbacks: SectionStreamCallbacks,
+): AbortController {
+  const controller = new AbortController()
+  const decoder = new SSEDecoder()
+
+  fetch(`/api/meetings/${meetingId}/sections/${tabId}/generate-stream`, {
+    signal: controller.signal,
+  }).then(async (resp) => {
+    if (!resp.ok) {
+      callbacks.onError?.(`HTTP ${resp.status}: ${await resp.text()}`)
+      return
+    }
+    const reader = resp.body?.getReader()
+    if (!reader) return
+    const utf8 = new TextDecoder("utf-8")
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const text = utf8.decode(value, { stream: true })
+
+      for (const [event, data] of decoder.push(text)) {
+        switch (event) {
+          case "state": {
+            const parsed = JSON.parse(data) as { section_gen?: string }
+            callbacks.onState?.(parsed)
+            break
+          }
+          case "thinking":
+            callbacks.onThinking?.(JSON.parse(data) as string)
+            break
+          case "token":
+            callbacks.onToken?.(JSON.parse(data) as string)
+            break
+          case "section_done": {
+            const parsed = JSON.parse(data) as { tab_id: string; md: string }
+            callbacks.onSectionDone?.(parsed)
+            break
+          }
+          case "error": {
+            const parsed = JSON.parse(data) as { message: string }
+            callbacks.onError?.(parsed.message)
+            break
+          }
+        }
+      }
+    }
+  }).catch((err: unknown) => {
+    if (err instanceof DOMException && err.name === "AbortError") return
+    callbacks.onError?.(err instanceof Error ? err.message : String(err))
+  })
+
+  return controller
+}
+
 export const getMeetingTranscript = (id: string) =>
   request<{ segments: TranscriptSegment[] }>(`/meetings/${id}/transcript`)
 
@@ -810,15 +989,20 @@ export const saveMeetingTranscript = (
     body: JSON.stringify(payload),
   })
 
-// ── Meeting v2: Breakdown & Extract ──
+// ── Meeting v2: Extract (v3) ──
 
-export const startBreakdown = (id: string) =>
-  request<Meeting>(`/meetings/${id}/breakdown`, { method: "POST" })
+export interface ExtractReceipt {
+  source: "blueprint" | "custom"
+  tab_id?: string
+  blueprint_id?: string  // v3: matches BlueprintItem.blueprint_id
+  name: string
+  description: string
+}
 
-export const magicExtract = (id: string, topics: { name: string; description: string }[], targetTabId?: string) =>
-  request<Meeting>(`/meetings/${id}/magic-extract`, {
+export const extract = (id: string, receipts: ExtractReceipt[]) =>
+  request<Meeting>(`/meetings/${id}/extract`, {
     method: "POST",
-    body: JSON.stringify({ topics, target_tab_id: targetTabId }),
+    body: JSON.stringify({ receipts }),
   })
 
 export const deleteSection = (meetingId: string, tabId: string) =>
@@ -850,6 +1034,17 @@ export const saveSectionMd = (meetingId: string, tabId: string, content: string)
   request<{ ok: boolean }>(`/meetings/${meetingId}/sections/${tabId}/md`, {
     method: "PUT",
     body: JSON.stringify({ content }),
+  })
+
+export interface SectionDescResult {
+  found: boolean
+  description?: string
+}
+
+export const generateSectionDescription = (meetingId: string, sectionName: string) =>
+  request<SectionDescResult>(`/meetings/${meetingId}/generate-section-description`, {
+    method: "POST",
+    body: JSON.stringify({ section_name: sectionName }),
   })
 
 // ── Transcription Providers ──

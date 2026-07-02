@@ -15,6 +15,7 @@ interface TranscriptPanelProps {
   speakerNames?: Record<string, string>
   onUpdateSpeakerName?: (speakerId: string, name: string) => void
   isRealtime?: boolean
+  tabs?: { tab_id: string; type?: string; md_file_path?: string }[]
 }
 
 export function TranscriptPanel({
@@ -28,6 +29,7 @@ export function TranscriptPanel({
   speakerNames = {},
   onUpdateSpeakerName,
   isRealtime = false,
+  tabs,
 }: TranscriptPanelProps) {
   const [tab, setTab] = useState("transcript")
 
@@ -76,6 +78,7 @@ export function TranscriptPanel({
                 focusRef={focusRef}
                 activeSectionTag={activeSectionTag}
                 speakerNames={speakerNames}
+                tabs={tabs}
               />
             </TabsContent>
             <TabsContent key={`speakers-${tab}`} value="speakers" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
@@ -105,7 +108,9 @@ export function TranscriptTab({
   focusRef,
   activeSectionTag,
   speakerNames,
+  tabs,
   showSearch = true,
+  playbackTime = 0,
 }: {
   segments: TranscriptSegment[]
   partialText?: string
@@ -113,10 +118,13 @@ export function TranscriptTab({
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
   speakerNames: Record<string, string>
+  tabs?: { tab_id: string; type?: string; md_file_path?: string }[]
   showSearch?: boolean
+  playbackTime?: number
 }) {
   const [search, setSearch] = useState("")
   const [focusedIdx, setFocusedIdx] = useState(-1)
+  const [playingIdx, setPlayingIdx] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
   const query = search.toLowerCase().trim()
 
@@ -155,6 +163,29 @@ export function TranscriptTab({
     return () => { cancelAnimationFrame(raf); clearTimeout(timer) }
   }, [focusRef?.ts, focusRef?.id, segments])
 
+  // Auto-scroll to current segment during playback
+  const lastAutoScrollRef = useRef(0)
+  useEffect(() => {
+    if (!playbackTime || !containerRef.current) return
+    // Throttle: only auto-scroll at most once per second
+    const now = Date.now()
+    if (now - lastAutoScrollRef.current < 800) return
+    // Find the segment at current playback time
+    const idx = segments.findIndex((seg) => seg.start <= playbackTime && seg.end >= playbackTime)
+    if (idx === -1) { setPlayingIdx(-1); return }
+    lastAutoScrollRef.current = now
+    setPlayingIdx(idx)
+    const container = containerRef.current
+    const items = container.querySelectorAll("[data-seg-idx]")
+    const el = items[idx] as HTMLElement | undefined
+    if (!el) return
+    const containerTop = container.getBoundingClientRect().top
+    const elTop = el.getBoundingClientRect().top
+    const offset = elTop - containerTop + container.scrollTop
+      - container.clientHeight / 3
+    container.scrollTo({ top: offset, behavior: "smooth" })
+  }, [playbackTime, segments])
+
   const highlight = (text: string) => {
     if (!query) return text
     const idx = text.toLowerCase().indexOf(query)
@@ -180,7 +211,7 @@ export function TranscriptTab({
               placeholder="Search transcript..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full h-7 pl-7 pr-2 text-xs rounded-md border border-input bg-background"
+              className="w-full h-7 pl-7 pr-3 text-xs rounded-full border border-input bg-background"
             />
           </div>
           {query && (
@@ -209,7 +240,8 @@ export function TranscriptTab({
                 "rounded-md px-2 py-1.5 -mx-1 transition-colors",
                 onSegmentClick && "cursor-pointer hover:bg-accent",
                 query && seg.text.toLowerCase().includes(query) && "ring-1 ring-primary/30",
-                origIdx === focusedIdx && "ring-2 ring-primary bg-primary/5"
+                origIdx === focusedIdx && "ring-2 ring-primary bg-primary/5",
+                origIdx === playingIdx && focusedIdx !== origIdx && "border-l-[3px] border-emerald-500 bg-emerald-500/5"
               )}
               onClick={() => onSegmentClick?.(seg.start)}
             >
@@ -222,6 +254,8 @@ export function TranscriptTab({
                 {seg.section_tags && seg.section_tags.length > 0 && (
                   <span className="flex items-center gap-1">
                     {seg.section_tags.map((tag) => {
+                      const label = sectionTagLabel(tag, tabs)
+                      if (!label) return null
                       const isActive = activeSectionTag === tag
                       return (
                         <span
@@ -234,7 +268,7 @@ export function TranscriptTab({
                           )}
                           title={tag}
                         >
-                          {sectionTagLabel(tag)}
+                          {label}
                         </span>
                       )
                     })}
@@ -306,7 +340,7 @@ export function SpeakersTab({
   }
 
   return (
-    <div className="p-2 space-y-4">
+    <div className="p-2 space-y-4 pt-6">
       {speakers.map((speaker) => (
         <SpeakerCard
           key={speaker.id}
@@ -357,7 +391,7 @@ function SpeakerCard({
   }
 
   return (
-    <div className="border border-border rounded-lg p-2 space-y-2">
+    <div className="border border-emerald-600/50 rounded-xl p-3 space-y-2 shadow-[0_0_12px_rgba(5,150,105,0.12)]">
       {/* Speaker header */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-light text-primary bg-primary/10 px-2 py-1 rounded">
@@ -446,9 +480,20 @@ export function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`
 }
 
-/** Convert tab_sec_01 → T1, tab_sec_02 → T2 */
-export function sectionTagLabel(tag: string): string {
-  const m = tag.match(/^tab_sec_(\d+)$/)
+/** Convert tab_(sec|blue|cus)_NN → T1, T2, ...
+ *
+ * When `tabs` is provided, uses the same dynamic sequential indexing as
+ * `tabShortLabel()` so transcript tags match Section Summary "(Topic N)".
+ * Without tabs, falls back to extracting the number from the tab ID suffix. */
+export function sectionTagLabel(tag: string, tabs?: { tab_id: string; type?: string; md_file_path?: string }[]): string {
+  if (tabs) {
+    const sections = tabs.filter(t => t.type === "section")
+    const idx = sections.findIndex(t => t.tab_id === tag)
+    if (idx >= 0) return `T${idx + 1}`
+    // Tag not found in current tabs — stale, hide it
+    return ""
+  }
+  const m = tag.match(/^tab_(?:(?:sec|blue|cus)_)?(\d+)$/)
   if (m) return `T${parseInt(m[1], 10)}`
   return tag
 }

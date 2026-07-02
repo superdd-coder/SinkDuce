@@ -55,6 +55,9 @@ logging.getLogger().addFilter(_FunASRDiarizationFilter())
 async def lifespan(app: FastAPI):
     init_services()
     await task_manager.start()
+    # Recover stale processing states left by a previous crash/restart
+    from src.meeting.service import reset_stale_processing_states
+    await reset_stale_processing_states()
     yield
     await task_manager.stop()
 
