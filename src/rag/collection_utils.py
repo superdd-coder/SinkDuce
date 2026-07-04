@@ -61,6 +61,15 @@ def get_collection_embedding(col_config: dict, collection: str = "") -> Embeddin
     if global_default:
         cfg = global_default.model_copy()
         if actual_dim:
+            if global_default.dimensions and actual_dim != global_default.dimensions:
+                logger.warning(
+                    "Collection %s has %d-dim vectors but global embedding provider "
+                    "(%s, %d dims) will be overridden to %d. "
+                    "Ensure the model %s supports Matryoshka/truncation to %d dims.",
+                    collection, actual_dim, global_default.model,
+                    global_default.dimensions, actual_dim,
+                    global_default.model, actual_dim,
+                )
             cfg.dimensions = actual_dim
         return create_embedding_provider(cfg)
 

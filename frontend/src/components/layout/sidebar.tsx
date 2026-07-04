@@ -131,8 +131,8 @@ export function Sidebar() {
                     <DiamondDot />
                   </span>
                   <span
-                    className="text-[10px] uppercase tracking-[0.12em]"
-                    style={{ color: "#1a3a2a", fontFamily: "var(--font-serif)" }}
+                    className="text-[10px] uppercase tracking-[0.12em] t-body-family"
+                    style={{ color: "#1a3a2a" }}
                   >
                     New Version
                   </span>
@@ -148,8 +148,8 @@ export function Sidebar() {
 
               {/* Version number */}
               <p
-                className="text-sm font-light mb-3"
-                style={{ fontFamily: "var(--font-serif)", color: "var(--ze-ink)" }}
+                className="text-sm font-light mb-3 t-body-family"
+                style={{ color: "var(--ze-ink)" }}
               >
                 {update.latestVersion}
               </p>
@@ -158,15 +158,14 @@ export function Sidebar() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleIgnore}
-                  className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
-                  style={{ fontFamily: "var(--font-serif)" }}
+                  className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-muted-foreground transition-colors t-body-family"
                 >
                   Ignore
                 </button>
                 <button
                   onClick={() => setDialogOpen(true)}
-                  className="text-[10px] uppercase tracking-[0.08em] font-medium transition-colors flex items-center gap-1"
-                  style={{ color: "#1a3a2a", fontFamily: "var(--font-serif)" }}
+                  className="text-[10px] uppercase tracking-[0.08em] font-medium transition-colors flex items-center gap-1 t-body-family"
+                  style={{ color: "#1a3a2a" }}
                 >
                   Update <ArrowUpRight className="h-2.5 w-2.5" />
                 </button>
@@ -179,16 +178,15 @@ export function Sidebar() {
           <div className="pt-5 border-t border-dashed border-border">
             <div className="flex items-center justify-between">
               <span
-                className="text-[10px] font-[300] tracking-[0.1em] text-muted-foreground/60"
-                style={{ fontFamily: "var(--font-serif)" }}
+                className="text-[10px] font-[300] tracking-[0.1em] text-muted-foreground/60 t-body-family"
               >
                 v{currentVersion}
               </span>
               {showDot && (
                 <button
                   onClick={() => setDialogOpen(true)}
-                  className="flex items-center gap-1 text-[10px] font-[300] tracking-[0.08em] hover:opacity-80 transition-opacity"
-                  style={{ color: "#dc2626", fontFamily: "var(--font-serif)" }}
+                  className="flex items-center gap-1 text-[10px] font-[300] tracking-[0.08em] hover:opacity-80 transition-opacity t-body-family"
+                  style={{ color: "#dc2626" }}
                   title={`Update ${update.latestVersion} available`}
                 >
                   <span className="w-1 h-1 rounded-full" style={{ backgroundColor: "#dc2626" }} />
@@ -206,11 +204,10 @@ export function Sidebar() {
             title="Hover to open navigation"
           >
             <span
-              className="text-[10px] font-[300] uppercase tracking-[0.25em] text-muted-foreground group-hover:text-primary transition-colors select-none whitespace-nowrap"
+              className="text-[10px] font-[300] uppercase tracking-[0.25em] text-muted-foreground group-hover:text-primary transition-colors select-none whitespace-nowrap t-body-family"
               style={{
                 writingMode: "vertical-rl",
                 transform: "rotate(180deg)",
-                fontFamily: "var(--font-serif)",
               }}
             >
               Navigate

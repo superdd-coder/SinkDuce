@@ -127,7 +127,7 @@ export function ChatInput() {
               type="button"
               ref={buttonRef}
               onClick={() => setShowCollections(!showCollections)}
-              className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
+              className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
               style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "155px", color: showCollections ? "var(--color-primary-foreground)" : selectedCollections.length > 0 ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
             >
               <span className="relative z-10 whitespace-nowrap text-center">
@@ -181,7 +181,7 @@ export function ChatInput() {
           {/* Thinking toggle — AI-COMP-060 full-body green flow when ON */}
           <button
             type="button"
-            className={`flex items-center gap-1.5 cursor-pointer font-sans transition-all ${thinking ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
+            className={`flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${thinking ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
             style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: thinking ? "2px 7px" : "0", borderRadius: "2px" }}
             onClick={() => setThinking(!thinking)}
             title={thinking ? "Deep thinking ON — slower, more thorough" : "Deep thinking OFF — faster responses"}
@@ -199,7 +199,7 @@ export function ChatInput() {
                 type="button"
                 ref={providerButtonRef}
                 onClick={() => { setShowProviderMenu(!showProviderMenu); setHoveredProvider(null) }}
-                className="group relative flex items-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
+                className="group relative flex items-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
                 style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "160px", color: showProviderMenu ? "var(--color-primary-foreground)" : activeProvider ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
               >
                 <span className="relative z-10 whitespace-nowrap">
@@ -308,8 +308,8 @@ export function ChatInput() {
           <div className="relative flex-1">
             <textarea
               ref={textareaRef}
-              className="w-full resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[160px] outline-none bg-transparent leading-[1.7] focus:border-primary"
-              style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", color: "var(--ze-text)", borderRadius: 0 }}
+              className="w-full resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[160px] outline-none bg-transparent leading-[1.7] focus:border-primary t-body-italic-family"
+              style={{ color: "var(--ze-text)", borderRadius: 0 }}
               placeholder="Ask about your documents…"
               rows={1}
               value={input}
@@ -324,13 +324,11 @@ export function ChatInput() {
         {/* Disclaimer + Send row */}
         <div className="flex items-center justify-between gap-3 pt-1">
           <p
-            className="select-none text-left flex-1 min-w-0"
+            className="select-none text-left flex-1 min-w-0 t-body-italic-family"
             style={{
               fontSize: "10px",
               fontWeight: 400,
               color: "oklch(0.38 0.07 160 / 0.85)",
-              fontFamily: "var(--font-serif)",
-              fontStyle: "italic",
             }}
           >
             AI-generated answers may contain errors. Please verify critical information.
@@ -338,7 +336,7 @@ export function ChatInput() {
           {isStreaming ? (
             <button
               type="button"
-              className="shrink-0 flex items-center gap-1.5 cursor-pointer font-sans sk-stop-btn"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family sk-stop-btn"
               style={{
                 fontSize: "10px", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.12em",
@@ -352,7 +350,7 @@ export function ChatInput() {
           ) : (
             <button
               type="button"
-              className="shrink-0 flex items-center gap-1.5 cursor-pointer font-sans sk-send-btn"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family sk-send-btn"
               style={{
                 fontSize: "10px", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.12em",

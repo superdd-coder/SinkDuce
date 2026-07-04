@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { Loader2, ChevronRight, ChevronDown, RefreshCw } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
 import { getFilePreviewUrl, getDocSummary, setDocSummaryInclude, generateDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
@@ -58,9 +59,10 @@ interface FileDetailDialogProps {
   loading: boolean
   onOpenChange: (open: boolean) => void
   openKey?: number
+  highlightChunkIndex?: number
 }
 
-export function FileDetailDialog({ collection, source, displayName, fileType, originalExt, chunks, chunksTotal, loading, onOpenChange, openKey }: FileDetailDialogProps) {
+export function FileDetailDialog({ collection, source, displayName, fileType, originalExt, chunks, chunksTotal, loading, onOpenChange, openKey, highlightChunkIndex }: FileDetailDialogProps) {
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
@@ -71,6 +73,26 @@ export function FileDetailDialog({ collection, source, displayName, fileType, or
   const [activeTab, setActiveTab] = useState("source")
   const sourceContentRef = useRef<HTMLDivElement>(null)
   const sourceEditorRef = useRef<Editor | null>(null)
+
+  const [highlightedIdx, setHighlightedIdx] = useState<number | undefined>(undefined)
+
+  // Sync from prop
+  useEffect(() => {
+    setHighlightedIdx(highlightChunkIndex)
+  }, [highlightChunkIndex])
+
+  // Scroll to highlighted chunk when chunks load
+  useEffect(() => {
+    if (highlightedIdx == null || loading || chunks.length === 0) return
+    const timer = setTimeout(() => {
+      const el = document.querySelector(`[data-chunk-index="${highlightedIdx}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" })
+        setTimeout(() => setHighlightedIdx(undefined), 3000)
+      }
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [highlightedIdx, loading, chunks.length])
 
   const isPdf = source?.toLowerCase().endsWith(".pdf") || fileType === "pdf" || originalExt === "pdf"
 
@@ -274,8 +296,8 @@ export function FileDetailDialog({ collection, source, displayName, fileType, or
                 {goToLabel && (
                   <button
                     type="button"
-                    className="text-[10px] font-medium uppercase tracking-[0.1em] text-primary hover:opacity-80 transition-opacity cursor-pointer"
-                    style={{ background: "none", border: "none", fontFamily: "var(--font-sans)" }}
+                    className="text-[10px] font-medium uppercase tracking-[0.1em] text-primary hover:opacity-80 transition-opacity cursor-pointer t-sans-family"
+                    style={{ background: "none", border: "none" }}
                     onClick={handleGoToSource}
                   >
                     {goToLabel}
@@ -559,7 +581,13 @@ export function FileDetailDialog({ collection, source, displayName, fileType, or
                     chunks.map((chunk) => (
                       <div
                         key={chunk.id}
-                        className="border border-border rounded-lg p-3 cursor-pointer hover:bg-accent/50 transition-colors"
+                        data-chunk-index={chunk.chunk_index}
+                        className={cn(
+                          "border rounded-lg p-3 cursor-pointer hover:bg-accent/50 transition-all",
+                          highlightedIdx === chunk.chunk_index
+                            ? "border-primary ring-2 ring-primary/30 bg-primary/5"
+                            : "border-border",
+                        )}
                         onClick={() => handleLocate(chunk)}
                         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleLocate(chunk) }}
                         role="button"

@@ -214,15 +214,15 @@ export function InfoPanel({ collection }: InfoPanelProps) {
       <div className="flex items-end justify-between pb-5 border-b border-dashed border-border">
         <div className="flex gap-10">
           <div className="flex flex-col">
-            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{docCount}</span>
+            <span className="text-[28px] font-light leading-none text-foreground t-body-family">{docCount}</span>
             <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Documents</span>
           </div>
           <div className="flex flex-col">
-            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{meetings.length > 0 || meetingsLoading ? meetings.length : "—"}</span>
+            <span className="text-[28px] font-light leading-none text-foreground t-body-family">{meetings.length > 0 || meetingsLoading ? meetings.length : "—"}</span>
             <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Meetings</span>
           </div>
           <div className="flex flex-col">
-            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>
+            <span className="text-[28px] font-light leading-none text-foreground t-body-family">
               {notesCount > 0 ? `${ingestedNotesCount}/${notesCount}` : "—"}
             </span>
             <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">
@@ -230,7 +230,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
             </span>
           </div>
           <div className="flex flex-col">
-            <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{conflicts.length}</span>
+            <span className="text-[28px] font-light leading-none text-foreground t-body-family">{conflicts.length}</span>
             <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Conflicts</span>
           </div>
         </div>
@@ -243,7 +243,6 @@ export function InfoPanel({ collection }: InfoPanelProps) {
           style={{
             padding: "4px 10px",
             borderRadius: "2px",
-            fontFamily: "var(--font-sans)",
           }}
         >
           {consolidating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
@@ -259,8 +258,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
         </div>
       ) : projectDescription && (
         <div
-          className="text-sm leading-[1.8] pl-4 border-l italic text-foreground border-border"
-          style={{ fontFamily: "var(--font-serif)" }}
+          className="text-sm leading-[1.8] pl-4 border-l italic text-foreground border-border t-body-italic-family"
         >
           {projectDescription}
         </div>

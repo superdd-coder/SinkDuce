@@ -1329,11 +1329,11 @@ export async function listSessions(): Promise<SessionItem[]> {
   return r.json()
 }
 
-export async function createSession(title = "", collections?: string[]): Promise<SessionItem> {
+export async function createSession(title = "", collections?: string[], id?: string): Promise<SessionItem> {
   const r = await fetch(`${BASE}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, collections }),
+    body: JSON.stringify({ title, collections, id }),
   })
   if (!r.ok) throw new Error(await r.text())
   return r.json()

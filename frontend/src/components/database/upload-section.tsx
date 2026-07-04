@@ -97,13 +97,12 @@ export function UploadSection({ hasActiveTasks, tasks, allowedFileTypes, onUploa
               type="button"
               onClick={handleClearCompleted}
               disabled={!tasks.some((t) => t.status === "completed" || t.status === "failed")}
-              className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 text-muted-foreground"
+              className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 text-muted-foreground t-sans-family"
               style={{
                 background: "none",
                 border: "0.5px solid var(--color-border)",
                 padding: "3px 8px",
                 borderRadius: "2px",
-                fontFamily: "var(--font-sans)",
                 opacity: tasks.some((t) => t.status === "completed" || t.status === "failed") ? 1 : 0.3,
               }}
             >

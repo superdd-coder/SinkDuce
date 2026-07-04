@@ -99,7 +99,11 @@ class DirectQueryModule:
         _emit("retrieve_start", f"Searching {len(collections)} collection(s)",
               query=query[:200], collections=collections, top_k=top_k, search_mode=search_mode)
 
-        overrides = embedding_overrides or {}
+        if embedding_overrides is None:
+            from src.rag.collection_utils import get_embedding_overrides
+            overrides = get_embedding_overrides(collections)
+        else:
+            overrides = embedding_overrides
         _lock = threading.Lock()
 
         def _retrieve_one(col: str):

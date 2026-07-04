@@ -43,7 +43,7 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
 
         <div className="space-y-4 py-2">
           <p className="text-sm text-muted-foreground">
-            Type <span className="font-mono font-medium text-foreground">{collectionName}</span> to confirm deletion.
+            Type <span className="t-mono-family font-medium text-foreground">{collectionName}</span> to confirm deletion.
           </p>
           <Input
             value={confirmName}

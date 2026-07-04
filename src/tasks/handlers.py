@@ -256,6 +256,9 @@ def _build_enriched_text(chunk) -> str:
         # Use just the filename, not the full path
         filename = source.replace("\\", "/").rsplit("/", 1)[-1]
         parts.append(f"Source: {filename}")
+    meeting_date = chunk.metadata.get("meeting_date", "")
+    if meeting_date:
+        parts.append(f"Meeting Date: {meeting_date}")
     summary = chunk.metadata.get("summary", "")
     if summary:
         parts.append(f"Document: {summary}")
@@ -500,7 +503,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     return {"message": "Consolidation done", "conflicts_count": len(conflicts)}
 
 
-async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None, source_label: str | None = None, file_id: str | None = None) -> dict[str, Any]:
+async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None, source_label: str | None = None, file_id: str | None = None, meeting_date: str | None = None) -> dict[str, Any]:
     """处理文件上传任务 - 使用流水线队列控制并发"""
     from src.tasks.task_manager import set_current_task, clear_current_task, check_cancelled
 
@@ -614,6 +617,8 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 extra_meta["position_map"] = doc.position_map
             if meeting_id:
                 extra_meta["meeting_id"] = meeting_id
+            if meeting_date:
+                extra_meta["meeting_date"] = meeting_date
             if file_id:
                 extra_meta["file_id"] = file_id
             # Human-readable label for search results display

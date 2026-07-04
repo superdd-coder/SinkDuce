@@ -100,7 +100,7 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
               return (
                 <span
                   key={m}
-                  className={`text-[10px] px-1.5 py-0.5 rounded font-mono inline-flex items-center gap-0.5 ${
+                  className={`text-[10px] px-1.5 py-0.5 rounded t-mono-family inline-flex items-center gap-0.5 ${
                     m === provider.default_model
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted text-muted-foreground"

@@ -91,9 +91,8 @@ export function ChatView() {
           {/* Session title header — h-12 (48px) matches Collections/Sessions headers */}
           <div className="shrink-0 px-12 h-12 flex items-center border-b border-border/30">
             <h1
-              className="truncate"
+              className="truncate t-body-family"
               style={{
-                fontFamily: "var(--font-serif)",
                 fontSize: "clamp(20px, 2vw, 24px)",
                 fontWeight: 300,
                 letterSpacing: "-0.01em",
@@ -112,8 +111,8 @@ export function ChatView() {
                 style={{ color: "var(--ze-muted)" }}
               >
                 <p
-                  className="text-sm font-medium"
-                  style={{ color: "var(--ze-ink)", fontFamily: "var(--font-serif)" }}
+                  className="text-sm font-medium t-body-family"
+                  style={{ color: "var(--ze-ink)" }}
                 >
                   Ask a question about your documents
                 </p>

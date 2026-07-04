@@ -1176,7 +1176,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
       <DialogContent className="max-w-sm !gap-3">
         <DialogHeader className="!gap-1">
-          <DialogTitle className="text-sm font-light uppercase tracking-[0.15em]" style={{ fontFamily: "var(--font-serif)" }}>
+          <DialogTitle className="text-sm font-light uppercase tracking-[0.15em] t-body-family">
             Delete Note
           </DialogTitle>
         </DialogHeader>

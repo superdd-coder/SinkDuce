@@ -243,7 +243,14 @@ export const useAppStore = create<AppState>((set) => ({
   fetchCollections: async () => {
     try {
       const items = await getCollections()
-      set({ collections: items })
+      // Clean up stale selectedCollections (e.g. deleted collections)
+      const validIds = new Set(items.map((c: any) => c.id))
+      const current = loadPersisted<string[]>("selectedCollections", [])
+      const cleaned = current.filter((id) => validIds.has(id))
+      if (cleaned.length !== current.length) {
+        localStorage.setItem("rag_selectedCollections", JSON.stringify(cleaned))
+      }
+      set({ collections: items, selectedCollections: cleaned })
     } catch {
       // ignore
     }

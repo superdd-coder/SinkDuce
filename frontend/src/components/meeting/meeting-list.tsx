@@ -17,9 +17,8 @@ export function MeetingList({ meetings, activeMeeting, onSelect, onCreated, onDe
     <div className="w-64 border-r border-border flex flex-col shrink-0">
       <div className="flex items-center justify-between px-4 h-12 border-b border-border">
         <span
-          className="uppercase"
+          className="uppercase t-body-family"
           style={{
-            fontFamily: "var(--font-serif)",
             fontSize: "14px",
             fontWeight: 300,
             letterSpacing: "-0.015em",

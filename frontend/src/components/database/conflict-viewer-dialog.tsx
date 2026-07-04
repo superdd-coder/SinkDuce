@@ -85,7 +85,7 @@ function SourcePanel({ collection, source, content }: { collection: string; sour
               ) : previewContent !== null ? (
                 <ScrollArea className="h-[calc(100%-60px)]">
                   <CardContent className="px-4 pb-4">
-                    <pre className="text-sm leading-relaxed whitespace-pre-wrap font-sans">{previewContent}</pre>
+                    <pre className="text-sm leading-relaxed whitespace-pre-wrap t-sans-family">{previewContent}</pre>
                   </CardContent>
                 </ScrollArea>
               ) : (

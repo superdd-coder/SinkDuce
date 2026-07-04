@@ -81,7 +81,7 @@ def list_provider_types():
 
 
 # Top-level AppConfig fields that can be updated individually
-_TOP_LEVEL_FIELDS = {"visual_model_id"}
+_TOP_LEVEL_FIELDS = {"visual_model_id", "default_chat_model"}
 
 
 @router.put("/config")
@@ -390,6 +390,24 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
                 for j, other in enumerate(config.llm.providers):
                     if j != i:
                         other.is_default = False
+            # If visual_model_ids changed, clean up stale visual_model_id config
+            if "visual_model_ids" in update:
+                all_visual = {
+                    m
+                    for prov in config.llm.providers
+                    for m in (prov.visual_model_ids or [])
+                }
+                if config.visual_model_id and config.visual_model_id not in all_visual:
+                    config.visual_model_id = None
+            # If function_call_model_ids changed, clean up stale default_chat_model
+            if "function_call_model_ids" in update:
+                all_chat = {
+                    m
+                    for prov in config.llm.providers
+                    for m in (prov.function_call_model_ids or [])
+                }
+                if config.default_chat_model and config.default_chat_model not in all_chat:
+                    config.default_chat_model = None
             save_config(config)
             reload_config()
             await async_reload_services()
@@ -404,6 +422,13 @@ async def delete_llm_provider(provider_id: str):
     config.llm.providers = [p for p in config.llm.providers if p.id != provider_id]
     if len(config.llm.providers) == original_len:
         return {"error": f"Provider '{provider_id}' not found"}
+    # Clean up stale visual_model_id / default_chat_model
+    all_visual = {m for prov in config.llm.providers for m in (prov.visual_model_ids or [])}
+    if config.visual_model_id and config.visual_model_id not in all_visual:
+        config.visual_model_id = None
+    all_chat = {m for prov in config.llm.providers for m in (prov.function_call_model_ids or [])}
+    if config.default_chat_model and config.default_chat_model not in all_chat:
+        config.default_chat_model = None
     save_config(config)
     reload_config()
     return {"message": f"Provider '{provider_id}' deleted"}
@@ -1163,3 +1188,5 @@ def get_version():
         "version": _get_app_version(),
         "repo": "superdd-coder/sinkduce",
     }
+
+

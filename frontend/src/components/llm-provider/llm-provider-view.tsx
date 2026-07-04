@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Combobox } from "@/components/ui/combobox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw, Sparkles, MessageSquare } from "lucide-react"
+import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw, Sparkles, MessageSquare, ChevronRight } from "lucide-react"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { useAppStore } from "@/stores/app-store"
 import {
@@ -32,6 +32,20 @@ import type { LoadState } from "./local-model-card"
 import { ModelDownloadDialog } from "@/components/model-download-dialog"
 import { HotWordsManager } from "./hot-words-manager"
 import { OneShotDashscopeDialog } from "./oneshot-dashscope-dialog"
+import { OneShotOpenRouterDialog } from "./oneshot-openrouter-dialog"
+
+// OpenRouter transcription models suitable for long audio (file transcription)
+const OPENROUTER_TRANSCRIPTION_MODELS = [
+  { value: "openai/whisper-large-v3-turbo", label: "OpenAI: Whisper Large V3 Turbo" },
+  { value: "openai/whisper-large-v3", label: "OpenAI: Whisper Large V3" },
+  { value: "openai/whisper-1", label: "OpenAI: Whisper V1" },
+  { value: "openai/gpt-4o-transcribe", label: "OpenAI: GPT-4o Transcribe" },
+  { value: "openai/gpt-4o-mini-transcribe", label: "OpenAI: GPT-4o Mini Transcribe" },
+  { value: "google/chirp-3", label: "Google: Chirp 3" },
+  { value: "nvidia/parakeet-tdt-0.6b-v3", label: "NVIDIA: Parakeet TDT 0.6B V3" },
+  { value: "microsoft/mai-transcribe-1.5", label: "Microsoft: MAI Transcribe 1.5" },
+  { value: "mistralai/voxtral-mini-transcribe", label: "Mistral: Voxtral Mini Transcribe" },
+]
 
 // ── Generic provider card for embedding/rerank ──
 
@@ -261,7 +275,7 @@ function SimpleProviderDialog<T extends { id: string }>({
           {resolvedFields.map((f) => (
             <div key={f.key} className="space-y-1.5">
               <label className="text-sm font-light uppercase tracking-wider">{f.label}</label>
-              {f.key === "model" && modelFetchSection ? (
+              {f.key === "model" && modelFetchSection && !f.options?.length ? (
                 <>
                   <div className="flex gap-2">
                     <Combobox
@@ -450,6 +464,7 @@ export function LLMProviderView() {
 
   // OneShot Dashscope dialog
   const [oneshotDialogOpen, setOneshotDialogOpen] = useState(false)
+const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
   // Language hints config editor state for file transcription openai_compatible adapter
   const [fileTransLangHints, setFileTransLangHints] = useState<LanguageHintOption[]>([])
@@ -496,15 +511,16 @@ export function LLMProviderView() {
     { value: "devanagari", label: "Devanagari (Hindi/Marathi/Nepali)" },
   ]
 
-  const [ragTopK,setRagTopK]=useState("20");const [ragRerankTopK,setRagRerankTopK]=useState("5");const [ragMaxParallel,setRagMaxParallel]=useState("10");const [ragMaxIter,setRagMaxIter]=useState("8");const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState("0")
-  const [dirTopK,setDirTopK]=useState("20");const [dirRerankTopK,setDirRerankTopK]=useState("5");const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState("0")
+  const [ragTopK,setRagTopK]=useState("20");const [ragRerankTopK,setRagRerankTopK]=useState("5");const [ragMaxParallel,setRagMaxParallel]=useState("10");const [ragMaxIter,setRagMaxIter]=useState("8");const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState("25")
+  const [dirTopK,setDirTopK]=useState("20");const [dirRerankTopK,setDirRerankTopK]=useState("5");const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState("25")
   const [enrichMaxParallel,setEnrichMaxParallel]=useState("50");const [enrichModel,setEnrichModel]=useState("")
-  const [meetingModel,setMeetingModel]=useState("");const [meetingThinking,setMeetingThinking]=useState(false)
+  const [meetingModel,setMeetingModel]=useState("");const [meetingThinking,setMeetingThinking]=useState(true);const [meetingThinkingConfirmOpen,setMeetingThinkingConfirmOpen]=useState(false)
   const [showAdvanced,setShowAdvanced]=useState(false)
+  const [showModelConfig,setShowModelConfig]=useState(false)
   const enrichModelBtnRef=useRef<HTMLButtonElement>(null);const enrichModelMenuRef=useRef<HTMLDivElement>(null);const [showEnrichModelDropdown,setShowEnrichModelDropdown]=useState(false);const [enrichModelPos,setEnrichModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
   const meetingModelBtnRef=useRef<HTMLButtonElement>(null);const meetingModelMenuRef=useRef<HTMLDivElement>(null);const [showMeetingModelDropdown,setShowMeetingModelDropdown]=useState(false);const [meetingModelPos,setMeetingModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
-  const _saveRag=(mode?:string)=>updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:mode??ragSearchMode,min_score:parseFloat(ragMinScore)||0}).catch(()=>{})
-  const _saveDir=(mode?:string)=>updateConfig("direct_rag",{top_k:parseInt(dirTopK)||20,rerank_top_k:parseInt(dirRerankTopK)||5,use_reranker:dirRerankEnabled,default_search_mode:mode??dirSearchMode,min_score:parseFloat(dirMinScore)||0}).catch(()=>{})
+  const _saveRag=(mode?:string)=>updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:mode??ragSearchMode,min_score:(parseInt(ragMinScore)||0)/100}).catch(()=>{})
+  const _saveDir=(mode?:string)=>updateConfig("direct_rag",{top_k:parseInt(dirTopK)||20,rerank_top_k:parseInt(dirRerankTopK)||5,use_reranker:dirRerankEnabled,default_search_mode:mode??dirSearchMode,min_score:(parseInt(dirMinScore)||0)/100}).catch(()=>{})
   // MinerU cloud parsing settings
   const [mineruEnabled, setMineruEnabled] = useState(false)
   const [mineruToken, setMineruToken] = useState("")
@@ -785,6 +801,14 @@ export function LLMProviderView() {
         { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
       ]
     }
+    if (adapter === "openrouter") {
+      return [
+        ...fileTransFields,
+        { key: "base_url", label: "Base URL", placeholder: "https://openrouter.ai/api/v1" },
+        { key: "model", label: "Model", options: OPENROUTER_TRANSCRIPTION_MODELS },
+        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-or-v1-..." },
+      ]
+    }
     // Remote adapters: only api_key
     return [
       ...fileTransFields,
@@ -831,18 +855,23 @@ export function LLMProviderView() {
         <div className="flex items-center justify-between pb-6 mb-2 border-b border-dashed border-border">
           <div>
             <p className="text-[18px] font-[350] tracking-tight uppercase">QUICK SETUP</p>
-            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">Configure all providers with a single Dashscope API Key</p>
+            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">Quickly configure providers with a single API Key</p>
           </div>
-          <Button variant="outline" onClick={() => setOneshotDialogOpen(true)} className="font-light uppercase">
-            <Zap className="h-4 w-4 mr-2" />OneShot Dashscope
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setOneshotDialogOpen(true)} className="font-light uppercase">
+              <Zap className="h-4 w-4 mr-2" />Dashscope
+            </Button>
+            <Button variant="outline" onClick={() => setOpenrouterDialogOpen(true)} className="font-light uppercase">
+              <Zap className="h-4 w-4 mr-2" />OpenRouter
+            </Button>
+          </div>
         </div>
 
         {/* ── LLM Providers ── */}
         <section className="border-b border-border pb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-[18px] font-[350] tracking-tight uppercase">LANGUAGE MODELS</h2>
+              <h2 className="text-[18px] font-[350] tracking-tight uppercase">MODELS</h2>
             </div>
             <div className="flex gap-2">
               <Button variant="default" onClick={handleAdd} className="font-light uppercase">ADD</Button>
@@ -854,241 +883,149 @@ export function LLMProviderView() {
             ))}
           </div>
 
-          {/* ── Visual Model ── */}
+          {/* ── Model Configuration (collapsible sub-menu) ── */}
           <div className="pt-4 mt-4 border-t border-border/50">
-          <div className="flex items-center justify-between mb-4">
+          <button
+            onClick={() => setShowModelConfig(!showModelConfig)}
+            className="flex items-center justify-between w-full text-left"
+          >
             <div>
-              <h2 className="text-[18px] font-[350] tracking-tight uppercase">VISUAL MODEL</h2>
-              <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed mt-1">
-                Select a vision-capable model for image description (Visual Translate). Enable Visual support in LLM settings per model.
-              </p>
+              <h2 className="text-[14px] font-[350] tracking-tight uppercase">MORE</h2>
             </div>
-          </div>
-          {(() => {
-            const visualModels = providers.flatMap((p) =>
-              (p.visual_model_ids || []).map((m) => ({
-                model: m,
-                providerName: p.name || p.id,
-                providerId: p.id,
-              }))
-            )
-            if (visualModels.length === 0) {
-              return (
-                <div className="border border-dashed border-muted-foreground/30 rounded-lg p-6 text-center">
-                  <Sparkles className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
-                  <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
-                    No visual-capable models configured. Enable Visual support for models in the LLM settings above.
-                  </p>
-                </div>
-              )
-            }
-            return (
-              <div className="flex items-center gap-3">
-                <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
-                <div className="flex-1 max-w-md relative" ref={visualModelMenuRef}>
-                  <button
-                    type="button"
-                    ref={visualModelBtnRef}
-                    onClick={() => {
-                      const r = visualModelMenuRef.current?.getBoundingClientRect()
-                      if (r) setVisualModelPos({ top: r.bottom + 4, left: r.left, width: visualModelBtnRef.current?.getBoundingClientRect().width || r.width })
-                      setShowVisualModelDropdown(!showVisualModelDropdown)
-                    }}
-                    className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
-                    style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showVisualModelDropdown ? "var(--color-primary-foreground)" : visualModelId ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
-                  >
-                    <span className="relative z-10 whitespace-nowrap">
-                      {visualModelId ? visualModels.find(vm => vm.model === visualModelId)?.model || visualModelId : "NONE (DISABLED)"}
-                    </span>
-                    <span
-                      className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-                      style={{ transform: showVisualModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showVisualModelDropdown ? "right" : "left" }}
-                    />
-                  </button>
-                  <div
-                    className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${
-                      showVisualModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"
-                    }`}
-                    style={{ width: visualModelPos.width, top: visualModelPos.top, left: visualModelPos.left }}
-                  >
-                    {[{ value: "", label: "NONE (DISABLED)" }, ...visualModels.map(vm => ({ value: vm.model, label: `${vm.providerName} / ${vm.model}` }))].map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={async () => {
-                          setVisualModelId(opt.value)
-                          setShowVisualModelDropdown(false)
-                          try {
-                            await updateConfig("visual_model_id", { visual_model_id: opt.value || null })
-                            toast.success("Visual model updated")
-                          } catch {
-                            toast.error("Failed to update visual model")
-                          }
-                        }}
-                        className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
-                        style={{ background: "none", border: "none" }}
-                      >
-                        <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
-                          {visualModelId === opt.value || (!visualModelId && opt.value === "") ? (
-                            <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
-                          ) : (
-                            <span className="w-1.5 h-1.5 shrink-0" />
-                          )}
-                          {opt.label}
-                        </span>
-                        <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
-          </div>
+            <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform duration-300 ${showModelConfig ? "rotate-90" : ""}`} />
+          </button>
+          <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${showModelConfig ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
+            <div className="overflow-hidden">
 
-          {/* ── Chat Model ── */}
-          <div className="pt-4 mt-4 border-t border-border/50">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-[18px] font-[350] tracking-tight uppercase">CHAT MODEL</h2>
-              <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed mt-1">
-                Select the default model for Chat. Only providers with Supports Functions enabled are listed.
-              </p>
-            </div>
-          </div>
-          {(() => {
-            const chatModels = providers.flatMap((p) =>
-              (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
-                model: m,
-                providerName: p.name || p.id,
-                providerId: p.id,
-                isFunctionCall: ((p as any).function_call_model_ids || []).includes(m),
-              }))
-            ).filter((cm) => cm.isFunctionCall)
-            if (chatModels.length === 0) {
-              return (
-                <div className="border border-dashed border-muted-foreground/30 rounded-lg p-6 text-center">
-                  <MessageSquare className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
-                  <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
-                    No chat-capable models configured. Enable Supports Functions for an LLM provider above.
-                  </p>
-                </div>
-              )
-            }
-            return (
-              <div className="flex items-center gap-3">
-                <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
-                <div className="flex-1 max-w-md relative" ref={chatModelMenuRef}>
-                  <button
-                    type="button"
-                    ref={chatModelBtnRef}
-                    onClick={() => {
-                      const r = chatModelMenuRef.current?.getBoundingClientRect()
-                      if (r) setChatModelPos({ top: r.bottom + 4, left: r.left, width: chatModelBtnRef.current?.getBoundingClientRect().width || r.width })
-                      setShowChatModelDropdown(!showChatModelDropdown)
-                    }}
-                    className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
-                    style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showChatModelDropdown ? "var(--color-primary-foreground)" : chatModelId ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
-                  >
-                    <span className="relative z-10 whitespace-nowrap">
-                      {chatModelId ? chatModels.find(vm => vm.model === chatModelId)?.model || chatModelId : "NONE (AUTO)"}
-                    </span>
-                    <span
-                      className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-                      style={{ transform: showChatModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showChatModelDropdown ? "right" : "left" }}
-                    />
-                  </button>
-                  <div
-                    className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${
-                      showChatModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"
-                    }`}
-                    style={{ width: chatModelPos.width, top: chatModelPos.top, left: chatModelPos.left }}
-                  >
-                    {[{ value: "", label: "NONE (AUTO)" }, ...chatModels.map(vm => ({ value: vm.model, label: `${vm.providerName} / ${vm.model}` }))].map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={async () => {
-                          setChatModelId(opt.value)
-                          setShowChatModelDropdown(false)
-                          try {
-                            await updateConfig("default_chat_model", { default_chat_model: opt.value || null })
-                            toast.success("Chat model updated")
-                          } catch {
-                            toast.error("Failed to update chat model")
-                          }
-                        }}
-                        className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
-                        style={{ background: "none", border: "none" }}
-                      >
-                        <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
-                          {chatModelId === opt.value || (!chatModelId && opt.value === "") ? (
-                            <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
-                          ) : (
-                            <span className="w-1.5 h-1.5 shrink-0" />
-                          )}
-                          {opt.label}
-                        </span>
-                        <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
-          </div>
-        </section>
-
-        {/* ── Meeting Summary Model ── */}
-        <section className="border-b border-border pb-6">
-          <div className="pt-4">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-[18px] font-[350] tracking-tight uppercase">MEETING SUMMARY MODEL</h2>
-                <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed mt-1">
-                  LLM used for meeting blueprint, section tagging, and summary generation. Choose a stronger model for more stable results.
-                </p>
-              </div>
-            </div>
-            {(() => {
-              const meetingModels = providers.flatMap((p) =>
-                (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
-                  model: m,
-                  providerName: p.name || p.id,
-                  providerId: p.id,
-                }))
-              )
-              if (meetingModels.length === 0) {
+            {/* Visual Model */}
+            <div className="pt-4">
+              <h3 className="text-[12px] font-[350] uppercase tracking-tight mb-2">VISUAL MODEL</h3>
+              {(() => {
+                const visualModels = providers.flatMap((p) =>
+                  (p.visual_model_ids || []).map((m) => ({
+                    model: m,
+                    providerName: p.name || p.id,
+                    providerId: p.id,
+                  }))
+                )
+                if (visualModels.length === 0) {
+                  return (
+                    <div className="border border-dashed border-muted-foreground/30 rounded-lg p-4 text-center">
+                      <Sparkles className="h-6 w-6 mx-auto mb-1 text-muted-foreground/40" />
+                      <p className="font-normal text-[11px] text-muted-foreground/70">No visual-capable models configured.</p>
+                    </div>
+                  )
+                }
                 return (
-                  <div className="border border-dashed border-muted-foreground/30 rounded-lg p-6 text-center">
-                    <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
-                      No LLM providers configured. Add one above first.
-                    </p>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
+                    <div className="flex-1 max-w-md relative" ref={visualModelMenuRef}>
+                      <button type="button" ref={visualModelBtnRef} onClick={() => { const r = visualModelMenuRef.current?.getBoundingClientRect(); if (r) setVisualModelPos({ top: r.bottom + 4, left: r.left, width: visualModelBtnRef.current?.getBoundingClientRect().width || r.width }); setShowVisualModelDropdown(!showVisualModelDropdown) }} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showVisualModelDropdown ? "var(--color-primary-foreground)" : visualModelId ? "var(--color-primary)" : "var(--color-muted-foreground)" }}>
+                        <span className="relative z-10 whitespace-nowrap">{visualModelId ? visualModels.find(vm => vm.model === visualModelId)?.model || visualModelId : "NONE (DISABLED)"}</span>
+                        <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{ transform: showVisualModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showVisualModelDropdown ? "right" : "left" }} />
+                      </button>
+                      <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showVisualModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{ width: visualModelPos.width, top: visualModelPos.top, left: visualModelPos.left }}>
+                        {[{ value: "", label: "NONE (DISABLED)" }, ...visualModels.map(vm => ({ value: vm.model, label: `${vm.providerName} / ${vm.model}` }))].map((opt) => (
+                          <button key={opt.value} type="button" onClick={async () => { setVisualModelId(opt.value); setShowVisualModelDropdown(false); try { await updateConfig("visual_model_id", { visual_model_id: opt.value || null }); toast.success("Visual model updated") } catch { toast.error("Failed to update visual model") } }} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{ background: "none", border: "none" }}>
+                            <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
+                              {visualModelId === opt.value || (!visualModelId && opt.value === "") ? <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" /> : <span className="w-1.5 h-1.5 shrink-0" />}
+                              {opt.label}
+                            </span>
+                            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )
-              }
-              return (
-                <>
+              })()}
+            </div>
+
+            {/* Chat Model */}
+            <div className="pt-4 mt-3 border-t border-border/50">
+              <h3 className="text-[12px] font-[350] uppercase tracking-tight mb-2">CHAT MODEL</h3>
+              {(() => {
+                const chatModels = providers.flatMap((p) =>
+                  (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
+                    model: m,
+                    providerName: p.name || p.id,
+                    providerId: p.id,
+                    isFunctionCall: ((p as any).function_call_model_ids || []).includes(m),
+                  }))
+                ).filter((cm) => cm.isFunctionCall)
+                if (chatModels.length === 0) {
+                  return (
+                    <div className="border border-dashed border-muted-foreground/30 rounded-lg p-4 text-center">
+                      <MessageSquare className="h-6 w-6 mx-auto mb-1 text-muted-foreground/40" />
+                      <p className="font-normal text-[11px] text-muted-foreground/70">No chat-capable models configured.</p>
+                    </div>
+                  )
+                }
+                return (
                   <div className="flex items-center gap-3">
-                    <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
+                    <span className="text-[11px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
+                    <div className="flex-1 max-w-md relative" ref={chatModelMenuRef}>
+                      <button type="button" ref={chatModelBtnRef} onClick={() => { const r = chatModelMenuRef.current?.getBoundingClientRect(); if (r) setChatModelPos({ top: r.bottom + 4, left: r.left, width: chatModelBtnRef.current?.getBoundingClientRect().width || r.width }); setShowChatModelDropdown(!showChatModelDropdown) }} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showChatModelDropdown ? "var(--color-primary-foreground)" : chatModelId ? "var(--color-primary)" : "var(--color-muted-foreground)" }}>
+                        <span className="relative z-10 whitespace-nowrap">{chatModelId ? chatModels.find(vm => vm.model === chatModelId)?.model || chatModelId : "DEFAULT"}</span>
+                        <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{ transform: showChatModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showChatModelDropdown ? "right" : "left" }} />
+                      </button>
+                      <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showChatModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{ width: chatModelPos.width, top: chatModelPos.top, left: chatModelPos.left }}>
+                        {[{ value: "", label: "DEFAULT" }, ...chatModels.map(vm => ({ value: vm.model, label: `${vm.providerName} / ${vm.model}` }))].map((opt) => (
+                          <button key={opt.value} type="button" onClick={async () => { setChatModelId(opt.value); setShowChatModelDropdown(false); try { await updateConfig("default_chat_model", { default_chat_model: opt.value || null }); toast.success("Chat model updated") } catch { toast.error("Failed to update chat model") } }} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{ background: "none", border: "none" }}>
+                            <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
+                              {chatModelId === opt.value || (!chatModelId && opt.value === "") ? <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" /> : <span className="w-1.5 h-1.5 shrink-0" />}
+                              {opt.label}
+                            </span>
+                            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+
+            {/* Meeting Summary Model */}
+            <div className="pt-4 mt-3 border-t border-border/50 pb-2">
+              <h3 className="text-[12px] font-[350] uppercase tracking-tight mb-2">MEETING SUMMARY MODEL</h3>
+              {(() => {
+                const meetingModels = providers.flatMap((p) =>
+                  (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
+                    model: m,
+                    providerName: p.name || p.id,
+                    providerId: p.id,
+                  }))
+                )
+                if (meetingModels.length === 0) {
+                  return (
+                    <div className="border border-dashed border-muted-foreground/30 rounded-lg p-4 text-center">
+                      <p className="font-normal text-[11px] text-muted-foreground/70">No LLM providers configured.</p>
+                    </div>
+                  )
+                }
+                return (
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
                     <div className="flex-1 max-w-md relative" ref={meetingModelMenuRef}>
-                      <button type="button" ref={meetingModelBtnRef} onClick={()=>{const r=meetingModelMenuRef.current?.getBoundingClientRect();if(r)setMeetingModelPos({top:r.bottom+4,left:r.left,width:meetingModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowMeetingModelDropdown(!showMeetingModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showMeetingModelDropdown?"var(--color-primary-foreground)":meetingModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
-                        <span className="relative z-10 whitespace-nowrap">{meetingModel?(()=>{const [pid,mid]=meetingModel.split("|");const p=providers.find(x=>x.id===pid);return p?(p.name||p.id)+" / "+mid:meetingModel})():"Same as default LLM"}</span>
+                      <button type="button" ref={meetingModelBtnRef} onClick={()=>{const r=meetingModelMenuRef.current?.getBoundingClientRect();if(r)setMeetingModelPos({top:r.bottom+4,left:r.left,width:meetingModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowMeetingModelDropdown(!showMeetingModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showMeetingModelDropdown?"var(--color-primary-foreground)":meetingModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
+                        <span className="relative z-10 whitespace-nowrap">{meetingModel?(()=>{const [pid,mid]=meetingModel.split("|");const p=providers.find(x=>x.id===pid);return p?(p.name||p.id)+" / "+mid:meetingModel})():"DEFAULT"}</span>
                         <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{transform:showMeetingModelDropdown?"scaleX(1)":"scaleX(0)",transformOrigin:showMeetingModelDropdown?"right":"left"}}/>
                       </button>
                       <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showMeetingModelDropdown?"opacity-100 visible translate-y-0 pointer-events-auto":"opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{width:meetingModelPos.width,top:meetingModelPos.top,left:meetingModelPos.left}}>
-                        {[{value:"",label:"Same as default LLM",providerId:"",model:""},...meetingModels.map(m=>({value:`${m.providerId}|${m.model}`,label:`${m.providerName} / ${m.model}`,providerId:m.providerId,model:m.model}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setMeetingModel(opt.value);setShowMeetingModelDropdown(false);try{await updateConfig("enrichment",{meeting_model:opt.value,meeting_thinking:meetingThinking});toast.success("Meeting model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{meetingModel===opt.value||(!meetingModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
+                        {[{value:"",label:"DEFAULT",providerId:"",model:""},...meetingModels.map(m=>({value:`${m.providerId}|${m.model}`,label:`${m.providerName} / ${m.model}`,providerId:m.providerId,model:m.model}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setMeetingModel(opt.value);setShowMeetingModelDropdown(false);try{await updateConfig("enrichment",{meeting_model:opt.value,meeting_thinking:meetingThinking});toast.success("Meeting model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{meetingModel===opt.value||(!meetingModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
                       </div>
                     </div>
-                    {/* Thinking toggle — same style as chat toolbar */}
-                    <button type="button" onClick={async()=>{const v=!meetingThinking;setMeetingThinking(v);try{await updateConfig("enrichment",{meeting_model:meetingModel,meeting_thinking:v})}catch{toast.error("Failed to update")}}} className={`flex items-center gap-1.5 cursor-pointer font-sans transition-all ${meetingThinking?"sk-thinking-flow text-primary":"border-none bg-transparent text-muted-foreground hover:text-primary"}`} style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:meetingThinking?"2px 7px":"0",borderRadius:"2px"}} title={meetingThinking?"Deep thinking ON":"Deep thinking OFF"}>
+                    <button type="button" onClick={()=>{if(meetingThinking){setMeetingThinkingConfirmOpen(true)}else{setMeetingThinking(true);updateConfig("enrichment",{meeting_model:meetingModel,meeting_thinking:true}).catch(()=>{toast.error("Failed to update");setMeetingThinking(false)})}}} className={`flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${meetingThinking?"sk-thinking-flow text-primary":"border-none bg-transparent text-muted-foreground hover:text-primary"}`} style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:meetingThinking?"2px 7px":"0",borderRadius:"2px"}} title={meetingThinking?"Deep thinking ON":"Deep thinking OFF"}>
                       THINKING {meetingThinking?"ON":"OFF"}
                     </button>
                   </div>
-                </>
-              )
-            })()}
+                )
+              })()}
+            </div>
+
+            </div>
+          </div>
           </div>
         </section>
 
@@ -1286,7 +1223,7 @@ export function LLMProviderView() {
                         ref={mineruModelBtnRef}
                         onClick={() => { if (!mineruEnabled) return; updateMineruPositions(); setShowMineruLanguageDropdown(false); setShowMineruModelDropdown(!showMineruModelDropdown) }}
                         disabled={!mineruEnabled}
-                        className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+                        className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
                         style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showMineruModelDropdown ? "var(--color-primary-foreground)" : "var(--color-primary)" }}
                       >
                         <span className="relative z-10 whitespace-nowrap">
@@ -1335,7 +1272,7 @@ export function LLMProviderView() {
                         ref={mineruLangBtnRef}
                         onClick={() => { if (!mineruEnabled) return; updateMineruPositions(); setShowMineruModelDropdown(false); setShowMineruLanguageDropdown(!showMineruLanguageDropdown) }}
                         disabled={!mineruEnabled}
-                        className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+                        className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
                         style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showMineruLanguageDropdown ? "var(--color-primary-foreground)" : "var(--color-primary)" }}
                       >
                         <span className="relative z-10 whitespace-nowrap">
@@ -1422,17 +1359,30 @@ export function LLMProviderView() {
               <div className="flex items-center gap-3 mb-4">
                 <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
                 <div className="flex-1 max-w-md relative" ref={enrichModelMenuRef}>
-                  <button type="button" ref={enrichModelBtnRef} onClick={()=>{const r=enrichModelMenuRef.current?.getBoundingClientRect();if(r)setEnrichModelPos({top:r.bottom+4,left:r.left,width:enrichModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowEnrichModelDropdown(!showEnrichModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showEnrichModelDropdown?"var(--color-primary-foreground)":enrichModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
-                    <span className="relative z-10 whitespace-nowrap">{enrichModel?(()=>{const p=providers.find(x=>x.id===enrichModel);return p?p.name+" / "+p.model:enrichModel})():"Same as default LLM"}</span>
+                  <button type="button" ref={enrichModelBtnRef} onClick={()=>{const r=enrichModelMenuRef.current?.getBoundingClientRect();if(r)setEnrichModelPos({top:r.bottom+4,left:r.left,width:enrichModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowEnrichModelDropdown(!showEnrichModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showEnrichModelDropdown?"var(--color-primary-foreground)":enrichModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
+                    <span className="relative z-10 whitespace-nowrap">{enrichModel?(()=>{const p=providers.find(x=>x.id===enrichModel);return p?p.name+" / "+p.model:enrichModel})():"DEFAULT"}</span>
                     <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{transform:showEnrichModelDropdown?"scaleX(1)":"scaleX(0)",transformOrigin:showEnrichModelDropdown?"right":"left"}}/>
                   </button>
                   <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showEnrichModelDropdown?"opacity-100 visible translate-y-0 pointer-events-auto":"opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{width:enrichModelPos.width,top:enrichModelPos.top,left:enrichModelPos.left}}>
-                    {[{value:"",label:"Same as default LLM"},...providers.map(p=>({value:p.id,label:`${p.name} / ${p.model}`}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setEnrichModel(opt.value);setShowEnrichModelDropdown(false);try{await updateConfig("enrichment",{enrichment_model:opt.value,max_parallel_context:enrichMaxParallel,batch_poll_interval:30});toast.success("Enrichment model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{enrichModel===opt.value||(!enrichModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
+                    {[{value:"",label:"DEFAULT"},...providers.map(p=>({value:p.id,label:`${p.name} / ${p.model}`}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setEnrichModel(opt.value);setShowEnrichModelDropdown(false);try{await updateConfig("enrichment",{enrichment_model:opt.value,max_parallel_context:enrichMaxParallel,batch_poll_interval:30});toast.success("Enrichment model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{enrichModel===opt.value||(!enrichModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-4">
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={enrichMaxParallel} onChange={(e)=>setEnrichMaxParallel(e.target.value)} onBlur={()=>{const v=parseInt(enrichMaxParallel)||50;setEnrichMaxParallel(String(Math.max(1,Math.min(100,v))));updateConfig("enrichment",{max_parallel_context:v,batch_poll_interval:30,enrichment_model:enrichModel}).catch(()=>{})}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Parallel</label>
+                  <input
+                    type="text" inputMode="numeric"
+                    value={enrichMaxParallel}
+                    onChange={(e) => setEnrichMaxParallel(e.target.value)}
+                    onBlur={() => {
+                      const v = parseInt(enrichMaxParallel) || 50
+                      setEnrichMaxParallel(String(Math.max(1, Math.min(100, v))))
+                      updateConfig("enrichment", { max_parallel_context: v, batch_poll_interval: 30, enrichment_model: enrichModel }).catch(() => {})
+                    }}
+                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1441,14 +1391,51 @@ export function LLMProviderView() {
               <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">AGENTIC RAG DEFAULTS</h3>
               <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Applies to decompose, rewrite loop, and aggregate.</p>
               <div className="flex items-center gap-4 mb-3">
-                <button type="button" onClick={()=>{const m=ragSearchMode==="hybrid"?"dense":"hybrid";setRagSearchMode(m);_saveRag(m)}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:ragSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{ragSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${ragSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+                <button type="button" onClick={()=>{const m=ragSearchMode==="hybrid"?"dense":"hybrid";setRagSearchMode(m);_saveRag(m)}} className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:ragSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{ragSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${ragSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
               </div>
-              <div className="flex items-center gap-4">
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={ragTopK} onChange={(e)=>setRagTopK(e.target.value)} onBlur={()=>{const v=parseInt(ragTopK)||20;setRagTopK(String(Math.max(1,Math.min(100,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={ragRerankTopK} onChange={(e)=>setRagRerankTopK(e.target.value)} onBlur={()=>{const v=parseInt(ragRerankTopK)||5;setRagRerankTopK(String(Math.max(1,Math.min(50,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Parallel</label><input type="text" inputMode="numeric" value={ragMaxParallel} onChange={(e)=>setRagMaxParallel(e.target.value)} onBlur={()=>{const v=parseInt(ragMaxParallel)||10;setRagMaxParallel(String(Math.max(1,Math.min(32,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Iter</label><input type="text" inputMode="numeric" value={ragMaxIter} onChange={(e)=>setRagMaxIter(e.target.value)} onBlur={()=>{const v=parseInt(ragMaxIter)||8;setRagMaxIter(String(Math.max(1,Math.min(20,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                {ragSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score</label><input type="text" inputMode="numeric" value={ragMinScore} onChange={(e)=>setRagMinScore(e.target.value)} onBlur={()=>{const v=parseFloat(ragMinScore)||0;setRagMinScore(String(Math.max(0,Math.min(1,v))));_saveRag()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Top K</label>
+                  <input type="text" inputMode="numeric" value={ragTopK}
+                    onChange={(e) => setRagTopK(e.target.value)}
+                    onBlur={() => { const v = parseInt(ragTopK) || 20; setRagTopK(String(Math.max(1, Math.min(100, v)))); _saveRag() }}
+                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Rerank Top K</label>
+                  <input type="text" inputMode="numeric" value={ragRerankTopK}
+                    onChange={(e) => setRagRerankTopK(e.target.value)}
+                    onBlur={() => { const v = parseInt(ragRerankTopK) || 5; setRagRerankTopK(String(Math.max(1, Math.min(50, v)))); _saveRag() }}
+                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Parallel</label>
+                  <input type="text" inputMode="numeric" value={ragMaxParallel}
+                    onChange={(e) => setRagMaxParallel(e.target.value)}
+                    onBlur={() => { const v = parseInt(ragMaxParallel) || 10; setRagMaxParallel(String(Math.max(1, Math.min(32, v)))); _saveRag() }}
+                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Iter</label>
+                  <input type="text" inputMode="numeric" value={ragMaxIter}
+                    onChange={(e) => setRagMaxIter(e.target.value)}
+                    onBlur={() => { const v = parseInt(ragMaxIter) || 8; setRagMaxIter(String(Math.max(1, Math.min(20, v)))); _saveRag() }}
+                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                  />
+                </div>
+                {ragSearchMode === "dense" && (
+                  <div className="flex items-center gap-3">
+                    <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Min Score</label>
+                    <input type="text" inputMode="numeric" value={ragMinScore}
+                      onChange={(e) => setRagMinScore(e.target.value)}
+                      onBlur={() => { const v = parseInt(ragMinScore) || 25; setRagMinScore(String(Math.max(0, Math.min(100, v)))); _saveRag() }}
+                      className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1457,13 +1444,38 @@ export function LLMProviderView() {
               <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">DIRECT RAG DEFAULTS</h3>
               <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Used when Agentic mode is disabled. Direct retrieval with optional rerank.</p>
               <div className="flex items-center gap-4 mb-3">
-                <button type="button" onClick={()=>{const n=!dirRerankEnabled;setDirRerankEnabled(n);setDirTopK(n?"20":"10");updateConfig("direct_rag",{use_reranker:n}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirRerankEnabled?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirRerankEnabled?"RERANK ON":"RERANK OFF"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirRerankEnabled?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
-                <button type="button" onClick={()=>{const m=dirSearchMode==="hybrid"?"dense":"hybrid";setDirSearchMode(m);_saveDir(m)}} className="group relative flex items-center justify-center overflow-hidden rounded font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+                <button type="button" onClick={()=>{const n=!dirRerankEnabled;setDirRerankEnabled(n);setDirTopK(n?"20":"10");updateConfig("direct_rag",{use_reranker:n}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirRerankEnabled?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirRerankEnabled?"RERANK ON":"RERANK OFF"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirRerankEnabled?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
+                <button type="button" onClick={()=>{const m=dirSearchMode==="hybrid"?"dense":"hybrid";setDirSearchMode(m);_saveDir(m)}} className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
               </div>
-              <div className="flex items-center gap-4">
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Top K</label><input type="text" inputMode="numeric" value={dirTopK} onChange={(e)=>setDirTopK(e.target.value)} onBlur={()=>{const v=parseInt(dirTopK)||(dirRerankEnabled?20:10);setDirTopK(String(Math.max(1,Math.min(100,v))));_saveDir()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/>
-                {dirRerankEnabled&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Rerank Top K</label><input type="text" inputMode="numeric" value={dirRerankTopK} onChange={(e)=>setDirRerankTopK(e.target.value)} onBlur={()=>{const v=parseInt(dirRerankTopK)||5;setDirRerankTopK(String(Math.max(1,Math.min(50,v))));_saveDir()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
-                {dirSearchMode==="dense"&&(<><label className="text-[11px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Min Score</label><input type="text" inputMode="numeric" value={dirMinScore} onChange={(e)=>setDirMinScore(e.target.value)} onBlur={()=>{const v=parseFloat(dirMinScore)||0;setDirMinScore(String(Math.max(0,Math.min(1,v))));_saveDir()}} className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"/></>)}
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Top K</label>
+                  <input type="text" inputMode="numeric" value={dirTopK}
+                    onChange={(e) => setDirTopK(e.target.value)}
+                    onBlur={() => { const v = parseInt(dirTopK) || (dirRerankEnabled ? 20 : 10); setDirTopK(String(Math.max(1, Math.min(100, v)))); _saveDir() }}
+                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                  />
+                </div>
+                {dirRerankEnabled && (
+                  <div className="flex items-center gap-3">
+                    <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Rerank Top K</label>
+                    <input type="text" inputMode="numeric" value={dirRerankTopK}
+                      onChange={(e) => setDirRerankTopK(e.target.value)}
+                      onBlur={() => { const v = parseInt(dirRerankTopK) || 5; setDirRerankTopK(String(Math.max(1, Math.min(50, v)))); _saveDir() }}
+                      className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                    />
+                  </div>
+                )}
+                {dirSearchMode === "dense" && (
+                  <div className="flex items-center gap-3">
+                    <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Min Score</label>
+                    <input type="text" inputMode="numeric" value={dirMinScore}
+                      onChange={(e) => setDirMinScore(e.target.value)}
+                      onBlur={() => { const v = parseInt(dirMinScore) || 25; setDirMinScore(String(Math.max(0, Math.min(100, v)))); _saveDir() }}
+                      className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1493,9 +1505,6 @@ export function LLMProviderView() {
           </div>
         </div>
 
-        <div className="flex justify-end pt-4 pb-6">
-          <Button className="font-light uppercase" onClick={async()=>{try{await Promise.all([updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:ragSearchMode,min_score:parseFloat(ragMinScore)||0}),updateConfig("direct_rag",{top_k:parseInt(dirTopK)||20,rerank_top_k:parseInt(dirRerankTopK)||5,use_reranker:dirRerankEnabled,default_search_mode:dirSearchMode,min_score:parseFloat(dirMinScore)||0}),updateConfig("enrichment",{max_parallel_context:parseInt(enrichMaxParallel)||50,batch_poll_interval:30,enrichment_model:enrichModel}),updateConfig("mineru",{enabled:mineruEnabled,api_token:mineruToken,base_url:"https://mineru.net/api/v4",model_version:mineruModel,is_ocr:mineruOcr,enable_formula:mineruFormula,enable_table:mineruTable,language:mineruLanguage})]);toast.success("Settings saved")}catch{toast.error("Failed to save")}}}>Save Settings</Button>
-        </div>
 
         {/* ── Dialogs ── */}
         <AddProviderDialog open={dialogOpen} provider={editingProvider} onOpenChange={setDialogOpen} onSaved={handleSaved} />
@@ -1628,9 +1637,49 @@ export function LLMProviderView() {
           fetchRtTransProviders()
           getConfig().then((c) => {
             if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
+            if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
           }).catch(() => {})
         }}
       />
+
+      <OneShotOpenRouterDialog
+        open={openrouterDialogOpen}
+        onOpenChange={setOpenrouterDialogOpen}
+        onSaved={() => {
+          fetchProviders()
+          fetchEmbProviders()
+          fetchRerankProviders()
+          fetchFileTransProviders()
+          getConfig().then((c) => {
+            if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
+            if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
+          }).catch(() => {})
+        }}
+      />
+
+      <Dialog open={meetingThinkingConfirmOpen} onOpenChange={setMeetingThinkingConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Turn off deep thinking for meetings?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Disabling thinking will significantly reduce the accuracy of Section breakdown and section allocation. Blueprint extraction and content routing may also degrade.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setMeetingThinkingConfirmOpen(false)}>Keep thinking on</Button>
+            <Button variant="destructive" onClick={async () => {
+              setMeetingThinkingConfirmOpen(false)
+              setMeetingThinking(false)
+              try {
+                await updateConfig("enrichment", { meeting_model: meetingModel, meeting_thinking: false })
+              } catch {
+                toast.error("Failed to update")
+                setMeetingThinking(true)
+              }
+            }}>Turn off anyway</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

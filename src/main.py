@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     await task_manager.stop()
 
 
-app = FastAPI(title="SinkDuce", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="SinkDuce", version="1.0.0", lifespan=lifespan)
 
 # CORS for development
 app.add_middleware(
@@ -138,6 +138,23 @@ app.include_router(meeting_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(visual_router, prefix="/api")
 app.include_router(hot_words_router)
+
+
+# OpenRouter CORS proxy — registered directly on app so it's guaranteed
+# to match before the SPA catch-all below.
+@app.get("/api/proxy/openrouter-models")
+async def proxy_openrouter_models():
+    import httpx
+    from fastapi.responses import JSONResponse
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            llm_r = await http.get("https://openrouter.ai/api/v1/models")
+            emb_r = await http.get("https://openrouter.ai/api/v1/embeddings/models")
+        llm = llm_r.json().get("data", []) if llm_r.status_code == 200 else []
+        emb = emb_r.json().get("data", []) if emb_r.status_code == 200 else []
+        return {"llm": llm, "embedding": emb}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
 
 
 @app.get("/health")

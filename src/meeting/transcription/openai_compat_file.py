@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 import httpx
+from openai import OpenAI
 
 from src.config import TranscriptionProviderConfig
 from src.meeting.models import TranscriptSegment, TranscriptionResult
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @file_transcription_registry.register("openai_compatible", display_name="OpenAI-Compatible (Whisper)")
 class OpenAICompatFileTranscription(FileTranscriptionProvider):
-    """File transcription via OpenAI Whisper API: POST {base_url}/audio/transcriptions."""
+    """File transcription via OpenAI Whisper API using the OpenAI SDK."""
 
     SUPPORTED_LANGUAGE_HINTS = [
         {"code": "auto", "label": "Auto"},
@@ -31,8 +33,9 @@ class OpenAICompatFileTranscription(FileTranscriptionProvider):
     ]
 
     def __init__(self, config: TranscriptionProviderConfig):
-        self._base_url = (config.base_url or "https://api.openai.com/v1").strip().rstrip("/")
-        self._api_key = (config.api_key or "").strip()
+        base_url = (config.base_url or "https://api.openai.com/v1").strip().rstrip("/")
+        api_key = (config.api_key or "").strip()
+        self._client = OpenAI(base_url=base_url, api_key=api_key)
         self._model = (config.model or "whisper-1").strip()
 
     async def transcribe(
@@ -41,15 +44,13 @@ class OpenAICompatFileTranscription(FileTranscriptionProvider):
         language_hints: list[str] | None = None,
         hot_words: list | None = None,
     ) -> TranscriptionResult:
-        url = f"{self._base_url}/audio/transcriptions"
-
-        import tempfile
         local_path = file_path
         cleanup = False
 
+        # Download remote files to a temp file first
         if file_path.startswith(("http://", "https://")):
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.get(file_path)
+            async with httpx.AsyncClient(timeout=120) as http:
+                resp = await http.get(file_path)
                 resp.raise_for_status()
                 suffix = Path(file_path).suffix or ".wav"
                 tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
@@ -59,17 +60,10 @@ class OpenAICompatFileTranscription(FileTranscriptionProvider):
                 cleanup = True
 
         try:
-            file_data = await asyncio.to_thread(lambda: open(local_path, "rb").read())
-
-            suffix = Path(file_path).suffix or ".wav"
-            data_fields = {
-                "model": self._model,
-                "response_format": "verbose_json",
-            }
+            # Build optional parameters
+            extra: dict = {}
             if language_hints:
-                data_fields["language"] = language_hints[0]
-            # Whisper has no dedicated hot words API, but the prompt parameter
-            # can bias recognition toward specific vocabulary.
+                extra["language"] = language_hints[0]
             if hot_words:
                 words = []
                 for hw in hot_words:
@@ -77,34 +71,55 @@ class OpenAICompatFileTranscription(FileTranscriptionProvider):
                     if t:
                         words.append(t)
                 if words:
-                    data_fields["prompt"] = ", ".join(words)
-                    logger.info("Applying %d hot words via Whisper prompt parameter", len(words))
-            files = {"file": ("audio" + suffix, file_data, "application/octet-stream")}
+                    extra["prompt"] = ", ".join(words)
 
-            async with httpx.AsyncClient(timeout=300) as client:
-                headers = {}
-                if self._api_key:
-                    headers["Authorization"] = f"Bearer {self._api_key}"
-                resp = await client.post(url, data=data_fields, files=files, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
+            # Try OpenAI SDK (multipart) first; fall back to JSON with base64
+            # — OpenRouter and some proxies reject multipart/form-data.
+            result = None
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self._client.audio.transcriptions.create(
+                        model=self._model,
+                        file=open(local_path, "rb"),
+                        response_format="verbose_json",
+                        **extra,
+                    )
+                )
+            except Exception as e:
+                err_msg = str(e)
+                if "invalid content-type" in err_msg or "multipart" in err_msg:
+                    import base64
+                    from types import SimpleNamespace
+                    audio_bytes = Path(local_path).read_bytes()
+                    audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+                    json_body: dict = {"model": self._model, "file": audio_b64, "response_format": "verbose_json"}
+                    json_body.update(extra)
+                    base = str(self._client.base_url).rstrip("/")
+                    headers = {"Authorization": f"Bearer {self._client.api_key}", "Content-Type": "application/json"}
+                    async with httpx.AsyncClient(timeout=120) as _http:
+                        json_resp = await _http.post(f"{base}/audio/transcriptions", json=json_body, headers=headers)
+                        json_resp.raise_for_status()
+                        data = json_resp.json()
+                        result = SimpleNamespace(
+                            text=data.get("text", ""),
+                            segments=[SimpleNamespace(**s) for s in data.get("segments", [])],
+                            language=data.get("language"),
+                        )
+                else:
+                    raise
 
-            logger.info("Whisper response keys: %s, segments count: %d",
-                         list(data.keys()), len(data.get("segments", [])))
-
-            text = data.get("text", "")
             segments = []
-            for seg in data.get("segments", []):
+            for seg in getattr(result, "segments", []) or []:
                 segments.append(TranscriptSegment(
-                    start=seg.get("start", 0.0),
-                    end=seg.get("end", 0.0),
-                    text=seg.get("text", "").strip(),
+                    start=getattr(seg, "start", 0.0),
+                    end=getattr(seg, "end", 0.0),
+                    text=(getattr(seg, "text", "") or "").strip(),
                 ))
 
             return TranscriptionResult(
-                text=text,
+                text=getattr(result, "text", "") or "",
                 segments=segments,
-                language=data.get("language"),
+                language=getattr(result, "language", None),
             )
         finally:
             if cleanup and os.path.exists(local_path):

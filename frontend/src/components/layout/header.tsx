@@ -35,8 +35,8 @@ export function Header() {
         )}
       >
         <h1
-          className="text-[16px] font-light tracking-[0.18em] uppercase whitespace-nowrap"
-          style={{ fontFamily: "var(--font-serif)", color: "var(--ze-ink)" }}
+          className="text-[16px] font-light tracking-[0.18em] uppercase whitespace-nowrap t-body-family"
+          style={{ color: "var(--ze-ink)" }}
         >
           SINK
           <em
@@ -55,10 +55,9 @@ export function Header() {
       <div className="flex items-center gap-3.5 px-5 flex-1">
         <span
           className={cn(
-            "text-[12px] font-light uppercase tracking-[0.15em] text-muted-foreground transition-opacity duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+            "text-[12px] font-light uppercase tracking-[0.15em] text-muted-foreground transition-opacity duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] t-body-family",
             sidebarOpen ? "opacity-100" : "opacity-0"
           )}
-          style={{ fontFamily: "var(--font-serif)" }}
         >
           Spark. Sink. Educe.
         </span>

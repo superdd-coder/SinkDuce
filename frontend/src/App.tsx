@@ -16,7 +16,6 @@ export default function App() {
             fontSize: "10px",
             fontStyle: "italic",
             fontWeight: 300,
-            fontFamily: "var(--font-sans)",
             color: "var(--color-foreground)",
             boxShadow: "0 0 10px rgba(4,120,87,0.15), 0 0 25px rgba(4,120,87,0.05)",
           },

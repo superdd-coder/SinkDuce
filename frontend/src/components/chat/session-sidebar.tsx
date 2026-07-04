@@ -113,9 +113,8 @@ export function SessionSidebar() {
           header in chat-view. */}
       <div className="flex items-center border-b border-border/50 px-3 h-12">
         <span
-          className="uppercase"
+          className="uppercase t-body-family"
           style={{
-            fontFamily: "var(--font-serif)",
             fontSize: "14px",
             fontWeight: 300,
             letterSpacing: "-0.015em",
@@ -131,7 +130,7 @@ export function SessionSidebar() {
         <button
           type="button"
           onClick={handleNew}
-          className="w-full flex items-center justify-center gap-2 font-sans sk-send-btn"
+          className="w-full flex items-center justify-center gap-2 t-sans-family sk-send-btn"
           style={{
             fontSize: "10px",
             fontWeight: 600,

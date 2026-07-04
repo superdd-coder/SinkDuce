@@ -17,7 +17,8 @@ from src.meeting.transcription import dashscope_realtime  # noqa: F401
 from src.meeting.transcription import funasr_local  # noqa: F401
 from src.meeting.transcription import funasr_local_realtime  # noqa: F401
 from src.meeting.transcription import openai_compat_file  # noqa: F401
-from src.meeting.transcription import openai_compat_realtime  # noqa: F401
+from src.meeting.transcription import openrouter_file  # noqa: F401
+
 
 
 def create_file_transcription_provider(

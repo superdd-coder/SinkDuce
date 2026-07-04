@@ -193,11 +193,10 @@ export function NotesCard({ collection }: NotesCardProps) {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 text-muted-foreground"
+              className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 text-muted-foreground t-sans-family"
               style={{
                 background: "none", border: "0.5px solid var(--color-border)",
                 padding: "3px 8px", borderRadius: "2px",
-                fontFamily: "var(--font-sans)",
               }}
             >
               Import
@@ -205,10 +204,10 @@ export function NotesCard({ collection }: NotesCardProps) {
             <button
               type="button"
               onClick={handleCreate}
-              className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-85"
+              className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-85 t-sans-family"
               style={{
                 background: "var(--color-primary)", color: "white", border: "none",
-                padding: "4px 10px", borderRadius: "2px", fontFamily: "var(--font-sans)",
+                padding: "4px 10px", borderRadius: "2px",
               }}
             >
               + New Note
@@ -283,7 +282,7 @@ export function NotesCard({ collection }: NotesCardProps) {
       <Dialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null) }}>
         <DialogContent className="max-w-sm !gap-3">
           <DialogHeader className="!gap-1">
-            <DialogTitle className="text-sm font-light uppercase tracking-[0.15em]" style={{ fontFamily: "var(--font-serif)" }}>
+            <DialogTitle className="text-sm font-light uppercase tracking-[0.15em] t-body-family">
               Delete Note
             </DialogTitle>
           </DialogHeader>

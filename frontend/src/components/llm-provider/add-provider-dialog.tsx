@@ -243,7 +243,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                         "w-1.5 h-1.5 shrink-0 transition-all",
                         selected ? "bg-primary rotate-45" : "border border-muted-foreground/30 rotate-45",
                       )} />
-                      <span className="flex-1 truncate font-mono text-xs min-w-0">{model}</span>
+                      <span className="flex-1 truncate t-mono-family text-xs min-w-0">{model}</span>
                       {selected && (
                         <>
                           <button
@@ -316,7 +316,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                         "w-1.5 h-1.5 shrink-0 transition-all",
                         selected ? "bg-primary rotate-45" : "border border-muted-foreground/30 rotate-45",
                       )} />
-                      <span className="flex-1 truncate font-mono text-xs min-w-0">{model}</span>
+                      <span className="flex-1 truncate t-mono-family text-xs min-w-0">{model}</span>
                       <button
                         type="button"
                         className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap ${

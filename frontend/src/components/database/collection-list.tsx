@@ -22,9 +22,8 @@ export function CollectionList({ collections, activeCollection, onSelect, onCrea
         className="flex items-center justify-between px-4 h-12 border-b border-border"
       >
         <span
-          className="uppercase"
+          className="uppercase t-body-family"
           style={{
-            fontFamily: "var(--font-serif)",
             fontSize: "14px",
             fontWeight: 300,
             letterSpacing: "-0.015em",
@@ -36,8 +35,8 @@ export function CollectionList({ collections, activeCollection, onSelect, onCrea
         <button
           type="button"
           onClick={onCreate}
-          className="text-[10px] font-medium uppercase tracking-[0.1em] px-2 py-0.5 cursor-pointer transition-opacity hover:opacity-85 bg-primary text-primary-foreground border-none"
-          style={{ borderRadius: "2px", fontFamily: "var(--font-sans)" }}
+          className="text-[10px] font-medium uppercase tracking-[0.1em] px-2 py-0.5 cursor-pointer transition-opacity hover:opacity-85 bg-primary text-primary-foreground border-none t-sans-family"
+          style={{ borderRadius: "2px" }}
         >
           + New
         </button>

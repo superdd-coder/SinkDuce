@@ -120,18 +120,24 @@ class SessionStore:
 
     # ── session CRUD ───────────────────────────────────────────────
 
-    def create_session(self, title: str = "", collections: list[str] | None = None) -> Session:
-        sid = self._uid()
+    def create_session(self, title: str = "", collections: list[str] | None = None, session_id: str | None = None) -> Session:
+        sid = session_id or self._uid()
         now = self._now()
         title = title or "New Chat"
         cols_json = json.dumps(collections if collections is not None else [], ensure_ascii=False)
         with self._lock:
             conn = self._get_conn()
             conn.execute(
-                "INSERT INTO sessions (id, title, collections, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO sessions (id, title, collections, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (sid, title, cols_json, now, now),
             )
             conn.commit()
+            # If the session already existed (IGNORE'd), fetch the existing one
+            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+        if row:
+            logger.info("Created session %s" if not session_id else "Using session %s", sid)
+            return self._row_to_session(row)
+        # Should not happen, but safety fallback
         logger.info("Created session %s", sid)
         return Session(id=sid, title=title, collections=collections or [], created_at=now, updated_at=now)
 
@@ -226,3 +232,35 @@ class SessionStore:
                 (session_id, limit),
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
+
+    def count_messages(self, session_id: str) -> int:
+        """Count total messages in a session."""
+        with self._lock:
+            conn = self._get_conn()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return row[0] if row else 0
+
+    def trim_messages(self, session_id: str, keep_last: int) -> int:
+        """Delete oldest messages, keeping only the most recent *keep_last*. Returns number deleted."""
+        with self._lock:
+            conn = self._get_conn()
+            rows = conn.execute(
+                "SELECT id FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                (session_id, keep_last),
+            ).fetchall()
+            keep_ids = [r["id"] for r in rows]
+            if not keep_ids:
+                return 0
+            placeholders = ",".join("?" * len(keep_ids))
+            cur = conn.execute(
+                f"DELETE FROM messages WHERE session_id = ? AND id NOT IN ({placeholders})",
+                (session_id, *keep_ids),
+            )
+            conn.commit()
+            deleted = cur.rowcount
+        if deleted:
+            logger.info("Trimmed %d messages from session %s, kept %d", deleted, session_id, keep_last)
+        return deleted

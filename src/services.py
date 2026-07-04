@@ -30,11 +30,11 @@ def _preload_transcription_providers(config):
 
     # --- File transcription ---
     file_cfg = config.transcription.active_file_provider
-    if file_cfg is None:
-        file_cfg = config.transcription.get_local_file_provider()
-    if file_cfg.adapter.startswith("funasr_local"):
+    # Only auto-load local model when it is explicitly the active provider,
+    # not when there is no active provider at all.
+    if file_cfg and file_cfg.adapter.startswith("funasr_local"):
         if _is_builtin_model_downloaded(file_cfg.id):
-            if get_state(file_cfg.id) != "loaded":
+            if get_state(file_cfg.id) not in ("loaded", "loading"):
                 reload_provider(file_cfg.id, loading=True)
         else:
             logger.info("Built-in file transcription model not downloaded, deactivating")
@@ -42,7 +42,7 @@ def _preload_transcription_providers(config):
                 if p.id == file_cfg.id:
                     p.is_active = False
             save_config(config)
-    else:
+    elif not file_cfg or not file_cfg.adapter.startswith("funasr_local"):
         for key in list(_provider_cache_snapshot()):
             if key.startswith("file_trans:"):
                 cache_invalidate(key)
@@ -50,11 +50,9 @@ def _preload_transcription_providers(config):
 
     # --- Realtime transcription ---
     rt_cfg = config.transcription.active_realtime_provider
-    if rt_cfg is None:
-        rt_cfg = config.transcription.get_local_realtime_provider()
-    if rt_cfg.adapter.startswith("funasr_local"):
+    if rt_cfg and rt_cfg.adapter.startswith("funasr_local"):
         if _is_builtin_model_downloaded(rt_cfg.id):
-            if get_state(rt_cfg.id) != "loaded":
+            if get_state(rt_cfg.id) not in ("loaded", "loading"):
                 reload_provider(rt_cfg.id, loading=True)
         else:
             logger.info("Built-in realtime transcription model not downloaded, deactivating")
@@ -118,7 +116,7 @@ def reload_provider(model_id: str, *, loading: bool):
 def _reload_transcription_provider(model_id: str, loading: bool):
     """Handle load/unload for a single transcription provider."""
     from src.providers.cache import invalidate as cache_invalidate
-    from src.providers.load_state import set_state
+    from src.providers.load_state import set_state, get_state
     config = get_config()
 
     if model_id == "builtin-local-file":
@@ -133,6 +131,8 @@ def _reload_transcription_provider(model_id: str, loading: bool):
         return
 
     if loading:
+        if get_state(model_id) in ("loaded", "loading"):
+            return  # Already loaded or loading — avoid duplicate load
         if not _is_builtin_model_downloaded(model_id):
             logger.warning("Cannot load transcription provider: model not downloaded")
             return
@@ -358,6 +358,7 @@ def init_services():
                 session_store=services.session_store,
                 chat_llm=chat_llm,
                 agentic_service=services.agentic_query,
+                direct_module=services.direct_query,
             )
             logger.info("ChatboxAgent initialized with model=%s",
                         getattr(chat_llm, "_model", "unknown"))

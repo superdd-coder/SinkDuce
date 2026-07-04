@@ -82,7 +82,7 @@ export function LanguageHintsSelector({ selected, onChange, options }: Props) {
                     )}
                   </div>
                   <span className="flex-1">{label}</span>
-                  <span className="text-xs text-muted-foreground font-mono">{code}</span>
+                  <span className="text-xs text-muted-foreground t-mono-family">{code}</span>
                 </div>
               )
             })}

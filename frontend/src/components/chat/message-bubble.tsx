@@ -17,13 +17,13 @@ function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boo
         className="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 uppercase tracking-[0.1em] cursor-pointer hover:text-muted-foreground/70 transition-colors"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <Brain className="h-3 w-3 text-amber-500/60" />
+        <Brain className="h-3 w-3 text-[var(--ze-green)]" />
         Thinking{isStreaming ? "…" : ""}
       </button>
       {expanded && (
         <div
-          className="mt-1.5 pl-5 text-[11px] leading-relaxed border-l border-amber-500/20"
-          style={{ color: "oklch(0.45 0.08 80 / 0.6)", fontFamily: "var(--font-serif)", fontStyle: "italic" }}
+          className="mt-1.5 pl-5 text-[11px] leading-relaxed border-l border-[var(--ze-green)]/20 t-body-italic-family"
+          style={{ color: "oklch(0.38 0.07 160 / 0.65)" }}
         >
           {text}
         </div>
@@ -67,8 +67,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
           You
         </div>
         <div
-          className="max-w-[60%] text-sm leading-[1.7] pb-3 border-b text-right text-foreground border-border"
-          style={{ fontFamily: "var(--font-serif)" }}
+          className="max-w-[60%] text-sm leading-[1.7] pb-3 border-b text-right text-foreground border-border t-body-family"
         >
           <p>{message.content}</p>
         </div>
@@ -113,12 +112,11 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="31.4 31.4" className="opacity-25" />
             <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
           </svg>
-          <span className="font-light uppercase tracking-[0.12em]" style={{ fontFamily: "var(--font-serif)", fontStyle: "italic" }}>Educing…</span>
+          <span className="font-light uppercase tracking-[0.12em] t-body-italic-family">Educing…</span>
         </div>
       ) : message.content ? (
         <div
-          className="text-sm leading-[1.8] text-foreground"
-          style={{ fontFamily: "var(--font-serif)" }}
+          className="text-sm leading-[1.8] text-foreground t-body-family"
         >
           <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>

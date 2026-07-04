@@ -8,16 +8,24 @@ function getCollectionName(id: string) {
   return collections.find(c => c.id === id)?.name || id
 }
 
-interface ResultListProps {
-  results: RecallResult[]
+function resolveSource(source: string, filesMap: Record<string, string>): string {
+  if (filesMap[source]) return filesMap[source]
+  // Fallback: last segment of path
+  const last = source.split("/").pop()
+  return last || source
 }
 
-function ResultCard({ result, rank }: { result: RecallResult; rank: number }) {
+interface ResultListProps {
+  results: RecallResult[]
+  filesMap?: Record<string, string>
+}
+
+function ResultCard({ result, rank, filesMap }: { result: RecallResult; rank: number; filesMap: Record<string, string> }) {
   return (
     <div className="py-3">
       <div className="flex items-start gap-3">
         <div className="flex items-center gap-2 shrink-0">
-          <Badge variant="outline" className="text-xs font-mono">#{rank}</Badge>
+          <Badge variant="outline" className="text-xs t-mono-family">#{rank}</Badge>
           <Badge variant="secondary" className="text-xs">
             {(result.score * 100).toFixed(1)}%
           </Badge>
@@ -28,7 +36,7 @@ function ResultCard({ result, rank }: { result: RecallResult; rank: number }) {
               <Badge variant="outline" className="text-[10px]">{getCollectionName(result.collection)}</Badge>
             )}
             {result.source && (
-              <span className="text-xs text-muted-foreground truncate">{result.source}</span>
+              <span className="text-xs text-muted-foreground truncate">{resolveSource(result.source, filesMap)}</span>
             )}
             {result.chunk_type && result.chunk_type !== "normal" && (
               <Badge variant="secondary" className="text-[10px]">{result.chunk_type}</Badge>
@@ -48,7 +56,7 @@ function ResultCard({ result, rank }: { result: RecallResult; rank: number }) {
   )
 }
 
-function ChildCard({ child }: { child: RecallResult }) {
+function ChildCard({ child, filesMap }: { child: RecallResult; filesMap: Record<string, string> }) {
   return (
     <div className="ml-8 border-l-2 border-primary/20 pl-3">
       <div className="flex items-center gap-2 mb-1">
@@ -57,7 +65,7 @@ function ChildCard({ child }: { child: RecallResult }) {
           {(child.score * 100).toFixed(1)}%
         </Badge>
         {child.source && (
-          <span className="text-[10px] text-muted-foreground truncate">{child.source}</span>
+          <span className="text-[10px] text-muted-foreground truncate">{resolveSource(child.source, filesMap)}</span>
         )}
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap">
@@ -72,21 +80,22 @@ function ChildCard({ child }: { child: RecallResult }) {
   )
 }
 
-export function ResultList({ results }: ResultListProps) {
+export function ResultList({ results, filesMap }: ResultListProps) {
+  const map = filesMap || {}
   return (
     <div>
       {results.map((result, i) => (
         <div key={result.id || i}>
           {i > 0 && <Separator className="my-2" />}
           <div className="space-y-2">
-            <ResultCard result={result} rank={i + 1} />
+            <ResultCard result={result} rank={i + 1} filesMap={map} />
             {result.children && result.children.length > 0 && (
               <div className="space-y-2 py-1">
                 <div className="text-[10px] text-muted-foreground font-medium ml-8">
                   Matched child chunks ({result.children.length}):
                 </div>
                 {result.children.map((child, j) => (
-                  <ChildCard key={child.id || j} child={child} />
+                  <ChildCard key={child.id || j} child={child} filesMap={map} />
                 ))}
               </div>
             )}

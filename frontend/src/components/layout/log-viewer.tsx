@@ -95,7 +95,7 @@ export function LogViewer({ open, onClose }: { open: boolean; onClose: () => voi
       </div>
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden font-mono text-xs leading-relaxed p-2 space-y-0.5"
+        className="flex-1 overflow-y-auto overflow-x-hidden t-mono-family text-xs leading-relaxed p-2 space-y-0.5"
         onScroll={(e) => {
           const el = e.currentTarget
           setAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 40)

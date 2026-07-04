@@ -3,7 +3,7 @@ import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages, Check } from "lucide-react"
+import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages } from "lucide-react"
 import type { MeetingStatus, HotWordsLibrarySummary, LanguageHintOption } from "@/api/client"
 
 interface MediaBarProps {
@@ -159,7 +159,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
     return (
       <div className="flex items-center gap-3 py-3 px-0">
         <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
-        <span className="font-mono text-sm tabular-nums">{formatDuration(duration)}</span>
+        <span className="t-mono-family text-sm tabular-nums">{formatDuration(duration)}</span>
         <div className="flex-1 flex items-center gap-1">
           {Array.from({ length: 20 }).map((_, i) => (
             <div
@@ -397,27 +397,16 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                           key={code}
                           type="button"
                           onClick={() => {
-                            if (isSelected) {
-                              onChangeLanguageHints?.(languageHints.filter((c) => c !== code))
-                            } else {
-                              onChangeLanguageHints?.([...languageHints, code])
-                            }
+                            // Single-select: emit [code] when picking, [] when unselecting the current one
+                            onChangeLanguageHints?.(isSelected ? [] : [code])
+                            setLangOpen(false)
                           }}
                           className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
                         >
                           <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                            <span className={cn(
-                              "h-3.5 w-3.5 rounded border-2 flex items-center justify-center shrink-0 transition-colors",
-                              isSelected
-                                ? "bg-primary border-primary"
-                                : "border-muted-foreground/40"
-                            )}>
-                              {isSelected && (
-                                <Check className="h-2.5 w-2.5 text-primary-foreground" strokeWidth={4} />
-                              )}
-                            </span>
+                            <span className={`sk-diamond ${isSelected ? "on" : ""}`} aria-hidden />
                             <span className="flex-1 whitespace-normal break-words min-w-0 leading-snug">{label}</span>
-                            <span className="text-[9px] text-muted-foreground/60 shrink-0 ml-1 font-mono">{code}</span>
+                            <span className="text-[9px] text-muted-foreground/60 shrink-0 ml-1 t-mono-family">{code}</span>
                           </span>
                           <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
                         </button>

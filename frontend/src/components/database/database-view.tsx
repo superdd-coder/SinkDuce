@@ -15,6 +15,7 @@ import { CollectionConfig } from "./collection-config"
 import { InfoPanel } from "./info-panel"
 import { FileDetailDialog } from "./file-detail-dialog"
 import { UploadSection } from "./upload-section"
+import { QuickChat } from "./quick-chat"
 
 // Module-level: allows note-editor-dialog to trigger files refresh after ingestion
 let _refreshFilesCallback: (() => void) | null = null
@@ -43,6 +44,8 @@ export function DatabaseView() {
   const [allowedFileTypes, setAllowedFileTypes] = useState<string[]>([])
   const [coverage, setCoverage] = useState<string>("")
   const [generatingSummaries, setGeneratingSummaries] = useState<Set<string>>(new Set())
+  const [quickChatOpen, setQuickChatOpen] = useState(false)
+  const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | undefined>(undefined)
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -271,9 +274,8 @@ export function DatabaseView() {
             {/* Collection name header — AI-COMP-001 Heading LG */}
             <div className="flex items-baseline justify-between mb-5">
               <span
-                className="truncate"
+                className="truncate t-body-family"
                 style={{
-                  fontFamily: "var(--font-serif)",
                   fontSize: "24px",
                   fontWeight: 300,
                   letterSpacing: "-0.01em",
@@ -323,8 +325,7 @@ export function DatabaseView() {
               <TabsContent key={`files-${activeTab}`} value="files" className="flex-1 mt-2 overflow-hidden animate-tab-in">
                 <div className="h-full flex flex-col gap-4">
                   {coverage && (
-                    <div className="text-[11px] leading-relaxed px-3 py-2 border border-dashed border-border bg-muted/30"
-                         style={{ fontFamily: "var(--font-sans)" }}>
+                    <div className="text-[11px] leading-relaxed px-3 py-2 border border-dashed border-border bg-muted/30 t-sans-family">
                       <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground/70">Coverage · </span>
                       <span className="text-muted-foreground">{coverage}</span>
                     </div>
@@ -438,11 +439,28 @@ export function DatabaseView() {
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
             <div className="text-center">
-              <p className="text-sm" style={{ fontFamily: "var(--font-serif)" }}>Select a collection or create one</p>
+              <p className="text-sm t-body-family">Select a collection or create one</p>
             </div>
           </div>
         )}
       </div>
+
+      {/* Quick Chat — always mounted for floating button, sidebar shown on demand */}
+      {activeCollection && (
+        <QuickChat
+          collectionId={activeCollection}
+          collectionName={collections.find(c => c.id === activeCollection)?.name || activeCollection}
+          open={quickChatOpen}
+          onOpen={() => setQuickChatOpen(true)}
+          onClose={() => setQuickChatOpen(false)}
+          files={files}
+          onSourceClick={(source, chunkIndex) => {
+            setActiveTab("files")
+            setHighlightChunkIndex(chunkIndex)
+            openFileDetail(source)
+          }}
+        />
+      )}
 
       <CreateCollectionDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={fetchCollections} />
       <DeleteCollectionDialog
@@ -471,7 +489,8 @@ export function DatabaseView() {
         chunks={chunks}
         chunksTotal={chunksTotal}
         loading={chunksLoading}
-        onOpenChange={(v) => { if (!v) { setSelectedFile(null); fetchFiles() } }}
+        highlightChunkIndex={highlightChunkIndex}
+        onOpenChange={(v) => { if (!v) { setSelectedFile(null); setHighlightChunkIndex(undefined); fetchFiles() } }}
       />
 
       {/* File deletion confirmation */}

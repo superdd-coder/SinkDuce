@@ -53,8 +53,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
       <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col">
         <DialogHeader className="shrink-0">
           <DialogTitle
-            className="text-base font-light tracking-[0.15em] uppercase"
-            style={{ fontFamily: "var(--font-sans)" }}
+            className="text-base font-light tracking-[0.15em] uppercase t-sans-family"
           >
             Update Available
           </DialogTitle>
@@ -64,21 +63,19 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
           {/* Version summary */}
           <div className="flex items-baseline gap-2 text-sm">
             <span
-              className="text-[10px] uppercase tracking-[0.12em] font-light text-muted-foreground"
-              style={{ fontFamily: "var(--font-sans)" }}
+              className="text-[10px] uppercase tracking-[0.12em] font-light text-muted-foreground t-sans-family"
             >
               Current
             </span>
             <span
-              className="font-light text-muted-foreground text-[13px]"
-              style={{ fontFamily: "var(--font-sans)" }}
+              className="font-light text-muted-foreground text-[13px] t-sans-family"
             >
               {update.currentVersion}
             </span>
             <span className="text-muted-foreground/60 mx-1">→</span>
             <span
-              className="text-[13px] font-light"
-              style={{ fontFamily: "var(--font-sans)", color: "var(--ze-ink)" }}
+              className="text-[13px] font-light t-sans-family"
+              style={{ color: "var(--ze-ink)" }}
             >
               {update.latestVersion}
             </span>
@@ -91,8 +88,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
                 What&rsquo;s New
               </p>
               <div
-                className="text-[12px] leading-relaxed text-muted-foreground whitespace-pre-line border border-border/60 rounded-md p-2.5 max-h-32 overflow-y-auto"
-                style={{ fontFamily: "var(--font-sans)" }}
+                className="text-[12px] leading-relaxed text-muted-foreground whitespace-pre-line border border-border/60 rounded-md p-2.5 max-h-32 overflow-y-auto t-sans-family"
               >
                 {releaseNotes}
               </div>
@@ -109,8 +105,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
             </p>
             <div className="relative">
               <pre
-                className="text-[12px] p-2.5 pr-24 rounded-md border border-border/60 bg-muted/40 overflow-x-auto whitespace-pre-wrap break-all"
-                style={{ fontFamily: "var(--font-mono, monospace)" }}
+                className="text-[12px] p-2.5 pr-24 rounded-md border border-border/60 bg-muted/40 overflow-x-auto whitespace-pre-wrap break-all t-mono-family"
               >
                 {UPDATE_COMMAND}
               </pre>

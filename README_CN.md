@@ -44,14 +44,24 @@ docker compose up -d --build
 
 Docker 将使用最新代码重新构建镜像，同时完整保留您的 `data/` 目录（包含数据库、配置及历史记录）。
 
-### 推荐开箱即用配置 (阿里云百炼 DashScope)
+### 推荐开箱即用配置
 
-本项目对 [阿里云百炼 (DashScope)](https://bailian.console.aliyun.com/) 进行了深度优化。前往 **Settings** → **LLM Providers** → 点击 **OneShot Setting (DashScope API)** 并输入您的 API Key，系统将自动一键配置所有服务，并匹配最佳默认模型：
+项目提供两套 OneShot 一键配置方案：
+
+**阿里云百炼 (DashScope)**：前往 **Settings** → **LLM Providers** → **OneShot Setting (DashScope API)**，输入 API Key 自动配置全部服务：
 
 * **LLM**: `deepseek-v4-flash`
-* **Embedding**: `text-embedding-v4`
+* **Embedding**: `text-embedding-v4`（1024 维）
 * **Reranker**: `qwen3-rerank`
 * **Transcription**: `fun-asr` / `fun-asr-realtime`
+
+**OpenRouter**：前往 **Settings** → **LLM Providers** → **OneShot Setting (OpenRouter API)**，输入 API Key 后自动拉取模型列表并分类：
+
+* **LLM**: `deepseek/deepseek-v4-flash`
+* **Chat**（自动筛选支持工具调用的模型）: `deepseek/deepseek-v4-pro`
+* **Visual**（自动筛选视觉模型）: `xiaomi/mimo-v2.5`
+* **Embedding**: `qwen/qwen3-embedding-4b`（默认 1536 维）
+* **Reranker**: `cohere/rerank-v3.5`
 
 ## 🏗️ 三大核心支柱
 
@@ -62,8 +72,10 @@ Docker 将使用最新代码重新构建镜像，同时完整保留您的 `data/
 * **Full-Featured Markdown Workspace (Collection Notes)**: 创建明确绑定到特定业务上下文的结构化个人笔记。支持全功能所见即所得（WYSIWYG）编辑及 Markdown 语法（标题、表格、任务列表、代码块、图片和 YouTube 视频内嵌）。
 * **Intelligent Note Distillation (Drag-to-Distill)**: 直接将现有的旧笔记或文档拖入当前工作区，系统会自动将其核心洞察提取为高密度的引用块，无需手动重写即可无缝聚合零散灵感。
 * **AI Image Ingestion**: One click 触发 AI 生成精准的图像上下文文本描述，将视觉数据织入您的 Markdown 记忆网络中以供向量索引。支持图片粘贴、拖拽和带行内字幕的尺寸调整。
-* **音频转录与“三折页”流水线**: 支持上传录音或通过 WebSockets 录制实时会议/讲座。语音转文字（STT）可由内置的本地引擎或灵活的外部 API 端点处理。系统随后会生成结构化的三折页伪影：*Summary（语义合成摘要）*、*To-Do List/Action Items（清晰的行动项）* 以及 *Detail（深度信息提取，过滤口语杂音并保留核心意图）*。
+* **音频转录与多阶段智能管道**: 支持上传录音或通过 WebSockets 录制实时会议/讲座。语音转文字（STT）可由内置本地 FunASR 引擎或外部 API（DashScope、OpenRouter 等）处理。转写完成后自动运行多阶段分析：**Pass 1 — General Summary + Blueprint（章节结构发现）**，SSE 流式输出，动态构建章节骨架；**Pass 2 — Section Summary（逐章节深度总结）**，支持一键添加自定义 Section，仅需一个关键词即可智能生成该章节的描述与摘要；**Pass 3 — 合并产出**，最终生成 Summary、To-Do List 及 Detail 三折页产物。
 * **Hot Words**: 管理特定专业领域的自定义词汇库，以显著提高特定术语的语音转写准确率。
+* **Quick Chat Panel**: Collection 视图中通过悬浮菱形按钮呼出的侧边栏，使用 Direct RAG 快速问答。每个 Collection 独立会话，支持 SSE 流式输出与 thinking 过程展示。
+* **Multi-turn Agentic Chat**: 主 Chat 支持多轮对话，Agent 通过工具调用（Tool-calling）自主决策是否检索、检索哪些 Collection、以何种模式检索，将 Agentic RAG 的完整能力暴露在对话交互中。
 
 ### 📥 02. Sink: Anti-Hoarding Ingestion Pipeline
 
@@ -74,13 +86,14 @@ Docker 将使用最新代码重新构建镜像，同时完整保留您的 `data/
 * **Granular Document Parsing & Chunking**: 利用内置的本地解析引擎（支持 12 种格式解析器）或链接到强大的云端解析 API（如 *MinerU*）。支持基于标题、段落和最大 Token 配置的高级 **Parent-Child chunking**，同时保持完整的词边界。
 * **Context Enrichment Engine**: 开启后，LLM 将评估每个切分出的数据块，并为其注入缺失的全局上下文，从而缓解检索过程中的“分块孤立”效应。
 * **Auto-Summarization & Consolidation**: 每个文档都会获得一个结构化摘要。同时，集合会生成固化综述，并在文档间出现事实冲突时自动进行冲突检测与提示。
+* **Auto-Updating Collection Coverage**: 集合在每次文档入库后自动触发摘要固化与变化检测，对比新旧文档并更新集合级别的主题覆盖图（Coverage Map），确保检索上下文始终反映最新的知识边界。
 
 ### 🧠 03. Educe: High-Dimensional Contextual Reasoning
 
 **Educe** 实现了前沿的检索架构，将静态的数据转化为活跃的智能。
 
 * **Advanced Hybrid Retrieval**: 支持标准稠密向量相似度检索、关键词-语义混合查询（基于 Qdrant 的 BM25 + Dense），并结合先进的 **Reranking算法** 来锁定顶级上下文。
-* **Iterative Agentic RAG Pipeline**: 远超传统朴素的单次语义检索。Sinkduce 编排了一个多步骤的 Agentic RAG 循环：*Analyze → Route → Retrieve → Grade → Decompose → Rerank → Synthesize*，直到精准锁定底层事实。
+* **Agentic RAG Pipeline**: 复杂查询 → 拆解为原子子查询 → 并行路由至多个 Collection → 各自执行 Variant（Rewrite + Grade loop）→ 聚合合成。全程事件流可观测（`decompose → variant_generation → scoring → synthesize_merge`），每阶段结果可追溯。
 * **Multi-Collection Federated Search**: Context-Isolated 架构并不会限制高维度的知识合成。用户可以设计同时跨越多个明确集合的联合查询，系统将触发相互隔离的多路检索流水线，并通过顶层推理协调跨领域碎片。
 * **Absolute Source Traceability (3-Layer Traceability)**: 允许直接穿透至原始文本，建立对 AI 回答的铁证信任。您可以立即向下钻取三层源头脉络：特定 *Vector Chunk*、*Full-Text Context* 或 *Original Source File*。
 * **Recall Evaluation**: 内置基准测试功能，可通过可调参数评估检索的召回率（Recall）和精确度（Precision）。
@@ -149,7 +162,7 @@ JSON
 
 ### Backend & Frontend Stack
 
-Python 3.11+, FastAPI, React 19, Vite, TypeScript, Tailwind CSS, Qdrant, FunASR, Zustand, Shadcn UI.
+Python 3.11+, FastAPI, React 19, Vite, TypeScript, Tailwind CSS, Qdrant, FunASR, Zustand, Shadcn UI, SSE Streaming, Session-based Chat, Tool-calling LLM Agent.
 
 ### Directory Layout
 

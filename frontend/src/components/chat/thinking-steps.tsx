@@ -18,14 +18,25 @@ interface ThinkingStepsProps {
 
 // ── Icons ──
 
-function AqIcon({ aq }: { aq: AqSummary }) {
-  if (aq.has_gaps === false) return <Check className="h-3 w-3 shrink-0 text-emerald-500" />
-  return <span className="text-[10px] shrink-0 text-amber-500">⚠</span>
+function AqIcon({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
+  // In-progress: still searching and no final chunks yet
+  const isSearching =
+    isStreaming && (aq.final_chunks ?? 0) === 0 && aq.has_gaps !== false
+  // Complete: retrieval sufficient, no gaps
+  if (aq.has_gaps === false) {
+    return <span className="sk-diamond on shrink-0" aria-hidden />
+  }
+  // Searching: breathing empty diamond
+  if (isSearching) {
+    return <span className="sk-diamond breathing shrink-0" aria-hidden />
+  }
+  // Gaps remain after retrieval: empty diamond
+  return <span className="sk-diamond shrink-0" aria-hidden />
 }
 
 // ── AQ row ──
 
-function AqRow({ aq }: { aq: AqSummary }) {
+function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const variants = aq.variants ?? []
   const totalQueries = 1 + (aq.variant_count ?? 0)
@@ -42,7 +53,9 @@ function AqRow({ aq }: { aq: AqSummary }) {
         ) : (
           <span className="w-2.5 shrink-0" />
         )}
-        <AqIcon aq={aq} />
+        <span className="inline-flex items-center mt-1.5">
+          <AqIcon aq={aq} isStreaming={isStreaming} />
+        </span>
         <span className="text-muted-foreground truncate">{aq.query}</span>
         <span className="text-muted-foreground/50 shrink-0">
           {(aq.final_chunks ?? 0) > 0 ? (
@@ -84,7 +97,7 @@ function AqRow({ aq }: { aq: AqSummary }) {
 
 // ── Task group ──
 
-function TaskGroup({ task }: { task: TaskSummary }) {
+function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(true)
 
   return (
@@ -113,7 +126,7 @@ function TaskGroup({ task }: { task: TaskSummary }) {
             </div>
           )}
           {(task.aqs ?? []).map((aq) => (
-            <AqRow key={aq.aq_id} aq={aq} />
+            <AqRow key={aq.aq_id} aq={aq} isStreaming={isStreaming} />
           ))}
         </div>
       )}
@@ -132,7 +145,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
       <div className="mt-5 pt-3.5 border-t border-dashed border-border">
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 italic">
           <Loader2 className="h-3 w-3 animate-spin text-primary" />
-          <Sparkles className="h-3 w-3 text-amber-500/60" />
+          <Sparkles className="h-3 w-3 text-[var(--ze-green)]" />
           Agentic RAG — searching…
         </div>
       </div>
@@ -168,7 +181,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
             <ChevronRight className="h-3 w-3 text-muted-foreground" />
           )}
           <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80">
-            <Sparkles className="h-3 w-3 inline mr-1 text-amber-500/60" />
+            <Sparkles className="h-3 w-3 inline mr-1 text-[var(--ze-green)]" />
             Agentic RAG · {summary.task_count} task{summary.task_count > 1 ? "s" : ""}, {summary.aq_count} AQ{summary.aq_count > 1 ? "s" : ""}
           </span>
         </button>
@@ -184,7 +197,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
         {topExpanded && (
           <div className="space-y-1">
             {(summary.tasks ?? []).map((task, i) => (
-              <TaskGroup key={i} task={task} />
+              <TaskGroup key={i} task={task} isStreaming={isStreaming} />
             ))}
 
             {/* Generating indicator */}
@@ -206,7 +219,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
       <div className="mt-5 pt-3.5 border-t border-dashed border-border">
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60">
           <Check className="h-3 w-3 text-emerald-500" />
-          <Sparkles className="h-3 w-3 text-amber-500/60" />
+          <Sparkles className="h-3 w-3 text-[var(--ze-green)]" />
           Agentic RAG — {summary.aq_count > 0 ? `${summary.aq_count} AQ${summary.aq_count > 1 ? "s" : ""} searched` : "search completed"}
         </div>
       </div>

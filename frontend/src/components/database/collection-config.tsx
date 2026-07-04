@@ -86,7 +86,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           setEmbeddingProviders(providers)
         } catch { /* ignore */ }
 
-        setEmbeddingDimensions(String(cfg.dimensions ?? "1024"))
+        setEmbeddingDimensions(String(cfg.dimensions ?? "1536"))
         setChunkMode(String(cfg.chunk_mode ?? "normal"))
         setChunkSize(String(cfg.chunk_size ?? ""))
         setChunkOverlap(String(cfg.chunk_overlap ?? ""))

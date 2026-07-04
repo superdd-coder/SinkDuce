@@ -25,6 +25,7 @@ const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotDashscopeDialogProps) {
   const [apiKey, setApiKey] = useState("")
   const [llmModel, setLlmModel] = useState("deepseek-v4-flash")
+  const [chatModel, setChatModel] = useState("deepseek-v4-flash")
   const [visualModel, setVisualModel] = useState("qwen3.5-flash")
   const [embModel, setEmbModel] = useState("text-embedding-v4")
   const [rerankerModel, setRerankerModel] = useState("qwen3-rerank")
@@ -49,16 +50,25 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
         getRealtimeTranscriptionProviders(),
       ])
 
-      await Promise.all([
-        ...llmList.filter((p) => p.is_default).map((p) => updateLLMProvider(p.id, { ...p, is_default: false })),
-        ...embList.filter((p) => p.is_default).map((p) => updateEmbeddingProvider(p.id, { ...p, is_default: false })),
-        ...rerankList.filter((p) => p.is_default).map((p) => updateRerankProvider(p.id, { ...p, is_default: false })),
-        ...fileTransList.filter((p) => p.is_active).map((p) => updateFileTranscriptionProvider(p.id, { ...p, is_active: false })),
-        ...rtTransList.filter((p) => p.is_active).map((p) => updateRealtimeTranscriptionProvider(p.id, { ...p, is_active: false })),
-      ])
+      // Unset defaults one by one (avoid concurrent async_reload_services races)
+      for (const p of llmList.filter((p) => p.is_default)) {
+        await updateLLMProvider(p.id, { ...p, is_default: false })
+      }
+      for (const p of embList.filter((p) => p.is_default)) {
+        await updateEmbeddingProvider(p.id, { ...p, is_default: false })
+      }
+      for (const p of rerankList.filter((p) => p.is_default)) {
+        await updateRerankProvider(p.id, { ...p, is_default: false })
+      }
+      for (const p of fileTransList.filter((p) => p.is_active)) {
+        await updateFileTranscriptionProvider(p.id, { ...p, is_active: false })
+      }
+      for (const p of rtTransList.filter((p) => p.is_active)) {
+        await updateRealtimeTranscriptionProvider(p.id, { ...p, is_active: false })
+      }
 
-      // Build selected_models: both text and visual models (deduplicate if same)
-      const selectedModels = [...new Set([llmModel.trim(), visualModel.trim()].filter(Boolean))]
+      // Build selected_models: all models (deduplicate)
+      const selectedModels = [...new Set([llmModel.trim(), chatModel.trim(), visualModel.trim()].filter(Boolean))]
       const visualModelIds = visualModel.trim() ? [visualModel.trim()] : []
 
       // Create new providers with default/active set
@@ -73,6 +83,7 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           selected_models: selectedModels,
           default_model: llmModel.trim(),
           visual_model_ids: visualModelIds,
+          function_call_model_ids: [chatModel.trim()],
         }),
         createEmbeddingProvider({
           name: "Dashscope",
@@ -80,7 +91,7 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           model: embModel.trim(),
           base_url: DASHSCOPE_BASE_URL,
           api_key: apiKey.trim(),
-          dimensions: 0,
+          dimensions: 1536,
           batch_size: 10,
           is_default: true,
         }),
@@ -106,7 +117,8 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           is_active: true,
         }),
       ])
-      // Set the global visual model to the configured visual model
+      // Set global model configs
+      await updateConfig("default_chat_model", { default_chat_model: chatModel.trim() })
       if (visualModel.trim()) {
         await updateConfig("visual_model_id", { visual_model_id: visualModel.trim() })
       }
@@ -156,14 +168,15 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           {/* LLM Model */}
           <div className="space-y-1.5">
             <label className="text-sm font-medium">LLM Model</label>
-            <Input
-              value={llmModel}
-              onChange={(e) => setLlmModel(e.target.value)}
-              placeholder="deepseek-v4-flash"
-            />
-            <p className="text-xs text-muted-foreground">
-              Base URL: {DASHSCOPE_BASE_URL}
-            </p>
+            <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="deepseek-v4-flash" />
+            <p className="text-xs text-muted-foreground">Base URL: {DASHSCOPE_BASE_URL}</p>
+          </div>
+
+          {/* Chat Model */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Chat Model</label>
+            <Input value={chatModel} onChange={(e) => setChatModel(e.target.value)} placeholder="deepseek-v4-flash" />
+            <p className="text-xs text-muted-foreground">Model used for Chat function calling. Must support Functions.</p>
           </div>
 
           {/* Visual Model */}

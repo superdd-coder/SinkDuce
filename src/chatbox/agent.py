@@ -12,6 +12,7 @@ import logging
 import queue as sync_queue
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import AsyncGenerator
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,39 @@ TOOLS = [
     }
 ]
 
+LOOKUP_TOOL = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_collection",
+            "description": (
+                "Search the current collection for relevant document chunks. "
+                "Use this to find specific information before answering.\n\n"
+                "RULES:\n"
+                "1. For questions about the collection's content — call this tool FIRST.\n"
+                "2. For chitchat and common knowledge — answer directly.\n"
+                "3. Write a focused search query describing what you need to find.\n"
+                "4. You may make MULTIPLE calls in a conversation for follow-up questions.\n"
+                "5. Base your answers on the retrieved chunks — cite specific details."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "WHAT to search for in the collection. Write a natural "
+                            "phrase describing the information you need. Be specific "
+                            "about entities, topics, or aspects to look up."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    }
+]
+
 # ═══════════════════════════════════════════════════════════════════
 # Default system prompt
 # ═══════════════════════════════════════════════════════════════════
@@ -127,6 +161,25 @@ Formatting:
 - Use standard alignment: :--- (left), :---: (center), ---: (right). Never use ::--
 - Keep tables simple. Prefer lists over tables when comparing only 2-3 items."""
 
+QUICK_CHAT_SYSTEM_PROMPT = """You are a quick Q&A assistant for the document collection "%(collection_name)s". You can use the lookup_collection tool to search this collection for relevant information.
+
+YOUR ROLE:
+- Answer questions about the collection's content concisely and accurately.
+- Use lookup_collection to find relevant document chunks before answering factual questions.
+- For chitchat and common knowledge, answer directly without the tool.
+
+RULES:
+- Base all factual answers on retrieved chunks — do NOT fabricate information.
+- Cite specific data points (numbers, names, dates) when they appear in the retrieved content.
+- If the collection does not contain relevant information, say so clearly.
+- Keep answers focused and concise — this is a quick Q&A, not a deep research session.
+- You may call lookup_collection multiple times during a conversation to follow up on details.
+
+Formatting:
+- Use Markdown for readability (headers, lists, bold/italic).
+- When using markdown tables, put each row on its own line with proper newlines.
+- Keep tables simple. Prefer lists over tables when comparing only 2-3 items."""
+
 # ═══════════════════════════════════════════════════════════════════
 # Response types
 # ═══════════════════════════════════════════════════════════════════
@@ -139,11 +192,34 @@ class ChatResponse:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════
+
+def _format_current_time() -> str:
+    """Return current local time with timezone, e.g. '2026-07-03 14:30 CST (UTC+08:00)'."""
+    now = datetime.now().astimezone()
+    offset = now.utcoffset()
+    if offset is not None:
+        total_seconds = int(offset.total_seconds())
+        sign = "+" if total_seconds >= 0 else "-"
+        hours, minutes = divmod(abs(total_seconds), 3600)
+        minutes //= 60
+        tz_str = f"UTC{sign}{hours:02d}:{minutes:02d}"
+    else:
+        tz_str = "UTC"
+    tz_name = now.strftime("%Z") or tz_str
+    return f"{now.strftime('%Y-%m-%d %H:%M')} {tz_name} ({tz_str})"
+
+
+# ═══════════════════════════════════════════════════════════════════
 # ChatboxAgent
 # ═══════════════════════════════════════════════════════════════════
 
 _MAX_TOOL_ROUNDS = 5
 _MAX_HISTORY_MESSAGES = 50
+_QUICK_MAX_MESSAGES = 30
+_QUICK_WARN_THRESHOLD = 20
+_QUICK_TRIM_KEEP = 5
 _TOTAL_MAX_TOKENS = 128000  # generous ceiling
 
 
@@ -151,7 +227,10 @@ class ChatboxAgent:
     """Chat agent with conversation memory and RAG tool access.
 
     Uses function calling to decide when to search the knowledge base.
-    Tool-use internals (rewrite/grading loops) are NOT exposed to the user.
+    Supports two modes:
+      - "agentic" (default): search_knowledge_base tool → AgenticQueryService
+      - "direct": lookup_collection tool → DirectQueryModule (lightweight,
+        collection-scoped Q&A; no decompose/fan-out/synthesize)
     """
 
     def __init__(
@@ -159,14 +238,46 @@ class ChatboxAgent:
         session_store,
         chat_llm,
         agentic_service,
+        direct_module=None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     ):
         self._store = session_store
         self._llm = chat_llm
         self._agentic = agentic_service
+        self._direct = direct_module
         self._system_prompt = system_prompt
 
     # ── helpers ──────────────────────────────────────────────────────
+
+    def _resolve_tools_and_prompt(self, mode: str, session_id: str, collections: list[str] | None = None):
+        """Return (tools, system_prompt, catalog_text) for the given mode."""
+        if mode == "direct":
+            tools = LOOKUP_TOOL
+            # Fold collection context into the system prompt.
+            # Use %s to avoid KeyError if the name contains {} etc.
+            cols = collections or self._get_collections(session_id)
+            col_name = cols[0] if cols else "this collection"
+            system_prompt = QUICK_CHAT_SYSTEM_PROMPT % {"collection_name": col_name}
+            return tools, system_prompt, ""
+        # Agentic mode (default)
+        catalog_text = self._build_catalog_text(session_id, collections=collections)
+        return TOOLS, self._system_prompt, catalog_text
+
+    def _check_quick_truncation(self, session_id: str) -> int | None:
+        """Check and enforce quick-chat message limits.
+
+        Returns the current message count BEFORE any truncation, or None if
+        not a quick session.
+        """
+        if not session_id.startswith("quick_"):
+            return None
+        count = self._store.count_messages(session_id)
+        if count >= _QUICK_MAX_MESSAGES:
+            logger.info("Quick session %s hit %d messages, trimming to %d",
+                        session_id, count, _QUICK_TRIM_KEEP)
+            self._store.trim_messages(session_id, _QUICK_TRIM_KEEP)
+            return _QUICK_TRIM_KEEP  # after trim, count = keep_last
+        return count
 
     def _build_catalog_text(self, session_id: str, *, collections: list[str] | None = None) -> str:
         """Build a concise catalog summary for the system prompt."""
@@ -213,17 +324,20 @@ class ChatboxAgent:
         *,
         extra_messages: list[dict] | None = None,
         collections: list[str] | None = None,
+        system_prompt: str | None = None,
+        catalog_text: str | None = None,
     ) -> list[dict]:
         """Build OpenAI-compatible messages array for the LLM call."""
         messages: list[dict] = []
 
         # Static system prompt (position 0 — always cache-hit)
-        messages.append({"role": "system", "content": self._system_prompt})
+        sp = system_prompt if system_prompt is not None else self._system_prompt
+        messages.append({"role": "system", "content": sp})
 
         # Catalog reference as separate message (position 1 — per-session, static within session)
-        catalog_text = self._build_catalog_text(session_id, collections=collections)
-        if catalog_text:
-            messages.append({"role": "system", "content": catalog_text})
+        ct = catalog_text if catalog_text is not None else self._build_catalog_text(session_id, collections=collections)
+        if ct:
+            messages.append({"role": "system", "content": ct})
 
         # Load history (including persisted tool calls and results)
         hist = self._store.get_messages(session_id, limit=_MAX_HISTORY_MESSAGES)
@@ -250,18 +364,24 @@ class ChatboxAgent:
             messages.extend(extra_messages)
 
         # Current user message — only if not already the last history message
-        # (it was saved before the LLM call and loaded above)
+        # (it was saved before the LLM call and loaded above).
+        # Prepend current time with timezone so the LLM has temporal context
+        # for time-sensitive queries. Not persisted — UI shows original message.
         if not hist or hist[-1].content != user_message or hist[-1].role != "user":
-            messages.append({"role": "user", "content": user_message})
+            timestamped = f"[Current time: {_format_current_time()}]\n\n{user_message}"
+            messages.append({"role": "user", "content": timestamped})
 
         return messages
 
     # ── non-streaming chat ───────────────────────────────────────────
 
-    def chat(self, session_id: str, user_message: str) -> ChatResponse:
+    def chat(self, session_id: str, user_message: str, *, mode: str = "agentic") -> ChatResponse:
         """Non-streaming chat. Returns final answer with sources."""
         if not user_message or not user_message.strip():
             return ChatResponse(answer="")
+
+        _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(mode, session_id)
+        self._check_quick_truncation(session_id)
 
         collections = self._get_collections(session_id)
         total_tool_calls = 0
@@ -277,17 +397,18 @@ class ChatboxAgent:
             messages = self._build_messages(
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
+                system_prompt=_sys_prompt, catalog_text=_cat_text,
             )
 
             # Call LLM with tools — use underlying OpenAI client directly
             # (avoids modifying the LLMProvider ABC)
-            response = self._call_llm_with_tools(messages)
+            response = self._call_llm_with_tools(messages, tools=_tools)
 
             if response.get("tool_calls"):
                 # ── LLM wants to use a tool ──
                 tcs = response["tool_calls"]
-                # Merge multiple calls into one decompose=true (safety net)
-                if len(tcs) > 1:
+                # For agentic mode: merge multiple calls into one decompose=true
+                if mode != "direct" and len(tcs) > 1:
                     queries = []
                     for tc in tcs:
                         try:
@@ -313,20 +434,45 @@ class ChatboxAgent:
                             },
                         }]
                 for tc in tcs:
-                    if tc["function"]["name"] != "search_knowledge_base":
-                        logger.warning("Unknown tool: %s", tc["function"]["name"])
+                    tool_name = tc["function"]["name"]
+                    if tool_name not in ("search_knowledge_base", "lookup_collection"):
+                        logger.warning("Unknown tool: %s", tool_name)
                         continue
 
                     try:
                         args = json.loads(tc["function"]["arguments"])
                     except json.JSONDecodeError:
-                        args = {"raw_query": user_message, "generate_answer": True}
+                        args = {"raw_query": user_message, "generate_answer": True} if mode != "direct" else {"query": user_message}
 
-                    raw_query = args.get("raw_query", user_message)
-                    generate_answer = args.get("generate_answer", True)
-                    decompose = args.get("decompose", True)
+                    if mode == "direct":
+                        raw_query = args.get("query", user_message)
+                    else:
+                        raw_query = args.get("raw_query", user_message)
+                    generate_answer = args.get("generate_answer", True) if mode != "direct" else False
+                    decompose = args.get("decompose", True) if mode != "direct" else False
 
-                    if self._agentic is None:
+                    if mode == "direct":
+                        if self._direct is None:
+                            tool_content = "Direct retrieval is not configured."
+                        else:
+                            query = args.get("query", raw_query)
+                            direct_result = self._direct.retrieve(
+                                query,
+                                collections=collections or [],
+                                top_k=10,
+                                generate_answer=False,
+                            )
+                            total_tool_calls += 1
+                            for chunk in direct_result.chunks:
+                                source = {
+                                    "text": getattr(chunk, "text", "")[:500],
+                                    "score": getattr(chunk, "score", 0.0),
+                                    "metadata": getattr(chunk, "metadata", {}),
+                                }
+                                if source not in all_sources:
+                                    all_sources.append(source)
+                            tool_content = direct_result.context if direct_result.context else "No relevant information found."
+                    elif self._agentic is None:
                         logger.warning("Tool call requested but agentic_service is None")
                         tool_content = "Knowledge base search is not configured. Please enable Function Calling on an LLM model in Settings."
                     else:
@@ -359,12 +505,13 @@ class ChatboxAgent:
                                 all_sources.append(source)
 
                     # Inject assistant tool_call + tool result into extra messages
+                    _tn = tc["function"]["name"]
                     tool_call_id = tc.get("id", "call_1")
                     tool_call_data = [{
                         "id": tool_call_id,
                         "type": "function",
                         "function": {
-                            "name": "search_knowledge_base",
+                            "name": _tn,
                             "arguments": tc["function"]["arguments"],
                         },
                     }]
@@ -403,19 +550,33 @@ class ChatboxAgent:
     async def chat_stream(
         self, session_id: str, user_message: str, *,
         thinking: bool = True, collections: list[str] | None = None,
+        mode: str = "agentic",
     ) -> AsyncGenerator[dict, None]:
         """Streaming chat — yields SSE event dicts.
 
         Events:
-          {"type":"tool_call_start", "tool":"search_knowledge_base"}
+          {"type":"tool_call_start", "tool":"search_knowledge_base"|"lookup_collection"}
           {"type":"tool_step", "step":"decompose|aq_start|...", ...}
           {"type":"tool_result", "status":"done", "sources":[...]}
           {"type":"token", "content":"Hello"}
-          {"type":"done", "sources":[...]}
+          {"type":"done", "sources":[...], "message_count": N}
         """
         if not user_message or not user_message.strip():
             yield {"type": "done", "sources": []}
             return
+
+        # ── Mode-specific setup ─────────────────────────────────────
+        _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
+            mode, session_id, collections,
+        )
+
+        # Quick-chat truncation check
+        msg_count = self._check_quick_truncation(session_id)
+        _quick_warn = (
+            msg_count is not None
+            and msg_count >= _QUICK_WARN_THRESHOLD
+            and msg_count < _QUICK_MAX_MESSAGES
+        )
 
         # Prefer request collections over session's stored collections
         if collections is None:
@@ -435,6 +596,7 @@ class ChatboxAgent:
             messages = self._build_messages(
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
+                system_prompt=_sys_prompt, catalog_text=_cat_text,
             )
 
             # ── Streaming LLM call (real token-by-token, threaded) ──
@@ -459,9 +621,10 @@ class ChatboxAgent:
 
                 stream_kwargs = dict(
                     model=model, messages=messages, temperature=0.1,
-                    tools=TOOLS, tool_choice="auto", stream=True,
-                    extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}},
+                    tools=_tools, tool_choice="auto", stream=True,
                 )
+                if thinking:
+                    stream_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
                 try:
                     mt = getattr(self._llm, "_default_max_tokens", 0)
                     if isinstance(mt, int) and mt > 0:
@@ -579,8 +742,8 @@ class ChatboxAgent:
             if response.get("tool_calls"):
                 # ── Tool call path ──
                 tcs = response["tool_calls"]
-                # Merge multiple calls into one decompose=true (safety net)
-                if len(tcs) > 1:
+                # For agentic mode: merge multiple calls into one decompose=true
+                if mode != "direct" and len(tcs) > 1:
                     queries = []
                     for tc in tcs:
                         try:
@@ -606,27 +769,68 @@ class ChatboxAgent:
                             },
                         }]
                 for tc in tcs:
-                    if tc["function"]["name"] != "search_knowledge_base":
+                    tool_name = tc["function"]["name"]
+                    if tool_name not in ("search_knowledge_base", "lookup_collection"):
                         continue
 
                     try:
                         args = json.loads(tc["function"]["arguments"])
                     except json.JSONDecodeError:
-                        args = {"raw_query": user_message, "generate_answer": True}
+                        args = {"raw_query": user_message} if mode != "direct" else {"query": user_message}
 
-                    raw_query = args.get("raw_query", user_message)
-                    generate_answer = args.get("generate_answer", True)
-                    decompose = args.get("decompose", True)
+                    if mode == "direct":
+                        raw_query = args.get("query", user_message)
+                    else:
+                        raw_query = args.get("raw_query", user_message)
+                    generate_answer = args.get("generate_answer", True) if mode != "direct" else False
+                    decompose = args.get("decompose", True) if mode != "direct" else False
 
                     # Emit tool_call_start
                     yield {
                         "type": "tool_call_start",
-                        "tool": "search_knowledge_base",
+                        "tool": tool_name,
                         "raw_query": raw_query,
                         "tool_call_id": tc.get("id", ""),
                     }
 
-                    if self._agentic is None:
+                    if mode == "direct":
+                        # ── Direct mode: call DirectQueryModule ──
+                        if self._direct is None:
+                            yield {
+                                "type": "tool_result",
+                                "status": "error",
+                                "content": "Direct retrieval is not configured.",
+                            }
+                            tool_content = "Direct retrieval is not configured."
+                        else:
+                            query = args.get("query", raw_query)
+                            direct_result = self._direct.retrieve(
+                                query,
+                                collections=collections or [],
+                                top_k=10,
+                                generate_answer=False,  # Chat LLM generates the answer
+                            )
+                            total_tool_calls += 1
+
+                            # Collect sources
+                            for chunk in direct_result.chunks:
+                                source = {
+                                    "text": getattr(chunk, "text", "")[:500],
+                                    "score": getattr(chunk, "score", 0.0),
+                                    "metadata": getattr(chunk, "metadata", {}),
+                                }
+                                if source not in all_sources:
+                                    all_sources.append(source)
+
+                            tool_content = direct_result.context if direct_result.context else "No relevant information found."
+
+                            yield {
+                                "type": "tool_result",
+                                "status": "done",
+                                "sources_count": len(all_sources),
+                                "tool_call_id": tc.get("id", ""),
+                            }
+                    elif self._agentic is None:
                         # No agentic service — skip tool execution
                         yield {
                             "type": "tool_result",
@@ -757,7 +961,7 @@ class ChatboxAgent:
                         "id": tool_call_id,
                         "type": "function",
                         "function": {
-                            "name": "search_knowledge_base",
+                            "name": tool_name,
                             "arguments": tc["function"]["arguments"],
                         },
                     }]
@@ -792,15 +996,25 @@ class ChatboxAgent:
                     metadata=meta,
                 )
 
-                yield {"type": "done", "sources": all_sources}
+                yield {
+                    "type": "done",
+                    "sources": all_sources,
+                    "message_count": msg_count,
+                    "context_warning": _quick_warn,
+                }
                 return
 
         # Max rounds reached — save whatever we got
-        yield {"type": "done", "sources": all_sources}
+        yield {
+            "type": "done",
+            "sources": all_sources,
+            "message_count": msg_count,
+            "context_warning": _quick_warn,
+        }
 
     # ── LLM call with tools ──────────────────────────────────────────
 
-    def _call_llm_with_tools(self, messages: list[dict]) -> dict:
+    def _call_llm_with_tools(self, messages: list[dict], tools=None) -> dict:
         """Call the Chat LLM with tools enabled.
 
         Uses the underlying OpenAI-compatible client directly for function
@@ -823,11 +1037,13 @@ class ChatboxAgent:
             content = self._llm.generate(prompt, system=system)
             return {"content": content}
 
+        _tools = tools if tools is not None else TOOLS
+
         kwargs = dict(
             model=model,
             messages=messages,
             temperature=0.1,
-            tools=TOOLS,
+            tools=_tools,
             tool_choice="auto",
         )
         # Apply max_tokens if available (guard against mock objects)

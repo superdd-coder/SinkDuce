@@ -436,8 +436,8 @@ export function MeetingView() {
               ) : (
                 <div className="flex items-start gap-1 min-w-0 flex-1">
                   <h2
+                    className="t-body-family"
                     style={{
-                      fontFamily: "var(--font-serif)",
                       fontSize: "clamp(20px, 2vw, 24px)",
                       fontWeight: 300,
                       letterSpacing: "-0.01em",
@@ -705,7 +705,7 @@ export function MeetingView() {
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
             <div className="text-center">
-              <p className="text-sm" style={{ fontFamily: "var(--font-serif)" }}>Select a meeting or create one</p>
+              <p className="text-sm t-body-family">Select a meeting or create one</p>
             </div>
           </div>
         )}

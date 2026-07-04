@@ -20,6 +20,7 @@ from pydantic import BaseModel
 class SessionCreateRequest(BaseModel):
     title: str = ""
     collections: list[str] | None = None
+    id: str | None = None  # Optional fixed ID (used for quick-chat sessions)
 
 
 class SessionUpdateRequest(BaseModel):
@@ -30,6 +31,7 @@ class SessionMessageRequest(BaseModel):
     content: str
     thinking: bool = True
     collections: list[str] | None = None
+    mode: str = "agentic"  # "agentic" | "direct"
 
 
 class SessionResponse(BaseModel):
@@ -90,19 +92,22 @@ def _session_response(session, store) -> SessionResponse:
 
 @router.get("/sessions")
 def list_sessions():
-    """List sessions ordered by updated_at descending."""
+    """List sessions ordered by updated_at descending. Quick-chat sessions (prefix 'quick_') are excluded."""
     store = _get_store()
     sessions = store.list_sessions()
+    # Filter out quick-chat sessions — they are collection-scoped, not user-facing
+    sessions = [s for s in sessions if not s.id.startswith("quick_")]
     return [_session_response(s, store) for s in sessions]
 
 
 @router.post("/sessions", status_code=201)
 def create_session(body: SessionCreateRequest = Body(...)):
-    """Create a new session."""
+    """Create a new session. If *id* is provided, uses it as the session ID (for quick-chat sessions)."""
     store = _get_store()
     session = store.create_session(
         title=body.title,
         collections=body.collections,
+        session_id=body.id,
     )
     return _session_response(session, store)
 
@@ -231,6 +236,16 @@ def generate_title(session_id: str):
     return {"title": updated.title}
 
 
+@router.get("/sessions/{session_id}/message-count")
+def get_message_count(session_id: str):
+    """Get the total message count for a session (useful for context-warning thresholds)."""
+    store = _get_store()
+    if store.get_session(session_id) is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    count = store.count_messages(session_id)
+    return {"session_id": session_id, "message_count": count}
+
+
 @router.delete("/sessions/{session_id}", status_code=204)
 def delete_session(session_id: str):
     """Delete session and cascade-delete its messages."""
@@ -260,7 +275,11 @@ async def send_message(session_id: str, body: SessionMessageRequest = Body(...))
     handler = ChatStreamHandler(agent)
 
     async def event_stream():
-        async for sse in handler.handle(session_id, body.content, thinking=body.thinking, collections=body.collections):
+        async for sse in handler.handle(
+            session_id, body.content,
+            thinking=body.thinking, collections=body.collections,
+            mode=body.mode,
+        ):
             yield sse
 
     return StreamingResponse(

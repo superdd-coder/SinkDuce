@@ -18,14 +18,20 @@ class ChatStreamHandler:
     async def handle(
         self, session_id: str, user_message: str, *,
         thinking: bool = True, collections: list[str] | None = None,
+        mode: str = "agentic",
     ) -> AsyncGenerator[str, None]:
         """Yield SSE event strings for the frontend to consume."""
         try:
             async for event in self._agent.chat_stream(
                 session_id, user_message, thinking=thinking, collections=collections,
+                mode=mode,
             ):
                 event_type = event.get("type", "unknown")
-                payload = json.dumps(event, ensure_ascii=False)
+                try:
+                    payload = json.dumps(event, ensure_ascii=False, default=str)
+                except Exception:
+                    logger.warning("Failed to serialize event type=%r, skipping", event_type)
+                    continue
                 yield f"event: {event_type}\ndata: {payload}\n\n"
         except Exception:
             logger.exception("Stream handler error for session %s", session_id)

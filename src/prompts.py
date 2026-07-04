@@ -361,8 +361,15 @@ in the transcript): use their name as mentioned.
 #            collections, then decomposes the transcript into sections
 #            matching that taxonomy.  Receives the collection catalog
 #            for dimension inference and topic-to-collection matching.
+#
+#            v2 (2026-07): Catalog moved inside STEP 1 to reduce
+#            anchoring.  Dimension is free-form (not a preset enum)
+#            so it generalizes to any organizing principle.  STEP 2
+#            includes a self-verification check to prevent ghost
+#            sections from catalog-only entities.
 #   Role: user
 #   Called by: src/meeting/service.py → MeetingService._do_blueprint_summary()
+#              and generate_blueprint_stream()
 #   Template vars: {transcript}         — full transcript [N] [spk:ID] {text}
 #                  {notes}              — user meeting notes
 #                  {hot_words}          — domain terms (correction aid)
@@ -380,119 +387,116 @@ MEETING_BLUEPRINT_PROMPT = """\
 {notes}
 </user-meeting-note>
 
+<task>
+
+STEP 1 — Observe the user's organizing principle
+
 <collection-catalog>
 {collection_catalog}
 </collection-catalog>
 
-<task>
+Look at the collection names and descriptions above.  What organizing
+principle do they follow?  Observe the actual pattern — do NOT force
+it into a preset category.  The organizing principle could be by
+project, by function, by department, by region, by quarter, by vendor,
+by technology, or anything else.  Describe what you actually see.
 
-STEP 1 — Infer the user's categorization dimension
+Name the principle with a short ``dimension`` label and write a one-
+sentence ``explanation``.  For example:
 
-Look at the collection names and descriptions in <collection-catalog>.
-What pattern organizes them?  Common dimensions:
+  If each collection = one project:    dimension: "project"
+  If each collection = one function:   dimension: "function"
+  If each collection = one department: dimension: "department"
+  If each collection = one region:     dimension: "region"
+  If the pattern is something else:    choose a short descriptive label
 
-  project      — each collection = one project / client / case.
-                 All work types (finance, legal, HR, …) for that
-                 project live inside the same collection.
-                 Examples: "Project Alpha", "Case #2024-001", "Client X"
-
-  function     — each collection = one business function / work type.
-                 Content from all projects related to that function
-                 lives inside the same collection.
-                 Examples: "Finance", "Legal", "HR", "Supply Chain"
-
-  department   — each collection = one department or team.
-                 Examples: "R&D", "Sales", "Operations"
-
-  other        — describe the pattern in one sentence.
-
-If the catalog is empty ("No existing collections"), use "project"
-as the default dimension.
+If the catalog is empty ("No existing collections"):
+  dimension: "other"
+  explanation: "No existing collections — meeting content will be
+  organized by the topics discussed in the transcript."
 
 IMPORTANT — FALLBACK: If the meeting's content does not naturally fit
-the inferred dimension (e.g. the dimension is "project" but the
-meeting discusses cross-cutting policies and standards that don't
-belong to any single project), choose the dimension that BEST
-organizes THIS meeting's topics — even if it differs from the
-catalog's pattern.  The goal is to decompose the meeting into
-meaningful sections, not to force-fit it into a mismatched taxonomy.
+the observed organizing principle (e.g. collections are organized by
+project but this meeting discusses cross-cutting policies that don't
+belong to any single project), apply the principle that BEST organizes
+THIS meeting's actual topics — even if it differs from the catalog's
+pattern.  Note this in the taxonomy.
 
-Output your conclusion in the ``taxonomy`` field of the JSON
-(see output format below).
+────────────────────────────────────────────────────────────────
 
-STEP 2 — Decomposition Blueprint
+STEP 2 — Extract the entities discussed in this meeting
 
-STEP 2a — Extract topics FROM the transcript
+Now work exclusively from <transcript>.  Using the organizing
+principle from STEP 1, scan <transcript> for every distinct entity
+that fits that principle and was discussed.
 
-First, restate the dimension from STEP 1 aloud: "The user organizes
-by [dimension]. I will scan the transcript for every distinct
-[entity type] that was discussed."
-
-Then, scan <transcript> for every distinct topic that matches this
-dimension.  If the transcript discusses 5 different projects, or
-3 different functions, list ALL of them.
-
-  If dimension = "project":
+  For example, if the principle is "by project":
     Scan for every project / client / case name that was discussed.
-    Example: transcript discusses Project A audit + Project B legal
-    + Project C HR → topics: Project A, Project B, Project C.
-    Also scan for topics NOT in the catalog — if a topic was
-    discussed but has no matching collection, it STILL gets a section.
+    Transcript discusses Project A audit + Project B legal
+    + Project C HR → entities: Project A, Project B, Project C.
 
-  If dimension = "function":
+  For example, if the principle is "by function":
     Scan for every business function / work type that was discussed.
-    Example: transcript discusses legal issues (projects B, C) and
-    HR issues (project C) → topics: Legal, HR.
-    Also scan for functions NOT in the catalog.
+    Transcript discusses legal issues + HR issues → entities: Legal, HR.
 
-  If dimension = "department":
-    Scan for every department or team that was discussed.
-    Example: transcript discusses R&D headcount planning + Sales
-    Q3 target review + Operations workflow → topics: R&D, Sales,
-    Operations.
-    Also scan for departments NOT in the catalog.
+  For example, if the principle is "by department":
+    Scan for every department / team that was discussed.
+    Transcript discusses R&D headcount + Sales Q3 targets
+    + Operations workflow → entities: R&D, Sales, Operations.
 
-  If dimension = "other":
-    Apply the pattern you described in STEP 1's taxonomy explanation.
-    Scan for every distinct entity matching that pattern.
-    Example: if the pattern is "by region", scan for every region
-    (APAC, EMEA, North America) that was discussed.
+  Apply the SAME logic to whatever principle you observed in STEP 1.
 
-The catalog is NOT used in this step.  Topics come ONLY from
-<transcript>.  Be thorough — list every distinct entity matching
-the dimension, whether or not it has a collection.
+Skip: greetings, tech checks, pure social small talk with zero
+business relevance.
 
-STEP 2b — Match topics to collections
+Before finalizing your entity list, verify each one against
+<transcript>:
+  - Can you recall a moment in the transcript where the discussion
+    explicitly shifts to or focuses on this entity?
+  - Is there more than a passing mention — a speaker naming it,
+    asking about it, or reporting on it?
+  If you cannot name a specific moment for an entity, it was not
+  meaningfully discussed.  Remove it.
 
-For each topic from STEP 2a, check <collection-catalog>:
+Do NOT create a section just because you saw a matching collection
+name in STEP 1.  The collection catalog tells you which collections
+exist — it does NOT describe what was discussed in this meeting.
+
+STEP 3 — Match entities to collections
+
+For each entity from STEP 2, check the <collection-catalog> in STEP 1:
   - If a collection represents the SAME entity → use its id and name.
-  - If no match → leave id and name empty.  Use a ``tab_name`` that
-    follows the same naming convention as the catalog.
+  - If no match → leave ``associated_collection_id`` and
+    ``associated_collection_name`` as empty strings "".
 
-Rules:
-- Every distinct topic from STEP 2a becomes one section.  Do not
-  merge distinct projects, functions, or entities.
-- Skip greetings, tech checks, and off-topic small-talk.
-- Topics that fit the dimension get a section even if they have no
-  matching collection — they are still important.
-- For each topic, write a ``section_description`` (max 400 chars)
-  that describes ONLY what <transcript> says about this topic.
-  The classifier uses this to identify which conversation segments
-  belong here — so it must reflect THIS meeting, not general knowledge.
+CRITICAL:
+- Entities come ONLY from STEP 2.  Do NOT add new entities based on
+  collection names you saw in STEP 1.
+- If a collection exists in the catalog but its entity was NOT found
+  in STEP 2, it gets NO blueprint entry.  That collection's content
+  comes from other meetings, not this one.
+- Do NOT merge two distinct entities into one section.
 
-  CRITICAL — TRANSCRIPT-ONLY: Derive the section_description EXCLUSIVELY
-  from <transcript>.  <collection-catalog> tells you which collections
-  exist and how they are named — it does NOT describe what was discussed
-  in this meeting.  NEVER copy, paraphrase, or use any information from
-  the catalog's descriptions.
+STEP 4 — Write section descriptions
 
-  CRITICAL — CROSS-CUTTING CONCEPTS: When a general method, model,
-  or approach was discussed, describe ONLY how it applies to this
-  specific entity.  Do NOT list the general concept as a standalone
-  signal — the classifier will tag every sentence about that concept
-  regardless of entity.
+For each entity, write a ``section_description`` (max 400 chars)
+that describes ONLY what <transcript> says about this entity.
 
-STEP 3 — Output
+Derive the description EXCLUSIVELY from <transcript>.  The catalog
+descriptions in STEP 1 may reflect content from OTHER meetings —
+they do NOT describe what was discussed in THIS meeting.
+
+The downstream sentence classifier uses this description to identify
+conversation segments.  It must reflect THIS meeting's actual
+discussion, not general knowledge or catalog content.
+
+CRITICAL — CROSS-CUTTING CONCEPTS: When a general method, model, or
+approach was discussed, describe ONLY how it applies to this
+specific entity.  Do NOT list the general concept as a standalone
+signal — the classifier will tag every sentence about that concept
+regardless of which entity it relates to.
+
+STEP 5 — Output JSON
 
 Output EXACTLY this JSON (no markdown fences, no extra text):
 
@@ -506,7 +510,7 @@ Output EXACTLY this JSON (no markdown fences, no extra text):
     {{
       "tab_name": "Project Alpha",
       "section_description": "Audit progress review including Q2 financial model updates and budget approval discussion...",
-      "associated_collection_id": "col_abc123",
+      "associated_collection_id": "col_1",
       "associated_collection_name": "Project Alpha"
     }},
     {{
@@ -518,16 +522,15 @@ Output EXACTLY this JSON (no markdown fences, no extra text):
   ]
 }}
 
-CRITICAL:
-- ``blueprint`` MUST include every distinct entity matching the
-  user's categorization dimension as a SEPARATE entry.
-- When a section matches an existing collection, use the exact id
-  and name from <collection-catalog>.
+MANDATORY:
+- Every distinct entity from STEP 2 that passes verification
+  MUST appear as a separate entry in ``blueprint``.
+- ``tab_name`` follows the same naming convention as existing
+  collections.
+- ``taxonomy.dimension`` is a short label describing the organizing
+  principle — name what you observed, not from a preset list.
 - When unmatched, ``associated_collection_id`` and
-  ``associated_collection_name`` MUST be empty strings "".
-- ``tab_name`` for unmatched sections MUST follow the same naming
-  convention as existing collections, not a hybrid like
-  "Project C — Litigation".
+  ``associated_collection_name`` MUST be "".
 </task>"""
 
 

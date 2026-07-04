@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { cn } from "@/lib/utils"
 import { Loader2, X, RefreshCw, Plus, Pencil, Sparkles, ChevronDown } from "lucide-react"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -69,7 +70,7 @@ function renderInline(text: string, onRefClick: (id: string) => void): ReactNode
     } else if (match[3]) {
       parts.push(<em key={`i${lastIdx}`}>{match[4]}</em>)
     } else if (match[5]) {
-      parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs font-mono">{match[6]}</code>)
+      parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
     } else if (match[8] || match[10]) {
       // [stt_0044,stt_0045,stt_0046] or 【stt_0044,stt_0045,stt_0046】
       const raw = (match[8] || match[10])!
@@ -92,7 +93,7 @@ function renderInline(text: string, onRefClick: (id: string) => void): ReactNode
         parts.push(
           <button
             key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-muted hover:bg-primary/20 font-mono align-baseline"
+            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-muted hover:bg-primary/20 t-mono-family align-baseline"
             onClick={(e) => { e.stopPropagation(); onRefClick(start.id) }}
             title={`Sources: ${allInRange.join(", ")}`}
           >
@@ -242,9 +243,8 @@ function EditableSectionContent({
       <div className="sticky top-0 z-10 -mx-2 bg-background/80 backdrop-blur-sm">
         <div className="flex items-center justify-between px-6 py-[14px]">
           <div
-            className="min-w-0 truncate"
+            className="min-w-0 truncate t-body-family"
             style={{
-              fontFamily: "var(--font-serif)",
               fontSize: "clamp(20px, 2vw, 24px)",
               fontWeight: 400,
               letterSpacing: "-0.01em",
@@ -597,8 +597,8 @@ function SectionMetadata({
           <div ref={editContainerRef} className="flex flex-col gap-1 w-full">
             <div className="flex items-center gap-0">
               <span
+                className="t-body-family"
                 style={{
-                  fontFamily: "var(--font-serif)",
                   fontSize: "clamp(20px, 2vw, 24px)",
                   fontWeight: 400,
                   letterSpacing: "-0.01em",
@@ -609,9 +609,8 @@ function SectionMetadata({
                 {tabLabel}{" "}
               </span>
               <input
-                className="flex-1 text-current bg-transparent border-b border-primary outline-none px-0 py-0.5 min-w-0"
+                className="flex-1 text-current bg-transparent border-b border-primary outline-none px-0 py-0.5 min-w-0 t-body-family"
                 style={{
-                  fontFamily: "var(--font-serif)",
                   fontSize: "clamp(20px, 2vw, 24px)",
                   fontWeight: 400,
                   letterSpacing: "-0.01em",
@@ -636,9 +635,8 @@ function SectionMetadata({
         ) : (
           <>
             <div
-              className="whitespace-normal break-words w-full"
+              className="whitespace-normal break-words w-full t-body-family"
               style={{
-                fontFamily: "var(--font-serif)",
                 fontSize: "clamp(20px, 2vw, 24px)",
                 fontWeight: 400,
                 letterSpacing: "-0.01em",
@@ -665,7 +663,7 @@ function SectionMetadata({
             onClick={displayActive ? () => setCancelOpen(true) : () => handleIngest(associatedId)}
             title={displayActive ? "Click to cancel ingestion" : displaySuggestion ? "Click to ingest" : undefined}
             className={cn(
-              "group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
+              "group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
               ingesting && "sk-thinking-flow",
               // Dashed outline for suggestion state (not yet ingested)
               displaySuggestion && !ingesting && "border border-dashed border-green-600/40",
@@ -695,7 +693,7 @@ function SectionMetadata({
           ref={buttonRef}
           disabled={ingesting}
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+          className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
           style={{
             fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
             color: dropdownOpen
@@ -1205,6 +1203,7 @@ export function MeetingTabs({
   }
 
   const handleAddOrExtract = async () => {
+    if (busy) { toast.error("Meeting is processing. Please wait until the current operation completes."); return }
     const name = addForm.name.trim()
     if (!name) { toast.error("Section name is required"); return }
     if (!hasSections) {
@@ -1588,7 +1587,7 @@ export function MeetingTabs({
                       <summary className="text-xs text-muted-foreground cursor-pointer select-none">
                         Thinking…
                       </summary>
-                      <p className="text-xs text-muted-foreground/60 mt-2 leading-relaxed whitespace-pre-wrap font-mono max-h-32 overflow-auto">
+                      <p className="text-xs text-muted-foreground/60 mt-2 leading-relaxed whitespace-pre-wrap t-mono-family max-h-32 overflow-auto">
                         {bpStream.thinkingText}
                       </p>
                     </details>
@@ -1633,9 +1632,8 @@ export function MeetingTabs({
                       <div className="px-6 pt-6 pb-3">
                         <div className="flex items-start gap-2">
                           <span
-                            className="shrink-0"
+                            className="shrink-0 t-body-family"
                             style={{
-                              fontFamily: "var(--font-serif)",
                               fontSize: "clamp(20px, 2vw, 24px)",
                               fontWeight: 400,
                               letterSpacing: "-0.01em",
@@ -1672,9 +1670,8 @@ export function MeetingTabs({
                     <div className="px-6 pt-6 pb-3">
                       <div className="flex items-start gap-2">
                         <span
-                          className="shrink-0"
+                          className="shrink-0 t-body-family"
                           style={{
-                            fontFamily: "var(--font-serif)",
                             fontSize: "clamp(20px, 2vw, 24px)",
                             fontWeight: 400,
                             letterSpacing: "-0.01em",
@@ -1780,10 +1777,9 @@ export function MeetingTabs({
                               <div className="space-y-1.5">
                                 {blueprint.map((b) => {
                                   const isSelected = selectedBlueprintIds.has(b.blueprint_id)
-                                  return (
+                                  const pill = (
                                     <button
                                       key={b.blueprint_id}
-                                      title={b.tab_description}
                                       disabled={busy}
                                       onClick={() => {
                                         setSelectedBlueprintIds((prev) => {
@@ -1809,6 +1805,15 @@ export function MeetingTabs({
                                       {b.tab_name}
                                     </button>
                                   )
+                                  if (!b.tab_description) return <span key={b.blueprint_id} className="block">{pill}</span>
+                                  return (
+                                    <Tooltip key={b.blueprint_id}>
+                                      <TooltipTrigger render={pill} />
+                                      <TooltipContent side="top" className="max-w-xs px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
+                                        {b.tab_description}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  )
                                 })}
                                 {customReceipts.map((c, i) => (
                                   <button
@@ -1831,8 +1836,8 @@ export function MeetingTabs({
                               <div className="flex items-center gap-2 pt-1">
                                 <button
                                   onClick={() => setAddSectionOpen(true)}
-                                  disabled={meeting.processing_state === "summarizing"}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full cursor-pointer text-xs font-medium border border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors"
+                                  disabled={busy}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full cursor-pointer text-xs font-medium border border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                   <Plus className="h-3.5 w-3.5" />
                                   Add Section
@@ -1883,8 +1888,8 @@ export function MeetingTabs({
                               </div>
                               <button
                                 onClick={() => setAddSectionOpen(true)}
-                                disabled={meeting.processing_state === "summarizing"}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full cursor-pointer text-xs font-medium border border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors"
+                                disabled={busy}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full cursor-pointer text-xs font-medium border border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 <Plus className="h-3.5 w-3.5" />
                                 Add Section

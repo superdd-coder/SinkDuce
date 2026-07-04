@@ -23,14 +23,14 @@ logger = logging.getLogger(__name__)
 _CONFIG_POINT_ID = str(uuid.uuid5(uuid.NAMESPACE_DNS, "my-rag-collection-config"))
 
 _DEFAULT_COLLECTION_CONFIG = {
-    "dimensions": 1024,
+    "dimensions": 1536,
     "chunk_mode": "normal",
     "chunk_size": 512,
     "chunk_overlap": 64,
     "parent_strategy": "paragraph",
     "parent_chunk_size": 1024,
     "parent_chunk_overlap": 128,
-    "child_chunk_size": 128,
+    "child_chunk_size": 256,
     "child_chunk_overlap": 32,
     "buffer_ratio": 0.5,
     "embedding_provider": "openai_compatible",
@@ -295,8 +295,8 @@ class QdrantManager:
         results = self.client.query_points(
             collection_name=collection,
             prefetch=[
-                Prefetch(query=query_vector, limit=top_k * 2, filter=filter_condition),
-                Prefetch(query=sparse, using="sparse", limit=top_k * 2, filter=filter_condition),
+                Prefetch(query=query_vector, limit=top_k * 3, filter=filter_condition),
+                Prefetch(query=sparse, using="sparse", limit=top_k * 3, filter=filter_condition),
             ],
             query=FusionQuery(fusion="rrf"),
             limit=top_k,
@@ -340,7 +340,7 @@ class QdrantManager:
         # Use actual collection vector size (authoritative), not config value
         vector_size = self.get_vector_size(collection)
         if vector_size is None:
-            vector_size = merged.get("dimensions", 1024)
+            vector_size = merged.get("dimensions", 1536)
 
         # Save back
         self.upsert_points(

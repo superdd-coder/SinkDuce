@@ -1437,7 +1437,7 @@ class MeetingService:
 
                 # ── Step B: Build payload ────────────────────────
                 payload_ids = build_payload(
-                    full_tagged_ids, sentences, radius=2, gap_threshold=10.0,
+                    full_tagged_ids, sentences, radius=3, gap_threshold=10.0,
                 )
                 topic_payload[tab_id] = set(payload_ids)  # FOCUS + NEARBY (expanded)
                 if not payload_ids:
@@ -1865,7 +1865,7 @@ class MeetingService:
 
                 # ── Build payload ─────────────────────────────────
                 payload_ids = build_payload(
-                    full_tagged_ids, sentences, radius=2, gap_threshold=10.0,
+                    full_tagged_ids, sentences, radius=3, gap_threshold=10.0,
                 )
                 if not payload_ids:
                     logger.warning("[SECTION-STREAM] Empty payload for '%s'", section_name)
@@ -2249,6 +2249,9 @@ class MeetingService:
         section_label = tab_meta.get("name", tab_id)
         full_content = f"# {section_label}\n\n{content}"
 
+        # ── Format meeting date for embedding ────────────────────
+        meeting_date = meeting.created_at.strftime("%Y-%m-%d") if meeting.created_at else None
+
         # ── Upload to collection ────────────────────────────────
         alloc_file_id = uuid.uuid4().hex
         file_dir = _files_dir(collection_id) / alloc_file_id
@@ -2271,6 +2274,7 @@ class MeetingService:
             source_label=f"Meeting: {meeting.title} / {section_label}",
             file_id=alloc_file_id,
             meeting_id=meeting_id,
+            meeting_date=meeting_date,
         )
 
         # ── Update tab metadata ─────────────────────────────────

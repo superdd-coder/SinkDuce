@@ -17,6 +17,7 @@ import {
   getEvalCases, deleteEvalCase, generateEvalCases,
   runEval, getEvalHistory, getChunkContent,
   type EvalTestCase, type EvalReport, type ChunkContent,
+  getFiles, type FileListItem,
 } from "@/api/client"
 import { toast } from "sonner"
 import { ResultList } from "./result-list"
@@ -42,6 +43,7 @@ function SearchTab() {
   const [showContext, setShowContext] = useState(false)
   const [searching, setSearching] = useState(false)
   const [showCollections, setShowCollections] = useState(false)
+  const [filesMap, setFilesMap] = useState<Record<string, string>>({})
   const collectionMenuRef = useRef<HTMLDivElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -50,6 +52,22 @@ function SearchTab() {
   useEffect(() => {
     fetchCollections()
   }, [fetchCollections])
+
+  // Build source→display_name map for selected collections
+  useEffect(() => {
+    if (recallCollections.length === 0) return
+    Promise.all(recallCollections.map(c => getFiles(c).catch(() => ({ files: [] as FileListItem[] }))))
+      .then(results => {
+        const map: Record<string, string> = {}
+        for (const r of results) {
+          for (const f of r.files) {
+            if (f.display_name) map[f.source] = f.display_name
+          }
+        }
+        setFilesMap(map)
+      })
+      .catch(() => {})
+  }, [recallCollections.join(",")])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -104,8 +122,8 @@ function SearchTab() {
           <div className="flex items-end gap-3">
             <textarea
               ref={textareaRef}
-              className="flex-1 resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[300px] outline-none bg-transparent leading-[1.7] focus:border-primary"
-              style={{ fontFamily: "var(--font-serif)", fontStyle: "italic", color: "var(--ze-text)", borderRadius: 0 }}
+              className="flex-1 resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[300px] outline-none bg-transparent leading-[1.7] focus:border-primary t-body-italic-family"
+              style={{ color: "var(--ze-text)", borderRadius: 0 }}
               placeholder="Search query…"
               rows={1}
               value={query}
@@ -115,7 +133,7 @@ function SearchTab() {
             />
             <button
               type="button"
-              className="shrink-0 flex items-center gap-1.5 cursor-pointer transition-opacity border-none text-white font-sans"
+              className="shrink-0 flex items-center gap-1.5 cursor-pointer transition-opacity border-none text-white t-sans-family"
               style={{
                 background: "var(--ze-green)",
                 fontSize: "10px", fontWeight: 600,
@@ -142,7 +160,7 @@ function SearchTab() {
                 type="button"
                 ref={buttonRef}
                 onClick={() => setShowCollections(!showCollections)}
-                className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
+                className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
                 style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: showCollections ? "var(--color-primary-foreground)" : recallCollections.length > 0 ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
               >
                 <span className="relative z-10 whitespace-nowrap text-center">
@@ -194,7 +212,7 @@ function SearchTab() {
             {/* Agent toggle */}
             <button
               type="button"
-              className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${useAgent ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
+              className={`flex items-center gap-1.5 cursor-pointer border-none t-sans-family transition-all ${useAgent ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
               style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: useAgent ? "3px 8px" : "0", borderRadius: "2px" }}
               onClick={() => {
                 const next = !useAgent
@@ -210,7 +228,7 @@ function SearchTab() {
             {/* Reranker toggle */}
             <button
               type="button"
-              className={`cursor-pointer border-none font-sans transition-all ${
+              className={`cursor-pointer border-none t-sans-family transition-all ${
                 useAgent
                   ? "bg-primary/50 text-primary-foreground/60 cursor-not-allowed"
                   : useReranker
@@ -235,7 +253,7 @@ function SearchTab() {
             >
               <button
                 type="button"
-                className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${
+                className={`flex items-center gap-1.5 cursor-pointer border-none t-sans-family transition-all ${
                   searchMode === "hybrid"
                     ? "bg-primary text-primary-foreground"
                     : "bg-transparent text-muted-foreground hover:text-primary"
@@ -254,7 +272,7 @@ function SearchTab() {
                 <span className="text-[10px] text-muted-foreground/60 select-none">·</span>
                 <button
                   type="button"
-                  className={`cursor-pointer border-none font-sans transition-all ${
+                  className={`cursor-pointer border-none t-sans-family transition-all ${
                     useAgent
                       ? "bg-primary/50 text-primary-foreground/60 cursor-not-allowed"
                       : sparseLlmTokenize
@@ -325,7 +343,7 @@ function SearchTab() {
                 <button
                   type="button"
                   onClick={() => setShowContext(!showContext)}
-                  className={`cursor-pointer border-none font-sans transition-all ${showContext ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
+                  className={`cursor-pointer border-none t-sans-family transition-all ${showContext ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-primary"}`}
                   style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: showContext ? "3px 8px" : "0", borderRadius: "2px" }}
                 >
                   VIEW CONTEXT
@@ -337,7 +355,7 @@ function SearchTab() {
                 <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{searchContext}</ReactMarkdown>
               </div>
             ) : (
-              <ResultList results={results} />
+              <ResultList results={results} filesMap={filesMap} />
             )}
           </div>
         </div>
@@ -377,11 +395,23 @@ function EvaluateTab() {
   const [expandedChunk, setExpandedChunk] = useState<ChunkContent | null>(null)
   const [chunkLoading, setChunkLoading] = useState(false)
   const [expandedChunkKey, setExpandedChunkKey] = useState<string | null>(null)
+  const [evalFilesMap, setEvalFilesMap] = useState<Record<string, string>>({})
   const autoRecovered = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     fetchCollections()
   }, [fetchCollections])
+
+  useEffect(() => {
+    if (!collection) return
+    getFiles(collection).then(r => {
+      const map: Record<string, string> = {}
+      for (const f of r.files) {
+        if (f.display_name) map[f.source] = f.display_name
+      }
+      setEvalFilesMap(map)
+    }).catch(() => {})
+  }, [collection])
 
   // Animate dashboard section when report changes
   useEffect(() => {
@@ -548,7 +578,7 @@ function EvaluateTab() {
               type="button"
               ref={evalButtonRef}
               onClick={() => setEvalShowCollections(!evalShowCollections)}
-              className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
+              className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
               style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: evalShowCollections ? "var(--color-primary-foreground)" : "var(--color-muted-foreground)" }}
             >
               <span className="relative z-10 whitespace-nowrap text-center">Choose a collection...</span>
@@ -608,7 +638,7 @@ function EvaluateTab() {
                 type="button"
                 ref={evalButtonRef}
                 onClick={() => setEvalShowCollections(!evalShowCollections)}
-                className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 font-sans transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
+                className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
                 style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "140px", color: evalShowCollections ? "var(--color-primary-foreground)" : collection ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
               >
                 <span className="relative z-10 whitespace-nowrap text-center">
@@ -659,7 +689,7 @@ function EvaluateTab() {
             {/* Reranker toggle */}
             <button
               type="button"
-              className={`cursor-pointer border-none font-sans transition-all ${
+              className={`cursor-pointer border-none t-sans-family transition-all ${
                 evalUseReranker
                   ? "bg-primary text-primary-foreground"
                   : "bg-transparent text-muted-foreground hover:text-primary"
@@ -681,7 +711,7 @@ function EvaluateTab() {
             >
               <button
                 type="button"
-                className={`flex items-center gap-1.5 cursor-pointer border-none font-sans transition-all ${
+                className={`flex items-center gap-1.5 cursor-pointer border-none t-sans-family transition-all ${
                   evalSearchMode === "hybrid"
                     ? "bg-primary text-primary-foreground"
                     : "bg-transparent text-muted-foreground hover:text-primary"
@@ -700,7 +730,7 @@ function EvaluateTab() {
                 <span className="text-[10px] text-muted-foreground/60 select-none">·</span>
                 <button
                   type="button"
-                  className={`cursor-pointer border-none font-sans transition-all ${
+                  className={`cursor-pointer border-none t-sans-family transition-all ${
                     evalSparseLlmTokenize
                       ? "bg-primary text-primary-foreground"
                       : "bg-transparent text-muted-foreground hover:text-primary"
@@ -753,7 +783,7 @@ function EvaluateTab() {
           <div className="flex gap-2">
             {cases.length === 0 ? (
               <button
-                className="cursor-pointer border-none font-sans text-muted-foreground hover:text-primary transition-colors"
+                className="cursor-pointer border-none t-sans-family text-muted-foreground hover:text-primary transition-colors"
                 style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", background: "transparent" }}
                 onClick={() => handleGenerate(false)} disabled={loading}
               >
@@ -762,7 +792,7 @@ function EvaluateTab() {
               </button>
             ) : (
               <button
-                className="cursor-pointer border-none font-sans text-muted-foreground hover:text-primary transition-colors"
+                className="cursor-pointer border-none t-sans-family text-muted-foreground hover:text-primary transition-colors"
                 style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", background: "transparent" }}
                 onClick={() => handleGenerate(true)} disabled={loading}
               >
@@ -809,7 +839,7 @@ function EvaluateTab() {
                     {expandedCaseId === c.id ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
                     <span className="flex-1 truncate">{c.query}</span>
                     <span className="text-muted-foreground shrink-0 truncate max-w-[200px]" title={c.target_source}>
-                      → {c.target_source?.split("/").pop()}
+                      → {evalFilesMap[c.target_source] || c.target_source?.split("/").pop() || c.target_source}
                     </span>
                     <Button variant="ghost" size="sm" className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); handleDeleteCase(c.id) }}>
                       <Trash2 className="h-3 w-3" />
@@ -827,8 +857,8 @@ function EvaluateTab() {
                           <div className="text-foreground/90 whitespace-pre-wrap">{c.query}</div>
                         </div>
                         <div className="flex gap-4 text-[10px] text-muted-foreground">
-                          <span>Target chunk: <span className="font-mono text-foreground/70">{c.target_chunk_id}</span></span>
-                          <span>Source: <span className="text-foreground/70">{c.target_source?.split("/").pop()}</span></span>
+                          <span>Target chunk: <span className="t-mono-family text-foreground/70">{c.target_chunk_id}</span></span>
+                          <span>Source: <span className="text-foreground/70">{evalFilesMap[c.target_source] || c.target_source?.split("/").pop() || c.target_source}</span></span>
                         </div>
                         <div>
                           <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Target Chunk Content</div>
@@ -886,7 +916,7 @@ function EvaluateTab() {
                 </span>
                 <Badge variant="outline" className="text-[10px]">{hSelected.total_cases} cases</Badge>
                 <span>Recall: {((hSelected.avg_recall ?? hSelected.avg_hard_recall ?? 0) * 100).toFixed(0)}%</span>
-                <span className={`font-mono ${qualityColor(hSelected.avg_quality_score ?? 0)}`}>Q: {formatSigned(hSelected.avg_quality_score ?? 0)}</span>
+                <span className={`t-mono-family ${qualityColor(hSelected.avg_quality_score ?? 0)}`}>Q: {formatSigned(hSelected.avg_quality_score ?? 0)}</span>
                 <span className="text-muted-foreground">{(hSelected.avg_time_ms ?? 0).toFixed(0)}ms</span>
               </>
             ) : (
@@ -927,7 +957,7 @@ function EvaluateTab() {
                       </span>
                       <Badge variant="outline" className="text-[10px]">{h.total_cases} cases</Badge>
                       <span>Recall: {((h.avg_recall ?? h.avg_hard_recall ?? 0) * 100).toFixed(0)}%</span>
-                      <span className={`font-mono ${qualityColor(h.avg_quality_score ?? 0)}`}>Q: {formatSigned(h.avg_quality_score ?? 0)}</span>
+                      <span className={`t-mono-family ${qualityColor(h.avg_quality_score ?? 0)}`}>Q: {formatSigned(h.avg_quality_score ?? 0)}</span>
                       <span className="text-muted-foreground">{(h.avg_time_ms ?? 0).toFixed(0)}ms</span>
                     </div>
                   ))}
@@ -952,25 +982,25 @@ function EvaluateTab() {
             <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
               metricsVisible ? "opacity-100" : "opacity-0"
             }`} style={{ transitionDelay: metricsVisible ? "0ms" : "0ms" }}>
-              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{((report.avg_recall ?? 0) * 100).toFixed(1)}%</span>
+              <span className="text-[28px] font-light leading-none text-foreground t-body-family">{((report.avg_recall ?? 0) * 100).toFixed(1)}%</span>
               <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 text-muted-foreground mt-1.5">Recall</span>
             </div>
             <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
               metricsVisible ? "opacity-100" : "opacity-0"
             }`} style={{ transitionDelay: metricsVisible ? "300ms" : "0ms" }}>
-              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{((report.avg_hard_recall ?? 0) * 100).toFixed(1)}%</span>
+              <span className="text-[28px] font-light leading-none text-foreground t-body-family">{((report.avg_hard_recall ?? 0) * 100).toFixed(1)}%</span>
               <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 text-muted-foreground mt-1.5">Hard Recall</span>
             </div>
             <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
               metricsVisible ? "opacity-100" : "opacity-0"
             }`} style={{ transitionDelay: metricsVisible ? "600ms" : "0ms" }}>
-              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{formatSigned(report.avg_quality_score ?? 0)}</span>
+              <span className="text-[28px] font-light leading-none text-foreground t-body-family">{formatSigned(report.avg_quality_score ?? 0)}</span>
               <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 text-muted-foreground mt-1.5">Quality</span>
             </div>
             <div className={`flex flex-col items-center transition-opacity duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
               metricsVisible ? "opacity-100" : "opacity-0"
             }`} style={{ transitionDelay: metricsVisible ? "900ms" : "0ms" }}>
-              <span className="text-[28px] font-light leading-none text-foreground" style={{ fontFamily: "var(--font-serif)" }}>{(report.avg_mrr ?? 0).toFixed(3)}</span>
+              <span className="text-[28px] font-light leading-none text-foreground t-body-family">{(report.avg_mrr ?? 0).toFixed(3)}</span>
               <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 text-muted-foreground mt-1.5">MRR</span>
             </div>
           </div>
@@ -996,7 +1026,7 @@ function EvaluateTab() {
                     ) : (
                       <Badge className="text-[10px] px-1 bg-orange-600">miss</Badge>
                     )}
-                    <span className={`w-14 text-right font-mono ${qualityColor(r.quality_score ?? 0)}`}>
+                    <span className={`w-14 text-right t-mono-family ${qualityColor(r.quality_score ?? 0)}`}>
                       Q:{formatSigned(r.quality_score ?? 0)}
                     </span>
                     <span className="text-muted-foreground w-12 text-right">{r.time_ms}ms</span>
@@ -1012,7 +1042,7 @@ function EvaluateTab() {
                           <span>Recall: <span className={r.recalled ? "text-emerald-500 font-medium" : "text-orange-500"}>{r.recalled ? "✓" : "✗"}</span></span>
                           <span>Hard: <span className={r.hard_recall ? "text-emerald-500 font-medium" : "text-orange-500"}>{r.hard_recall ? "✓" : "✗"}</span></span>
                           <span>Holistic: <span className={r.holistic_can_answer ? "text-emerald-500 font-medium" : "text-muted-foreground"}>{r.holistic_can_answer ? "✓" : "✗"}</span></span>
-                          <span>Quality: <span className={`font-mono ${qualityColor(r.quality_score ?? 0)}`}>{formatSigned(r.quality_score ?? 0)}</span> <span className="text-[10px]">[-1, 1]</span></span>
+                          <span>Quality: <span className={`t-mono-family ${qualityColor(r.quality_score ?? 0)}`}>{formatSigned(r.quality_score ?? 0)}</span> <span className="text-[10px]">[-1, 1]</span></span>
                           <span>MRR: {(r.mrr ?? 0).toFixed(3)}</span>
                           {(r.target_position ?? 0) > 0 && <span className="text-emerald-500 font-medium">target @ #{r.target_position}</span>}
                         </div>
@@ -1038,7 +1068,7 @@ function EvaluateTab() {
                               return (
                                 <div key={j.id || i} className={`border-l-4 ${judgmentColors.border} ${judgmentColors.bg} pl-2 py-1.5`}>
                                   <div className="flex items-center gap-2 text-[10px] flex-wrap">
-                                    <span className="font-mono text-muted-foreground">#{i + 1}</span>
+                                    <span className="t-mono-family text-muted-foreground">#{i + 1}</span>
                                     <span className={`px-1.5 py-0.5 rounded text-white font-bold ${judgmentColors.badge}`}>
                                       {judgmentColors.label}
                                     </span>
@@ -1131,9 +1161,8 @@ export function RecallView() {
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="mb-5">
           <span
-            className="uppercase"
+            className="uppercase t-body-family"
             style={{
-              fontFamily: "var(--font-serif)",
               fontSize: "20px",
               fontWeight: 300,
               letterSpacing: "-0.015em",

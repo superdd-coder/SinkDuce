@@ -141,6 +141,13 @@
   --font-heading: var(--font-sans);
   --font-sans: 'Geist Variable', sans-serif;
   --font-serif: 'Source Serif 4 Variable', Georgia, serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+  /* ── Semantic font roles ── */
+  --font-display: var(--font-serif);
+  --font-ui:      var(--font-sans);
+  --font-body:    var(--font-serif);
+  --font-meta:    var(--font-sans);
+  --font-code:    var(--font-mono);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -921,6 +928,15 @@ input[type="checkbox"] {
   100% { opacity: 0;    transform: scale(1.4); }
 }
 
+/* ── Thinking diamond breathing (in-progress AQ) ── */
+@keyframes sk-diamond-breathe {
+  0%, 100% { opacity: 0.45; transform: rotate(45deg) scale(1); }
+  50%      { opacity: 1;    transform: rotate(45deg) scale(1.25); }
+}
+.sk-diamond.breathing {
+  animation: sk-diamond-breathe 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
 /* ── AI-COMP-120 · reasoning flow · 4-edge marquee via background dual-layer ── */
 /* Uses background-clip: padding-box / border-box with a transparent border.
    No mask-composite needed — works in all browsers. */
@@ -1160,4 +1176,59 @@ input[type="checkbox"] {
   .t-meta         { font: var(--t-meta-w) var(--t-meta)/var(--t-meta-lh) var(--ff-sans); letter-spacing: var(--t-meta-tr); text-transform: uppercase; color: var(--muted); }
   .t-micro        { font: var(--t-micro-w) var(--t-micro)/var(--t-micro-lh) var(--ff-sans); letter-spacing: var(--t-micro-tr); text-transform: uppercase; color: var(--muted); }
   .t-mono         { font: var(--t-mono-w) var(--t-mono)/var(--t-mono-lh) var(--ff-mono); letter-spacing: var(--t-mono-tr); color: var(--text); }
+
+  /* ── Family-only roles (preserve caller-provided size/weight) ── */
+  .t-body-family       { font-family: var(--ff-serif); }
+  .t-body-italic-family{ font-family: var(--ff-serif); font-style: italic; }
+  .t-sans-family       { font-family: var(--ff-sans); }
+  .t-mono-family       { font-family: var(--ff-mono); }
+
+/* ── Quick Chat message slide-in ── */
+@keyframes slide-in-right {
+  0%   { opacity: 0; transform: translateX(24px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Quick Chat floating button · diamond hover rotation ── */
+.quick-chat-btn:hover .diamond-outer {
+  transform: rotate(180deg);
+}
+.quick-chat-btn:hover .diamond-inner {
+  transform: rotate(-180deg);
+}
+
+/* ── Quick Chat floating button · gentle float bob ── */
+@keyframes qc-float {
+  0%, 100% { bottom: 24px; }
+  50%      { bottom: 32px; }
+}
+.quick-chat-btn {
+  animation: qc-float 3s ease-in-out infinite;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.12));
+  transition:
+    filter 0.3s ease,
+    transform 0.35s ease-out;
+}
+.quick-chat-btn:hover {
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.18));
+}
+
+/* ── Quick Chat floating button · continuous spin when sidebar open ── */
+@keyframes qc-spin-cw {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes qc-spin-ccw {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(-360deg); }
+}
+.quick-chat-btn-spinning .diamond-outer {
+  animation: qc-spin-cw 6s linear infinite;
+}
+.quick-chat-btn-spinning .diamond-inner {
+  animation: qc-spin-ccw 6s linear infinite;
+}
 }

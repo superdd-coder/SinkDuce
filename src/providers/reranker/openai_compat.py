@@ -34,21 +34,29 @@ class OpenAICompatReranker(RerankerProvider):
     def rerank(self, query: str, documents: list[str], top_k: int = 5) -> list[tuple[int, float]]:
         top_n = top_k or self._top_k or 5
 
+        # Only use Qwen-style chat fallback for Qwen reranker models
+        _is_qwen = "qwen" in self._model.lower()
         if not self._use_chat_fallback:
             try:
                 result = self._rerank_via_api(query, documents, top_n)
                 logger.debug("Rerank via API: %d results, top score=%.4f", len(result), result[0][1] if result else 0)
                 return result
             except Exception as e:
-                logger.info(
-                    "Rerank API failed (%s), falling back to chat completions for %s",
-                    e, self._model,
-                )
-                self._use_chat_fallback = True
+                if _is_qwen:
+                    logger.warning(
+                        "Rerank API failed (%s), falling back to chat completions for %s",
+                        e, self._model,
+                    )
+                    self._use_chat_fallback = True
+                else:
+                    raise
 
-        result = self._rerank_via_chat(query, documents, top_n)
-        logger.debug("Rerank via chat fallback: %d results, top score=%.4f", len(result), result[0][1] if result else 0)
-        return result
+        if self._use_chat_fallback and _is_qwen:
+            result = self._rerank_via_chat(query, documents, top_n)
+            logger.debug("Rerank via chat fallback: %d results, top score=%.4f", len(result), result[0][1] if result else 0)
+            return result
+
+        raise RuntimeError(f"Rerank failed for {self._model} and no chat fallback available")
 
     def _rerank_via_api(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
         body: dict = {
