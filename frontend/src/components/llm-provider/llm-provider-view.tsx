@@ -1199,6 +1199,20 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                       type={showMineruToken ? "text" : "password"}
                       value={mineruToken}
                       onChange={(e) => setMineruToken(e.target.value)}
+                      onBlur={async () => {
+                        try {
+                          await updateConfig("mineru", {
+                            enabled: mineruEnabled,
+                            api_token: mineruToken,
+                            base_url: "https://mineru.net/api/v4",
+                            model_version: mineruModel,
+                            is_ocr: mineruOcr,
+                            enable_formula: mineruFormula,
+                            enable_table: mineruTable,
+                            language: mineruLanguage,
+                          })
+                        } catch { /* ignore */ }
+                      }}
                       placeholder="Enter your MinerU API token"
                       disabled={!mineruEnabled}
                       className="pr-10"

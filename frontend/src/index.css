@@ -1088,6 +1088,13 @@ input[type="checkbox"] {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
+/* Suppress browser's native password reveal icon — we have our own Eye button */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear,
+input[type="password"]::-webkit-credentials-auto-fill-button {
+  display: none;
+}
+
 *::-webkit-scrollbar {
   width: 0;
   height: 0;
