@@ -875,6 +875,15 @@ export function MeetingTabs({
   // Has summary if any tab has content available (.md file or streaming)
   const hasSummary = !!(tabs.some(t => (t.type === "section" || t.tab_id === "tab_general") && t.md_file_path))
   const [mainTab, setMainTab] = useState(hasSummary ? "summary" : "notes")
+
+  // Sync mainTab when summary content appears/disappears (e.g. after async meeting load or summarization)
+  useEffect(() => {
+    if (hasSummary) {
+      setMainTab((prev) => prev === "notes" ? "summary" : prev)
+    } else {
+      setMainTab("notes")
+    }
+  }, [hasSummary])
   const [selectedSummaryId, setSelectedSummaryId] = useState("tab_general")
   const [tabMdContents, setTabMdContents] = useState<Record<string, string>>({})
 
@@ -1736,7 +1745,7 @@ export function MeetingTabs({
                 actionButtons={null}
                 toolbar={
                   isGeneral ? (
-                    <div className="px-4 pb-2 space-y-3">
+                    <div className="px-4 pt-3 pb-4 space-y-3">
                       <button
                         type="button"
                         disabled={busy || ingestingTabs.size > 0}
