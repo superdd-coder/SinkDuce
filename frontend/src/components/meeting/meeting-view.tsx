@@ -60,8 +60,6 @@ export function MeetingView() {
   // When too narrow, the panel becomes a flex sibling so the content column
   // can yield/compress instead of overflowing.
   const mainAreaRef = useRef<HTMLDivElement>(null)
-  const titleRef = useRef<HTMLDivElement>(null)
-  const [titleHeight, setTitleHeight] = useState(56)
   const [canShift, setCanShift] = useState(true)
   // Hide the metadata block (CREATED/SPEAKERS/COLLECTIONS) when the main area
   // is too narrow to fit it next to the title without crowding.
@@ -79,17 +77,6 @@ export function MeetingView() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [meeting?.id])
-
-  // Measure meeting title height for sticky tab bar offset
-  useEffect(() => {
-    const el = titleRef.current
-    if (!el) return
-    const update = () => setTitleHeight(el.getBoundingClientRect().height)
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [meeting?.id, showMetadata])
 
   // Open floating transcript when sentence reference is clicked
   useEffect(() => {
@@ -426,7 +413,7 @@ export function MeetingView() {
               floatingOpen && canShift ? "-translate-x-[196px]" : "translate-x-0",
             )}>
               {/* Header — sticky title on the left, metadata (CREATED/SPEAKERS/COLLECTIONS) on the right */}
-              <div ref={titleRef} className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0 sticky top-0 z-20 bg-background">
+              <div className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0 sticky top-0 z-20 bg-background">
               {editingTitle ? (
                 <div className="flex items-center gap-1 flex-1 min-w-0">
                   <input
@@ -648,7 +635,6 @@ export function MeetingView() {
                 floatingPanelOpen={floatingOpen}
                 canShift={canShift}
                 playbackTime={playbackTime}
-                titleHeight={titleHeight}
                 className="flex-1 min-w-0"
                 floatingPanelSlot={floatingOpen && canShift ? (
                   <div className="relative pointer-events-none" style={{ width: "100%", height: 0, overflow: "visible" }}>

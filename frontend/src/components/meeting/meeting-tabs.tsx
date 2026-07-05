@@ -42,7 +42,6 @@ interface Props {
   playbackTime?: number
   floatingPanelSlot?: ReactNode
   className?: string
-  titleHeight?: number
 }
 
 // ── Inline markdown normalizer ────────────────────────────────────
@@ -856,7 +855,6 @@ export function MeetingTabs({
   playbackTime = 0,
   floatingPanelSlot,
   className,
-  titleHeight = 56,
 }: Props) {
   const tabs = meeting.tabs ?? []
   const speakerNames: Record<string, string> = meeting.speaker_names ?? {}
