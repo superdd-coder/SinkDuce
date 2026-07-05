@@ -60,6 +60,8 @@ export function MeetingView() {
   // When too narrow, the panel becomes a flex sibling so the content column
   // can yield/compress instead of overflowing.
   const mainAreaRef = useRef<HTMLDivElement>(null)
+  const titleRef = useRef<HTMLDivElement>(null)
+  const [titleHeight, setTitleHeight] = useState(56)
   const [canShift, setCanShift] = useState(true)
   // Hide the metadata block (CREATED/SPEAKERS/COLLECTIONS) when the main area
   // is too narrow to fit it next to the title without crowding.
@@ -77,6 +79,17 @@ export function MeetingView() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [meeting?.id])
+
+  // Measure meeting title height for sticky tab bar offset
+  useEffect(() => {
+    const el = titleRef.current
+    if (!el) return
+    const update = () => setTitleHeight(el.getBoundingClientRect().height)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [meeting?.id, showMetadata])
 
   // Open floating transcript when sentence reference is clicked
   useEffect(() => {
@@ -412,8 +425,8 @@ export function MeetingView() {
               "flex-1 flex flex-col min-h-0 max-w-[800px] mx-auto w-full transition-transform duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
               floatingOpen && canShift ? "-translate-x-[196px]" : "translate-x-0",
             )}>
-              {/* Header — title on the left, metadata (CREATED/SPEAKERS/COLLECTIONS) on the right */}
-              <div className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0">
+              {/* Header — sticky title on the left, metadata (CREATED/SPEAKERS/COLLECTIONS) on the right */}
+              <div ref={titleRef} className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0 sticky top-0 z-20 bg-background">
               {editingTitle ? (
                 <div className="flex items-center gap-1 flex-1 min-w-0">
                   <input
@@ -505,6 +518,9 @@ export function MeetingView() {
               </div>
               )}
             </div>
+
+            {/* ── Scroll container: everything below the sticky title scrolls together ── */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
 
             {/* TOPICS — own row below the title row, left-aligned, width capped to heading+button */}
             <div className="flex items-start justify-between gap-4 px-4 pb-1 pt-4 shrink-0 text-[11px] text-muted-foreground">
@@ -615,7 +631,7 @@ export function MeetingView() {
             )}
 
             {/* Content: MeetingTabs + (narrow mode) floating panel as flex sibling. */}
-            <div ref={meetingContentRef} className="flex-1 min-h-0 flex w-full">
+            <div ref={meetingContentRef} className="flex w-full">
               <MeetingTabs
                 key={meeting.id}
                 meetingId={meeting.id}
@@ -632,6 +648,7 @@ export function MeetingView() {
                 floatingPanelOpen={floatingOpen}
                 canShift={canShift}
                 playbackTime={playbackTime}
+                titleHeight={titleHeight}
                 className="flex-1 min-w-0"
                 floatingPanelSlot={floatingOpen && canShift ? (
                   <div className="relative pointer-events-none" style={{ width: "100%", height: 0, overflow: "visible" }}>
@@ -699,6 +716,7 @@ export function MeetingView() {
                   </div>
                 </div>
               )}
+            </div>
             </div>
             </div>
           </div>

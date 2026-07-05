@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -42,6 +42,7 @@ interface Props {
   playbackTime?: number
   floatingPanelSlot?: ReactNode
   className?: string
+  titleHeight?: number
 }
 
 // ── Inline markdown normalizer ────────────────────────────────────
@@ -203,6 +204,7 @@ function EditableSectionContent({
   metadata,
   toolbar,
   actionsDisabled,
+  stickyOffset = 0,
 }: {
   content: string
   onSave: (updated: string) => Promise<void>
@@ -213,6 +215,7 @@ function EditableSectionContent({
   metadata?: ReactNode
   toolbar?: ReactNode
   actionsDisabled?: boolean
+  stickyOffset?: number
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(content)
@@ -240,8 +243,8 @@ function EditableSectionContent({
     <div className="relative min-h-full">
       {/* Sticky header with title (General only) */}
       {(title || actionButtons) && (
-      <div className="sticky top-0 z-10 -mx-2 bg-background/80 backdrop-blur-sm">
-        <div className="flex items-center justify-between px-6 py-[14px]">
+      <div className="sticky z-10 -mx-2 bg-background/80 backdrop-blur-sm" style={{ top: `${stickyOffset}px` }}>
+        <div className="flex items-center justify-between px-6 py-2">
           <div
             className="min-w-0 truncate t-body-family"
             style={{
@@ -263,7 +266,7 @@ function EditableSectionContent({
             {actionButtons}
           </div>
         </div>
-        <div className="flex items-center justify-between px-6 pb-3">
+        <div className="flex items-center justify-between px-6 pb-1">
           <div className="flex-1 h-px bg-border" />
           {!editing && !actionsDisabled && (
             <Button variant="ghost" size="icon" className="h-7 w-7 ml-2 shrink-0" onClick={() => setEditing(true)} title="Edit">
@@ -297,7 +300,7 @@ function EditableSectionContent({
             value={draft}
             onChange={setDraft}
             minHeight="250px"
-            stickyToolbarOffset={72}
+            stickyToolbarOffset={stickyOffset + ((title || actionButtons) ? 53 : 0)}
             toolbarActions={
               <div className="flex items-center gap-2">
                 <button
@@ -333,21 +336,23 @@ function EditableSectionContent({
 
 // ── Section metadata (between title bar and content) ──────────────
 
-function SectionMetadata({
-  tab,
-  blueprint,
-  tabs,
-  meetingId,
-  onMeetingUpdate,
-  onIngestingChange,
-}: {
+const SectionMetadata = forwardRef<{ startEditing: () => void }, {
   tab: MeetingTab
   blueprint: Meeting["blueprint"]
   tabs: MeetingTab[]
   meetingId: string
   onMeetingUpdate: (m: Meeting) => void
   onIngestingChange?: (tabId: string, v: boolean) => void
-}) {
+  hideTitle?: boolean
+}>(function SectionMetadata({
+  tab,
+  blueprint,
+  tabs,
+  meetingId,
+  onMeetingUpdate,
+  onIngestingChange,
+  hideTitle,
+}, ref) {
   const bpEntry = (blueprint ?? []).find((b) => b.blueprint_id === tab.blueprint_id)
   // Tab now carries its own description (set at extract time).
   // Fall back to blueprint for tabs created before the description field existed.
@@ -392,6 +397,10 @@ function SectionMetadata({
   const [descDraft, setDescDraft] = useState(description)
   const savingRef = useRef(false)  // sync guard: prevents double-save from blur + click
   const editContainerRef = useRef<HTMLDivElement>(null)
+
+  useImperativeHandle(ref, () => ({
+    startEditing: () => setEditingMeta(true),
+  }))
 
   // Click-outside handler for inline editing
   useEffect(() => {
@@ -583,10 +592,15 @@ function SectionMetadata({
     <div ref={containerRef} className="px-6 py-3 pb-4 flex gap-4 group relative">
       {/* Left column: section title + description */}
       <div className="flex-1 min-w-0 flex flex-col gap-1 relative items-start">
-        {/* Edit button — appears on hover at top-right of left column */}
+        {/* Edit button — appears on hover at top-right of left column (or always visible when title is hidden) */}
         {!editingMeta && (
           <button
-            className="absolute top-0 -right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent"
+            className={cn(
+              "h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-opacity duration-200",
+              hideTitle
+                ? "absolute top-0 -right-1 opacity-0 group-hover:opacity-100"
+                : "absolute top-0 -right-1 opacity-0 group-hover:opacity-100",
+            )}
             onClick={() => setEditingMeta(true)}
             title="Edit section"
           >
@@ -624,16 +638,17 @@ function SectionMetadata({
               />
             </div>
             <textarea
-              className="text-xs text-muted-foreground bg-transparent border-b border-border outline-none px-0 py-1 flex-1 resize-none min-h-[40px]"
+              className="text-xs text-muted-foreground bg-transparent border-b border-border outline-none px-0 py-1 flex-1 resize-none min-h-[80px]"
               placeholder="Section description..."
               value={descDraft}
               onChange={(e) => setDescDraft(e.target.value)}
-              rows={2}
+              rows={4}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitMeta() } }}
             />
           </div>
         ) : (
           <>
+            {!hideTitle && (
             <div
               className="whitespace-normal break-words w-full t-body-family"
               style={{
@@ -647,6 +662,7 @@ function SectionMetadata({
             >
               {tabLabel} {sectionDisplayName}
             </div>
+            )}
             {description && (
               <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
             )}
@@ -663,7 +679,7 @@ function SectionMetadata({
             onClick={displayActive ? () => setCancelOpen(true) : () => handleIngest(associatedId)}
             title={displayActive ? "Click to cancel ingestion" : displaySuggestion ? "Click to ingest" : undefined}
             className={cn(
-              "group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
+              "group relative z-0 flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
               ingesting && "sk-thinking-flow",
               // Dashed outline for suggestion state (not yet ingested)
               displaySuggestion && !ingesting && "border border-dashed border-green-600/40",
@@ -693,7 +709,7 @@ function SectionMetadata({
           ref={buttonRef}
           disabled={ingesting}
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
+          className="group relative z-0 flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
           style={{
             fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
             color: dropdownOpen
@@ -715,7 +731,7 @@ function SectionMetadata({
         {createPortal(
           <div
             ref={dropdownContentRef}
-            className={`fixed z-[100] flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+            className={`fixed z-50 flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
               dropdownOpen
                 ? "opacity-100 visible translate-y-0 pointer-events-auto"
                 : "opacity-0 invisible translate-y-3 pointer-events-none"
@@ -825,7 +841,7 @@ function SectionMetadata({
       </Dialog>
     </div>
   )
-}
+})
 
 // ── Main component ────────────────────────────────────────────────
 
@@ -840,6 +856,7 @@ export function MeetingTabs({
   playbackTime = 0,
   floatingPanelSlot,
   className,
+  titleHeight = 56,
 }: Props) {
   const tabs = meeting.tabs ?? []
   const speakerNames: Record<string, string> = meeting.speaker_names ?? {}
@@ -1036,8 +1053,23 @@ export function MeetingTabs({
   const [reSummarizeOpen, setReSummarizeOpen] = useState(false)
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
   const [deleteSectionTarget, setDeleteSectionTarget] = useState<string | null>(null)
+  const sectionMetaRef = useRef<{ startEditing: () => void }>(null)
   const [summaryHoverOpen, setSummaryHoverOpen] = useState(false)
   const summaryHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null)
+
+  // Track dropdown position continuously when open (follows button on scroll)
+  useEffect(() => {
+    if (!summaryHoverOpen) return
+    const update = () => {
+      const rect = summaryBtnRef.current?.getBoundingClientRect()
+      if (rect) setDropdownPos({ top: rect.bottom, left: rect.left })
+    }
+    update()
+    window.addEventListener("scroll", update, { passive: true, capture: true })
+    return () => window.removeEventListener("scroll", update, { capture: true })
+  }, [summaryHoverOpen])
+
   const summaryBarRef = useRef<HTMLDivElement>(null)
   const tabContainerRef = useRef<HTMLDivElement>(null)
   const summaryBtnRef = useRef<HTMLButtonElement>(null)
@@ -1413,15 +1445,16 @@ export function MeetingTabs({
   const isTabGenerating = selectedTab?.processing_state === "generating"
 
   return (
-    <div className={cn("flex-1 flex flex-col min-h-0", className)}>
+    <div className={cn("flex flex-col", className)}>
 
-      {/* ── Tab bar: extends right when floating panel opens (wide mode only) ── */}
+      {/* ── Tab bar: sticky below meeting title, extends right when floating panel opens ── */}
       <div
         ref={summaryBarRef}
         className={cn(
-          "relative flex items-center border-b border-border px-2 shrink-0 transition-[margin-right] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+          "sticky flex items-center border-b border-border px-2 shrink-0 transition-[margin-right] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] bg-background z-10",
           floatingPanelOpen && canShift ? "-mr-[320px]" : "mr-0",
         )}
+        style={{ top: 0 }}
       >
         <div ref={tabContainerRef} className="flex items-center relative">
           <button
@@ -1435,7 +1468,11 @@ export function MeetingTabs({
             onClick={() => setMainTab("summary")}
             onMouseEnter={() => {
               if (summaryHoverTimer.current) { clearTimeout(summaryHoverTimer.current); summaryHoverTimer.current = null }
-              if (hasBlueprint) setSummaryHoverOpen(true)
+              if (hasBlueprint) {
+                const rect = summaryBtnRef.current?.getBoundingClientRect()
+                if (rect) setDropdownPos({ top: rect.bottom, left: rect.left })
+                setSummaryHoverOpen(true)
+              }
             }}
             onMouseLeave={() => {
               summaryHoverTimer.current = setTimeout(() => setSummaryHoverOpen(false), 150)
@@ -1491,14 +1528,16 @@ export function MeetingTabs({
         </div>
         {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground ml-2" />}
 
-      {/* Hover dropdown — section picker below the Summary tab */}
+      {/* Hover dropdown — section picker below the Summary tab (portal to avoid overflow clipping) */}
+        {dropdownPos && createPortal(
         <div
           className={cn(
-            "absolute z-50 top-full left-2 mt-0 w-56 overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+            "fixed z-50 w-56 overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
             summaryHoverOpen
               ? "opacity-100 visible translate-y-0 pointer-events-auto"
               : "opacity-0 invisible -translate-y-3 pointer-events-none",
           )}
+          style={{ top: dropdownPos.top, left: dropdownPos.left }}
           onMouseEnter={() => {
             if (summaryHoverTimer.current) { clearTimeout(summaryHoverTimer.current); summaryHoverTimer.current = null }
             setSummaryHoverOpen(true)
@@ -1547,6 +1586,7 @@ export function MeetingTabs({
           ))}
 
         </div>
+        , document.body)}
       </div>
 
       {floatingPanelSlot}
@@ -1554,11 +1594,11 @@ export function MeetingTabs({
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
         mainTab === "summary"
-          ? "flex-1 flex flex-col min-h-0 opacity-100"
-          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+          ? "flex flex-col opacity-100"
+          : "hidden",
       )}>
-        {/* Content area */}
-        <div className="flex-1 min-h-0 overflow-auto">
+        {/* Content area — scroll handled by parent */}
+        <div className="min-h-[400px]">
           {/* ═══ Blueprint skeleton — stays until streaming fully ends ═══ */}
           {(bpStream.blueprintGenState !== "idle" || bpStream.isStreaming) && isGeneral && !hasSections && (
             <div className="px-6 pt-6">
@@ -1737,10 +1777,22 @@ export function MeetingTabs({
                 onRefClick={handleRefClick}
                 speakerNames={speakerNames}
                 actionsDisabled={ingestingTabs.has(selectedSummaryId)}
+                stickyOffset={36}
                 title={
                   isGeneral
                     ? "General"
-                    : ""
+                    : selectedTab ? (
+                        <span className="group/title inline-flex items-center gap-1.5">
+                          <span>{tabShortLabel(selectedTab)} {selectedTab.name || (blueprint as any[]).find((b: any) => b.blueprint_id === selectedTab.blueprint_id)?.tab_name || ""}</span>
+                          <button
+                            className="opacity-0 group-hover/title:opacity-100 transition-opacity duration-200 h-6 w-6 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent shrink-0"
+                            onClick={(e) => { e.stopPropagation(); sectionMetaRef.current?.startEditing() }}
+                            title="Edit section name"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ) : ""
                 }
                 actionButtons={null}
                 toolbar={
@@ -1965,11 +2017,13 @@ export function MeetingTabs({
                 metadata={
                   !isGeneral && selectedTab ? (
                     <SectionMetadata
+                      ref={sectionMetaRef}
                       tab={selectedTab}
                       blueprint={blueprint}
                       tabs={tabs}
                       meetingId={meetingId}
                       onMeetingUpdate={onMeetingUpdate}
+                      hideTitle
                       onIngestingChange={(tabId, v) => {
                         setIngestingTabs(prev => {
                           const next = new Set(prev);
@@ -1992,15 +2046,15 @@ export function MeetingTabs({
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
         mainTab === "notes"
-          ? "flex-1 flex flex-col min-h-0 opacity-100"
-          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+          ? "flex flex-col opacity-100"
+          : "hidden",
       )}>
-        <div className="flex-1 min-h-0 overflow-auto">
+        <div>
           <MarkdownEditor
             value={notesDraft}
             onChange={handleNotesChange}
-            minHeight="250px"
-            stickyToolbarOffset={6}
+            minHeight="400px"
+            stickyToolbarOffset={36}
             placeholder="Write your meeting notes here (Markdown supported)..."
           />
         </div>
@@ -2010,10 +2064,10 @@ export function MeetingTabs({
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
         mainTab === "transcript"
-          ? "flex-1 flex flex-col min-h-0"
-          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+          ? "flex flex-col"
+          : "hidden",
       )}>
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="min-h-[400px]">
           <TranscriptTab
             segments={transcriptSegments}
             partialText={partialText}
@@ -2031,10 +2085,10 @@ export function MeetingTabs({
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
         mainTab === "speaker"
-          ? "flex-1 flex flex-col min-h-0"
-          : "opacity-0 invisible absolute inset-0 pointer-events-none",
+          ? "flex flex-col"
+          : "hidden",
       )}>
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="min-h-[400px]">
         <SpeakersTab
           segments={transcriptSegments}
           speakerNames={speakerNames}
