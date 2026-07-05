@@ -54,7 +54,7 @@ export function MeetingView() {
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
   const [floatingOpen, setFloatingOpen] = useState(false)
-  const [floatingPanelPos, setFloatingPanelPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
+  const floatingPanelRef = useRef<HTMLDivElement>(null)
   const [playbackTime, setPlaybackTime] = useState(0)
 
   // When the main content area is wide enough, we left-shift the centered column
@@ -90,23 +90,22 @@ export function MeetingView() {
     setFloatingOpen(false)
   }, [activeMeeting])
 
-  // Track floating panel position on scroll (Portal-escaped from overflow clipping)
-  // Clamp top so panel anchors to tab bar when it sticks below the meeting title
+  // Track floating panel position on scroll — direct DOM manipulation for smooth 60fps
   useEffect(() => {
     if (!floatingOpen || !canShift) return
     let raf = 0
+    const panel = floatingPanelRef.current
     const update = () => {
-      if (raf) return
+      if (raf || !panel) return
       raf = requestAnimationFrame(() => {
         raf = 0
         const contentRect = meetingContentRef.current?.getBoundingClientRect()
-        if (!contentRect) return
+        if (!contentRect || !panel) return
         const titleBottom = document.querySelector('[data-meeting-title]')?.getBoundingClientRect().bottom ?? 56
         const tabBarBottom = titleBottom + 36
-        setFloatingPanelPos({
-          top: Math.max(contentRect.top, tabBarBottom),
-          left: contentRect.right + 20,
-        })
+        const top = Math.max(contentRect.top, tabBarBottom)
+        panel.style.top = `${top}px`
+        panel.style.left = `${contentRect.right + 20}px`
       })
     }
     update()
@@ -698,11 +697,11 @@ export function MeetingView() {
 
             {/* Wide-mode floating transcript panel — Portal to avoid scroll-container clipping */}
             {floatingOpen && canShift && createPortal(
-              <div className="fixed z-30 flex flex-col animate-slide-up py-5" style={{
+              <div ref={floatingPanelRef} className="fixed z-30 flex flex-col animate-slide-up py-5" style={{
                 width: "min(320px, calc(100vw - 520px))",
-                height: "calc(100vh - 200px)",
-                top: floatingPanelPos.top,
-                left: floatingPanelPos.left,
+                top: 0,
+                left: 0,
+                bottom: 0,
               }}>
                 <div className="flex flex-col flex-1 min-h-0 border-l border-primary/45 bg-background/95 backdrop-blur-sm">
                   <div className="flex items-center justify-between px-3 h-9 pb-2 shrink-0">
