@@ -94,15 +94,19 @@ export function MeetingView() {
   // Clamp top so panel anchors to tab bar when it sticks below the meeting title
   useEffect(() => {
     if (!floatingOpen || !canShift) return
+    let raf = 0
     const update = () => {
-      const contentRect = meetingContentRef.current?.getBoundingClientRect()
-      if (!contentRect) return
-      // Tab bar (36px) sits at top of MeetingTabs; sticky title bottom is the clamp point
-      const titleBottom = document.querySelector('[data-meeting-title]')?.getBoundingClientRect().bottom ?? 56
-      const tabBarBottom = titleBottom + 36
-      setFloatingPanelPos({
-        top: Math.max(contentRect.top, tabBarBottom),
-        left: contentRect.right + 20,
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        const contentRect = meetingContentRef.current?.getBoundingClientRect()
+        if (!contentRect) return
+        const titleBottom = document.querySelector('[data-meeting-title]')?.getBoundingClientRect().bottom ?? 56
+        const tabBarBottom = titleBottom + 36
+        setFloatingPanelPos({
+          top: Math.max(contentRect.top, tabBarBottom),
+          left: contentRect.right + 20,
+        })
       })
     }
     update()
@@ -529,7 +533,7 @@ export function MeetingView() {
             </div>
 
             {/* ── Scroll container: everything below the sticky title scrolls together ── */}
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
 
             {/* TOPICS — own row below the title row, left-aligned, width capped to heading+button */}
             <div className="flex items-start justify-between gap-4 px-4 pb-1 pt-4 shrink-0 text-[11px] text-muted-foreground">
