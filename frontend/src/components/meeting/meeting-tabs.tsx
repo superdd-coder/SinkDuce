@@ -40,7 +40,6 @@ interface Props {
   floatingPanelOpen?: boolean
   canShift?: boolean
   playbackTime?: number
-  floatingPanelSlot?: ReactNode
   className?: string
 }
 
@@ -853,7 +852,6 @@ export function MeetingTabs({
   floatingPanelOpen,
   canShift = true,
   playbackTime = 0,
-  floatingPanelSlot,
   className,
 }: Props) {
   const tabs = meeting.tabs ?? []
@@ -1587,7 +1585,6 @@ export function MeetingTabs({
         , document.body)}
       </div>
 
-      {floatingPanelSlot}
       {/* ── Summary Tab ── */}
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",

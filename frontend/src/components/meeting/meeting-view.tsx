@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react"
+import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -53,6 +54,7 @@ export function MeetingView() {
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
   const [floatingOpen, setFloatingOpen] = useState(false)
+  const [floatingPanelPos, setFloatingPanelPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
   const [playbackTime, setPlaybackTime] = useState(0)
 
   // When the main content area is wide enough, we left-shift the centered column
@@ -87,6 +89,26 @@ export function MeetingView() {
   useEffect(() => {
     setFloatingOpen(false)
   }, [activeMeeting])
+
+  // Track floating panel position on scroll (Portal-escaped from overflow clipping)
+  // Clamp top so panel anchors to tab bar when it sticks below the meeting title
+  useEffect(() => {
+    if (!floatingOpen || !canShift) return
+    const update = () => {
+      const contentRect = meetingContentRef.current?.getBoundingClientRect()
+      if (!contentRect) return
+      // Tab bar (36px) sits at top of MeetingTabs; sticky title bottom is the clamp point
+      const titleBottom = document.querySelector('[data-meeting-title]')?.getBoundingClientRect().bottom ?? 56
+      const tabBarBottom = titleBottom + 36
+      setFloatingPanelPos({
+        top: Math.max(contentRect.top, tabBarBottom),
+        left: contentRect.right + 20,
+      })
+    }
+    update()
+    window.addEventListener("scroll", update, { passive: true, capture: true })
+    return () => window.removeEventListener("scroll", update, { capture: true })
+  }, [floatingOpen, canShift])
 
   // Hooks
   const transcription = useTranscription(activeMeeting)
@@ -413,7 +435,7 @@ export function MeetingView() {
               floatingOpen && canShift ? "-translate-x-[196px]" : "translate-x-0",
             )}>
               {/* Header — sticky title on the left, metadata (CREATED/SPEAKERS/COLLECTIONS) on the right */}
-              <div className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0 sticky top-0 z-20 bg-background">
+              <div data-meeting-title className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0 sticky top-0 z-20 bg-background">
               {editingTitle ? (
                 <div className="flex items-center gap-1 flex-1 min-w-0">
                   <input
@@ -617,7 +639,7 @@ export function MeetingView() {
               </div>
             )}
 
-            {/* Content: MeetingTabs + (narrow mode) floating panel as flex sibling. */}
+            {/* Content: MeetingTabs + narrow floating panel */}
             <div ref={meetingContentRef} className="flex w-full">
               <MeetingTabs
                 key={meeting.id}
@@ -636,42 +658,6 @@ export function MeetingView() {
                 canShift={canShift}
                 playbackTime={playbackTime}
                 className="flex-1 min-w-0"
-                floatingPanelSlot={floatingOpen && canShift ? (
-                  <div className="relative pointer-events-none" style={{ width: "100%", height: 0, overflow: "visible" }}>
-                    <div
-                      className="absolute left-full top-0 pl-5 z-30 flex flex-col animate-slide-up py-5"
-                      style={{
-                        width: "min(320px, calc(100vw - 520px))",
-                        height: "calc(100vh - 200px)",
-                      }}
-                    >
-                      <div className="flex flex-col flex-1 min-h-0 border-l border-primary/45 bg-transparent pointer-events-auto">
-                        <div className="flex items-center justify-between px-3 h-9 pb-2 shrink-0">
-                          <span className="text-xs font-light uppercase tracking-[0.15em] text-muted-foreground whitespace-nowrap">Transcript</span>
-                          <button
-                            onClick={() => setFloatingOpen(false)}
-                            className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                          >
-                            <XIcon className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                        <div className="flex-1 min-h-0 overflow-y-auto">
-                          <TranscriptTab
-                            segments={transcription.segments.length > 0 ? transcription.segments : transcript}
-                            partialText={transcription.currentPartial}
-                            onSegmentClick={handleSegmentClick}
-                            focusRef={focusRef}
-                            activeSectionTag={activeSectionTag}
-                            speakerNames={meeting.speaker_names ?? {}}
-                            tabs={meeting?.tabs}
-                            showSearch={false}
-                            playbackTime={playbackTime}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
               />
               {/* Narrow mode: floating panel as a flex sibling so the content column yields. */}
               {floatingOpen && !canShift && (
@@ -705,6 +691,42 @@ export function MeetingView() {
             </div>
             </div>
             </div>
+
+            {/* Wide-mode floating transcript panel — Portal to avoid scroll-container clipping */}
+            {floatingOpen && canShift && createPortal(
+              <div className="fixed z-30 flex flex-col animate-slide-up py-5" style={{
+                width: "min(320px, calc(100vw - 520px))",
+                height: "calc(100vh - 200px)",
+                top: floatingPanelPos.top,
+                left: floatingPanelPos.left,
+              }}>
+                <div className="flex flex-col flex-1 min-h-0 border-l border-primary/45 bg-background/95 backdrop-blur-sm">
+                  <div className="flex items-center justify-between px-3 h-9 pb-2 shrink-0">
+                    <span className="text-xs font-light uppercase tracking-[0.15em] text-muted-foreground whitespace-nowrap">Transcript</span>
+                    <button
+                      onClick={() => setFloatingOpen(false)}
+                      className="h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    >
+                      <XIcon className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    <TranscriptTab
+                      segments={transcription.segments.length > 0 ? transcription.segments : transcript}
+                      partialText={transcription.currentPartial}
+                      onSegmentClick={handleSegmentClick}
+                      focusRef={focusRef}
+                      activeSectionTag={activeSectionTag}
+                      speakerNames={meeting.speaker_names ?? {}}
+                      tabs={meeting?.tabs}
+                      showSearch={false}
+                      playbackTime={playbackTime}
+                    />
+                  </div>
+                </div>
+              </div>, document.body
+            )}
+
           </div>
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
