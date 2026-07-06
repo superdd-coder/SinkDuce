@@ -27,8 +27,6 @@ interface MarkdownEditorProps {
   onEditorReady?: (editor: any) => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
-  /** Called when user clicks Visual Translate on an image. Receives image URL, returns description string. */
-  onVisualTranslate?: (imageUrl: string) => Promise<string>
   /** Top offset for sticky toolbar (px). Default 0. */
   stickyToolbarOffset?: number
   /** Extra toolbar actions rendered at the right side. */
@@ -51,7 +49,6 @@ function TyporaEditor({
   onDistillNavigate,
   onEditorReady,
   showToolbar,
-  onVisualTranslate,
   stickyToolbarOffset,
   toolbarActions,
 }: Omit<MarkdownEditorProps, "variant">) {
@@ -69,7 +66,6 @@ function TyporaEditor({
       onDistillNavigate={onDistillNavigate}
       onEditorReady={onEditorReady}
       showToolbar={showToolbar}
-      onVisualTranslate={onVisualTranslate}
       stickyToolbarOffset={stickyToolbarOffset}
       toolbarActions={toolbarActions}
     />

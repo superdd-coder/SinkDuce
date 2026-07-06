@@ -3,16 +3,20 @@
 Converts .docx files to Markdown via mammoth, preserving formatting
 (bold, italic, lists, headings, tables) that python-docx's para.text drops.
 Output uses file_type="markdown" so it routes to MarkdownChunker.
+
+Images are extracted via python-docx and appended as :::image fenced blocks
+at the end of the document content.
 """
 
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
 
 import mammoth
 
-from src.parsers.base import DocumentParser, ParsedDocument
+from src.parsers.base import DocumentParser, ImageInfo, ParsedDocument
 
 
 def clean_mammoth_markdown(text: str) -> str:
@@ -34,7 +38,42 @@ def clean_mammoth_markdown(text: str) -> str:
     # 4. Clean up empty/trailing-whitespace bold markers (e.g. "** " or "** **")
     text = re.sub(r"\*\*\s+\*\*", "", text)
 
+    # 5. Remove mammoth's default base64-embedded images — we handle images separately
+    text = re.sub(r"!\[[^\]]*\]\(data:image/[^)]+\)", "", text)
+
     return text
+
+
+def _extract_images_from_docx(path: Path) -> list[ImageInfo]:
+    """Extract embedded images from a .docx file.
+
+    Walks the OPC package relationships to find image parts.
+    """
+    from docx import Document
+
+    images: list[ImageInfo] = []
+    try:
+        doc = Document(str(path))
+    except Exception:
+        return images
+
+    # Walk all relationships in the document part looking for images
+    for rel in doc.part.rels.values():
+        if "image" in (rel.reltype or ""):
+            try:
+                image_bytes = rel.target_part.blob
+                content_type = rel.target_part.content_type
+                fmt = content_type.split("/")[-1] if "/" in content_type else "png"
+                img_id = uuid.uuid4().hex
+                images.append(ImageInfo(
+                    image_id=img_id,
+                    image_bytes=image_bytes,
+                    image_format=fmt,
+                ))
+            except Exception:
+                pass
+
+    return images
 
 
 class DocxParser(DocumentParser):
@@ -43,6 +82,22 @@ class DocxParser(DocumentParser):
             result = mammoth.convert_to_markdown(f)
 
         text = clean_mammoth_markdown(result.value)
+
+        # Extract images via python-docx
+        images = _extract_images_from_docx(path)
+
+        # Append :::image blocks at the end of the document
+        if images:
+            blocks = []
+            for img in images:
+                blocks.append(
+                    f":::image\n"
+                    f"image_id: {img.image_id}\n"
+                    f"file_id: \n"
+                    f"description: \n"
+                    f":::"
+                )
+            text = text.rstrip() + "\n\n" + "\n\n".join(blocks)
 
         # Build position_map from heading positions
         position_map: list[dict] = []
@@ -61,4 +116,5 @@ class DocxParser(DocumentParser):
             source_path=str(path),
             file_type="markdown",
             position_map=position_map,
+            images=images,
         )

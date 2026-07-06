@@ -10,9 +10,36 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _extract_images_base64(chunks: list) -> dict[str, dict]:
+    """Extract and encode images referenced in chunk metadata."""
+    from src.parsers.image_utils import encode_image_base64
+
+    images: dict[str, dict] = {}
+    seen: set[str] = set()
+    for chunk in chunks:
+        meta = getattr(chunk, "metadata", {}) if hasattr(chunk, "metadata") else {}
+        chunk_images = meta.get("images", [])
+        if not isinstance(chunk_images, list):
+            continue
+        for img_ref in chunk_images:
+            if not isinstance(img_ref, dict):
+                continue
+            img_id = img_ref.get("image_id", "")
+            file_id = img_ref.get("file_id", "")
+            if not img_id or not file_id or img_id in seen:
+                continue
+            seen.add(img_id)
+            encoded = encode_image_base64(img_id, file_id)
+            if encoded:
+                b64, mime = encoded
+                images[img_id] = {"base64": b64, "mime": mime}
+    return images
+
+
 async def search_knowledge_base(
     raw_query: str,
     generate_answer: bool = True,
+    include_images: bool = False,
 ) -> str:
     """Search the private knowledge base with agentic RAG and optional AI-generated answer.
 
@@ -20,10 +47,12 @@ async def search_knowledge_base(
     No ``collection`` parameter needed — the system auto-discovers the most relevant collections.
 
     Set ``generate_answer=False`` for raw chunk results without LLM generation.
+    Set ``include_images=True`` to include base64-encoded images from retrieved chunks.
+    Use this when your LLM supports vision/image input.
 
     Returns a JSON string::
 
-        {"answer": "...", "sources": [...], "tasks": [...]}
+        {"answer": "...", "sources": [...], "tasks": [...], "images": {...}}
     """
     from src.services import services
 
@@ -31,7 +60,7 @@ async def search_knowledge_base(
         if not services.agentic_query:
             return {"error": "Agentic query service not available"}
 
-        result = services.agentic_query.run(raw_query, generate_answer=generate_answer)
+        result = services.agentic_query.run(raw_query, generate_answer=generate_answer, include_images=include_images)
 
         sources = [
             {
@@ -46,11 +75,14 @@ async def search_knowledge_base(
             for c in (result.all_chunks or [])
         ]
 
-        return {
+        response = {
             "answer": result.answer,
             "sources": sources,
             "tasks": result.tasks,
         }
+        if include_images and result.images:
+            response["images"] = result.images
+        return response
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, _run)
@@ -66,11 +98,14 @@ async def search_chunks(
     rerank_top_k: int = 5,
     use_reranker: bool = False,
     min_score: float = 0.0,
+    include_images: bool = False,
 ) -> str:
     """Search for relevant document chunks without LLM generation.
 
     Returns raw chunks with relevance scores. Use this for debugging retrieval
     quality or retrieving context for your own processing.
+
+    Set ``include_images=True`` to include base64-encoded images from retrieved chunks.
     """
     from src.services import services
     from src.rag.collection_utils import get_embedding_overrides
@@ -101,11 +136,13 @@ async def search_chunks(
                     "chunk_type": c.metadata.get("chunk_type", "normal"),
                     "context": c.metadata.get("context"),
                     "id": c.metadata.get("id", ""),
+                    "images": c.metadata.get("images", []),
                 }
                 for c in dq_result.chunks
             ],
             "query_used": query,
             "total": len(dq_result.chunks),
+            **({"images": _extract_images_base64(dq_result.chunks)} if include_images else {}),
         }
 
     loop = asyncio.get_running_loop()

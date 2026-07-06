@@ -565,16 +565,46 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                     "The file may be empty or the images could not be read by OCR."
                 )
 
+            file_dir = path.parent
+
+            # ── Image processing: filter, save, describe, update content ──
+            if doc.images and file_id:
+                from src.parsers.image_utils import process_document_images
+                from src.config import get_config
+
+                # Resolve Vision LLM config
+                cfg = get_config()
+                vision_provider = None
+                vision_model_id = cfg.visual_model_id if hasattr(cfg, "visual_model_id") else ""
+                if vision_model_id:
+                    for p in cfg.llm.providers:
+                        if hasattr(p, "visual_model_ids") and vision_model_id in p.visual_model_ids:
+                            vision_provider = p
+                            break
+
+                # Use the VISUAL_PROMPT from prompts.py
+                from src.prompts import VISUAL_PROMPT
+
+                doc = process_document_images(
+                    doc, file_id, file_dir,
+                    vision_provider=vision_provider,
+                    vision_model_id=vision_model_id,
+                    vision_prompt=VISUAL_PROMPT,
+                )
+                logger.info("[%s] Image processing done: %d images in doc",
+                            filename_param, len(doc.images or []))
+
             # Save parsed text for preview (same text the chunker uses)
             try:
-                file_dir = path.parent
                 parsed_path = file_dir / "parsed.txt"
                 parsed_path.write_text(doc.content, encoding="utf-8")
             except Exception as e:
                 logger.warning("[%s] Failed to save parsed text: %s", filename_param, e)
 
             update(40, "Chunking...")
-            use_markdown_chunker = doc.file_type == "markdown"
+            # Use MarkdownChunker when content has ::: blocks (images, distill, etc.)
+            # so fenced blocks are treated as atomic units and not split across chunks.
+            use_markdown_chunker = doc.file_type == "markdown" or bool(doc.images)
 
             if config.get("chunk_mode") == "parent_child":
                 if use_markdown_chunker:
@@ -628,6 +658,13 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             )
             logger.info("[%s] Chunking done in %.1fs, %d chunks",
                         filename_param, time.time() - t_chunk, len(chunks))
+
+            # Annotate chunk metadata with image references
+            if doc.images:
+                from src.parsers.image_utils import annotate_chunks_with_images
+                annotate_chunks_with_images(chunks, doc.images)
+                logger.info("[%s] Annotated chunks with %d image references",
+                            filename_param, len(doc.images))
 
             if not chunks:
                 raise ValueError(

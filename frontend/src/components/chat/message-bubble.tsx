@@ -1,4 +1,4 @@
-import { memo, useState } from "react"
+import { memo, useEffect, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { ChevronDown, ChevronRight, Brain } from "lucide-react"
@@ -8,6 +8,7 @@ import type { Message, Source, TimelineBlock } from "@/stores/app-store"
 
 function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(true)
+  useEffect(() => { if (!isStreaming) setExpanded(false) }, [isStreaming])
   if (!text) return null
   return (
     <div className="mt-4 mb-3">
@@ -40,7 +41,7 @@ interface MessageBubbleProps {
 
 function TimelineBlockView({ block, metaInfo, isStreaming }: { block: TimelineBlock; metaInfo?: Message["metaInfo"]; isStreaming: boolean }) {
   if (block.type === "thinking") {
-    return <ThinkingContent text={block.content || ""} isStreaming={!!block.isStreaming} />
+    return <ThinkingContent text={block.content || ""} isStreaming={isStreaming} />
   }
   if (block.type === "tool") {
     return (

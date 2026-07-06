@@ -60,8 +60,21 @@ TOOLS = [
                     },
                     "generate_answer": {
                         "type": "boolean",
-                        "default": True,
-                        "description": "Whether to generate a preliminary answer from search results. Usually true.",
+                        "default": False,
+                        "description": (
+                            "Whether the Query service should generate a preliminary answer. "
+                            "When false (default), the service returns search context for you to "
+                            "synthesize. Set to true only when you want the service to pre-generate."
+                        ),
+                    },
+                    "include_images": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Set to true to include base64-encoded images in the search results. "
+                            "Only enable when YOUR model supports vision/image input. "
+                            "When false (default), image descriptions in the chunk text suffice."
+                        ),
                     },
                     "decompose": {
                         "type": "boolean",
@@ -400,6 +413,16 @@ class ChatboxAgent:
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
             )
 
+            # CHECKPOINT: log multimodal messages
+            for i, msg in enumerate(messages):
+                ct = msg.get("content")
+                if isinstance(ct, list):
+                    logger.info(
+                        "[Chatbox] MSG[%d] role=%s MULTIMODAL parts=%d imgs=%d",
+                        i, msg["role"], len(ct),
+                        sum(1 for p in ct if p.get("type") == "image_url"),
+                    )
+
             # Call LLM with tools — use underlying OpenAI client directly
             # (avoids modifying the LLMProvider ABC)
             response = self._call_llm_with_tools(messages, tools=_tools)
@@ -444,11 +467,34 @@ class ChatboxAgent:
                     except json.JSONDecodeError:
                         args = {"raw_query": user_message, "generate_answer": True} if mode != "direct" else {"query": user_message}
 
+                    is_multimodal = False
                     if mode == "direct":
                         raw_query = args.get("query", user_message)
                     else:
                         raw_query = args.get("raw_query", user_message)
-                    generate_answer = args.get("generate_answer", True) if mode != "direct" else False
+                    generate_answer = args.get("generate_answer", False) if mode != "direct" else False
+                    include_images = args.get("include_images", False)
+
+                    # Auto-detect: if Chat LLM didn't explicitly request images but is
+                    # vision-capable, enable image stitching automatically.
+                    if not include_images:
+                        model = getattr(self._llm, "_model", "")
+                        from src.config import get_config as _get_cfg
+                        _cfg = _get_cfg()
+                        for _p in _cfg.llm.providers:
+                            if hasattr(_p, "visual_model_ids") and model in _p.visual_model_ids:
+                                include_images = True
+                                logger.info(
+                                    "[Chatbox] AUTO-DETECT VISION: model=%s -> include_images=True",
+                                    model,
+                                )
+                                break
+                        if not include_images:
+                            logger.info(
+                                "[Chatbox] AUTO-DETECT: model=%s NOT in visual_model_ids -> text only",
+                                model,
+                            )
+
                     decompose = args.get("decompose", True) if mode != "direct" else False
 
                     if mode == "direct":
@@ -465,13 +511,29 @@ class ChatboxAgent:
                             total_tool_calls += 1
                             for chunk in direct_result.chunks:
                                 source = {
-                                    "text": getattr(chunk, "text", "")[:500],
+                                    "text": getattr(chunk, "text", "")[:200],
                                     "score": getattr(chunk, "score", 0.0),
                                     "metadata": getattr(chunk, "metadata", {}),
                                 }
                                 if source not in all_sources:
                                     all_sources.append(source)
-                            tool_content = direct_result.context if direct_result.context else "No relevant information found."
+
+                            # Image stitching for vision LLMs (same as agentic path)
+                            if include_images and direct_result.chunks:
+                                from src.rag.agentic_query import (
+                                    _stitch_images_from_chunks,
+                                    _build_multimodal_context,
+                                )
+                                images_payload = _stitch_images_from_chunks(direct_result.chunks)
+                                if images_payload:
+                                    is_multimodal = True
+                                    tool_content = _build_multimodal_context(
+                                        direct_result.context, images_payload,
+                                    )
+                                else:
+                                    tool_content = direct_result.context if direct_result.context else "No relevant information found."
+                            else:
+                                tool_content = direct_result.context if direct_result.context else "No relevant information found."
                     elif self._agentic is None:
                         logger.warning("Tool call requested but agentic_service is None")
                         tool_content = "Knowledge base search is not configured. Please enable Function Calling on an LLM model in Settings."
@@ -480,24 +542,46 @@ class ChatboxAgent:
                             raw_query,
                             collections=collections or None,
                             generate_answer=generate_answer,
+                            include_images=include_images,
                             decompose=decompose,
                         )
 
                         total_tool_calls += 1
 
                         # Build tool result message
-                        tool_content_parts = []
-                        if result.answer:
-                            tool_content_parts.append(result.answer)
-                        elif result.context:
-                            tool_content_parts.append(result.context)
-
-                        tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
+                        # When include_images=True, answer is multimodal list[dict] —
+                        # inject as a user message so the vision LLM can see images.
+                        # Otherwise, inject as a tool message (text only).
+                        is_multimodal = isinstance(result.answer, list) if result else False
+                        if is_multimodal:
+                            logger.info(
+                                "[Chatbox] MULTIMODAL: answer is list[%d], "
+                                "image_parts=%d, images_available=%d",
+                                len(result.answer),
+                                sum(1 for p in result.answer if p.get("type") == "image_url"),
+                                len(result.images),
+                            )
+                        elif result:
+                            logger.info(
+                                "[Chatbox] TEXT-ONLY: answer type=%s len=%d images=%d",
+                                type(result.answer).__name__,
+                                len(result.answer) if result.answer else 0,
+                                len(result.images),
+                            )
+                        if is_multimodal:
+                            tool_content = result.answer
+                        else:
+                            tool_content_parts = []
+                            if result.answer:
+                                tool_content_parts.append(result.answer)
+                            elif result.context:
+                                tool_content_parts.append(result.context)
+                            tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
 
                         # Collect sources
                         for chunk in result.all_chunks:
                             source = {
-                                "text": getattr(chunk, "text", "")[:500],
+                                "text": getattr(chunk, "text", "")[:200],
                                 "score": getattr(chunk, "score", 0.0),
                                 "metadata": getattr(chunk, "metadata", {}),
                             }
@@ -525,10 +609,25 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
+                    # Multimodal content is now directly in tool message (line above)
             else:
                 # ── LLM returned text — final answer ──
                 final_answer = response.get("content", "") or ""
                 break
+
+        # If loop exhausted without a text response, force-generate
+        if not final_answer and total_tool_calls > 0:
+            logger.info(
+                "[Chatbox] Max rounds (%d) reached with %d tool calls — force generating answer",
+                _MAX_TOOL_ROUNDS, total_tool_calls,
+            )
+            _persist_extra_messages(self._store, session_id, extra_messages)
+            messages = self._build_messages(
+                session_id, user_message, extra_messages=extra_messages,
+                collections=collections,
+                system_prompt=_sys_prompt, catalog_text=_cat_text,
+            )
+            final_answer = _force_generate_answer(self._llm, messages)
 
         # Save assistant message + extra messages (tool calls/results)
         _persist_extra_messages(self._store, session_id, extra_messages)
@@ -551,19 +650,27 @@ class ChatboxAgent:
         self, session_id: str, user_message: str, *,
         thinking: bool = True, collections: list[str] | None = None,
         mode: str = "agentic",
+        provider_id: str | None = None, model: str | None = None,
     ) -> AsyncGenerator[dict, None]:
-        """Streaming chat — yields SSE event dicts.
-
-        Events:
-          {"type":"tool_call_start", "tool":"search_knowledge_base"|"lookup_collection"}
-          {"type":"tool_step", "step":"decompose|aq_start|...", ...}
-          {"type":"tool_result", "status":"done", "sources":[...]}
-          {"type":"token", "content":"Hello"}
-          {"type":"done", "sources":[...], "message_count": N}
-        """
+        """Streaming chat — yields SSE event dicts."""
         if not user_message or not user_message.strip():
             yield {"type": "done", "sources": []}
             return
+
+        # Temporary model override: swap self._llm for this request, restore after
+        _saved_llm = self._llm
+        if provider_id and model:
+            from src.config import get_config as _get_cfg
+            from src.providers.llm import create_llm_for_provider
+            _cfg = _get_cfg()
+            for _p in _cfg.llm.providers:
+                if _p.id == provider_id:
+                    try:
+                        self._llm = create_llm_for_provider(_p, model=model)
+                        logger.info("[Chatbox] Model override: %s/%s", _p.name, model)
+                    except Exception:
+                        pass
+                    break
 
         # ── Mode-specific setup ─────────────────────────────────────
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
@@ -624,7 +731,10 @@ class ChatboxAgent:
                     tools=_tools, tool_choice="auto", stream=True,
                 )
                 if thinking:
-                    stream_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+                    model_lower = (model or "").lower()
+                    # miniMax only supports adaptive|disabled
+                    think_type = "adaptive" if "minimax" in model_lower else "enabled"
+                    stream_kwargs["extra_body"] = {"thinking": {"type": think_type}}
                 try:
                     mt = getattr(self._llm, "_default_max_tokens", 0)
                     if isinstance(mt, int) and mt > 0:
@@ -640,9 +750,13 @@ class ChatboxAgent:
                     return
 
                 content = ""
-                tool_calls_acc: dict[int, dict] = {}  # index → accumulated delta
+                tool_calls_acc: dict[int, dict] = {}
                 reasoning = None
                 finish_reason = None
+                # State machine for <think> tag parsing (MiniMax / R1-style models)
+                think_buf = ""      # accumulated text for current segment
+                in_think = False    # inside <think>...</think>
+                all_thinking = ""
 
                 for chunk in stream:
                     if not chunk.choices:
@@ -651,20 +765,54 @@ class ChatboxAgent:
                     delta = choice.delta
                     finish_reason = choice.finish_reason
 
-                    # Reasoning (DeepSeek) — check first
                     delta_reasoning = getattr(delta, "reasoning_content", None) or None
 
-                    # Content tokens — only suppress in chunks that ALSO carry
-                    # reasoning (which is a content duplicate). After reasoning
-                    # phase ends, content is the real answer and must be streamed.
                     if delta.content:
-                        content += delta.content
-                        if delta_reasoning and total_tool_calls == 0:
-                            pass  # suppressed — same-chunk duplicate of reasoning
-                        else:
-                            token_queue.put(("token", delta.content))
+                        text = delta.content
+                        # Parse <think> tags inline
+                        while text:
+                            if not in_think:
+                                idx = text.find("<think>")
+                                if idx == -1:
+                                    # Check for partial "<think" at end
+                                    partial = _find_partial_tag(text, "<think>")
+                                    if partial >= 0:
+                                        think_buf = text[partial:]
+                                        text = text[:partial]
+                                    content += text
+                                    if think_buf:
+                                        token_queue.put(("token", text[:-len(think_buf)] if text[:-len(think_buf)] else ""))
+                                    elif text.strip():
+                                        token_queue.put(("token", text))
+                                    break
+                                else:
+                                    # Emit text before <think>
+                                    before = text[:idx]
+                                    if before.strip():
+                                        content += before
+                                        token_queue.put(("token", before))
+                                    text = text[idx + len("<think>"):]
+                                    if in_think:
+                                        # Not first <think>
+                                        think_buf += "<think>"
+                                    in_think = True
+                                    think_buf = ""
+                            else:
+                                idx = text.find("</think>")
+                                if idx == -1:
+                                    think_buf += text
+                                    all_thinking += text
+                                    token_queue.put(("thinking", text))
+                                    break
+                                else:
+                                    think_buf += text[:idx]
+                                    all_thinking += text[:idx]
+                                    if think_buf.strip():
+                                        token_queue.put(("thinking", think_buf))
+                                    text = text[idx + len("</think>"):]
+                                    in_think = False
+                                    think_buf = ""
 
-                    # Tool call deltas → accumulate
                     if delta.tool_calls:
                         for tc_delta in delta.tool_calls:
                             idx = tc_delta.index
@@ -683,7 +831,6 @@ class ChatboxAgent:
                                 if tc_delta.function.arguments:
                                     acc["function"]["arguments"] += tc_delta.function.arguments
 
-                    # Reasoning (DeepSeek) — stream to frontend
                     if delta_reasoning:
                         if reasoning is None:
                             reasoning = ""
@@ -697,9 +844,13 @@ class ChatboxAgent:
                         tool_calls_acc[i] for i in sorted(tool_calls_acc)
                     ]
                 else:
-                    result["content"] = content
+                    # Strip any remaining <think> tags
+                    from src.providers.llm.openai_compat import _strip_think
+                    result["content"] = _strip_think(content) or ""
                 if reasoning:
                     result["reasoning_content"] = reasoning
+                elif all_thinking:
+                    result["reasoning_content"] = all_thinking
                 token_queue.put(("done", result))
 
             loop_obj = asyncio.get_event_loop()
@@ -778,11 +929,34 @@ class ChatboxAgent:
                     except json.JSONDecodeError:
                         args = {"raw_query": user_message} if mode != "direct" else {"query": user_message}
 
+                    is_multimodal = False
                     if mode == "direct":
                         raw_query = args.get("query", user_message)
                     else:
                         raw_query = args.get("raw_query", user_message)
-                    generate_answer = args.get("generate_answer", True) if mode != "direct" else False
+                    generate_answer = args.get("generate_answer", False) if mode != "direct" else False
+                    include_images = args.get("include_images", False)
+
+                    # Auto-detect: if Chat LLM didn't explicitly request images but is
+                    # vision-capable, enable image stitching automatically.
+                    if not include_images:
+                        model = getattr(self._llm, "_model", "")
+                        from src.config import get_config as _get_cfg
+                        _cfg = _get_cfg()
+                        for _p in _cfg.llm.providers:
+                            if hasattr(_p, "visual_model_ids") and model in _p.visual_model_ids:
+                                include_images = True
+                                logger.info(
+                                    "[Chatbox] AUTO-DETECT VISION: model=%s -> include_images=True",
+                                    model,
+                                )
+                                break
+                        if not include_images:
+                            logger.info(
+                                "[Chatbox] AUTO-DETECT: model=%s NOT in visual_model_ids -> text only",
+                                model,
+                            )
+
                     decompose = args.get("decompose", True) if mode != "direct" else False
 
                     # Emit tool_call_start
@@ -804,25 +978,75 @@ class ChatboxAgent:
                             tool_content = "Direct retrieval is not configured."
                         else:
                             query = args.get("query", raw_query)
-                            direct_result = self._direct.retrieve(
-                                query,
-                                collections=collections or [],
-                                top_k=10,
-                                generate_answer=False,  # Chat LLM generates the answer
-                            )
+                            # Emit searching event so frontend shows progress
+                            yield {
+                                "type": "searching",
+                                "query": query[:200],
+                                "tool_call_id": tc.get("id", ""),
+                            }
+
+                            # Run retrieval + image stitching in thread executor
+                            # to avoid blocking the event loop during I/O
+                            _loop = asyncio.get_event_loop()
+
+                            def _run_direct_retrieval():
+                                result = self._direct.retrieve(
+                                    query,
+                                    collections=collections or [],
+                                    top_k=10,
+                                    generate_answer=False,
+                                )
+                                # Collect sources (done in thread for consistency)
+                                _sources = []
+                                for chunk in result.chunks:
+                                    s = {
+                                        "text": getattr(chunk, "text", "")[:200],
+                                        "score": getattr(chunk, "score", 0.0),
+                                        "metadata": getattr(chunk, "metadata", {}),
+                                    }
+                                    if s not in _sources:
+                                        _sources.append(s)
+
+                                # Image stitching (I/O-heavy, best in thread)
+                                _images_payload = {}
+                                _multimodal_content = None
+                                if include_images and result.chunks:
+                                    try:
+                                        from src.rag.agentic_query import (
+                                            _stitch_images_from_chunks,
+                                            _build_multimodal_context,
+                                        )
+                                        _images_payload = _stitch_images_from_chunks(result.chunks)
+                                        if _images_payload:
+                                            _multimodal_content = _build_multimodal_context(
+                                                result.context, _images_payload,
+                                            )
+                                    except Exception:
+                                        logger.exception("[Chatbox] Image stitching failed for direct mode")
+
+                                return {
+                                    "sources": _sources,
+                                    "context": result.context or "No relevant information found.",
+                                    "images_payload": _images_payload,
+                                    "multimodal_content": _multimodal_content,
+                                }
+
+                            direct_future = _loop.run_in_executor(None, _run_direct_retrieval)
+                            # Await result — yields control to event loop for other tasks
+                            direct_data = await direct_future
                             total_tool_calls += 1
 
-                            # Collect sources
-                            for chunk in direct_result.chunks:
-                                source = {
-                                    "text": getattr(chunk, "text", "")[:500],
-                                    "score": getattr(chunk, "score", 0.0),
-                                    "metadata": getattr(chunk, "metadata", {}),
-                                }
-                                if source not in all_sources:
-                                    all_sources.append(source)
+                            # Merge sources (dedup)
+                            for s in direct_data["sources"]:
+                                if s not in all_sources:
+                                    all_sources.append(s)
 
-                            tool_content = direct_result.context if direct_result.context else "No relevant information found."
+                            # Use multimodal content if image stitching succeeded
+                            if direct_data["multimodal_content"] is not None:
+                                is_multimodal = True
+                                tool_content = direct_data["multimodal_content"]
+                            else:
+                                tool_content = direct_data["context"]
 
                             yield {
                                 "type": "tool_result",
@@ -860,6 +1084,7 @@ class ChatboxAgent:
                                 raw_query,
                                 collections=collections or None,
                                 generate_answer=generate_answer,
+                                include_images=include_images,
                                 on_step=_on_step,
                                 decompose=decompose,
                             ),
@@ -932,7 +1157,7 @@ class ChatboxAgent:
                         # Collect sources
                         for chunk in result.all_chunks:
                             source = {
-                                "text": getattr(chunk, "text", "")[:500],
+                                "text": getattr(chunk, "text", "")[:200],
                                 "score": getattr(chunk, "score", 0.0),
                                 "metadata": getattr(chunk, "metadata", {}),
                             }
@@ -948,12 +1173,16 @@ class ChatboxAgent:
                         }
 
                         # Tool result content: use answer + context
-                        tool_content_parts = []
-                        if result.answer:
-                            tool_content_parts.append(result.answer)
-                        elif result.context:
-                            tool_content_parts.append(result.context)
-                        tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
+                        is_multimodal = isinstance(result.answer, list)
+                        if is_multimodal:
+                            tool_content = result.answer
+                        else:
+                            tool_content_parts = []
+                            if result.answer:
+                                tool_content_parts.append(result.answer)
+                            elif result.context:
+                                tool_content_parts.append(result.context)
+                            tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
 
                     # Inject assistant tool_call + tool result for next LLM round
                     tool_call_id = tc.get("id", "call_1")
@@ -978,6 +1207,7 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
+                    # Multimodal content is now directly in tool message (line above)
             else:
                 # ── Text response — tokens already streamed, just finalize ──
                 final_content = response.get("content", "") or ""
@@ -996,6 +1226,21 @@ class ChatboxAgent:
                     metadata=meta,
                 )
 
+                logger.info(
+                    "[Chatbox] YIELD done: all_sources=%d total_tool_calls=%d mode=%s",
+                    len(all_sources), total_tool_calls, mode,
+                )
+                logger.info(
+                    "[Chatbox] YIELD done: sources=%d tool_calls=%d mode=%s",
+                    len(all_sources), total_tool_calls, mode,
+                )
+                if all_sources:
+                    for i, s in enumerate(all_sources[:3]):
+                        logger.info(
+                            "[Chatbox]   source[%d]: text=%s... score=%.3f meta_keys=%s",
+                            i, s.get("text", "")[:60], s.get("score", 0),
+                            list((s.get("metadata") or {}).keys())[:6],
+                        )
                 yield {
                     "type": "done",
                     "sources": all_sources,
@@ -1004,13 +1249,43 @@ class ChatboxAgent:
                 }
                 return
 
-        # Max rounds reached — save whatever we got
+        # Max rounds reached — force a final answer without tools
+        logger.info(
+            "[Chatbox] Max rounds (%d) reached with %d tool calls — force generating answer",
+            _MAX_TOOL_ROUNDS, total_tool_calls,
+        )
+        _persist_extra_messages(self._store, session_id, extra_messages)
+        messages = self._build_messages(
+            session_id, user_message, extra_messages=extra_messages,
+            collections=collections,
+            system_prompt=_sys_prompt, catalog_text=_cat_text,
+        )
+        final_content = _force_generate_answer(self._llm, messages)
+        if final_content:
+            # Yield the answer as token events so the frontend shows it,
+            # then persist and emit done.
+            for i in range(0, len(final_content), 4):
+                yield {"type": "token", "content": final_content[i:i + 4]}
+            meta_final: dict = {"tool_calls": total_tool_calls}
+            if thinking_summary.get("aq_count", 0) > 0:
+                meta_final["thinking_summary"] = thinking_summary
+            self._store.add_message(
+                session_id, "assistant", final_content,
+                sources=all_sources if all_sources else None,
+                metadata=meta_final,
+            )
+        else:
+            logger.warning(
+                "[Chatbox] Force generate returned empty — total_tool_calls=%d sources=%d",
+                total_tool_calls, len(all_sources),
+            )
         yield {
             "type": "done",
             "sources": all_sources,
             "message_count": msg_count,
             "context_warning": _quick_warn,
         }
+        return
 
     # ── LLM call with tools ──────────────────────────────────────────
 
@@ -1103,10 +1378,62 @@ class ChatboxAgent:
             yield text[i:i + chunk_size]
 
 
+def _force_generate_answer(llm, messages: list[dict]) -> str:
+    """Generate a final answer without tools (strips thinking tags).
+
+    Appends a synthesis instruction so the LLM knows to produce an answer
+    from the tool results rather than requesting more tools.
+    """
+    client = getattr(llm, "_client", None)
+    model = getattr(llm, "_model", "gpt-4")
+
+    # Append a clear synthesis instruction — the LLM may have been in a
+    # tool-calling loop and needs an explicit cue to stop and synthesize.
+    _msgs = list(messages)
+    _msgs.append({
+        "role": "user",
+        "content": (
+            "You have reached the maximum number of search rounds. "
+            "Please synthesize a comprehensive answer NOW from all the search "
+            "results above. Do NOT request any more tools — just write your "
+            "final answer directly, citing specific details from the results."
+        ),
+    })
+
+    try:
+        if client:
+            kwargs = dict(model=model, messages=_msgs, temperature=0.1, max_tokens=4096)
+            if "minimax" not in (model or "").lower():
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            resp = client.chat.completions.create(**kwargs)
+            from src.providers.llm.openai_compat import _strip_think
+            return _strip_think(resp.choices[0].message.content or "")
+        else:
+            return llm.generate(
+                "Generate a final answer based on the conversation.",
+                system="You are a helpful assistant.",
+                thinking=False,
+            ) or ""
+    except Exception:
+        logger.exception("[Chatbox] Force generate answer failed")
+        return ""
+
+
+def _find_partial_tag(text: str, tag: str) -> int:
+    """Find the start of a partial open tag in *text*. Returns -1 if not found."""
+    for i in range(1, len(tag)):
+        if text.endswith(tag[:i]):
+            return len(text) - i
+    return -1
+
+
 def _persist_extra_messages(store, session_id: str, extra_messages: list[dict]) -> None:
     """Save tool_call and tool_result messages to DB for KV cache reuse."""
     for em in extra_messages:
         try:
+            # Skip multimodal messages — content is list[dict], can't store in TEXT column
+            if isinstance(em.get("content"), list):
+                continue
             role = em.get("role", "")
             content = em.get("content") or ""
             meta: dict = {}

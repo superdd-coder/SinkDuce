@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react"
+import { flushSync } from "react-dom"
 import { Send, Loader2, AlertTriangle } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -209,11 +210,15 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           } else if (line.startsWith("data: ") && eventType) {
             try {
               const data = JSON.parse(line.slice(6))
-              handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
-              if (eventType === "done" && data.message_count != null) {
-                setMsgCount(data.message_count)
-              }
-            } catch { /* skip */ }
+              flushSync(() => {
+                handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
+                if (eventType === "done" && data.message_count != null) {
+                  setMsgCount(data.message_count)
+                }
+              })
+            } catch (e) {
+              console.error("[QuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
+            }
             eventType = ""
           }
         }
@@ -237,7 +242,30 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     switch (type) {
       case "thinking": appendThinking(assistantId, data.content as string); break
       case "token": appendToken(assistantId, data.content as string); break
-      case "done": if (data.sources) setSources(data.sources as QAMessage["sources"]); break
+      case "searching":
+        // Show searching indicator in the assistant message
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n🔍 Searching: ${data.query || ""}...` } : m
+        ));
+        break
+      case "tool_call_start":
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n📡 Calling ${data.tool || "tool"}...` } : m
+        ));
+        break
+      case "tool_result":
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n✅ Found ${data.sources_count || 0} sources` } : m
+        ));
+        break
+      case "done":
+        console.log("[QuickChat] DONE event received — sources:", data.sources, "type:", typeof data.sources, "isArray:", Array.isArray(data.sources))
+        if (data.sources) {
+          const srcs = data.sources as QAMessage["sources"]
+          console.log("[QuickChat] DONE: setting sources count:", srcs?.length)
+          setSources(srcs)
+        }
+        break
       case "error": updateAssistant(assistantId, `Error: ${data.content}`); break
     }
   }
@@ -328,21 +356,28 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                   msg.isNew && "animate-slide-in-right",
                 )}
               >
-                {msg.role === "assistant" && msg.content ? (
+                {msg.role === "assistant" && (msg.content || msg.thinkingContent) ? (
                   <div>
                     {msg.thinkingContent && (
-                      <details className="mb-2">
+                      <details className="mb-2" open={msg.isStreaming ? true : undefined}>
                         <summary className="text-[10px] text-muted-foreground/60 cursor-pointer hover:text-muted-foreground transition-colors">
-                          Thinking
+                          Thinking {msg.isStreaming && <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-[-1px]" />}
                         </summary>
                         <p className="mt-1 text-[10px] text-muted-foreground/50 whitespace-pre-wrap leading-relaxed italic">
                           {msg.thinkingContent}
                         </p>
                       </details>
                     )}
-                    <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-xs">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    </div>
+                    {msg.content ? (
+                      <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-xs">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      </div>
+                    ) : msg.isStreaming && (
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span className="text-xs">Generating answer...</span>
+                      </div>
+                    )}
                   </div>
                 ) : msg.role === "assistant" && msg.isStreaming ? (
                   <div className="flex items-center gap-1 text-muted-foreground">

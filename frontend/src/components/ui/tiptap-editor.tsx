@@ -143,142 +143,15 @@ function createMarkdownHoverPlugin() {
 // Async Visual Translate Manager (module-level — survives React unmount)
 // ──────────────────────────────────────────────
 
-let _vtCallback: ((imageUrl: string) => Promise<string>) | null = null
 const _generatingImages = new Set<string>()
 const _pendingResults = new Map<string, string>() // imageId → description
-/** Tracks the current DOM container for each generating image so we can
- *  remove the image-generating CSS class when generation ends, even if
- *  the editor instance was destroyed and recreated. */
 const _vtContainers = new Map<string, HTMLElement>() // imageId → container
-/** Flush pending auto-save to server before async generation — ensures imageId is
- *  persisted so cross-note pending-injection finds its target on reload. */
 let _flushSaveBeforeGenerate: (() => Promise<void>) | null = null
 
 export function _setFlushSaveBeforeGenerate(fn: (() => Promise<void>) | undefined) {
   _flushSaveBeforeGenerate = fn ?? null
 }
 
-function _setVTCallback(fn: ((imageUrl: string) => Promise<string>) | undefined) {
-  _vtCallback = fn ?? null
-}
-
-async function _runVisualTranslate(
-  imageUrl: string,
-  imageId: string,
-  editor: any,
-  container: HTMLElement,
-) {
-  if (!_vtCallback) return
-  _generatingImages.add(imageId)
-  // Track the container so we can remove the generating class later,
-  // even if the editor is recreated by a note-switch round-trip.
-  _vtContainers.set(imageId, container)
-
-  // Lock image
-  container.style.pointerEvents = "none"
-  container.classList.add("image-generating")
-
-  // Flush auto-save to server BEFORE the async call, mirroring distill block's
-  // pattern. This ensures the image's data-image-id is persisted on the server,
-  // so if the user switches notes mid-generation, applyPendingDescriptions
-  // can find and update it when they return.
-  try {
-    if (_flushSaveBeforeGenerate) await _flushSaveBeforeGenerate()
-  } catch { /* non-critical */ }
-
-  let _desc: string | null = null
-  try {
-    _desc = await _vtCallback(imageUrl)
-    // Always store result — survives note switching / editor content changes
-    _pendingResults.set(imageId, _desc)
-
-
-
-    // Try to apply immediately to the current editor document.
-    // Wrapped in its own try/catch: if the editor was destroyed (note switch),
-    // the dispatch will fail, but we KEEP the result in _pendingResults so
-    // applyPendingDescriptions can inject it when the note is reloaded.
-    try {
-      const { doc } = editor.state
-      let foundPos: number | null = null
-      doc.descendants((node: any, pos: number) => {
-        if (node.type.name === "image" && node.attrs.imageId === imageId) {
-          foundPos = pos
-          return false
-        }
-        return true
-      })
-      if (foundPos !== null && !editor.isDestroyed) {
-const nodeAt = doc.nodeAt(foundPos)
-        if (nodeAt) {
-          const tr = editor.state.tr
-          tr.setNodeMarkup(foundPos, undefined, {
-            ...nodeAt.attrs,
-            visualDescription: _desc,
-          })
-          editor.view.dispatch(tr)
-          // Result applied to editor — persisted when onChange fires.
-          _pendingResults.delete(imageId)
-          // Fallback: also update DOM directly.
-          try {
-            const descArea = container.querySelector(".image-visual-desc") as HTMLElement | null
-            const descTextEl = container.querySelector(".image-visual-desc-text") as HTMLElement | null
-            if (descArea && descTextEl) {
-              descTextEl.textContent = _desc
-              descArea.style.display = "block"
-              container.classList.add("image-has-description")
-            }
-          } catch { /* best-effort fallback */ }
-        }
-      }
-      // If foundPos is null, the editor is showing different content.
-      // Result stays in _pendingResults — it will be applied when the
-      // note's content is reloaded (see applyPendingDescriptions).
-    } catch (_dispatchErr: any) {
-      // Dispatch failed — editor was likely destroyed during a note switch.
-      // The result is already in _pendingResults; it will be injected by
-      // applyPendingDescriptions when the note is reloaded.
-      console.warn("[VisualTranslate] dispatch skipped, result stays pending")
-    }
-  } catch (err: any) {
-    // Only reached if the API call (describeImage) itself failed.
-    // Clean up the pending entry — there's no result to persist.
-    console.error("[VisualTranslate] generation failed:", err)
-    _generatingImages.delete(imageId)
-    _pendingResults.delete(imageId)
-    try {
-      const toast = document.createElement("div")
-      toast.style.cssText = "position:fixed;bottom:20px;right:20px;background:#dc2626;color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;z-index:99999;max-width:400px"
-      toast.textContent = err?.message || "Visual Translate failed. Check Settings → Visual Model."
-      document.body.appendChild(toast)
-      setTimeout(() => toast.remove(), 5000)
-    } catch { /* ignore */ }
-  } finally {
-    _generatingImages.delete(imageId)
-    // Remove generating state from the tracked container AND force-show
-    // the description on it. This guarantees the description is visible
-    // even if the ProseMirror dispatch/update cycle didn't apply it.
-    try {
-      const c = _vtContainers.get(imageId)
-      if (c) {
-        c.classList.remove("image-generating")
-        c.style.pointerEvents = ""
-        // Force-show description on the current container
-        if (_desc) {
-          const da = c.querySelector(".image-visual-desc") as HTMLElement | null
-          const dt = c.querySelector(".image-visual-desc-text") as HTMLElement | null
-          if (da && dt) {
-            dt.textContent = _desc
-            da.style.display = "block"
-          }
-        }
-      }
-      _vtContainers.delete(imageId)
-    } catch { /* best-effort */ }
-    container.style.pointerEvents = ""
-    container.classList.remove("image-generating")
-  }
-}
 
 function _isImageGenerating(imageId: string): boolean {
   return _generatingImages.has(imageId)
@@ -330,10 +203,7 @@ export function applyPendingDescriptions(markdown: string): string {
 // ──────────────────────────────────────────────
 // Custom Resizable Image Extension
 // ──────────────────────────────────────────────
-function createResizableImageExtension(
-  onVisualTranslate?: (imageUrl: string) => Promise<string>
-) {
-  _setVTCallback(onVisualTranslate)
+function createResizableImageExtension() {
   return Node.create({
   name: "image",
   group: "block",
@@ -1081,7 +951,7 @@ function createResizableImageExtension(
             const { tr } = editor.state
             tr.setNodeMarkup(freshPos, undefined, merged)
             editor.view.dispatch(tr)
-          }, onVisualTranslate, editor, imageId)
+          })
         }
       })
 
@@ -1166,9 +1036,6 @@ function showImageFloatingMenu(
   container: HTMLElement,
   attrs: any,
   onUpdate: (attrs: any) => void,
-  onVisualTranslate?: (imageUrl: string) => Promise<string>,
-  editor?: any,
-  imageId?: string,
 ) {
   if (_isPreviewMode) return  // Don't show menus in preview
   // Remove existing menu
@@ -1283,61 +1150,8 @@ function showImageFloatingMenu(
   })
   menu.appendChild(captionBtn)
 
-  // ── Visual Translate button ──
-  if (onVisualTranslate) {
-    const visualDivider = document.createElement("div")
-    visualDivider.style.cssText = `width: 1px; background: rgba(255,255,255,0.2); margin: 4px 2px;`
-    menu.appendChild(visualDivider)
+  // ── Visual Translate removed — image descriptions are now automatic during ingest ──
 
-    const hasDesc = !!attrs.visualDescription
-
-    // ── AI sparkle icon (two overlapping 4-point stars) ──
-    const AI_ICON = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-      <path d="M8 1l1.2 3.6L12.5 6l-3.3 1.4L8 11l-1.2-3.6L3.5 6l3.3-1.4L8 1z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-      <path d="M4 10l.7 2L6.5 13l-1.8.8L4 16l-.7-2.2L1.5 13l1.8-.8L4 10z" stroke="currentColor" stroke-width="0.8" stroke-linejoin="round" opacity="0.7"/>
-      <path d="M12 3l.5 1.5L14 5l-1.5.6L12 8l-.5-1.4L10 5l1.5-.6L12 3z" stroke="currentColor" stroke-width="0.8" stroke-linejoin="round" opacity="0.7"/>
-    </svg>`
-
-    const LOADING_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-dasharray="30 70" stroke-linecap="round">
-        <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
-      </circle>
-    </svg>`
-
-    const visualBtn = document.createElement("button")
-    visualBtn.innerHTML = AI_ICON
-    visualBtn.title = hasDesc ? "Re-generate description" : "Visual Translate — generate AI description"
-    visualBtn.style.cssText = `
-      padding: 6px 8px;
-      border: none;
-      background: transparent;
-      border-radius: 4px;
-      cursor: pointer;
-      color: ${hasDesc ? "#6ee7b7" : "white"};
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.15s;
-    `
-    visualBtn.addEventListener("mouseenter", () => { visualBtn.style.background = "rgba(255,255,255,0.15)" })
-    visualBtn.addEventListener("mouseleave", () => { visualBtn.style.background = "transparent" })
-
-    visualBtn.addEventListener("click", (e) => {
-      e.stopPropagation()
-      const imgId = attrs.imageId || imageId || ""
-      if (!imgId || !editor) return
-      if (_isImageGenerating(imgId)) return // already generating
-
-      visualBtn.style.cursor = "wait"
-      visualBtn.style.opacity = "0.6"
-      visualBtn.innerHTML = LOADING_ICON
-
-      _runVisualTranslate(attrs.src, imgId, editor, container)
-      menu.remove()
-    })
-
-    menu.appendChild(visualBtn)
-  }
 
   container.style.position = "relative"
   container.appendChild(menu)
@@ -2515,8 +2329,6 @@ interface MarkdownEditorProps {
   onEditorReady?: (editor: any) => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
-  /** Called when user clicks Visual Translate on an image. Receives image URL, returns description string. */
-  onVisualTranslate?: (imageUrl: string) => Promise<string>
   /** Top offset for sticky toolbar (px). */
   stickyToolbarOffset?: number
   /** Extra toolbar actions on the right side. */
@@ -2914,7 +2726,7 @@ export function EditorToolbar({ editor, stickyOffset = 0, actions }: { editor: E
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
-  showToolbar = true, onVisualTranslate,
+  showToolbar = true,
   stickyToolbarOffset, toolbarActions,
 }: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
@@ -2926,7 +2738,7 @@ export function TiptapEditor({
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
   const SlashCmd = useRef(createSlashCommandExtension(onDistill, onImageUpload)).current
-  const ResizableImage = useRef(createResizableImageExtension(onVisualTranslate)).current
+  const ResizableImage = useRef(createResizableImageExtension()).current
 
   // Markdown Hover Extension
   const MarkdownHoverExt = useRef(Extension.create({

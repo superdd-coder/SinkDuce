@@ -184,6 +184,41 @@ async def upload_folder(
 
 
 
+@router.get("/documents/{collection}/{file_id}/images/{image_id}")
+def get_document_image(collection: str, file_id: str, image_id: str):
+    """Serve a document image from disk.
+
+    URL pattern: /api/documents/{collection}/{file_id}/images/{image_id}
+    Images are stored at data/collections/{collection}/files/{file_id}/images/.
+    """
+    from pathlib import Path as _Path
+
+    COLLECT_FILES_DIR = _Path("data").resolve() / "collections"
+
+    img_dir = COLLECT_FILES_DIR / collection / "files" / file_id / "images"
+    if not img_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Collection {collection} or file {file_id} not found")
+
+    for ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp"):
+        img_path = img_dir / f"{image_id}.{ext}"
+        if img_path.is_file():
+            content = img_path.read_bytes()
+            import mimetypes
+            mime, _ = mimetypes.guess_type(str(img_path))
+            mime = mime or f"image/{ext}"
+            return Response(
+                content=content,
+                media_type=mime,
+                headers={
+                    "Content-Disposition": f'inline; filename="{image_id}.{ext}"',
+                    "Content-Length": str(len(content)),
+                    "Cache-Control": "public, max-age=86400",
+                },
+            )
+
+    raise HTTPException(status_code=404, detail=f"Image {image_id} not found")
+
+
 @router.delete("/documents/{collection}/{doc_source:path}")
 async def delete_document(collection: str, doc_source: str):
     # Resolve collection: try as ID first, fall back to name (for legacy)

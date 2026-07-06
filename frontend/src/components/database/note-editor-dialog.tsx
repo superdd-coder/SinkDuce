@@ -13,15 +13,13 @@ import {
   distillNote,
   triggerPropagation,
   uploadNoteImage,
-  describeImage,
-  getConfig,
   ingestNote,
   removeNoteIngestion,
   type NoteDetail,
   type NoteListItem,
 } from "@/api/client"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { preprocessDistillBlocks, EditorToolbar, _setFlushSaveBeforeGenerate } from "@/components/ui/tiptap-editor"
+import { preprocessDistillBlocks, EditorToolbar } from "@/components/ui/tiptap-editor"
 import { _triggerFilesRefresh } from "@/components/database/database-view"
 import { NoteSidebarLeft } from "./note-sidebar-left"
 import { NoteSidebarRight } from "./note-sidebar-right"
@@ -390,42 +388,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     return result.url
   }, [collection, activeNoteId])
 
-  // ── Visual Translate ──────────────────────────────────
-
-  // Wire module-level flush-save so _runVisualTranslate can persist image data
-  // (including imageId) to the server BEFORE the async generation call.
-  // Mirrors the distill-block pattern: flush → async op → replace on return.
-  useEffect(() => {
-    _setFlushSaveBeforeGenerate(async () => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current)
-        saveTimerRef.current = null
-      }
-      const cur = latestContentRef.current
-      if (cur !== savedContent) {
-        try {
-          await updateNote(collection, activeNoteIdRef.current, { content: cur })
-          setSavedContent(cur)
-        } catch { /* non-critical — imageId may already be on server */ }
-      }
-    })
-    return () => { _setFlushSaveBeforeGenerate(undefined) }
-  }, [collection])
 
 
 
-  const handleVisualTranslate = useCallback(async (imageUrl: string): Promise<string> => {
-    // Pre-check: is a visual model configured?
-    const config = await getConfig()
-    const visualModelId = (config as Record<string, unknown>).visual_model_id
-    if (!visualModelId || typeof visualModelId !== "string" || !visualModelId.trim()) {
-      toast.error("No Visual Model configured. Go to Settings → Visual Model to select one.")
-      throw new Error("No visual model configured")
-    }
-    const result = await describeImage(imageUrl)
-    if (result.error) throw new Error(result.error)
-    return result.description
-  }, [])
 
   // ── Delete current note ────────────────────────────────
 
@@ -1071,7 +1036,6 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                     onEditorReady={(editor) => { tiptapEditorRef.current = editor; setEditorInstance(editor) }}
                     onChange={handleContentChange}
                     onImageUpload={handleImageUpload}
-                    onVisualTranslate={handleVisualTranslate}
                     onNoteLinkClick={(id) => {
                       flushSave()
                       navigateToNote(id)

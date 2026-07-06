@@ -32,6 +32,8 @@ class SessionMessageRequest(BaseModel):
     thinking: bool = True
     collections: list[str] | None = None
     mode: str = "agentic"  # "agentic" | "direct"
+    provider_id: str | None = None  # temporary override for this message
+    model: str | None = None        # temporary override for this message
 
 
 class SessionResponse(BaseModel):
@@ -206,14 +208,20 @@ def generate_title(session_id: str):
 
     try:
         if client:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=30,
-                extra_body={"thinking": {"type": "disabled"}},
+            kwargs: dict = dict(
+                model=model, messages=messages,
+                temperature=0.3, max_tokens=30,
             )
-            title = resp.choices[0].message.content.strip()
+            # MiniMax: thinking.type supports "adaptive" and "disabled" (not "enabled").
+            # All other providers: use "disabled" to skip reasoning overhead.
+            model_lower = (model or "").lower()
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            resp = client.chat.completions.create(**kwargs)
+            raw = resp.choices[0].message.content or ""
+            # Strip <think> tags — some models (MiniMax, R1-style) emit them
+            # even when thinking is nominally disabled.
+            from src.providers.llm.openai_compat import _strip_think
+            title = _strip_think(raw).strip()
         else:
             title = llm.generate(
                 "Write a short title (6 words max) for this conversation. Reply with ONLY the title, nothing else.",
@@ -279,6 +287,7 @@ async def send_message(session_id: str, body: SessionMessageRequest = Body(...))
             session_id, body.content,
             thinking=body.thinking, collections=body.collections,
             mode=body.mode,
+            provider_id=body.provider_id, model=body.model,
         ):
             yield sse
 

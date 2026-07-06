@@ -1,10 +1,18 @@
+from __future__ import annotations
+
+import re
+import uuid
 from pathlib import Path
 
 import yaml
 
-from src.parsers.base import DocumentParser, ParsedDocument
+from src.parsers.base import DocumentParser, ParsedDocument, ImageInfo
+from src.parsers.image_utils import build_image_block
 
 _FRONTMATTER_DELIMITER = "---"
+
+# Matches ![alt](url) — but NOT already inside a ::: fenced block
+_MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 
 
 def _extract_frontmatter(text: str) -> tuple[dict, str]:
@@ -32,6 +40,88 @@ def _extract_frontmatter(text: str) -> tuple[dict, str]:
     return metadata, body
 
 
+def _guess_image_format(url: str) -> str:
+    """Guess image format from URL/file extension."""
+    url_lower = url.lower().split("?")[0]
+    for ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "svg"):
+        if url_lower.endswith("." + ext):
+            return "jpeg" if ext == "jpg" else ext
+    return "png"
+
+
+def extract_markdown_images(
+    content: str,
+    *,
+    base_dir: Path | None = None,
+    url_resolver=None,
+) -> tuple[str, list[ImageInfo]]:
+    """Find ![alt](url) in markdown, resolve local images, replace with :::image blocks.
+
+    Args:
+        content: Markdown text.
+        base_dir: For relative URLs, resolve against this directory.
+        url_resolver: Optional callable(url) -> bytes | None for absolute URLs
+            (e.g. Note image URLs → local file read).
+
+    Returns:
+        (updated_content, list_of_ImageInfo).
+    """
+    images: list[ImageInfo] = []
+
+    def _repl(m: re.Match) -> str:
+        alt = m.group(1) or ""
+        url = m.group(2)
+
+        # Skip URLs that are already data URIs or inside ::: blocks (shouldn't happen,
+        # but guard against edge cases)
+        if url.startswith("data:"):
+            return m.group(0)
+
+        img_bytes: bytes | None = None
+
+        # 1. Try custom resolver (e.g. Note image URLs)
+        if url_resolver is not None:
+            try:
+                img_bytes = url_resolver(url)
+            except Exception:
+                pass
+
+        # 2. Try relative path from base_dir
+        if img_bytes is None and base_dir is not None and not url.startswith(("http://", "https://", "/")):
+            img_path = (base_dir / url).resolve()
+            if img_path.is_file():
+                try:
+                    img_bytes = img_path.read_bytes()
+                except Exception:
+                    pass
+
+        if img_bytes is None:
+            return m.group(0)  # can't resolve → keep as-is
+
+        image_id = uuid.uuid4().hex
+        fmt = _guess_image_format(url)
+        img = ImageInfo(
+            image_id=image_id,
+            alt_text=alt,
+            image_bytes=img_bytes,
+            image_format=fmt,
+        )
+        images.append(img)
+        return build_image_block(img)
+
+    # Only process content outside ::: fenced blocks
+    # Split on ::: blocks, process text segments, preserve blocks
+    parts = re.split(r'(^:::[\s\S]*?^:::$)', content, flags=re.MULTILINE)
+    result_parts: list[str] = []
+    for part in parts:
+        if part.startswith(":::") and part.rstrip().endswith(":::"):
+            result_parts.append(part)  # preserve existing ::: blocks
+        else:
+            result_parts.append(_MD_IMAGE_RE.sub(_repl, part))
+
+    return "".join(result_parts), images
+
+
 class MarkdownParser(DocumentParser):
     def parse(self, path: Path) -> ParsedDocument:
         try:
@@ -39,6 +129,10 @@ class MarkdownParser(DocumentParser):
         except UnicodeDecodeError:
             text = path.read_text(encoding="utf-8", errors="replace")
         frontmatter, body = _extract_frontmatter(text)
+
+        # Extract local images (relative paths)
+        base_dir = path.parent
+        body, images = extract_markdown_images(body, base_dir=base_dir)
 
         meta: dict = {"format": "markdown"}
         if frontmatter:
@@ -49,4 +143,5 @@ class MarkdownParser(DocumentParser):
             metadata=meta,
             source_path=str(path),
             file_type="markdown",
+            images=images,
         )

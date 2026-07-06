@@ -47,6 +47,7 @@ export function useStreamChat() {
     addMessage, appendToLastMessage, setLastMessageSources,
     appendTimelineThinking, setTimelineToolSummary, setTimelineToolStatus, startTimelineTool,
     finishLastMessage, flushLastMessageToThinking, setStreaming, selectedCollections,
+    activeProvider, activeModel,
   } = useAppStore()
 
   const sendMessage = async (content: string, thinking = true) => {
@@ -70,7 +71,11 @@ export function useStreamChat() {
       const resp = await fetch(`/api/sessions/${sid}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, thinking, collections: selectedCollections }),
+        body: JSON.stringify({
+          content, thinking, collections: selectedCollections,
+          provider_id: activeProvider || undefined,
+          model: activeModel || undefined,
+        }),
         signal: controller.signal,
       })
 

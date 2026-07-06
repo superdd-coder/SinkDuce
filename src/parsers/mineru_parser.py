@@ -318,7 +318,7 @@ class MinerUParser:
         )
 
     def _download_result(self, result: dict[str, Any], source_path: Path) -> ParsedDocument:
-        """Download the result zip and extract Markdown content + position_map."""
+        """Download the result zip and extract Markdown content + position_map + images."""
         zip_url = result.get("full_zip_url", "")
         if not zip_url:
             raise MinerUError("No result zip URL returned", code="NO_RESULT")
@@ -331,10 +331,11 @@ class MinerUParser:
         markdown_content = ""
         position_map: list[dict] = []
         layout_data: dict[str, Any] = {}
+        images_dir_files: dict[str, bytes] = {}  # filename → bytes from images/ dir
 
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()
-            logger.info("[MinerU] Zip contents: %s", names)
+            logger.info("[MinerU] Zip contents: %d files", len(names))
 
             # Extract full.md
             for name in names:
@@ -353,6 +354,104 @@ class MinerUParser:
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
                         logger.warning("[MinerU] Failed to parse layout file '%s': %s", name, e)
                     break
+
+            # Extract images from images/ directory
+            for name in names:
+                if "/images/" in name or name.startswith("images/"):
+                    try:
+                        file_data = zf.read(name)
+                        filename = name.rsplit("/", 1)[-1]
+                        images_dir_files[filename] = file_data
+                    except Exception as e:
+                        logger.warning("[MinerU] Failed to read image '%s': %s", name, e)
+
+        # ── Extract image metadata from layout.json ──
+        from src.parsers.base import ImageInfo
+        import uuid as _uuid
+
+        all_images: list[ImageInfo] = []
+        pages = layout_data if isinstance(layout_data, list) else layout_data.get("pdf_info", [])
+
+        # Collect image-type blocks with their page and bbox
+        layout_image_map: dict[str, dict] = {}  # image_filename → {page_idx, bbox}
+        for page in (pages if isinstance(pages, list) else []):
+            page_idx = page.get("page_idx", 0)
+            blocks = page.get("para_blocks", page.get("blocks", []))
+            for block in (blocks if isinstance(blocks, list) else []):
+                block_type = (block.get("type") or "").lower()
+                if block_type in ("image", "figure", "picture"):
+                    bbox = block.get("bbox")
+                    # Try to match this block with an image file by filename
+                    for line in (block.get("lines", []) if isinstance(block, dict) else []):
+                        for span in (line.get("spans", []) if isinstance(line, dict) else []):
+                            img_path = span.get("image_path", "")
+                            if img_path:
+                                filename = img_path.rsplit("/", 1)[-1]
+                                layout_image_map[filename] = {
+                                    "page_number": page_idx + 1,
+                                    "bbox": bbox,
+                                }
+
+        # Build ImageInfo from extracted image files
+        for filename, file_data in images_dir_files.items():
+            if not filename:
+                continue
+            img_id = _uuid.uuid4().hex
+            fmt = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+            layout_info = layout_image_map.get(filename, {})
+            all_images.append(ImageInfo(
+                image_id=img_id,
+                page_number=layout_info.get("page_number"),
+                bbox=layout_info.get("bbox"),
+                image_bytes=file_data,
+                image_format=fmt,
+            ))
+
+        logger.info("[MinerU] Extracted %d images from zip", len(all_images))
+
+        # ── Replace ![](images/xxx.png) with :::image blocks ──
+        # Map image filenames to ImageInfo
+        file_to_image: dict[str, ImageInfo] = {}
+        for img in all_images:
+            # We need to match the full path used in markdown
+            for filename in images_dir_files:
+                if filename.rsplit(".", 1)[0] == img.image_id[:8]:
+                    pass
+            # Better approach: iterate images and try to match with markdown refs
+            file_to_image[img.image_id] = img  # temp, will fix below
+
+        # Match markdown image refs to ImageInfo by filename
+        # full.md references look like: ![alt](images/filename.png)
+        # Our images_dir_files has filename → bytes
+        # We need to match filename → ImageInfo
+        img_by_filename: dict[str, ImageInfo] = {}
+        # Try to match by order (images in markdown order = images in directory order)
+        sorted_filenames = sorted(images_dir_files.keys())
+        sorted_images = sorted(all_images, key=lambda im: im.image_id)
+        for i, filename in enumerate(sorted_filenames):
+            if i < len(sorted_images):
+                img_by_filename[filename] = sorted_images[i]
+
+        def _replace_image_ref(match: _re_module.Match) -> str:
+            alt = match.group(1) or ""
+            ref = match.group(2) or ""
+            filename = ref.rsplit("/", 1)[-1] if "/" in ref else ref
+            img = img_by_filename.get(filename)
+            if img is None:
+                return match.group(0)
+            return (
+                f":::image\n"
+                f"image_id: {img.image_id}\n"
+                f"file_id: \n"
+                f"description: \n"
+                f":::"
+            )
+
+        markdown_content = _re_module.sub(
+            r"!\[([^\]]*)\]\(images/([^)]+)\)",
+            _replace_image_ref,
+            markdown_content,
+        )
 
         # Build position_map from layout data
         # Clean MinerU Markdown for Tiptap compatibility (HTML tables → GFM tables)
@@ -376,6 +475,7 @@ class MinerUParser:
             source_path=str(source_path),
             file_type="markdown",
             position_map=position_map,
+            images=all_images,
         )
 
     def _build_position_map(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.parsers.base import DocumentParser, ParsedDocument
+from src.parsers.base import DocumentParser, ImageInfo, ParsedDocument
 from src.parsers.docx import DocxParser
 from src.parsers.excel import ExcelParser
 from src.parsers.html import HTMLParser

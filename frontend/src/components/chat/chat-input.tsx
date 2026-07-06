@@ -268,9 +268,12 @@ export function ChatInput() {
                     <div className="min-w-[140px]">
                       {(() => {
                         const hp = hoveredProvider ? readyProviders.find(p => p.id === hoveredProvider) : null
-                        const models = hp
+                        const allModels = hp
                           ? (hp.selected_models && hp.selected_models.length > 0 ? hp.selected_models : hp.model ? [hp.model] : [])
                           : []
+                        // Only show models with function calling support (required for ChatboxAgent)
+                        const fcIds = (hp as any)?.function_call_model_ids ?? []
+                        const models = allModels.filter((m: string) => fcIds.length === 0 || fcIds.includes(m))
                         if (models.length === 0) return null
                         return models.map((m) => (
                           <button

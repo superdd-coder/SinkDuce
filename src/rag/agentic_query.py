@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
+from src.parsers.image_utils import _IMAGE_BLOCK_RE
 from src.rag.decomposer import AtomicQuery
 from src.rag.aggregator import SubQueryResult
 from src.rag.retriever import RetrievedChunk
@@ -16,13 +17,140 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AgenticQueryResult:
-    answer: str | None
-    context: str = ""         # build_context(all_chunks) — always set
-    all_chunks: list = field(default_factory=list)  # deduplicated, score desc
+    answer: str | list[dict] | None   # str when include_images=False; list[dict] (multimodal) when True
+    context: str = ""                 # build_context(all_chunks) — always str
+    all_chunks: list = field(default_factory=list)
     tasks: list[dict] = field(default_factory=list)
+    images: dict[str, dict] = field(default_factory=dict)  # image_id → {base64, mime}
 
 
 # ── Inline generate prompt ────────────────────────────────────────────────
+
+def _stitch_images_from_chunks(chunks: list) -> dict[str, dict]:
+    """Extract image references from chunk metadata and encode them as base64.
+
+    Each chunk's metadata carries ``collection`` (set during retrieval),
+    so image path resolution is O(1) — no directory scanning.
+
+    Returns a dict mapping image_id → {base64, mime} for all images
+    referenced in the chunks' metadata.
+    """
+    from src.parsers.image_utils import _encode_image_base64_direct, encode_image_base64
+
+    images: dict[str, dict] = {}
+    seen: set[str] = set()
+    total_refs = 0
+    not_found = 0
+
+    for chunk in chunks:
+        meta = getattr(chunk, "metadata", {}) if hasattr(chunk, "metadata") else {}
+        col = meta.get("collection", "")
+        chunk_images = meta.get("images", [])
+
+        # Fallback: if metadata has no images field (old data), scan chunk text
+        # for :::image blocks to extract image_id + file_id
+        if not chunk_images:
+            chunk_text = getattr(chunk, "text", "")
+            for m in _IMAGE_BLOCK_RE.finditer(chunk_text):
+                chunk_images.append({
+                    "image_id": m.group(1),
+                    "file_id": m.group(2),
+                })
+
+        if not isinstance(chunk_images, list):
+            continue
+        for img_ref in chunk_images:
+            if not isinstance(img_ref, dict):
+                continue
+            img_id = img_ref.get("image_id", "")
+            file_id = img_ref.get("file_id", "")
+            if not img_id or not file_id:
+                continue
+            if img_id in seen:
+                continue
+            seen.add(img_id)
+            total_refs += 1
+            if col:
+                encoded = _encode_image_base64_direct(img_id, file_id, col)
+            else:
+                encoded = encode_image_base64(img_id, file_id)
+            if encoded:
+                b64, mime = encoded
+                images[img_id] = {"base64": b64, "mime": mime}
+            else:
+                not_found += 1
+
+    logger.info(
+        "[ImageStitch] chunks=%d refs=%d found=%d not_found=%d",
+        len(chunks), total_refs, len(images), not_found,
+    )
+    return images
+
+
+def _build_multimodal_context(
+    content: str, images: dict[str, dict]
+) -> list[dict]:
+    """Build a multimodal content array with images inline in text flow.
+
+    Splits text around :::image blocks and replaces each block with an
+    image_url part, preserving original text-image-text order.
+
+    Returns a list suitable for OpenAI Vision API:
+        [{"type":"text","text":"..."}, {"type":"image_url","image_url":{...}}, ...]
+    """
+    if not content:
+        return [{"type": "text", "text": ""}]
+    if not images:
+        return [{"type": "text", "text": content}]
+
+    import re as _re
+
+    # _IMAGE_BLOCK_RE groups: (image_id, file_id, ocr_text, description)
+    # split() → [text, id, file_id, ocr, desc, text, id, file_id, ocr, desc, ...]
+    parts = _IMAGE_BLOCK_RE.split(content)
+    multimodal: list[dict] = []
+
+    img_id = ""
+    ocr_text = ""
+    for i, part in enumerate(parts):
+        pos = i % 5
+        if pos == 0:
+            text = part.strip()
+            if text:
+                multimodal.append({"type": "text", "text": text})
+        elif pos == 1:
+            img_id = part  # capture group 1: image_id
+        elif pos == 2:
+            # capture group 2: file_id — skipped
+            pass
+        elif pos == 3:
+            ocr_text = part or ""  # capture group 3: ocr_text (None in old format)
+        elif pos == 4:
+            # capture group 4: description — insert image
+            img_data = images.get(img_id) if img_id else None
+            if img_data:
+                b64 = img_data.get("base64", "")
+                mime = img_data.get("mime", "image/png")
+                # If OCR extracted text from this image, include it as a text part
+                # so the vision LLM gets both the original text AND the image pixels
+                ocr = ocr_text.strip() if ocr_text else ""
+                if ocr:
+                    multimodal.append({
+                        "type": "text",
+                        "text": f"[OCR text extracted from image]: {ocr}",
+                    })
+                multimodal.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                })
+            elif part.strip():
+                multimodal.append({
+                    "type": "text",
+                    "text": f"[Image: {part.strip()}]",
+                })
+            ocr_text = ""
+
+    return multimodal if multimodal else [{"type": "text", "text": content}]
 
 _GENERATE_ANSWER_SYSTEM = """You are a helpful research assistant. Answer the user's question based on the provided context and retained information.
 
@@ -83,6 +211,7 @@ class AgenticQueryService:
         *,
         collections: list[str] | None = None,
         generate_answer: bool = True,
+        include_images: bool = False,
         on_step=None,
         top_k: int = 20,
         rerank_enabled: bool = True,
@@ -315,7 +444,32 @@ class AgenticQueryService:
 
         logger.info("[Agentic] done — aqs=%d chunks=%d answer_len=%d",
                     len(aqs), len(all_chunks), len(final_answer) if final_answer else 0)
+
+        # ── Image stitching ─────────────────────────────────────────
+        images_payload: dict[str, dict] = {}
+        if include_images and all_chunks:
+            images_payload = _stitch_images_from_chunks(all_chunks)
+            if images_payload:
+                target = final_answer or context
+                if target:
+                    final_answer = _build_multimodal_context(target, images_payload)
+                    logger.info(
+                        "[Agentic] IMAGE STITCH: type=%s parts=%d images=%d",
+                        type(final_answer).__name__,
+                        len(final_answer) if isinstance(final_answer, list) else 0,
+                        len(images_payload),
+                    )
+            else:
+                logger.warning(
+                    "[Agentic] IMAGE STITCH FAILED: include_images=True but "
+                    "images_payload empty. chunks=%d, checked metadata for images",
+                    len(all_chunks),
+                )
+        elif include_images and not all_chunks:
+            logger.warning("[Agentic] IMAGE STITCH SKIPPED: no chunks")
+
         return AgenticQueryResult(
             answer=final_answer, context=context,
             all_chunks=all_chunks, tasks=task_details,
+            images=images_payload,
         )

@@ -96,6 +96,77 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
     snapshot_dir = ensure_files_dir(collection, file_id)
     (snapshot_dir / f"{safe_title}.md").write_text(content, encoding="utf-8")
 
+    # ── Stage 0: Image preprocessing ──
+    # Note content may have images in two formats:
+    #   - Markdown: ![alt](/api/notes/{col}/{note}/images/{file})
+    #   - HTML:     <img src="/api/notes/{col}/{note}/images/{file}" ... />
+    # Convert HTML <img> tags to markdown first, then extract both.
+    from src.parsers.markdown import extract_markdown_images
+
+    _note_img_re = _re.compile(r'/api/notes/[^/]+/([^/]+)/images/(.+)')
+
+    # Pre-convert HTML <img> tags (with note image URLs) to markdown ![](url)
+    _html_img_re = _re.compile(
+        r'<img\s[^>]*?src="([^"]*)"[^>]*/?>',
+        _re.IGNORECASE,
+    )
+    def _convert_html_img(m: _re.Match) -> str:
+        src = m.group(1)
+        if _note_img_re.search(src):
+            return f"![]({src})"
+        return m.group(0)
+    content = _html_img_re.sub(_convert_html_img, content)
+
+    def _resolve_note_image(url: str) -> bytes | None:
+        m = _note_img_re.search(url)
+        if not m:
+            return None
+        target_note = m.group(1)
+        filename = m.group(2)
+        img_path = store.NOTES_DIR / target_note / "images" / filename
+        if img_path.is_file():
+            try:
+                return img_path.read_bytes()
+            except Exception:
+                return None
+        return None
+
+    content, note_images = extract_markdown_images(
+        content, url_resolver=_resolve_note_image,
+    )
+
+    if note_images:
+        logger.info("[INGEST] Note %s: found %d images to process", note_id, len(note_images))
+        # Build a minimal ParsedDocument for process_document_images
+        from src.parsers.base import ParsedDocument
+        from src.parsers.image_utils import process_document_images, annotate_chunks_with_images
+        from src.config import get_config
+        from src.prompts import VISUAL_PROMPT
+
+        _doc = ParsedDocument(
+            content=content, file_type="note", images=note_images,
+        )
+        cfg = get_config()
+        vision_provider = None
+        vision_model_id = cfg.visual_model_id if hasattr(cfg, "visual_model_id") else ""
+        if vision_model_id:
+            for p in cfg.llm.providers:
+                if hasattr(p, "visual_model_ids") and vision_model_id in p.visual_model_ids:
+                    vision_provider = p
+                    break
+        _doc = process_document_images(
+            _doc, file_id, snapshot_dir,
+            vision_provider=vision_provider,
+            vision_model_id=vision_model_id,
+            vision_prompt=VISUAL_PROMPT,
+        )
+        content = _doc.content
+        note_images = _doc.images
+        # Update snapshot with processed content
+        (snapshot_dir / f"{safe_title}.md").write_text(content, encoding="utf-8")
+        logger.info("[INGEST] Note %s: image processing done — %d images in final content",
+                    note_id, len(note_images or []))
+
     if config.get("chunk_mode") == "parent_child":
         chunker = MarkdownParentChildChunker(
             parent_strategy=config.get("parent_strategy", "heading"),
@@ -118,6 +189,10 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
     )
     logger.info("[INGEST] Note %s: chunked into %d chunks (%.1fs)",
                 note_id, len(chunks), time.time() - t_start)
+
+    # Annotate chunks with image references for multimodal stitching at query time
+    if note_images:
+        annotate_chunks_with_images(chunks, note_images)
 
     if not chunks:
         logger.warning("[INGEST] Note %s: chunking produced 0 chunks, aborting", note_id)

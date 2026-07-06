@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { Loader2, ChevronRight, ChevronDown, RefreshCw } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn, transformImageBlocks } from "@/lib/utils"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
 import { getFilePreviewUrl, getDocSummary, setDocSummaryInclude, generateDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
@@ -317,7 +317,7 @@ export function FileDetailDialog({ collection, source, displayName, fileType, or
                       <div ref={sourceContentRef}>
                         <div className="p-4">
                           <TiptapEditor
-                            value={previewContent ?? ""}
+                            value={previewContent ? transformImageBlocks(previewContent, collection) : ""}
                             readonly
                             showToolbar={false}
                             onEditorReady={(e) => { sourceEditorRef.current = e }}

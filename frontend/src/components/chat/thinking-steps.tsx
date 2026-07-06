@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   ChevronRight,
   ChevronDown,
@@ -138,6 +138,7 @@ function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: bool
 
 export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: ThinkingStepsProps) {
   const [topExpanded, setTopExpanded] = useState(true)
+  useEffect(() => { if (!isStreaming) setTopExpanded(false) }, [isStreaming])
 
   // Waiting for first events — show spinner
   if (isStreaming && (!summary || (summary.tasks?.length ?? 0) === 0)) {

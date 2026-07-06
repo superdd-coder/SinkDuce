@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/compo
 import { Loader2, X, ChevronRight, ChevronDown, Locate } from "lucide-react"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
+import { transformImageBlocks } from "@/lib/utils"
 import { getFileChunks, getFilePreviewUrl, getDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
 import { useAppStore, type Source } from "@/stores/app-store"
 
@@ -241,7 +242,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                 <ScrollArea className="h-full">
                   <div ref={sourceContentRef} className="p-3">
                     <TiptapEditor
-                      value={previewContent ?? ""}
+                      value={previewContent ? transformImageBlocks(previewContent, collectionId) : ""}
                       readonly
                       showToolbar={false}
                       onEditorReady={(e) => { sourceEditorRef.current = e }}
