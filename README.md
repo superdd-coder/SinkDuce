@@ -34,6 +34,7 @@ Open [http://localhost:18900](http://localhost:18900/). On first launch:
 ### Updating
 
 ```bash
+cd sinkduce
 git pull
 docker compose up -d --build
 ```
