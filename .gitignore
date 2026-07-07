@@ -1,6 +1,12 @@
 # User data (mounted volume, never commit)
 data/
 
+# Dev scratch / local previews (not for commit)
+frontend/preview.html
+frontend/vite.preview.config.ts
+frontend/src/main-preview.tsx
+frontend/src/components/editorial/
+
 # Environment config
 .env
 .env.local
