@@ -457,8 +457,10 @@ export const setDefaultRerankProvider = (id: string) =>
 export interface ConflictItem {
   content1: string
   source1: string
+  source1_label?: string
   content2: string
   source2: string
+  source2_label?: string
 }
 
 export interface DocSummary {

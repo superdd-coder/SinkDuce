@@ -310,10 +310,10 @@ export function InfoPanel({ collection }: InfoPanelProps) {
                 >
                   <div className="text-xs leading-relaxed text-foreground">
                     <span style={{ color: "#B45309" }}>{conflict.content1}</span>
-                    <span className="text-muted-foreground"> ({conflict.source1})</span>
+                    <span className="text-muted-foreground"> ({conflict.source1_label ?? conflict.source1})</span>
                     <span className="text-muted-foreground" style={{ margin: "0 6px" }}>vs</span>
                     <span style={{ color: "#B45309" }}>{conflict.content2}</span>
-                    <span className="text-muted-foreground"> ({conflict.source2})</span>
+                    <span className="text-muted-foreground"> ({conflict.source2_label ?? conflict.source2})</span>
                   </div>
                 </button>
               ))}

@@ -4,7 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2 } from "lucide-react"
-import { getDocSummary, getFilePreviewUrl, isPreviewable, type ConflictItem, type DocSummary } from "@/api/client"
+import { getDocSummary, getFilePreviewUrl, getExtractedText, type ConflictItem, type DocSummary } from "@/api/client"
 
 interface ConflictViewerDialogProps {
   conflict: ConflictItem | null
@@ -12,48 +12,47 @@ interface ConflictViewerDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-function SourcePanel({ collection, source, content }: { collection: string; source: string; content: string }) {
+function SourcePanel({ collection, source, label, content }: { collection: string; source: string; label: string; content: string }) {
   const [summary, setSummary] = useState<DocSummary | null>(null)
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
 
-  // Strip category suffixes like "(Data)", "(Facts)", "(Insights)" from source
-  const cleanSource = source.replace(/\s*\((?:Data|Facts|Insights)\)\s*$/i, "").trim()
-  const isPdf = cleanSource.toLowerCase().endsWith(".pdf")
+  // Use the human-readable label to detect PDF (PDF is rendered via iframe).
+  // For all other types (including notes, which have no extension), fall back
+  // to getExtractedText which works for both files and notes.
+  const isPdf = label.toLowerCase().endsWith(".pdf")
 
   useEffect(() => {
-    if (!collection || !cleanSource) return
+    if (!collection || !source) return
     let cancelled = false
 
     // Load summary
     setSummaryLoading(true)
-    getDocSummary(collection, cleanSource)
+    getDocSummary(collection, source)
       .then((res) => { if (!cancelled) setSummary(res) })
       .catch(() => { if (!cancelled) setSummary(null) })
       .finally(() => { if (!cancelled) setSummaryLoading(false) })
 
-    // Load file preview (same logic as file-detail-dialog)
+    // Load preview. PDF uses iframe; everything else (incl. notes) uses
+    // getExtractedText — same approach as FileDetailDialog.
     if (isPdf) {
-      setPreviewContent(null) // PDF rendered via iframe
-    } else if (isPreviewable(cleanSource)) {
+      setPreviewContent(null)
+    } else {
       setPreviewLoading(true)
-      fetch(getFilePreviewUrl(cleanSource))
-        .then((res) => { if (!res.ok) throw new Error(); return res.text() })
-        .then((text) => { if (!cancelled) setPreviewContent(text) })
+      getExtractedText(source, collection)
+        .then((res) => { if (!cancelled) setPreviewContent(res.text) })
         .catch(() => { if (!cancelled) setPreviewContent(null) })
         .finally(() => { if (!cancelled) setPreviewLoading(false) })
-    } else {
-      setPreviewContent(null)
     }
 
     return () => { cancelled = true }
-  }, [collection, cleanSource, isPdf])
+  }, [collection, source, isPdf])
 
   return (
     <div className="w-1/2 flex flex-col min-h-0">
       <div className="flex items-center gap-2 mb-2">
-        <h4 className="text-sm font-medium text-muted-foreground truncate">{cleanSource}</h4>
+        <h4 className="text-sm font-medium text-muted-foreground truncate">{label}</h4>
       </div>
       <div className="flex-1 overflow-hidden rounded-lg border border-border min-h-0">
         <Tabs defaultValue="source" className="flex flex-col h-full">
@@ -73,9 +72,9 @@ function SourcePanel({ collection, source, content }: { collection: string; sour
               {/* Source file preview */}
               {isPdf ? (
                 <iframe
-                  src={getFilePreviewUrl(cleanSource)}
+                  src={getFilePreviewUrl(source)}
                   className="w-full h-[calc(100%-60px)] border-0"
-                  title={`Preview: ${cleanSource}`}
+                  title={`Preview: ${label}`}
                 />
               ) : previewLoading ? (
                 <div className="flex items-center justify-center py-8 text-muted-foreground">
@@ -166,11 +165,13 @@ export function ConflictViewerDialog({ conflict, collection, onOpenChange }: Con
               <SourcePanel
                 collection={collection}
                 source={conflict.source1}
+                label={conflict.source1_label ?? conflict.source1}
                 content={conflict.content1}
               />
               <SourcePanel
                 collection={collection}
                 source={conflict.source2}
+                label={conflict.source2_label ?? conflict.source2}
                 content={conflict.content2}
               />
             </>

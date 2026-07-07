@@ -323,14 +323,22 @@ Document summaries:
 {summaries}"""
 
 
-def format_doc_summaries_for_prompt(summaries: list[dict]) -> str:
-    """Format doc summaries into text for the consolidation prompt."""
+def format_doc_summaries_for_prompt(summaries: list[dict], alias_map: dict[str, str] | None = None) -> str:
+    """Format doc summaries into text for the consolidation prompt.
+
+    If alias_map is provided, source identifiers are rewritten to short
+    human-readable aliases (e.g. FILE_A, NOTE_B) so the LLM does not invent
+    UUIDs. The alias_map is the reverse lookup used later to translate
+    LLM-returned aliases back to real sources.
+    """
     if not summaries:
         return ""
     parts = []
     for s in summaries:
-        source = s.get("source", "unknown")
-        lines = [f"--- {source} ---"]
+        real_source = s.get("source", "unknown")
+        # If alias_map given, use the alias in the prompt; otherwise use real source.
+        display_source = (alias_map or {}).get(real_source, real_source)
+        lines = [f"--- {display_source} ---"]
         data = s.get("data", [])
         facts = s.get("facts", [])
         insights = s.get("insights", [])
@@ -350,11 +358,15 @@ def format_doc_summaries_for_prompt(summaries: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def parse_consolidation_response(raw: str) -> tuple[str, list[dict]]:
+def parse_consolidation_response(raw: str, alias_map: dict[str, str] | None = None) -> tuple[str, list[dict]]:
     """Parse LLM consolidation response into summary text and conflict dicts.
 
     Returns ``(collection_summary, conflicts)`` where each conflict is a dict
     with keys ``content1``, ``source1``, ``content2``, ``source2``.
+
+    If alias_map is provided, source identifiers returned by the LLM are
+    translated back to the real source strings via reverse lookup. Unknown
+    aliases are passed through unchanged.
 
     Handles both JSON output (preferred) and legacy === delimiter format.
     """
@@ -365,6 +377,11 @@ def parse_consolidation_response(raw: str) -> tuple[str, list[dict]]:
     import re as _re
 
     # Try JSON first
+    def _resolve_alias(value: str) -> str:
+        if not value or not alias_map:
+            return value
+        return alias_map.get(value, value)
+
     raw_stripped = raw.strip()
     # Extract JSON object from response (may have markdown fences or extra text)
     json_match = _re.search(r"\{[\s\S]*\}", raw_stripped)
@@ -374,6 +391,10 @@ def parse_consolidation_response(raw: str) -> tuple[str, list[dict]]:
             summary_text = data.get("summary", "")
             conflicts = data.get("conflicts", [])
             if isinstance(conflicts, list) and summary_text:
+                for c in conflicts:
+                    for key in ("source1", "source2"):
+                        if key in c:
+                            c[key] = _resolve_alias(c[key])
                 return summary_text, conflicts
         except (_json.JSONDecodeError, KeyError):
             pass
@@ -411,9 +432,9 @@ def parse_consolidation_response(raw: str) -> tuple[str, list[dict]]:
             if len(parts) >= 4:
                 conflicts.append({
                     "content1": parts[0],
-                    "source1": parts[1],
+                    "source1": _resolve_alias(parts[1]),
                     "content2": parts[2],
-                    "source2": parts[3],
+                    "source2": _resolve_alias(parts[3]),
                 })
 
     summary_text = "\n".join(summary_lines).strip()
@@ -448,9 +469,46 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     from src.rag.collection_utils import _resolve_collection_name
     collection_name = _resolve_collection_name(collection)
 
+    # 2b. Build ephemeral alias map so the LLM doesn't invent UUIDs.
+    #     Alias → real source. Forward (real → alias) used in prompt formatting;
+    #     reverse (alias → real) used in response parsing.
+    type_prefixes = ("__file__:", "__note__:", "__meeting__:", "__url__:", "__youtube__:")
+    alias_map: dict[str, str] = {}  # alias → real source
+    used_aliases: set[str] = set()
+    for s in doc_summaries:
+        real = s.get("source", "")
+        if not real:
+            continue
+        if real in alias_map.values():
+            continue  # already aliased
+        # Derive a short type token from the source prefix
+        if real.startswith("__file__:"):
+            token = "FILE"
+        elif real.startswith("__note__:"):
+            token = "NOTE"
+        elif real.startswith("__meeting__:"):
+            token = "MEETING"
+        elif real.startswith("__url__:"):
+            token = "URL"
+        elif real.startswith("__youtube__:"):
+            token = "VIDEO"
+        else:
+            token = "SRC"
+        # Find next available index (1-based, A/B/C suffix to keep aliases short)
+        idx = 1
+        while True:
+            letter = chr(ord("A") + (idx - 1) % 26)
+            suffix = "" if idx <= 26 else f"_{idx}"
+            alias = f"{token}_{letter}{suffix}"
+            if alias not in used_aliases:
+                used_aliases.add(alias)
+                alias_map[alias] = real
+                break
+            idx += 1
+
     # 3. Format and call LLM (generate first, delete old only on success)
-    summaries_text = format_doc_summaries_for_prompt(doc_summaries)
-    logger.info("[CONSOLIDATE] Formatted summaries (%d chars), calling LLM...", len(summaries_text))
+    summaries_text = format_doc_summaries_for_prompt(doc_summaries, alias_map={v: k for k, v in alias_map.items()})
+    logger.info("[CONSOLIDATE] Formatted summaries (%d chars, %d aliases), calling LLM...", len(summaries_text), len(alias_map))
     config = services.db.get_collection_config(collection)
     enriching_llm = _get_enriching_llm(config)
     loop = asyncio.get_running_loop()
@@ -458,7 +516,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
         None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, thinking=True)
     )
     logger.info("[CONSOLIDATE] LLM returned %d chars", len(raw))
-    collection_summary, conflicts = parse_consolidation_response(raw)
+    collection_summary, conflicts = parse_consolidation_response(raw, alias_map=alias_map)
     logger.info("[CONSOLIDATE] Parsed: summary=%d chars, %d conflicts", len(collection_summary), len(conflicts))
 
     if not collection_summary:
