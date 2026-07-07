@@ -172,7 +172,8 @@ def get_collection_conflicts(collection: str):
     sm = _get_summary_manager()
     conflicts = sm.get_conflicts(collection_id)
 
-    # Resolve source identifiers → human-readable labels via files.json
+    # Add human-readable labels via files.json WITHOUT mutating original source
+    # (the original source is needed by the frontend to call preview/summary APIs).
     try:
         from src.collections.file_index import load as load_file_index
         idx = load_file_index(collection_id)
@@ -188,7 +189,7 @@ def get_collection_conflicts(collection: str):
             for key in ("source1", "source2"):
                 src = c.get(key, "")
                 if src in label_map:
-                    c[key] = label_map[src]
+                    c[f"{key}_label"] = label_map[src]
                 else:
                     logger.info("[INFO] Conflict source '%s' not in label_map (keys: %s)", src, list(label_map.keys())[:5])
     except Exception:
