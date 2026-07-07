@@ -11,42 +11,54 @@ collect_ignore = ["test_api.py", "test_smoke.py", "test_ui_automation.py", "test
 def pytest_configure(config):
     """In CI, mock Qdrant client before any test module is imported,
     so import-time connection attempts don't fail."""
-    if os.environ.get("CI"):
-        from unittest.mock import MagicMock
+    if not os.environ.get("CI"):
+        return
 
-        # Mock the Qdrant client constructor so it never tries to connect
-        mock_client = MagicMock()
-        mock_client.search.return_value = []
-        mock_client.scroll.return_value = ([], None)
-        mock_client.get_collections.return_value = MagicMock(collections=[])
-        mock_client.create_collection.return_value = True
-        mock_client.collection_exists.return_value = False
-        mock_client.get_collection.return_value = MagicMock()
-        mock_client.count.return_value = MagicMock(count=0)
+    from unittest.mock import MagicMock
 
-        MockQdrantClient = MagicMock(return_value=mock_client)
+    mock_qdrant = MagicMock()
+    mock_qdrant.search.return_value = []
+    mock_qdrant.scroll.return_value = ([], None)
+    mock_qdrant.get_collections.return_value = MagicMock(collections=[])
+    mock_qdrant.create_collection.return_value = True
+    mock_qdrant.collection_exists.return_value = False
+    mock_qdrant.get_collection.return_value = MagicMock()
+    mock_qdrant.count.return_value = MagicMock(count=0)
 
-        try:
-            import qdrant_client
-            qdrant_client.QdrantClient = MockQdrantClient
-        except ImportError:
-            pass
+    MockQdrantClient = MagicMock(return_value=mock_qdrant)
 
-        # Also patch the module-level reference in src.db.qdrant
-        try:
-            import src.db.qdrant as db_qdrant
-            db_qdrant.QdrantClient = MockQdrantClient
-        except ImportError:
-            pass
+    try:
+        import qdrant_client
+        qdrant_client.QdrantClient = MockQdrantClient
+    except ImportError:
+        pass
+
+    try:
+        import src.db.qdrant as db_qdrant
+        db_qdrant.QdrantClient = MockQdrantClient
+    except ImportError:
+        pass
 
 
 def pytest_collection_modifyitems(config, items):
-    """In CI, auto-skip tests that need the running API server."""
-    if os.environ.get("CI"):
-        skip_marker = pytest.mark.skip(reason="CI: no external services available")
-        for item in items:
-            if "api_base" in getattr(item, "fixturenames", ()):
-                item.add_marker(skip_marker)
+    """In CI, skip tests that need a running API server."""
+    if not os.environ.get("CI"):
+        return
+
+    skip = pytest.mark.skip(reason="CI: no external services available")
+
+    # Files that are entirely integration tests (need real API server + Qdrant)
+    ci_skip_files = {
+        "test_collection_id.py",
+        "test_direct_query.py",
+    }
+
+    for item in items:
+        fname = os.path.basename(item.fspath)
+        if fname in ci_skip_files:
+            item.add_marker(skip)
+        elif "api_base" in getattr(item, "fixturenames", ()):
+            item.add_marker(skip)
 
 
 @pytest.fixture(scope="session")
