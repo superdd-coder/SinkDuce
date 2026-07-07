@@ -18,6 +18,8 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     name: Python Tests
+    env:
+      CI: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
