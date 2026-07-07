@@ -17,7 +17,7 @@ Sinkduce 秉承一个核心哲学：**从不盲目囤积知识——只沉淀真
 **前置条件**：需安装 Docker
 
 ```bash
-git clone [https://github.com/superdd-coder/sinkduce.git](https://github.com/superdd-coder/sinkduce.git)
+git clone https://github.com/superdd-coder/sinkduce.git
 cd sinkduce
 
 # 可选：自定义端口
@@ -38,6 +38,7 @@ docker compose up -d --build
 ### 升级更新
 
 ```bash
+cd sinkduce
 git pull
 docker compose up -d --build
 ```
