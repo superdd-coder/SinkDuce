@@ -176,20 +176,33 @@ def get_collection_conflicts(collection: str):
     # (the original source is needed by the frontend to call preview/summary APIs).
     try:
         from src.collections.file_index import load as load_file_index
+        import re as _re_uuid
         idx = load_file_index(collection_id)
-        # Build source → label map (cover both source string and file_id UUID)
+        # Build lookup tables. Conflict sources come from the LLM, which sometimes
+        # uses the raw UUID or formats like "note (uuid)" / "file (uuid)" — match
+        # those patterns too so labels resolve even for older conflict data.
         label_map: dict[str, str] = {}
+        uuid_to_label: dict[str, str] = {}
         for fid, entry in idx.items():
             src = entry.get("source", "")
             label = entry.get("source_label", fid[:8])
             if src:
                 label_map[src] = label
             label_map[fid] = label  # UUID → label fallback
+            uuid_to_label[fid] = label
         for c in conflicts:
             for key in ("source1", "source2"):
                 src = c.get(key, "")
-                if src in label_map:
-                    c[f"{key}_label"] = label_map[src]
+                if not src:
+                    continue
+                label = label_map.get(src)
+                if not label:
+                    # Try to extract a UUID from common LLM-generated formats
+                    m = _re_uuid.search(r'[0-9a-f]{32}', src)
+                    if m:
+                        label = uuid_to_label.get(m.group())
+                if label:
+                    c[f"{key}_label"] = label
                 else:
                     logger.info("[INFO] Conflict source '%s' not in label_map (keys: %s)", src, list(label_map.keys())[:5])
     except Exception:

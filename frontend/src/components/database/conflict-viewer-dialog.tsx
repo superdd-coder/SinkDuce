@@ -4,7 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2 } from "lucide-react"
-import { getDocSummary, getFilePreviewUrl, isPreviewable, type ConflictItem, type DocSummary } from "@/api/client"
+import { getDocSummary, getFilePreviewUrl, getExtractedText, type ConflictItem, type DocSummary } from "@/api/client"
 
 interface ConflictViewerDialogProps {
   conflict: ConflictItem | null
@@ -18,8 +18,9 @@ function SourcePanel({ collection, source, label, content }: { collection: strin
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
 
-  // Use the human-readable label for filename check, but pass the original source
-  // (e.g. "__file__:abc123") to backend APIs — labels aren't stored as source.
+  // Use the human-readable label to detect PDF (PDF is rendered via iframe).
+  // For all other types (including notes, which have no extension), fall back
+  // to getExtractedText which works for both files and notes.
   const isPdf = label.toLowerCase().endsWith(".pdf")
 
   useEffect(() => {
@@ -33,22 +34,20 @@ function SourcePanel({ collection, source, label, content }: { collection: strin
       .catch(() => { if (!cancelled) setSummary(null) })
       .finally(() => { if (!cancelled) setSummaryLoading(false) })
 
-    // Load file preview (same logic as file-detail-dialog)
+    // Load preview. PDF uses iframe; everything else (incl. notes) uses
+    // getExtractedText — same approach as FileDetailDialog.
     if (isPdf) {
-      setPreviewContent(null) // PDF rendered via iframe
-    } else if (isPreviewable(label)) {
+      setPreviewContent(null)
+    } else {
       setPreviewLoading(true)
-      fetch(getFilePreviewUrl(source))
-        .then((res) => { if (!res.ok) throw new Error(); return res.text() })
-        .then((text) => { if (!cancelled) setPreviewContent(text) })
+      getExtractedText(source, collection)
+        .then((res) => { if (!cancelled) setPreviewContent(res.text) })
         .catch(() => { if (!cancelled) setPreviewContent(null) })
         .finally(() => { if (!cancelled) setPreviewLoading(false) })
-    } else {
-      setPreviewContent(null)
     }
 
     return () => { cancelled = true }
-  }, [collection, source, label, isPdf])
+  }, [collection, source, isPdf])
 
   return (
     <div className="w-1/2 flex flex-col min-h-0">

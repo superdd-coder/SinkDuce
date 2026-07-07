@@ -87,7 +87,23 @@ CONSOLIDATION_PROMPT = """You are analyzing multiple document summaries from a s
    - Timeline and status
    Write in concise paragraphs without ## sub-headings. Use **bold** for key numbers and names.
 
-2. CONFLICTS: Identify ONLY genuine contradictions where two documents make different claims about the SAME fact.
+2. CONFLICTS: A conflict is a pair of claims that are mutually exclusive — both cannot be true at the same time.
+
+   Two claims are the SAME fact (not a conflict) when one is a more general, more specific, summarized, or broken-down version of the other, or when they describe different aspects of the same entity without disagreeing.
+
+   Two claims are CONFLICTING when one asserts something that directly contradicts the other — different numbers for the same measurable quantity, or logically incompatible statements about the same subject.
+
+   Compare these examples to calibrate. The hard cases are where the numbers look compatible at first glance:
+
+   Example A (IS a conflict — easy to miss because numbers look similar):
+     - "Total project cost is $750M broken into solar EPC ($620M), BESS EPC ($90M), interconnection ($22M), and development fees ($18M)."
+     - "The EPC budget for the project is $750M."
+     These both say $750M, but the first breaks $750M into multiple components (only ~$710M of which is EPC); the second claims EPC alone is $750M. The numbers cannot both be true.
+
+   Example B (NOT a conflict — different facets of the same project):
+     - "Project completion is scheduled for Q3 2026."
+     - "Construction begins in Q1 2025."
+     Both can be true; one is about construction start, the other about final completion. No contradiction.
 
 Document summaries:
 {summaries}
