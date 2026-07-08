@@ -4,7 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
-import { Loader2, ChevronRight, ChevronDown, RefreshCw } from "lucide-react"
+import { Loader2, ChevronRight, ChevronDown, RefreshCw, Crosshair } from "lucide-react"
 import { cn, transformImageBlocks } from "@/lib/utils"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
@@ -525,11 +525,22 @@ export function FileDetailDialog({ collection, source, displayName, fileType, or
                                 {group.parent.heading_path && (
                                   <span className="text-[10px] text-muted-foreground truncate">{group.parent.heading_path}</span>
                                 )}
-                                <button
-                                  className="ml-auto p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                                  title="Locate in preview"
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label="Locate in preview"
+                                  className="ml-auto p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                                   onClick={(e) => { e.stopPropagation(); handleLocate(group.parent) }}
-                                />
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      handleLocate(group.parent)
+                                    }
+                                  }}
+                                >
+                                  <Crosshair className="h-3.5 w-3.5" />
+                                </div>
                               </div>
                               <p className="text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground line-clamp-3">{group.parent.text}</p>
                             </div>

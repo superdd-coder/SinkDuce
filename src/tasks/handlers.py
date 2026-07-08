@@ -143,30 +143,46 @@ def _get_enriching_llm(config: dict):
     """Get LLM for contextual enrichment.
 
     Resolution: per-collection override → global Settings default → system default LLM.
+
+    Cached by (provider_id, model) so the same provider instance — and its
+    httpx connection pool — is reused across enrichments. Without caching,
+    every upload creates a new OpenAI client with a cold connection pool,
+    so the first LLM call (the slow summary call) pays TCP+TLS handshake
+    and any server-side warmup, blocking the upload for several extra
+    seconds on the very first enrichment.
     """
     from src.providers.llm import create_llm_for_provider
+    from src.providers.cache import get_or_create as cached_provider
     from src.config import get_config
     cfg = get_config()
+
+    def _build(provider_cfg, model_override: str | None):
+        # Apply model override by producing an updated copy of the config;
+        # adapters read the model from the config themselves.
+        effective_cfg = provider_cfg
+        if model_override:
+            effective_cfg = provider_cfg.model_copy(update={"default_model": model_override})
+        cache_key = f"llm:enrich:{provider_cfg.id}:{effective_cfg.default_model or effective_cfg.model or ''}"
+        return cached_provider(cache_key, lambda: create_llm_for_provider(effective_cfg))
 
     # 1. Per-collection override (collection-config.tsx)
     provider_id = config.get("enriching_llm_provider")
     if provider_id:
         for p in cfg.llm.providers:
             if p.id == provider_id:
-                model = config.get("enriching_llm_model")
-                return create_llm_for_provider(p, model=model)
+                return _build(p, config.get("enriching_llm_model"))
 
     # 2. Global enrichment model (Settings → Advanced → Enrichment → Model)
     enrich_model = cfg.enrichment.enrichment_model
     if enrich_model:
         for p in cfg.llm.providers:
             if p.id == enrich_model:
-                return create_llm_for_provider(p)
+                return _build(p, None)
 
     # 3. System default LLM
     if cfg.llm.providers:
         default_p = next((p for p in cfg.llm.providers if p.is_default), cfg.llm.providers[0])
-        return create_llm_for_provider(default_p)
+        return _build(default_p, None)
     return services.llm
 
 
@@ -763,19 +779,32 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
             chunks = await loop.run_in_executor(_cpu_executor, _enrich_and_embed)
 
-            # Flush remaining embed batches; start sparse in parallel
+            # Flush remaining embed batches; start sparse in parallel.
+            # IMPORTANT: both batcher.wait_all() and sparse_future.result() are
+            # sync blocking calls. Calling them directly on the event loop would
+            # stall the entire server (list_files, chat, etc.) for the full
+            # duration of embedding + sparse encoding — which can be many seconds
+            # for slow APIs. Run them in threads and await both concurrently.
             batcher.flush()
             if batcher._futures:
                 sparse_future = _cpu_executor.submit(_do_sparse, batcher.get_all_texts(), collection)
-                embeddings = batcher.wait_all(chunks)
-                sparse_vectors = sparse_future.result()
+                embeddings, sparse_vectors = await asyncio.gather(
+                    loop.run_in_executor(None, batcher.wait_all, chunks),
+                    asyncio.wrap_future(sparse_future),
+                )
             else:
-                # Enrichment skipped (e.g. >200 chunks) — embed all at once
+                # Enrichment skipped (e.g. >200 chunks) — embed all at once.
+                # Same reason: push both blocking calls into a thread.
                 logger.info("[%s] enrichment skipped, embedding all %d chunks inline",
                             filename_param, len(chunks))
                 texts = [_build_enriched_text(c) for c in chunks]
-                embeddings = embedding.embed_texts(texts)
-                sparse_vectors = _do_sparse(texts, collection)
+
+                def _embed_and_sparse():
+                    emb = embedding.embed_texts(texts)
+                    sp = _do_sparse(texts, collection)
+                    return emb, sp
+
+                embeddings, sparse_vectors = await loop.run_in_executor(None, _embed_and_sparse)
 
         else:
             # No enrichment — embed + sparse inline
@@ -847,16 +876,23 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         except Exception:
             logger.exception("[Coverage] trigger failed for %r", filename_param)
 
-        # Update file index
+        # Update file index — JSON load+save runs on a worker thread so the event
+        # loop stays responsive (avoids blocking other API calls like list_files
+        # when several uploads complete back-to-back).
         if file_id:
             try:
                 from src.collections.file_index import add as add_file_index
                 # Preserve original extension for PDF/office files
                 original_ext = Path(file_path).suffix.lower().lstrip(".")
-                add_file_index(collection, file_id, filename_param,
-                              source_label or filename_param,
-                              doc.file_type, len(chunks),
-                              original_ext if original_ext else None)
+                await loop.run_in_executor(
+                    None,
+                    lambda: add_file_index(
+                        collection, file_id, filename_param,
+                        source_label or filename_param,
+                        doc.file_type, len(chunks),
+                        original_ext if original_ext else None,
+                    ),
+                )
             except Exception:
                 logger.warning("[%s] Failed to update files.json", filename_param, exc_info=True)
 
@@ -1007,7 +1043,9 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
         include_in_summary=True,
     )
 
-    # Schedule debounced consolidation (replaces old counter-based trigger)
+    # Schedule debounced consolidation (replaces old counter-based trigger).
+    # This handler always stores include_in_summary=True, so the new entry is
+    # by definition a "definitive" file — always enter the debounce flow.
     schedule_debounced_consolidate(collection, pre_snapshot)
 
     # ── Catalog coverage refresh ──────────────────────────────────
