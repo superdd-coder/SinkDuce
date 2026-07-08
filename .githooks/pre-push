@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Pre-push hook: Docker build + smoke test
+# Fails fast — blocks git push if the Docker image cannot be built or
+# the health endpoint does not respond.
+#
+# Skip with:  git push --no-verify
+# Reset hook:  git config core.hooksPath .githooks
+#
+# To activate, run this ONCE in the repo root:
+#   git config core.hooksPath .githooks
+
+set -euo pipefail
+
+PROJECT="sinkduce"
+HEALTH_URL="http://localhost:18900/health"
+START_TIMEOUT=60   # seconds to wait for the container to become healthy
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log()  { printf "${GREEN}[pre-push]${NC} %s\n" "$*"; }
+warn() { printf "${YELLOW}[pre-push]${NC} %s\n" "$*"; }
+err()  { printf "${RED}[pre-push]${NC} %s\n" "$*"; }
+
+cleanup() {
+    log "Cleaning up containers…"
+    docker compose down --remove-orphans 2>/dev/null || true
+}
+
+trap cleanup EXIT
+
+# ── 1. Docker build ─────────────────────────────────────────────────
+log "Building Docker image (this may take a minute)…"
+if ! docker compose build --quiet 2>&1; then
+    err "Docker build FAILED."
+    err ""
+    err "The push was blocked. Fix the build error and try again."
+    err "To skip this check:  git push --no-verify"
+    exit 1
+fi
+log "Docker build passed."
+
+# ── 2. Start containers ─────────────────────────────────────────────
+log "Starting containers…"
+docker compose up -d --wait 2>/dev/null || true
+
+# ── 3. Health check (poll until timeout) ─────────────────────────────
+log "Waiting for health endpoint (timeout ${START_TIMEOUT}s)…"
+elapsed=0
+while [ $elapsed -lt $START_TIMEOUT ]; do
+    if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
+        log "Health check passed (${elapsed}s)."
+        log "All checks passed — push allowed."
+        exit 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+done
+
+err "Health check FAILED after ${START_TIMEOUT}s."
+err "The push was blocked."
+err "To skip:  git push --no-verify"
+exit 1
