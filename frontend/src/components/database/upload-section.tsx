@@ -3,16 +3,26 @@ import { Progress } from "@/components/ui/progress"
 import { Clock, Loader2, CheckCircle2, XCircle, StopCircle, RefreshCw } from "lucide-react"
 import { type TaskInfo } from "@/api/client"
 
-interface UploadSectionProps {
+interface UploadUIProps {
   hasActiveTasks: boolean
-  tasks: TaskInfo[]
   allowedFileTypes?: string[]
   onUpload: (files: FileList | null) => void
+}
+
+interface TaskQueueListProps {
+  hasActiveTasks: boolean
+  tasks: TaskInfo[]
   onClearCompleted: () => Promise<{ message: string }>
   onRefreshTasks: () => void
   onCancelTask?: (taskId: string) => void
   onRetryTask?: (taskId: string) => void
 }
+
+// Back-compat: keep the old UploadSection props/type export for any consumer
+// still importing the combined component. Renders only the upload UI; the
+// task queue is now expected to be rendered separately via <TaskQueueList />
+// inside the same scroll container as the file list.
+interface LegacyUploadSectionProps extends UploadUIProps, TaskQueueListProps {}
 
 function TaskStatusIcon({ status }: { status: string }) {
   switch (status) {
@@ -31,13 +41,46 @@ function TaskStatusIcon({ status }: { status: string }) {
 
 const ALL_FILE_TYPES = ["pdf", "txt", "md", "docx", "xlsx", "pptx", "csv"]
 
-export function UploadSection({ hasActiveTasks, tasks, allowedFileTypes, onUpload, onClearCompleted, onRefreshTasks, onCancelTask, onRetryTask }: UploadSectionProps) {
+export function UploadUI({ hasActiveTasks, allowedFileTypes, onUpload }: UploadUIProps) {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const effectiveTypes = allowedFileTypes && allowedFileTypes.length > 0 ? allowedFileTypes : ALL_FILE_TYPES
   const acceptAttr = effectiveTypes.map(t => `.${t}`).join(",")
   const typesLabel = effectiveTypes.map(t => t.toUpperCase()).join(", ")
 
+  return (
+    <div>
+      <div
+        className="text-[11px] font-normal uppercase tracking-[0.12em] mb-2.5 text-muted-foreground/80"
+      >
+        Upload Files
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept={acceptAttr}
+        className="hidden"
+        onChange={(e) => { onUpload(e.target.files); if (fileRef.current) fileRef.current.value = "" }}
+      />
+      <div
+        className="p-6 text-center cursor-pointer transition-colors hover:opacity-80 border border-dashed border-border"
+        onClick={() => fileRef.current?.click()}
+        onDrop={(e) => { e.preventDefault(); onUpload(e.dataTransfer.files) }}
+        onDragOver={(e) => e.preventDefault()}
+      >
+        <div className="text-[10px] font-medium uppercase tracking-[0.15em] mb-1 text-muted-foreground">
+          {hasActiveTasks ? "Processing… Upload more" : "Drop files to upload"}
+        </div>
+        <div className="text-[11px] text-muted-foreground" style={{ opacity: 0.7 }}>
+          {typesLabel}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefreshTasks, onCancelTask, onRetryTask }: TaskQueueListProps) {
   const handleClearCompleted = async () => {
     try {
       await onClearCompleted()
@@ -47,122 +90,108 @@ export function UploadSection({ hasActiveTasks, tasks, allowedFileTypes, onUploa
     }
   }
 
+  if (tasks.length === 0) return null
+
   return (
-    <div className="space-y-6">
-      {/* Upload zone */}
-      <div>
+    <div>
+      <div className="flex items-center justify-between mb-2.5">
         <div
-          className="text-[11px] font-normal uppercase tracking-[0.12em] mb-2.5 text-muted-foreground/80"
+          className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80"
         >
-          Upload Files
+          Upload Queue
+          {hasActiveTasks && (
+            <span className="ml-2 font-normal opacity-60">
+              · {tasks.filter((t) => t.status === "processing").length} processing
+            </span>
+          )}
         </div>
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept={acceptAttr}
-          className="hidden"
-          onChange={(e) => { onUpload(e.target.files); if (fileRef.current) fileRef.current.value = "" }}
-        />
-        <div
-          className="p-6 text-center cursor-pointer transition-colors hover:opacity-80 border border-dashed border-border"
-          onClick={() => fileRef.current?.click()}
-          onDrop={(e) => { e.preventDefault(); onUpload(e.dataTransfer.files) }}
-          onDragOver={(e) => e.preventDefault()}
+        <button
+          type="button"
+          onClick={handleClearCompleted}
+          disabled={!tasks.some((t) => t.status === "completed" || t.status === "failed")}
+          className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 text-muted-foreground t-sans-family"
+          style={{
+            background: "none",
+            border: "0.5px solid var(--color-border)",
+            padding: "3px 8px",
+            borderRadius: "2px",
+            opacity: tasks.some((t) => t.status === "completed" || t.status === "failed") ? 1 : 0.3,
+          }}
         >
-          <div className="text-[10px] font-medium uppercase tracking-[0.15em] mb-1 text-muted-foreground">
-            {hasActiveTasks ? "Processing… Upload more" : "Drop files to upload"}
-          </div>
-          <div className="text-[11px] text-muted-foreground" style={{ opacity: 0.7 }}>
-            {typesLabel}
-          </div>
-        </div>
+          Clear
+        </button>
       </div>
 
-      {/* Task queue */}
-      {tasks.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-2.5">
-            <div
-              className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80"
-            >
-              Upload Queue
-              {hasActiveTasks && (
-                <span className="ml-2 font-normal opacity-60">
-                  · {tasks.filter((t) => t.status === "processing").length} processing
-                </span>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={handleClearCompleted}
-              disabled={!tasks.some((t) => t.status === "completed" || t.status === "failed")}
-              className="text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 text-muted-foreground t-sans-family"
-              style={{
-                background: "none",
-                border: "0.5px solid var(--color-border)",
-                padding: "3px 8px",
-                borderRadius: "2px",
-                opacity: tasks.some((t) => t.status === "completed" || t.status === "failed") ? 1 : 0.3,
-              }}
-            >
-              Clear
-            </button>
-          </div>
-
-          <div>
-            {tasks.map((task) => (
-              <div
-                key={task.id}
-                className="py-2.5 border-b border-b border-dashed border-border"
-              >
-                <div className="flex items-center gap-3">
-                  <TaskStatusIcon status={task.status} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate text-foreground">{task.filename}</p>
-                    {task.message && (
-                      <p className="text-[11px] text-muted-foreground">{task.message}</p>
-                    )}
-                  </div>
-                  {task.status === "completed" && task.result && (
-                    <span className="text-[10px] font-medium shrink-0 text-primary">
-                      {task.result.chunks_count} chunks
-                    </span>
-                  )}
-                  {task.status === "processing" && onCancelTask && (
-                    <button
-                      type="button"
-                      className="shrink-0 cursor-pointer text-muted-foreground"
-                      style={{ background: "none", border: "none" }}
-                      onClick={() => onCancelTask(task.id)}
-                      title="Stop"
-                    >
-                      <StopCircle className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                  {task.status === "failed" && onRetryTask && (
-                    <button
-                      type="button"
-                      className="shrink-0 cursor-pointer text-muted-foreground"
-                      style={{ background: "none", border: "none" }}
-                      onClick={() => onRetryTask(task.id)}
-                      title="Retry"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-                {task.status === "processing" && (
-                  <Progress value={task.progress} className="h-0.5 mt-2" />
-                )}
-                {task.status === "failed" && task.error && (
-                  <p className="text-[11px] mt-1 pl-7" style={{ color: "#dc2626" }}>{task.error}</p>
+      <div>
+        {tasks.map((task) => (
+          <div
+            key={task.id}
+            className="py-2.5 border-b border-b border-dashed border-border"
+          >
+            <div className="flex items-center gap-3">
+              <TaskStatusIcon status={task.status} />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate text-foreground">{task.filename}</p>
+                {task.message && (
+                  <p className="text-[11px] text-muted-foreground">{task.message}</p>
                 )}
               </div>
-            ))}
+              {task.status === "completed" && task.result && (
+                <span className="text-[10px] font-medium shrink-0 text-primary">
+                  {task.result.chunks_count} chunks
+                </span>
+              )}
+              {task.status === "processing" && onCancelTask && (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer text-muted-foreground"
+                  style={{ background: "none", border: "none" }}
+                  onClick={() => onCancelTask(task.id)}
+                  title="Stop"
+                >
+                  <StopCircle className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {task.status === "failed" && onRetryTask && (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer text-muted-foreground"
+                  style={{ background: "none", border: "none" }}
+                  onClick={() => onRetryTask(task.id)}
+                  title="Retry"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {task.status === "processing" && (
+              <Progress value={task.progress} className="h-0.5 mt-2" />
+            )}
+            {task.status === "failed" && task.error && (
+              <p className="text-[11px] mt-1 pl-7" style={{ color: "#dc2626" }}>{task.error}</p>
+            )}
           </div>
-        </div>
-      )}
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Back-compat: combined component for any consumer still using the old API.
+// New code should render <UploadUI /> and <TaskQueueList /> separately so the
+// task queue can scroll together with the file list.
+export function UploadSection(props: LegacyUploadSectionProps) {
+  return (
+    <div className="space-y-6">
+      <UploadUI hasActiveTasks={props.hasActiveTasks} allowedFileTypes={props.allowedFileTypes} onUpload={props.onUpload} />
+      <TaskQueueList
+        hasActiveTasks={props.hasActiveTasks}
+        tasks={props.tasks}
+        onClearCompleted={props.onClearCompleted}
+        onRefreshTasks={props.onRefreshTasks}
+        onCancelTask={props.onCancelTask}
+        onRetryTask={props.onRetryTask}
+      />
     </div>
   )
 }

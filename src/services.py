@@ -251,6 +251,16 @@ def init_services():
     config = get_config()
     services.config = config
 
+    # Invalidate enrichment LLM provider cache so a config change (e.g. base_url,
+    # api_key, model) takes effect on the next upload. The enrichment path caches
+    # its provider instance to avoid per-upload cold-start (TCP+TLS handshake)
+    # on the slow summary LLM call — without invalidation, a stale provider would
+    # silently keep being used after the user updates Settings.
+    from src.providers.cache import invalidate as _cache_invalidate
+    for _key in list(_provider_cache_snapshot()):
+        if _key.startswith("llm:enrich:"):
+            _cache_invalidate(_key)
+
     services.db = QdrantManager(host=config.qdrant.host, port=config.qdrant.port)
 
     # Embedding provider — only from user config

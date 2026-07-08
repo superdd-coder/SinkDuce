@@ -73,7 +73,15 @@ async def upload_document(
         file_dir = _files_dir(collection_id) / file_id
         file_dir.mkdir(parents=True, exist_ok=True)
         save_path = file_dir / safe_name
-        save_path.write_bytes(await file.read())
+        # Stream upload to disk in chunks via a thread so the event loop stays
+        # responsive while other API calls (e.g. list_files on switch) are in flight.
+        loop = asyncio.get_running_loop()
+        with open(save_path, "wb") as _fp:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                await loop.run_in_executor(None, _fp.write, chunk)
 
         # 创建异步任务
         task = task_manager.create_task(
@@ -325,10 +333,22 @@ async def delete_document(collection: str, doc_source: str):
     except Exception as e:
         logger.warning("[DELETE] Meeting allocation cleanup failed (non-fatal): %s", e)
 
-    # Schedule debounced consolidation (replaces old counter-based trigger)
+    # Schedule debounced consolidation (replaces old counter-based trigger).
+    # Only enter the debounce flow if the deleted file was a "definitive"
+    # document — i.e. it actually contributed to the collection summary
+    # (had a doc_summary with include_in_summary != False). Deleting a
+    # non-definitive file (no summary, or summary with include=False)
+    # cannot change the consolidated output, so skip the 10s timer entirely.
     try:
         from src.api.routes.info import schedule_debounced_consolidate
-        schedule_debounced_consolidate(collection_id, pre_snapshot)
+        was_definitive = pre_snapshot.get(doc_source) is True
+        if was_definitive:
+            schedule_debounced_consolidate(collection_id, pre_snapshot)
+        else:
+            logger.info(
+                "[DELETE] '%s' was not definitive (not in pre_snapshot or include=False), "
+                "skipping debounce", doc_source,
+            )
     except Exception as e:
         logger.warning("[DELETE] Debounce schedule failed (non-fatal): %s", e)
 
@@ -623,8 +643,12 @@ async def list_files(collection: str):
         idx = load_file_index(collection)
 
         files = []
-        # New format: from files.json index
-        for fid, entry in sorted(idx.items(), key=lambda x: -(x[1].get("ingested_at", 0))):
+        # New format: from files.json index — sort by ingest time descending (newest first)
+        for fid, entry in sorted(
+            idx.items(),
+            key=lambda x: x[1].get("ingested_at", 0),
+            reverse=True,
+        ):
             src = entry.get("source", fid)
             files.append({
                 "source": src,
@@ -636,26 +660,32 @@ async def list_files(collection: str):
                 "note_title": entry.get("source_label", "") if entry.get("file_type") == "note" else "",
             })
 
-        # Legacy: scroll Qdrant for chunks without file_id (created before file_id system)
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
-        filter_cond = Filter(
+        # Legacy: scroll Qdrant for chunks without file_id (created before file_id system).
+        # Use is_null filter so Qdrant returns ONLY legacy chunks instead of streaming
+        # the entire collection (which is O(N) in chunk count and slow for big collections,
+        # especially when the upload path is also hitting Qdrant concurrently).
+        from qdrant_client.models import (
+            FieldCondition, Filter, MatchValue, IsNullCondition, PayloadField,
+        )
+        legacy_filter = Filter(
+            must=[
+                IsNullCondition(is_null=PayloadField(key="file_id")),
+            ],
             must_not=[
                 FieldCondition(key="chunk_type", match=MatchValue(value="__config__")),
-            ]
+            ],
         )
         legacy_sources: dict[str, int] = {}
         offset = None
         while True:
             points, offset = services.db.scroll_points(
                 collection=collection, limit=1000, offset=offset,
-                with_payload=["source", "file_id", "source_label", "file_type"],
-                with_vectors=False, scroll_filter=filter_cond,
+                with_payload=["source"],
+                with_vectors=False, scroll_filter=legacy_filter,
             )
             for p in points:
-                pl = p.get("payload", {})
-                if not pl.get("file_id"):
-                    src = pl.get("source", "unknown")
-                    legacy_sources[src] = legacy_sources.get(src, 0) + 1
+                src = p.get("payload", {}).get("source", "unknown")
+                legacy_sources[src] = legacy_sources.get(src, 0) + 1
             if offset is None:
                 break
 

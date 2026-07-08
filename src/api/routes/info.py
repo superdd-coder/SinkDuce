@@ -240,10 +240,23 @@ async def set_doc_summary_include(collection: str, source: str, body: dict):
 
     # Take snapshot BEFORE applying the change (for debounce net-change detection)
     pre_snapshot = _snapshot_includes(collection_id)
+    previous_include = pre_snapshot.get(source)  # True / False / None
 
     found = sm.set_doc_summary_include(collection_id, source, include)
     if not found:
         raise HTTPException(status_code=404, detail=f"No summary found for document '{source}'")
+
+    # Only enter the debounce flow if this toggle actually changes the definitive
+    # set. A no-op toggle (e.g. ON→ON) leaves the snapshot identical, so skipping
+    # saves the 10s timer + the "no change" check.
+    previous_definitive = previous_include is True
+    new_definitive = include is True
+    if previous_definitive == new_definitive:
+        logger.info(
+            "[INFO] include toggle for '%s' is a no-op (definitive=%s), skipping debounce",
+            source, new_definitive,
+        )
+        return {"source": source, "include_in_summary": include, "debounce_skipped": True}
 
     # Schedule debounced consolidation (auto-trigger on any include change)
     schedule_debounced_consolidate(collection_id, pre_snapshot)

@@ -14,7 +14,7 @@ import { RenameCollectionDialog } from "./rename-collection-dialog"
 import { CollectionConfig } from "./collection-config"
 import { InfoPanel } from "./info-panel"
 import { FileDetailDialog } from "./file-detail-dialog"
-import { UploadSection } from "./upload-section"
+import { UploadUI, TaskQueueList } from "./upload-section"
 import { QuickChat } from "./quick-chat"
 
 // Module-level: allows note-editor-dialog to trigger files refresh after ingestion
@@ -39,6 +39,13 @@ export function DatabaseView() {
   const [tasks, setTasks] = useState<TaskInfo[]>([])
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fetchFilesRef = useRef<() => void>(() => {})
+  // Per-fetch stale-response tokens. fetchFiles and fetchTasks each own their
+  // own counter because fetchTasks polls every 1s and would otherwise bump a
+  // shared token on every tick, causing an in-flight fetchFiles response to
+  // be discarded as "stale" right when the user switches to the uploading
+  // collection.
+  const filesTokenRef = useRef(0)
+  const tasksTokenRef = useRef(0)
   const [deleteFileTarget, setDeleteFileTarget] = useState<string | null>(null)
   const deleteFileDisplay = files.find(f => f.source === deleteFileTarget)?.display_name || deleteFileTarget
   const [allowedFileTypes, setAllowedFileTypes] = useState<string[]>([])
@@ -83,14 +90,17 @@ export function DatabaseView() {
 
   const fetchFiles = useCallback(async () => {
     if (!activeCollection) return
+    const token = ++filesTokenRef.current
     setLoading(true)
     try {
       const res = await getFiles(activeCollection)
+      if (token !== filesTokenRef.current) return  // stale, a newer fetch has started
       setFiles(res.files)
     } catch {
+      if (token !== filesTokenRef.current) return
       setFiles([])
     } finally {
-      setLoading(false)
+      if (token === filesTokenRef.current) setLoading(false)
     }
   }, [activeCollection])
 
@@ -104,8 +114,10 @@ export function DatabaseView() {
   }, [fetchFiles])
 
   const fetchTasks = useCallback(async () => {
+    const token = ++tasksTokenRef.current
     try {
       const res = await getTasks(activeCollection)
+      if (token !== tasksTokenRef.current) return  // stale, a newer fetch has started
       setTasks(res.tasks)
       if (res.processing > 0 || res.pending > 0) {
         if (!pollingRef.current) {
@@ -330,17 +342,23 @@ export function DatabaseView() {
                       <span className="text-muted-foreground">{coverage}</span>
                     </div>
                   )}
-                  <UploadSection
+                  {/* Upload UI stays at top, always accessible (not in scroll). */}
+                  <UploadUI
                     hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
-                    tasks={tasks}
                     allowedFileTypes={allowedFileTypes}
                     onUpload={handleUpload}
-                    onClearCompleted={clearCompletedTasks}
-                    onRefreshTasks={fetchTasks}
-                    onCancelTask={handleCancelTask}
-                    onRetryTask={handleRetryTask}
                   />
+                  {/* One shared scroll area: Upload Queue + File List scroll together
+                      so a long task queue can never push the file list out of view. */}
                   <div className="flex-1 overflow-auto">
+                    <TaskQueueList
+                      hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
+                      tasks={tasks}
+                      onClearCompleted={clearCompletedTasks}
+                      onRefreshTasks={fetchTasks}
+                      onCancelTask={handleCancelTask}
+                      onRetryTask={handleRetryTask}
+                    />
                     {loading ? (
                       <p className="text-sm text-muted-foreground">Loading...</p>
                     ) : files.length === 0 ? (
