@@ -8,15 +8,6 @@ from pathlib import Path
 from src.parsers.base import DocumentParser, ImageInfo, ParsedDocument
 
 
-def _bbox_in_table(bbox: tuple, table_bboxes: list[tuple]) -> bool:
-    """Check if a y-position falls inside any table region."""
-    y = bbox[1] if isinstance(bbox, tuple) else bbox
-    for ty0, _, ty1, _ in table_bboxes:
-        if ty0 - 5 <= y <= ty1 + 5:
-            return True
-    return False
-
-
 def _table_data_to_markdown(data: list[list[str | None]]) -> str:
     """Convert pdfplumber table data (list of lists) to markdown.
 

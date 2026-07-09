@@ -50,15 +50,6 @@ def get_all_states() -> dict[str, LoadState]:
         return dict(_states)
 
 
-def wait_loaded(provider_id: str, timeout: float | None = None) -> bool:
-    event: threading.Event | None
-    with _lock:
-        event = _events.get(provider_id)
-    if event is None:
-        return get_state(provider_id) == "loaded"
-    return event.wait(timeout=timeout)
-
-
 def acquire_load_slot() -> None:
     """Acquire the global model-loading slot — only one model loads at a time."""
     _model_load_semaphore.acquire()
