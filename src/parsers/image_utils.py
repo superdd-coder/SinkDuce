@@ -533,19 +533,19 @@ def process_document_images(
     final_images = text_images + described + table_source_images
 
     # Remove blocks for images that needed but failed description
-    needs_ids = {img.image_id for img in needs_description}
-    for image_id in (needs_ids - described_ids):
-        doc.content = _remove_image_block_from_content(doc.content, image_id)
-        logger.warning("[ImageProcess] Failed to describe image %s, block removed", image_id[:16])
+    # (only when Vision LLM was actually attempted)
+    if vision_provider and vision_model_id:
+        needs_ids = {img.image_id for img in needs_description}
+        for image_id in (needs_ids - described_ids):
+            doc.content = _remove_image_block_from_content(doc.content, image_id)
+            logger.warning("[ImageProcess] Failed to describe image %s, block removed", image_id[:16])
 
-    # If no Vision LLM, remove mixed+visual image blocks; keep text images with OCR
+    # If no Vision LLM, keep mixed+visual images without descriptions
     if not vision_provider or not vision_model_id:
         if needs_description:
-            for img in needs_description:
-                doc.content = _remove_image_block_from_content(doc.content, img.image_id)
-            logger.info("[ImageProcess] No Vision LLM — removed %d mixed+visual image blocks",
+            logger.info("[ImageProcess] No Vision LLM — keeping %d mixed+visual image blocks without descriptions",
                         len(needs_description))
-        final_images = text_images + table_source_images
+        final_images = text_images + needs_description + table_source_images
 
     doc.images = final_images
 

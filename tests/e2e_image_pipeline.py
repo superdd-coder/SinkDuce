@@ -321,12 +321,16 @@ def test_process_document_images():
 
         doc = process_document_images(doc, "e2e_pipe", tmpdir, vision_provider=None, vision_model_id="", vision_prompt="")
 
-        print(f"  Images before: 3, after: {len(doc.images)} (text-only kept, visual removed w/o Vision LLM)")
+        print(f"  Images before: 3, after: {len(doc.images)} (all kept, no descriptions w/o Vision LLM)")
         for img in doc.images:
             print(f"    kept: {img.image_id} ocr_text={bool(img.ocr_text)} desc={bool(img.description)}")
-        # Without Vision LLM, only text-type images survive (they have OCR text)
-        if doc.images:
-            assert all(img.ocr_text for img in doc.images), "Kept images should have OCR text"
+        # Without Vision LLM, all non-filtered images are kept (just without descriptions)
+        # img_small is filtered out (too small), img_text and img_visual both survive
+        assert len(doc.images) >= 1, "At least text-type image should survive"
+        assert all(not img.description for img in doc.images), "No images should have descriptions without Vision LLM"
+        # Image blocks should still be in content (not removed)
+        for img in doc.images:
+            assert img.image_id in doc.content, f"Image block {img.image_id} should remain in content"
         print(f"  OK Pipeline completed without errors")
 
 
