@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import uuid
 from pathlib import Path
 
 from src.parsers.base import DocumentParser, ImageInfo, ParsedDocument
+
+logger = logging.getLogger(__name__)
 
 
 def _table_data_to_markdown(data: list[list[str | None]]) -> str:
@@ -109,39 +112,135 @@ def _extract_page_images(page, page_number: int) -> list[ImageInfo]:
 _PageElement = tuple[float, str, str]  # (y, kind, content)  kind ∈ {"text", "table", "image"}
 
 
-def _parse_page_elements(page, page_number: int) -> tuple[list[_PageElement], bool, list[ImageInfo]]:
+def _parse_page_elements(
+    page, page_number: int,
+) -> tuple[list[_PageElement], bool, list[ImageInfo]]:
     """Parse a single page into ordered elements (text, tables, images).
 
     Returns (elements, has_table, images).
     Elements are sorted by y-coordinate.
     """
     elements: list[_PageElement] = []
+    page_images: list[ImageInfo] = []
     has_table = False
 
-    # ── 1. Tables ──
+    _page_w = float(getattr(page, "width", 612))
+    _page_h = float(getattr(page, "height", 792))
+
+    # ── 1. Images ──
+    page_images = _extract_page_images(page, page_number)
+
+    # Merge adjacent images (same x-range, similar width, touching/nearly
+    # touching) into one — e.g. a flowchart split into two PDF objects.
+    _merged_ids: set[str] = set()
+    for i in range(len(page_images)):
+        if page_images[i].image_id in _merged_ids:
+            continue
+        for j in range(i + 1, len(page_images)):
+            if page_images[j].image_id in _merged_ids:
+                continue
+            a, b = page_images[i], page_images[j]
+            if not a.bbox or not b.bbox or not a.image_bytes or not b.image_bytes:
+                continue
+            # Same x-range and similar width
+            x_overlap = min(a.bbox[2], b.bbox[2]) - max(a.bbox[0], b.bbox[0])
+            w_a, w_b = a.bbox[2] - a.bbox[0], b.bbox[2] - b.bbox[0]
+            if x_overlap < 0.8 * min(w_a, w_b):
+                continue
+            # Adjacent vertically (gap ≤ 5 px, no overlap)
+            a_top, b_top = a.bbox[1], b.bbox[1]
+            top_img, bot_img = (a, b) if a_top < b_top else (b, a)
+            gap = bot_img.bbox[1] - top_img.bbox[3]
+            if not (0 <= gap <= 5):
+                continue
+            # Merge: render combined region
+            try:
+                merged_bbox = (
+                    min(a.bbox[0], b.bbox[0]), min(a.bbox[1], b.bbox[1]),
+                    max(a.bbox[2], b.bbox[2]), max(a.bbox[3], b.bbox[3]),
+                )
+                cropped = page.within_bbox(merged_bbox)
+                pil_img = cropped.to_image(resolution=150).original
+                buf = io.BytesIO()
+                pil_img.save(buf, format="PNG")
+                merged = ImageInfo(
+                    image_id=uuid.uuid4().hex,
+                    page_number=page_number,
+                    bbox=merged_bbox,
+                    image_bytes=buf.getvalue(),
+                    image_format="png",
+                )
+                page_images.append(merged)
+                _merged_ids.add(a.image_id)
+                _merged_ids.add(b.image_id)
+                logger.info(
+                    "[PDFParser] Page %d: merged adjacent images (%.0f,%.0f)+(%.0f,%.0f) → (%.0f,%.0f,%.0f,%.0f)",
+                    page_number,
+                    a.bbox[1], a.bbox[3], b.bbox[1], b.bbox[3],
+                    merged_bbox[0], merged_bbox[1], merged_bbox[2], merged_bbox[3],
+                )
+            except Exception:
+                pass
+    # Remove individual images that were merged
+    page_images = [img for img in page_images if img.image_id not in _merged_ids]
+
+    # ── 2. Tables: extract → markdown → crop screenshot ──
     try:
         tables = page.find_tables()
     except Exception:
         tables = []
 
-    table_bboxes: list[tuple] = []
+    _table_source_ids: set[str] = set()
     if tables:
         has_table = True
         for table in tables:
-            table_bboxes.append(table.bbox)
             try:
                 data = table.extract()
-                if data and data[0]:
-                    col_count = len(data[0])
-                    if col_count < 2:
-                        continue  # skip single-column wrappers
-                    md = _table_data_to_markdown(data)
-                    if md:
-                        elements.append((table.bbox[1], "table", md))
+                if not data or not data[0] or len(data[0]) < 2:
+                    continue
+                md = _table_data_to_markdown(data)
+                if not md:
+                    continue
+
+                # Crop table region as source image
+                _img_y = table.bbox[1] - 0.1
+                try:
+                    x0, y0, x1, y1 = table.bbox
+                    mx = (x1 - x0) * 0.05
+                    my = (y1 - y0) * 0.05
+                    padded = (
+                        max(0, x0 - mx),
+                        max(0, y0 - my),
+                        min(_page_w, x1 + mx),
+                        min(_page_h, y1 + my),
+                    )
+                    cropped = page.within_bbox(padded)
+                    pil_img = cropped.to_image(resolution=300).original
+                    buf = io.BytesIO()
+                    pil_img.save(buf, format="PNG")
+                    img = ImageInfo(
+                        image_id=uuid.uuid4().hex,
+                        page_number=page_number,
+                        bbox=table.bbox,
+                        image_bytes=buf.getvalue(),
+                        image_format="png",
+                        is_table_source=True,
+                    )
+                    page_images.append(img)
+                    _table_source_ids.add(img.image_id)
+                    elements.append((_img_y, "image",
+                        f":::image\n"
+                        f"image_id: {img.image_id}\n"
+                        f"file_id: \n"
+                        f":::\n"))
+                except Exception:
+                    pass
+
+                elements.append((table.bbox[1], "table", md))
             except Exception:
                 pass
 
-    # ── 2. Text (exclude table regions) ──
+    # ── 3. Text ──
     try:
         full_text = page.extract_text() or ""
     except Exception:
@@ -150,10 +249,10 @@ def _parse_page_elements(page, page_number: int) -> tuple[list[_PageElement], bo
     if full_text.strip():
         elements.append((0, "text", full_text))
 
-    # ── 3. Images ──
-    page_images = _extract_page_images(page, page_number)
+    # ── 4. Remaining images (not used as table source) ──
     for img in page_images:
-        # Create :::image placeholder block with y-position from bbox
+        if img.is_table_source and img.image_id in _table_source_ids:
+            continue
         block = (
             f":::image\n"
             f"image_id: {img.image_id}\n"
@@ -173,7 +272,6 @@ def _parse_page_elements(page, page_number: int) -> tuple[list[_PageElement], bo
                 full_text = ocr_text
         except Exception:
             pass
-        # For scanned pages, don't treat whole page as an image — OCR text is enough
 
     return elements, has_table, page_images
 
@@ -190,7 +288,9 @@ class PDFParser(DocumentParser):
         try:
             for page_idx, page in enumerate(pdf.pages):
                 page_number = page_idx + 1
-                elements, page_has_table, page_images = _parse_page_elements(page, page_number)
+                elements, page_has_table, page_images = _parse_page_elements(
+                    page, page_number,
+                )
 
                 if page_has_table:
                     has_any_table = True

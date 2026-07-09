@@ -24,45 +24,60 @@ logger = logging.getLogger(__name__)
 
 
 def _preload_transcription_providers(config):
-    """Load local transcription providers at startup when they are the default."""
+    """Load local transcription providers at startup when they are the default.
+
+    Loads models with a staggered start so the first model can acquire the
+    global load semaphore before the second one tries, serializing the
+    actual model loading to avoid OOM from loading two large FunASR models
+    simultaneously.  The semaphore itself (Semaphore(1)) handles the rest.
+    """
+    import time as _time
     from src.providers.cache import invalidate as cache_invalidate
     from src.providers.load_state import get_state
 
-    # --- File transcription ---
-    file_cfg = config.transcription.active_file_provider
-    # Only auto-load local model when it is explicitly the active provider,
-    # not when there is no active provider at all.
-    if file_cfg and file_cfg.adapter.startswith("funasr_local"):
-        if _is_builtin_model_downloaded(file_cfg.id):
-            if get_state(file_cfg.id) not in ("loaded", "loading"):
-                reload_provider(file_cfg.id, loading=True)
-        else:
-            logger.info("Built-in file transcription model not downloaded, deactivating")
-            for p in config.transcription.file_providers:
-                if p.id == file_cfg.id:
+    def _trigger_load(cfg, providers, label):
+        """Fire-and-forget load for one transcription provider."""
+        if not cfg or not cfg.adapter.startswith("funasr_local"):
+            return
+        if not _is_builtin_model_downloaded(cfg.id):
+            logger.info("Built-in %s transcription model not downloaded, deactivating", label)
+            for p in providers:
+                if p.id == cfg.id:
                     p.is_active = False
             save_config(config)
-    elif not file_cfg or not file_cfg.adapter.startswith("funasr_local"):
-        for key in list(_provider_cache_snapshot()):
-            if key.startswith("file_trans:"):
+            return
+        if get_state(cfg.id) in ("loaded", "loading"):
+            logger.info("Transcription provider %s already %s, skipping", cfg.id, get_state(cfg.id))
+            return
+        reload_provider(cfg.id, loading=True)
+
+    # --- File transcription (starts first) ---
+    _trigger_load(
+        config.transcription.active_file_provider,
+        config.transcription.file_providers,
+        "file",
+    )
+    # Clean up inactive providers from cache
+    for key in list(_provider_cache_snapshot()):
+        if key.startswith("file_trans:"):
+            file_cfg = config.transcription.active_file_provider
+            if not file_cfg or not file_cfg.adapter.startswith("funasr_local"):
                 cache_invalidate(key)
                 logger.info("Unloaded inactive local file transcription provider: %s", key)
 
-    # --- Realtime transcription ---
-    rt_cfg = config.transcription.active_realtime_provider
-    if rt_cfg and rt_cfg.adapter.startswith("funasr_local"):
-        if _is_builtin_model_downloaded(rt_cfg.id):
-            if get_state(rt_cfg.id) not in ("loaded", "loading"):
-                reload_provider(rt_cfg.id, loading=True)
-        else:
-            logger.info("Built-in realtime transcription model not downloaded, deactivating")
-            for p in config.transcription.realtime_providers:
-                if p.id == rt_cfg.id:
-                    p.is_active = False
-            save_config(config)
-    else:
-        for key in list(_provider_cache_snapshot()):
-            if key.startswith("rt_trans:"):
+    # Stagger: let file model acquire the semaphore before realtime starts
+    _time.sleep(3)
+
+    # --- Realtime transcription (starts 3s later, waits on semaphore) ---
+    _trigger_load(
+        config.transcription.active_realtime_provider,
+        config.transcription.realtime_providers,
+        "realtime",
+    )
+    for key in list(_provider_cache_snapshot()):
+        if key.startswith("rt_trans:"):
+            rt_cfg = config.transcription.active_realtime_provider
+            if not rt_cfg or not rt_cfg.adapter.startswith("funasr_local"):
                 cache_invalidate(key)
                 logger.info("Unloaded inactive local realtime transcription provider: %s", key)
 

@@ -123,8 +123,32 @@ def filter_images(images: list[ImageInfo]) -> list[ImageInfo]:
 # ── OCR classification ───────────────────────────────────────────────────
 
 _OCR_MIN_CHARS = 30        # min chars: below this → visual (Vision LLM)
-_OCR_TEXT_ONLY_CHARS = 100 # above this → pure text (OCR only, skip Vision LLM)
+_OCR_TEXT_ONLY_CHARS = 200 # above this + clean → pure text (OCR only, skip Vision LLM)
 _OCR_MIN_CONFIDENCE = 60   # min mean confidence
+
+
+def _ocr_text_is_garbage(text: str) -> bool:
+    """Heuristic: OCR text is likely garbage if it contains too many short
+    fragments (1-2 char tokens) or non-word symbols — typical of Tesseract
+    hallucinating on flowcharts, diagrams, and photos.
+
+    Real English/Chinese text has mostly 3+ character words; garbage OCR
+    from graphics produces scattered single letters, digits, and symbols
+    (e.g. "a 7 é 5 4 3 2 1 us wunimasway ...").
+    """
+    if not text:
+        return True
+    tokens = text.split()
+    if not tokens:
+        return True
+    # Count short fragments (1-2 chars) that are NOT CJK (single CJK char
+    # can be a valid word in Chinese)
+    short = 0
+    for t in tokens:
+        if len(t) <= 2 and not ("一" <= t <= "鿿") and not t.isalpha():
+            short += 1
+    ratio = short / len(tokens)
+    return ratio > 0.3
 
 
 def _ocr_image(image_bytes: bytes, lang: str = "chi_sim+eng") -> tuple[str, float]:
@@ -149,15 +173,17 @@ def _classify_image(image_bytes: bytes) -> tuple[str, str]:
     """Classify image as 'text', 'mixed', or 'visual' based on OCR quality.
 
     Returns (classification, ocr_text).
-    - 'text': dense high-confidence text (scanned doc, text screenshot) → OCR only
-    - 'mixed': moderate text with visual elements (annotated diagrams,
-      architecture charts) → OCR + Vision LLM
+    - 'text': dense high-confidence clean text → OCR only, skip Vision LLM
+    - 'mixed': moderate text or text with garbage characters → OCR + Vision LLM
     - 'visual': little or low-quality text → Vision LLM only
     """
     ocr_text, confidence = _ocr_image(image_bytes)
     chars = len(ocr_text)
 
     if chars >= _OCR_TEXT_ONLY_CHARS and confidence >= _OCR_MIN_CONFIDENCE:
+        if _ocr_text_is_garbage(ocr_text):
+            logger.debug("[OCR] TEXT→MIXED (garbage ratio): %d chars, conf=%.0f%%", chars, confidence)
+            return "mixed", ocr_text
         logger.debug("[OCR] Classified as TEXT: %d chars, conf=%.0f%%", chars, confidence)
         return "text", ocr_text
     if chars >= _OCR_MIN_CHARS and confidence >= _OCR_MIN_CONFIDENCE:
@@ -335,23 +361,28 @@ _IMAGE_BLOCK_RE = re.compile(
     r":::image[ \t]*\n"
     r"image_id:\s*([a-f0-9]+)\n"
     r"file_id:\s*([^\n]*)\n"
-    r"(?:ocr_text:\s*((?:(?!:::).)*?)\n)?"   # optional — old format blocks lack this
-    r"description:\s*((?:(?!:::).)*?)\n"
+    r"(?:ocr_text:\s*((?:(?!:::).)*?)\n)?"        # optional — absent when ocr_text is empty
+    r"(?:description:\s*((?:(?!:::).)*?)\n)?"      # optional — absent when description is empty
     r":::",
     re.DOTALL,
 )
 
 
 def build_image_block(img: ImageInfo) -> str:
-    """Build a :::image fenced block string."""
-    return (
-        f":::image\n"
-        f"image_id: {img.image_id}\n"
-        f"file_id: {img.file_id}\n"
-        f"ocr_text: {img.ocr_text}\n"
-        f"description: {img.description}\n"
-        f":::"
-    )
+    """Build a :::image fenced block string.
+    Empty ocr_text / description lines are omitted to keep the block clean.
+    """
+    lines = [
+        ":::image",
+        f"image_id: {img.image_id}",
+        f"file_id: {img.file_id}",
+    ]
+    if img.ocr_text:
+        lines.append(f"ocr_text: {img.ocr_text}")
+    if img.description:
+        lines.append(f"description: {img.description}")
+    lines.append(":::")
+    return "\n".join(lines) + "\n"
 
 
 # ── document-level image processing ─────────────────────────────────────
@@ -378,7 +409,7 @@ def _remove_image_block_from_content(content: str, image_id: str) -> str:
         rf"image_id:\s*{re.escape(image_id)}\n"
         rf"file_id:\s*[^\n]*\n"
         rf"(?:ocr_text:\s*(?:(?!:::).)*?\n)?"
-        rf"description:\s*(?:(?!:::).)*?\n"
+        rf"(?:description:\s*(?:(?!:::).)*?\n)?"
         rf":::",
         re.DOTALL,
     )
@@ -386,20 +417,20 @@ def _remove_image_block_from_content(content: str, image_id: str) -> str:
 
 
 def _update_description_in_content(content: str, img: ImageInfo) -> str:
-    """Update file_id, ocr_text, and description fields in a :::image block."""
+    """Rebuild a :::image block from current ImageInfo values.
+    Empty ocr_text / description are omitted.
+    """
     pattern = re.compile(
-        rf"(:::image[ \t]*\n"
+        rf":::image[ \t]*\n"
         rf"image_id:\s*{re.escape(img.image_id)}\n"
-        rf"file_id:\s*)[^\n]*(\n"
+        rf"(?:file_id:\s*[^\n]*\n)"
         rf"(?:ocr_text:\s*(?:(?!:::).)*?\n)?"
-        rf"description:\s*)(?:(?!:::).)*?(\n"
-        rf":::)",
+        rf"(?:description:\s*(?:(?!:::).)*?\n)?"
+        rf":::",
         re.DOTALL,
     )
-    # Use callback to avoid backreference issues
-    def _repl(m: re.Match) -> str:
-        return m.group(1) + img.file_id + m.group(2) + f"ocr_text: {img.ocr_text}\n" + img.description + m.group(3)
-    return pattern.sub(_repl, content)
+    block = build_image_block(img)
+    return pattern.sub(block, content)
 
 
 def process_document_images(
@@ -456,10 +487,16 @@ def process_document_images(
         return doc
 
     # 3. OCR all kept images → classify as text / mixed / visual
+    # Table source images skip OCR + Vision LLM — they are the original
+    # images MinerU already converted to tables, kept for recall only.
+    table_source_images: list[ImageInfo] = []
     text_images: list[ImageInfo] = []      # OCR only, skip Vision LLM
     mixed_images: list[ImageInfo] = []     # OCR + Vision LLM
     visual_images: list[ImageInfo] = []    # Vision LLM only
     for img in kept:
+        if img.is_table_source:
+            table_source_images.append(img)
+            continue
         if img.image_bytes is None:
             visual_images.append(img)
             continue
@@ -470,11 +507,12 @@ def process_document_images(
         elif img_type == "mixed":
             mixed_images.append(img)
         else:
+            img.ocr_text = ""  # visual: OCR below threshold — clear garbage
             visual_images.append(img)
 
     logger.info(
-        "[ImageProcess] OCR classification: %d text, %d mixed, %d visual (of %d total)",
-        len(text_images), len(mixed_images), len(visual_images), len(kept),
+        "[ImageProcess] OCR classification: %d text, %d mixed, %d visual, %d table-source (of %d total)",
+        len(text_images), len(mixed_images), len(visual_images), len(table_source_images), len(kept),
     )
 
     # 4. Describe MIXED + VISUAL images with Vision LLM (text-only images skip this)
@@ -491,7 +529,8 @@ def process_document_images(
     described_ids = {img.image_id for img in described}
 
     # Text images (always keep) + successfully described mixed/visual images
-    final_images = text_images + described
+    # + table source images (always keep, no OCR/description)
+    final_images = text_images + described + table_source_images
 
     # Remove blocks for images that needed but failed description
     needs_ids = {img.image_id for img in needs_description}
@@ -506,7 +545,7 @@ def process_document_images(
                 doc.content = _remove_image_block_from_content(doc.content, img.image_id)
             logger.info("[ImageProcess] No Vision LLM — removed %d mixed+visual image blocks",
                         len(needs_description))
-        final_images = text_images
+        final_images = text_images + table_source_images
 
     doc.images = final_images
 
@@ -517,9 +556,10 @@ def process_document_images(
     n_text = len([i for i in final_images if i.ocr_text and not i.description])
     n_mixed = len([i for i in final_images if i.ocr_text and i.description])
     n_visual = len([i for i in final_images if i.description and not i.ocr_text])
+    n_table_src = len([i for i in final_images if i.is_table_source])
     logger.info(
-        "[ImageProcess] %d images final: %d text-only, %d mixed, %d visual-only for %s",
-        len(final_images), n_text, n_mixed, n_visual, file_id,
+        "[ImageProcess] %d images final: %d text-only, %d mixed, %d visual-only, %d table-source for %s",
+        len(final_images), n_text, n_mixed, n_visual, n_table_src, file_id,
     )
 
     # Save images to disk, then clear bytes from memory
