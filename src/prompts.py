@@ -972,13 +972,6 @@ Description: {section_description}
 </target-section>"""
 
 
-# ── Backward-compat aliases ──
-MEETING_EXTRACT_V3_SYSTEM = MEETING_TAGGER_V3_SYSTEM
-MEETING_EXTRACT_V3_PROMPT = MEETING_TAGGER_V3_PROMPT
-MEETING_SECTION_SUMMARY_SYSTEM = MEETING_SUMMARIZER_V3_SYSTEM
-MEETING_SECTION_SUMMARY_PROMPT = MEETING_SUMMARIZER_V3_PROMPT
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Meeting — AI Section Description Generator
 # ═══════════════════════════════════════════════════════════════════════
