@@ -28,24 +28,9 @@ class NoteListItem(BaseModel):
     is_ingested: bool = False
 
 
-class InjectionBlock(BaseModel):
-    """A single injection block inside a note's content."""
-    block_id: str
-    source_note_id: str
-    source_title: str = ""
-
-
 class PropagationLink(BaseModel):
     """One link in a propagation chain: source → target."""
     source_id: str
     source_title: str
     target_id: str
     target_title: str
-
-
-class PropagationChain(BaseModel):
-    """Full propagation chain preview shown to the user."""
-    origin_id: str
-    origin_title: str
-    links: list[PropagationLink] = Field(default_factory=list)
-    total_affected: int = 0
