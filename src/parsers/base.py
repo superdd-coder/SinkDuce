@@ -18,6 +18,7 @@ class ImageInfo:
     alt_text: str = ""
     description: str = ""
     ocr_text: str = ""
+    is_table_source: bool = False  # skip OCR + Vision LLM; insert before table
 
 
 @dataclass

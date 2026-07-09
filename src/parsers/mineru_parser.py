@@ -372,69 +372,74 @@ class MinerUParser:
         all_images: list[ImageInfo] = []
         pages = layout_data if isinstance(layout_data, list) else layout_data.get("pdf_info", [])
 
-        # Collect image-type blocks with their page and bbox
-        layout_image_map: dict[str, dict] = {}  # image_filename → {page_idx, bbox}
+        # Collect image references from all block types (recursively).
+        # Table blocks have nested sub-blocks (table_body, table_footnote)
+        # where image_path lives inside blocks[].lines[].spans[].
+        def _collect_image_paths(
+            block: dict, page_number: int, bbox, block_type: str,
+            result: dict[str, dict],
+        ) -> None:
+            for line in (block.get("lines", []) if isinstance(block, dict) else []):
+                for span in (line.get("spans", []) if isinstance(line, dict) else []):
+                    img_path = span.get("image_path", "")
+                    if img_path:
+                        fn = img_path.rsplit("/", 1)[-1]
+                        result[fn] = {
+                            "page_number": page_number,
+                            "bbox": bbox,
+                            "block_type": block_type,
+                            "table_html": span.get("html", ""),
+                        }
+            for sub in (block.get("blocks", []) if isinstance(block, dict) else []):
+                _collect_image_paths(sub, page_number, bbox, block_type, result)
+
+        layout_image_map: dict[str, dict] = {}  # image_filename → {page, bbox, block_type}
         for page in (pages if isinstance(pages, list) else []):
             page_idx = page.get("page_idx", 0)
-            blocks = page.get("para_blocks", page.get("blocks", []))
-            for block in (blocks if isinstance(blocks, list) else []):
+            for block in (page.get("para_blocks", page.get("blocks", [])) or []):
                 block_type = (block.get("type") or "").lower()
-                if block_type in ("image", "figure", "picture"):
-                    bbox = block.get("bbox")
-                    # Try to match this block with an image file by filename
-                    for line in (block.get("lines", []) if isinstance(block, dict) else []):
-                        for span in (line.get("spans", []) if isinstance(line, dict) else []):
-                            img_path = span.get("image_path", "")
-                            if img_path:
-                                filename = img_path.rsplit("/", 1)[-1]
-                                layout_image_map[filename] = {
-                                    "page_number": page_idx + 1,
-                                    "bbox": bbox,
-                                }
+                bbox = block.get("bbox")
+                _collect_image_paths(block, page_idx + 1, bbox, block_type, layout_image_map)
 
-        # Build ImageInfo from extracted image files
+        # ── Find which images are actually referenced in full.md ──
+        # MinerU may include images in the zip that it already converted to
+        # tables/formulas in the markdown — those must NOT become :::image blocks
+        # or go through OCR / Vision LLM.
+        _REF_RE = _re_module.compile(r"!\[[^\]]*\]\(images/([^)]+)\)")
+        _referenced_filenames: set[str] = set()
+        for _m in _REF_RE.finditer(markdown_content):
+            _ref = _m.group(1)
+            _fn = _ref.rsplit("/", 1)[-1] if "/" in _ref else _ref
+            _referenced_filenames.add(_fn)
+
+        logger.info("[MinerU] %d images in zip, %d referenced in markdown",
+                    len(images_dir_files), len(_referenced_filenames))
+
+        # Build ImageInfo ONLY for referenced images, keyed by filename.
+        img_by_filename: dict[str, ImageInfo] = {}
         for filename, file_data in images_dir_files.items():
-            if not filename:
+            if not filename or filename not in _referenced_filenames:
                 continue
             img_id = _uuid.uuid4().hex
             fmt = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
             layout_info = layout_image_map.get(filename, {})
-            all_images.append(ImageInfo(
+            img_by_filename[filename] = ImageInfo(
                 image_id=img_id,
                 page_number=layout_info.get("page_number"),
                 bbox=layout_info.get("bbox"),
                 image_bytes=file_data,
                 image_format=fmt,
-            ))
+            )
 
+        all_images = list(img_by_filename.values())
+        _skipped = len(images_dir_files) - len(all_images)
+        if _skipped:
+            logger.info("[MinerU] Skipped %d zip images (already converted to tables/formulas)", _skipped)
         logger.info("[MinerU] Extracted %d images from zip", len(all_images))
 
         # ── Replace ![](images/xxx.png) with :::image blocks ──
-        # Map image filenames to ImageInfo
-        file_to_image: dict[str, ImageInfo] = {}
-        for img in all_images:
-            # We need to match the full path used in markdown
-            for filename in images_dir_files:
-                if filename.rsplit(".", 1)[0] == img.image_id[:8]:
-                    pass
-            # Better approach: iterate images and try to match with markdown refs
-            file_to_image[img.image_id] = img  # temp, will fix below
-
-        # Match markdown image refs to ImageInfo by filename
-        # full.md references look like: ![alt](images/filename.png)
-        # Our images_dir_files has filename → bytes
-        # We need to match filename → ImageInfo
-        img_by_filename: dict[str, ImageInfo] = {}
-        # Try to match by order (images in markdown order = images in directory order)
-        sorted_filenames = sorted(images_dir_files.keys())
-        sorted_images = sorted(all_images, key=lambda im: im.image_id)
-        for i, filename in enumerate(sorted_filenames):
-            if i < len(sorted_images):
-                img_by_filename[filename] = sorted_images[i]
-
         def _replace_image_ref(match: _re_module.Match) -> str:
-            alt = match.group(1) or ""
-            ref = match.group(2) or ""
+            ref = match.group(1) or ""
             filename = ref.rsplit("/", 1)[-1] if "/" in ref else ref
             img = img_by_filename.get(filename)
             if img is None:
@@ -447,11 +452,76 @@ class MinerUParser:
                 f":::"
             )
 
-        markdown_content = _re_module.sub(
-            r"!\[([^\]]*)\]\(images/([^)]+)\)",
-            _replace_image_ref,
-            markdown_content,
-        )
+        markdown_content = _REF_RE.sub(_replace_image_ref, markdown_content)
+
+        # ── Insert table source images before <table> blocks ──
+        # MinerU puts both `html` and `image_path` in the same span — use the
+        # HTML content as the lookup key for 100% accurate matching.
+        _TABLE_RE = _re_module.compile(r"<table[\s>][\s\S]*?</table>", _re_module.IGNORECASE)
+
+        # Build normalized-html → (filename, data, info) map from layout.json.
+        # MinerU uses <eq>...</eq> in span.html but $...$ in full.md — normalize
+        # both sides to $...$ + collapsed whitespace for reliable matching.
+        _EQ_RE = _re_module.compile(r"<eq>(.*?)</eq>", _re_module.DOTALL)
+        # MinerU also changes spacing around $...$ between span.html and full.md
+        _MATH_SPACE_RE = _re_module.compile(r"\s*([$][^$]+[$])\s*")
+        _norm_html = lambda s: _re_module.sub(
+            r"\s+", " ", _MATH_SPACE_RE.sub(r"\1", _EQ_RE.sub(r"$\1$", s))
+        ).strip()
+
+        _html_to_img: dict[str, tuple[str, bytes, dict]] = {}
+        for fn, info in layout_image_map.items():
+            if info.get("block_type") != "table":
+                continue
+            if fn in _referenced_filenames:
+                continue
+            data = images_dir_files.get(fn)
+            html = info.get("table_html", "")
+            if data and html:
+                _html_to_img[_norm_html(html)] = (fn, data, info)
+
+        if _html_to_img:
+            _insert_count = [0]
+
+            def _insert_table_source(match: _re_module.Match) -> str:
+                key = _norm_html(match.group(0))
+                entry = _html_to_img.pop(key, None)
+                if entry is None:
+                    return match.group(0)
+
+                fn, data, info = entry
+                _insert_count[0] += 1
+                img_id = _uuid.uuid4().hex
+                fmt = fn.rsplit(".", 1)[-1].lower() if "." in fn else "png"
+                logger.info(
+                    "[MinerU] Table #%d matched → image %s (page=%s)",
+                    _insert_count[0], fn[:24], info.get("page_number"),
+                )
+                img = ImageInfo(
+                    image_id=img_id,
+                    page_number=info.get("page_number"),
+                    bbox=info.get("bbox"),
+                    image_bytes=data,
+                    image_format=fmt,
+                    is_table_source=True,
+                    ocr_text="",
+                    description="",
+                )
+                img_by_filename[fn] = img
+                return (
+                    f":::image\n"
+                    f"image_id: {img.image_id}\n"
+                    f"file_id: \n"
+                    f":::\n"
+                    f"{match.group(0)}"
+                )
+
+            markdown_content = _TABLE_RE.sub(_insert_table_source, markdown_content)
+            all_images = list(img_by_filename.values())
+            logger.info(
+                "[MinerU] Inserted %d table source images via HTML-content matching",
+                _insert_count[0],
+            )
 
         # Build position_map from layout data
         # Clean MinerU Markdown for Tiptap compatibility (HTML tables → GFM tables)
