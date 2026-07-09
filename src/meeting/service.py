@@ -2461,63 +2461,6 @@ def _parse_json_response(raw: str, expected_keys: list[str] | None = None) -> di
     return {}
 
 
-def _parse_blueprint_response(raw: str) -> tuple[str, list[dict], str, dict | None]:
-    """Parse Node 0.3 LLM response into (general_md_content, blueprint, title, taxonomy).
-
-    Scans for the first '{' then uses JSONDecoder.raw_decode() for proper
-    nested-brace handling.  Robust to preamble text and markdown fences.
-    Falls back to treating the entire response as markdown with an empty
-    blueprint.
-    """
-    import json as _json
-
-    raw_stripped = raw.strip()
-
-    # Find the blueprint JSON object.  With thinking mode enabled the LLM
-    # may emit reasoning text that contains brace characters, so we try
-    # multiple strategies in order of reliability.
-    decoder = _json.JSONDecoder()
-    strategies = [
-        # Strategy 1: look for {"title"  (most reliable anchor)
-        ("{\"title\"", raw_stripped.find('{"title"')),
-        # Strategy 2: look for "general_md_content" and backtrack to the
-        #             nearest opening brace
-        ("\"general_md_content\"", raw_stripped.rfind('"general_md_content"')),
-        # Strategy 3: first '{' (original behaviour, fragile with thinking)
-        ("{", raw_stripped.index("{")),
-    ]
-
-    for _label, idx in strategies:
-        if idx < 0:
-            continue
-        # For strategy 2, backtrack to the nearest '{' before the key
-        if _label == '"general_md_content"':
-            search_from = idx - 1
-            brace_idx = raw_stripped.rfind("{", 0, search_from)
-            if brace_idx < 0:
-                continue
-            idx = brace_idx
-        try:
-            data, _ = decoder.raw_decode(raw_stripped[idx:])
-            general_md = data.get("general_md_content", "")
-            blueprint = data.get("blueprint", [])
-            title = data.get("title", "")
-            taxonomy = data.get("taxonomy", None)
-            if isinstance(blueprint, list):
-                logger.info("[BLUEPRINT] JSON parsed via strategy '%s'", _label)
-                return general_md, blueprint, title, taxonomy
-        except (_json.JSONDecodeError, KeyError, TypeError, ValueError):
-            continue
-
-    # Fallback: treat raw as plain markdown, infer single-general section
-    logger.warning(
-        "[BLUEPRINT] JSON parse failed, falling back to plain markdown "
-        "(raw=%d chars)",
-        len(raw_stripped),
-    )
-    return raw_stripped, [], "", None
-
-
 def _normalize_brackets(md: str) -> str:
     """Convert CJK fullwidth brackets and other Unicode bracket variants to ASCII.
 
@@ -2645,24 +2588,6 @@ def _clean_refs(md: str, valid_ids: list[str]) -> str:
     )
 
 
-def _resolve_default_llm():
-    """Resolve the default LLM from config. Returns None if none found."""
-    try:
-        from src.config import get_config
-        from src.providers.llm import create_llm_for_provider
-
-        config = get_config()
-        if config.llm.providers:
-            default_p = next(
-                (p for p in config.llm.providers if p.is_default),
-                config.llm.providers[0],
-            )
-            return create_llm_for_provider(default_p)
-    except Exception:
-        logger.warning("Failed to resolve default LLM", exc_info=True)
-    return None
-
-
 def _parse_tagger_response(raw: str) -> dict[str, list[str]]:
     """Parse v3 Tagger LLM response into {"sentence_ids": [...]}.
 
@@ -2737,10 +2662,6 @@ def _parse_tagger_response(raw: str) -> dict[str, list[str]]:
         len(raw_stripped), raw_stripped[:200], last_err, raw_stripped[-200:],
     )
     return {"sentence_ids": []}
-
-
-# Backward compat
-_parse_tagging_response = _parse_tagger_response
 
 
 # Module-level singleton
