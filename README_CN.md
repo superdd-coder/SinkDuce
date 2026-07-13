@@ -124,40 +124,47 @@ Sinkduce 采用可插拔且解耦的模型架构，完全通过 Web UI 进行可
 
 ## 🔌 MCP 服务器接口
 
-> *注：目前为原型阶段，将在未来版本中持续优化。*
+Sinkduce 自带内置的 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 服务器，对外暴露 **40 个原子工具**，覆盖 8 个领域。您可以在 Claude Code、Cursor 或任何兼容 MCP 的客户端中使用，直接在 IDE 中异步检索和管理您的知识库。
 
-Sinkduce 自带内置的 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 服务器，将整套 Agentic RAG 流水线抽象为工具（Tools）暴露给 AI 编码 Agent。您可以在 Claude Code、Cursor 或任何兼容 MCP 的客户端中使用它，直接在 IDE 中异步检索您的知识库。
+### 架构说明
 
-### 快速配置 (以 Claude Code 为例)
+MCP 服务器以子应用形式挂载在同一个 FastAPI 进程的 `/mcp` 路径下（默认端口 `18900`），复用主应用的 lifespan——`services` 单例与 `task_manager` 全局共享，无需独立进程。传输层使用 [Streamable HTTP](https://modelcontextprotocol.io/) 协议。
+
+### 快速配置（以 Claude Code 为例）
 
 将以下配置添加至您的 Claude Code MCP 设置中（用户级 `~/.claude/settings.json` 或项目级 `.claude/settings.json`）：
 
-JSON
-
-```
+```json
 {
   "mcpServers": {
     "sinkduce": {
-      "command": "python",
-      "args": ["-m", "src.mcp.server"],
-      "cwd": "/path/to/sinkduce"
+      "url": "http://localhost:18900/mcp"
     }
   }
 }
 ```
 
-该 MCP 服务器采用 **stdio** 传输协议——Claude Code 会将其作为子进程启动并通过标准输入/输出（stdin/stdout）进行双向通信。无需暴露额外端口。
+前提条件：需先启动后端（`uvicorn src.main:app --port 18900 --reload` 或 `docker compose up -d`）。Claude Code 直接连接到已运行的服务器，无需启动子进程。
 
-### Available MCP Tools
+### MCP 工具清单（40 个原子工具）
 
-* **`list_collections`** / **`create_collection`** / **`delete_collection`**: 知识库集合的增删改查。
-* **`get_collection_config`** / **`update_collection_config`**: Manage 特定集合的分块规则与向量配置。
-* **`list_documents`** / **`upload_document`** / **`delete_document`**: 文档生命周期管理。
-* **`upload_folder`**: 从服务器指定目录批量导入文档。
-* **`get_task_status`**: 查看异步解析与向量索引队列的实时进度。
-* **`rag_query`**: 跨集合的 Agentic RAG 联合查询，附带精准源头引用。
-* **`search_chunks`**: 原始向量/混合片段检索，返回相关性得分。
-* **`get_doc_summary`** / **`get_collection_summary`** / **`get_conflicts`**: 访问高层摘要及数据事实冲突检测报告。
+**Collections（5）**：`list_collections`、`get_collection`、`create_collection`、`update_collection_config`、`delete_collection`。`update_collection_config` 会拒绝破坏性字段（`chunk_mode`、`embedding_*` 除 `embedding_provider_id` 外），这些字段需要完整重建索引才能修改，请通过 UI 进行。
+
+**Documents（6）**：`list_documents`、`upload_document`、`upload_document_content`、`delete_document`、`get_file_chunks`、`get_document_text`。`upload_document_content` 直接接收 base64 编码内容。
+
+**Search（3）**：`search_direct_chunks`（dense/sparse/hybrid 检索，不生成 LLM 答案）、`search_agentic_chunks`（完整 rewrite → decompose → retrieve → grade 流水线，返回 chunks）、`get_query_history`。
+
+**Tasks（5）**：`list_tasks`、`get_task_status`、`cancel_task`、`retry_task`、`clear_completed_tasks`。用于跟踪异步解析与索引进度。
+
+**Summaries（4）**：`get_collection_summary`、`get_doc_summary`、`get_conflicts`、`trigger_consolidate`。
+
+**Notes（6）**：`list_notes`、`get_note`、`create_note`、`update_note`、`delete_note`、`trigger_propagation`。
+
+**Meetings（6）**：`list_meetings`、`get_meeting`、`create_meeting`、`update_meeting`、`delete_meeting`、`start_meeting_summary`。
+
+**Hot Words（5）**：`list_hot_words_libraries`、`get_hot_words_library`、`create_hot_words_library`、`update_hot_words_library`、`delete_hot_words_library`。
+
+所有工具均返回 JSON 字符串。Search 工具只返回检索片段（chunks），最终答案由 Agent 用自己的 LLM 生成。
 
 ## 🛠️ 技术栈与架构设计
 
