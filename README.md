@@ -126,7 +126,7 @@ The MCP server is mounted under `/mcp` on the same FastAPI process as the REST A
 
 ### Quick Setup (Claude Code)
 
-Add to your Claude Code MCP settings (`~/.claude/settings.json` or project-level `.mcp.json`):
+Add to your Claude Code MCP settings (`~/.claude/.mcp.json` or project-level `.mcp.json`):
 
 ```json
 {
