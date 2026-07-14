@@ -8,8 +8,6 @@ $$\text{\textbf{Spark. Sink. Educe.}}$$
 
 Sinkduce is built on a strict philosophy: **Never hoard knowledge—only sink what truly matters.** Unlike massive, bloated traditional wikis or knowledge bases that encourage endless data hoarding (turning into "knowledge graveyards"), Sinkduce is designed as a **high-fidelity cognitive filter**. It is tailored for professionals managing multiple complex projects and students navigating multiple courses. Instead of blindly filling the vector pool with unread external text files, Sinkduce turns real-world conversations, lectures, and curated conceptual notes into precise structural units, allowing you to interact with your core operational memory under a context-isolated architecture.
 
-> *Note: Sinkduce is currently optimized as a hyper-efficient personal system. Server-side deployments and multi-user collaborative project memory are planned in future enterprise releases.*
-
 ## 🚀 Quick Start
 
 **Prerequisites**: Docker
@@ -120,7 +118,7 @@ All optional. Copy `.env.template` to `.env` to customize ports:
 
 ## 🔌 MCP Server Interface
 
-Sinkduce ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes **40 atomic tools** across 8 domains for AI coding agents. Use it with Claude Code, Cursor, or any MCP-compatible client to query and manage your knowledge bases directly from your IDE.
+Sinkduce ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes **43 atomic tools** across 8 domains for AI coding agents. Use it with Claude Code, Cursor, or any MCP-compatible client to query and manage your knowledge bases directly from your IDE.
 
 ### Architecture
 
@@ -128,35 +126,65 @@ The MCP server is mounted under `/mcp` on the same FastAPI process as the REST A
 
 ### Quick Setup (Claude Code)
 
-Add to your Claude Code MCP settings (`~/.claude/settings.json` or project-level `.claude/settings.json`):
+Add to your Claude Code MCP settings (`~/.claude/settings.json` or project-level `.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "sinkduce": {
+      "type": "http",
       "url": "http://localhost:18900/mcp"
     }
   }
 }
 ```
 
-Prerequisite: start the backend first (`uvicorn src.main:app --port 18900 --reload` or `docker compose up -d`). Claude Code connects to the running server — no subprocess is spawned.
+For Claude Code, the simplest setup is a `.mcp.json` file at the project root:
 
-### Available MCP Tools (40 atomic tools)
+```json
+{
+  "mcpServers": {
+    "sinkduce": {
+      "type": "http",
+      "url": "http://localhost:18900/mcp"
+    }
+  }
+}
+```
 
-**Collections (5)**: `list_collections`, `get_collection`, `create_collection`, `update_collection_config`, `delete_collection`. `update_collection_config` rejects destructive fields (`chunk_mode`, `embedding_*` other than `embedding_provider_id`) that would require a full re-index — change those via the UI.
+Prerequisite: start the backend first (`docker compose up -d` or `uvicorn src.main:app --port 18900 --reload`). Claude Code connects to the running server — no subprocess is spawned.
 
-**Documents (6)**: `list_documents`, `upload_document`, `upload_document_content`, `delete_document`, `get_file_chunks`, `get_document_text`. `upload_document_content` accepts base64-encoded content directly.
+### File Upload via Staging
 
-**Search (3)**: `search_direct_chunks` (dense/sparse/hybrid retrieval, no LLM answer), `search_agentic_chunks` (full rewrite → decompose → retrieve → grade pipeline, returns chunks), `get_query_history`.
+MCP tool parameters appear in the LLM conversation transcript. To prevent file content from leaking into context, Sinkduce uses a **side-channel staging** pattern. Instead of passing file bytes through MCP tools, use the HTTP staging endpoint:
 
-**Tasks (5)**: `list_tasks`, `get_task_status`, `cancel_task`, `retry_task`, `clear_completed_tasks`. Used to monitor async parsing/indexing progress.
+```bash
+# Upload a document (one-shot)
+curl -F "file=@report.pdf" -F "collection=col_xxx" \
+     http://localhost:18900/api/mcp/upload
+
+# Upload meeting audio (one-shot)
+curl -F "file=@recording.webm" -F "meeting_id=meet_xxx" \
+     http://localhost:18900/api/mcp/meeting-upload
+```
+
+The LLM uses its Bash tool to execute the curl command — file bytes travel over HTTP only and never enter the LLM context.
+
+### Available MCP Tools (43 atomic tools)
+
+**Collections (5)**: `list_collections`, `get_collection`, `create_collection`, `update_collection_config`, `delete_collection`. `update_collection_config` rejects destructive fields (`chunk_mode`, `embedding_*`) that would require a full re-index — change those via the UI.
+
+**Documents (6)**: `list_documents`, `upload_document_from_staging` (unified upload via staging token), `delete_document`, `get_file_chunks`, `get_document_text`, `set_document_definitive`. For file upload, use the HTTP staging endpoint above — the MCP tool only accepts a staging token.
+
+**Search (3)**: `search_direct_chunks` (dense/sparse/hybrid retrieval), `search_agentic_chunks` (rewrite → decompose → retrieve → grade pipeline), `get_query_history`.
+
+**Tasks (5)**: `list_tasks`, `get_task_status`, `cancel_task`, `retry_task`, `clear_completed_tasks`. Monitor async parsing/indexing/summary progress.
 
 **Summaries (4)**: `get_collection_summary`, `get_doc_summary`, `get_conflicts`, `trigger_consolidate`.
 
 **Notes (6)**: `list_notes`, `get_note`, `create_note`, `update_note`, `delete_note`, `trigger_propagation`.
 
-**Meetings (6)**: `list_meetings`, `get_meeting`, `create_meeting`, `update_meeting`, `delete_meeting`, `start_meeting_summary`.
+**Meetings (9)**: `list_meetings`, `get_meeting` (metadata + tabs), `get_section` (per-tab markdown, `tab_id="general"` for summary), `get_meeting_transcript` (paginated), `create_meeting`, `update_meeting`, `delete_meeting`, `start_meeting_summary`, `upload_meeting_audio_from_staging`.
 
 **Hot Words (5)**: `list_hot_words_libraries`, `get_hot_words_library`, `create_hot_words_library`, `update_hot_words_library`, `delete_hot_words_library`.
 
