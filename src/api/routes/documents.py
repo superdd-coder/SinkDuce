@@ -42,8 +42,9 @@ async def upload_document(
     collection: str = "default",
 ):
     """上传文件 - 异步队列处理"""
-    # Resolve collection: try as ID first, fall back to name (for legacy)
-    col_meta = collection_store.get_collection_meta(collection)
+    # Resolve collection: try as ID first, then display name
+    col_meta = (collection_store.get_collection_meta(collection)
+                or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
 
     # Check allowed file types for this collection
@@ -104,10 +105,11 @@ async def upload_document(
 @router.get("/documents/tasks")
 async def get_tasks(collection: str | None = None):
     """获取任务状态，可按collection过滤"""
-    # Resolve collection ID if needed
+    # Resolve collection ID (try ID first, then display name)
     collection_id = None
     if collection:
-        col_meta = collection_store.get_collection_meta(collection)
+        col_meta = (collection_store.get_collection_meta(collection)
+                    or collection_store.find_collection_by_name(collection))
         collection_id = col_meta["id"] if col_meta else collection
 
     tasks = task_manager.get_all_tasks(collection_id)
@@ -161,8 +163,9 @@ async def upload_folder(
     collection: str = "default",
 ):
     """上传文件夹 - 异步队列处理"""
-    # Resolve collection: try as ID first, fall back to name (for legacy)
-    col_meta = collection_store.get_collection_meta(collection)
+    # Resolve collection: try as ID first, then display name
+    col_meta = (collection_store.get_collection_meta(collection)
+                or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
 
     if not services.db.collection_exists(collection_id):
@@ -229,8 +232,9 @@ def get_document_image(collection: str, file_id: str, image_id: str):
 
 @router.delete("/documents/{collection}/{doc_source:path}")
 async def delete_document(collection: str, doc_source: str):
-    # Resolve collection: try as ID first, fall back to name (for legacy)
-    col_meta = collection_store.get_collection_meta(collection)
+    # Resolve collection: try as ID first, then display name
+    col_meta = (collection_store.get_collection_meta(collection)
+                or collection_store.find_collection_by_name(collection))
     collection_id = col_meta["id"] if col_meta else collection
 
     logger.info("[DELETE] Deleting document '%s' from collection='%s'", doc_source, collection_id)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -60,7 +60,7 @@ def _multi_collection_note(sources: list) -> str:
 
 def _save_history(question: str, answer: str, collection: str, sources: list):
     entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "question": question,
         "answer": answer,
         "collection": collection,

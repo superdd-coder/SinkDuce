@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import HotWordItem, HotWordsLibrary
@@ -32,7 +32,7 @@ def _dict_to_lib(data: dict) -> HotWordsLibrary:
 
 
 def create_library(name: str, description: str = "") -> HotWordsLibrary:
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     lib = HotWordsLibrary(
         id=uuid.uuid4().hex,
         name=name,
@@ -75,7 +75,7 @@ def update_library(library_id: str, **fields) -> HotWordsLibrary:
             setattr(lib, key, [HotWordItem(**w) if isinstance(w, dict) else w for w in value])
         else:
             setattr(lib, key, value)
-    lib.updated_at = datetime.now().isoformat()
+    lib.updated_at = datetime.now(timezone.utc).isoformat()
     _write_json(HOTWORDS_DIR / f"{lib.id}.json", _lib_to_dict(lib))
     return lib
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger("collections.store")
@@ -42,7 +42,7 @@ def create_collection_meta(collection_id: str, name: str, qdrant_name: str = Non
         "id": collection_id,
         "name": name,
         "qdrant_name": qdrant_name or name,  # Original Qdrant collection name
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _write_json(_meta_path(collection_id), meta)
     logger.info("Created collection metadata: %s (%s)", name, collection_id)
@@ -69,7 +69,7 @@ def update_collection_meta(collection_id: str, **kwargs) -> dict | None:
         return None
 
     meta.update(kwargs)
-    meta["updated_at"] = datetime.now().isoformat()
+    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_json(_meta_path(collection_id), meta)
     logger.info("Updated collection metadata: %s", collection_id)
     return meta

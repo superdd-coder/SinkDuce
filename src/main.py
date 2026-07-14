@@ -53,12 +53,42 @@ logging.getLogger().addFilter(_FunASRDiarizationFilter())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Register task handlers so the same set is shared between the FastAPI HTTP
+    # routes and the MCP sub-app mounted at /mcp. Must happen before
+    # task_manager.start() so handlers are available when tasks are dequeued.
+    from src.tasks.handlers import (
+        consolidate_handler,
+        doc_summary_handler,
+        meeting_extract_handler,
+        meeting_summary_handler,
+        sparse_recalc_handler,
+        upload_handler,
+    )
+    task_manager.register_handler("upload", upload_handler)
+    task_manager.register_handler("consolidate", consolidate_handler)
+    task_manager.register_handler("doc_summary", doc_summary_handler)
+    task_manager.register_handler("sparse_recalc", sparse_recalc_handler)
+    task_manager.register_handler("meeting_summary", meeting_summary_handler)
+    task_manager.register_handler("meeting_extract", meeting_extract_handler)
+
     init_services()
     await task_manager.start()
     # Recover stale processing states left by a previous crash/restart
     from src.meeting.service import reset_stale_processing_states
     await reset_stale_processing_states()
-    yield
+
+    # Start the MCP staging store (content side-channel for upload_document_from_staging)
+    from src.mcp.staging import staging_store as _staging_store
+    await _staging_store.start()
+
+    # Start the FastMCP session manager in parallel so MCP Streamable HTTP
+    # requests can spawn per-session background tasks. Sharing the FastAPI
+    # lifespan keeps a single process for HTTP API + MCP.
+    from src.mcp.server import session_lifespan as _mcp_lifespan
+    async with _mcp_lifespan():
+        yield
+
+    await _staging_store.stop()
     await task_manager.stop()
 
 
@@ -125,7 +155,9 @@ from src.hot_words.routes import router as hot_words_router
 from src.notes.routes import router as notes_router
 from src.api.routes.visual import router as visual_router
 from src.api.routes.sessions import router as sessions_router
+from src.mcp.staging_routes import router as mcp_staging_router
 
+app.include_router(mcp_staging_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(query_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
@@ -138,6 +170,28 @@ app.include_router(meeting_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(visual_router, prefix="/api")
 app.include_router(hot_words_router)
+
+
+# ── MCP sub-app (mounted at /mcp) ─────────────────────────────
+# The MCP server is mounted as an ASGI sub-app so it shares the same process,
+# services singletons, and task_manager as the HTTP API. Clients connect via
+# Streamable HTTP JSON-RPC at http://host:port/mcp.
+#
+# We register the sub-app via app.add_route rather than app.mount because
+# Starlette.Mount builds a path regex of "<prefix>/{path:path}", which never
+# matches the bare mount path (e.g. "/mcp" with no trailing slash). Using
+# add_route with both "/mcp" and "/mcp/{path:path}" keeps the URL clean.
+from starlette.routing import Route
+
+from src.mcp.server import get_http_app
+
+_mcp_handler = get_http_app()
+app.router.routes.append(
+    Route("/mcp", _mcp_handler, methods=["GET", "POST", "DELETE"])
+)
+app.router.routes.append(
+    Route("/mcp/{path:path}", _mcp_handler, methods=["GET", "POST", "DELETE"])
+)
 
 
 # OpenRouter CORS proxy — registered directly on app so it's guaranteed

@@ -17,7 +17,7 @@ import json
 import logging
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Note
@@ -51,9 +51,15 @@ def _note_to_dict(note: Note) -> dict:
 
 def _dict_to_note(data: dict) -> Note:
     if "created_at" in data and isinstance(data["created_at"], str):
-        data["created_at"] = datetime.fromisoformat(data["created_at"])
+        dt = datetime.fromisoformat(data["created_at"])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        data["created_at"] = dt
     if "updated_at" in data and isinstance(data["updated_at"], str):
-        data["updated_at"] = datetime.fromisoformat(data["updated_at"])
+        dt = datetime.fromisoformat(data["updated_at"])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        data["updated_at"] = dt
     return Note(**data)
 
 
@@ -78,7 +84,7 @@ def _find_note_dir(note_id: str) -> Path | None:
 
 def create_note(collection: str, title: str) -> Note:
     note_id = uuid.uuid4().hex
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     note = Note(
         id=note_id,
         title=title,
@@ -131,7 +137,7 @@ def update_note(note_id: str, **fields) -> Note:
     note = _dict_to_note(data)
     for key, value in fields.items():
         setattr(note, key, value)
-    note.updated_at = datetime.now()
+    note.updated_at = datetime.now(timezone.utc)
     _write_json(ndir / "meta.json", _note_to_dict(note))
     return note
 

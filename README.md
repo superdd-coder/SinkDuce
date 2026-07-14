@@ -94,7 +94,7 @@ Two OneShot configuration paths are available:
 * **Multi-Collection Federated Search**: Context isolation does not limit high-dimensional synthesis. Users can choreograph inquiries spanning multiple explicit Collections simultaneously, harmonizing cross-domain shards via top-level reasoning.
 * **Absolute Source Traceability (3-Layer Traceability)**: Build bulletproof trust in AI answers by drilling straight to the raw text. Instantly inspect the source lineage across three deep-dive levels: the specific *Vector Chunk*, the *Full-Text Context*, or the *Original Source File*.
 * **Recall Evaluation**: Built-in benchmarking with adjustable parameters to evaluate retrieval recall and precision.
-* **Local MCP Interface**: Features an open Model Context Protocol (MCP) server interface. Seamlessly connect Sinkduce to external autonomous agent frameworks (e.g., Claude Code, Cursor, Hermes), enabling you to **chat with your curated knowledge anywhere**. (Prototype, to be optimized in future release.)
+* **Local MCP Interface**: Features an open Model Context Protocol (MCP) server interface. Seamlessly connect Sinkduce to external autonomous agent frameworks (e.g., Claude Code, Cursor, Hermes), enabling you to **chat with your curated knowledge anywhere**. 
 
 ## 🔒 Model Configurations & Data Security
 
@@ -120,40 +120,47 @@ All optional. Copy `.env.template` to `.env` to customize ports:
 
 ## 🔌 MCP Server Interface
 
-> *Prototype, to be optimized in future release.*
+Sinkduce ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes **40 atomic tools** across 8 domains for AI coding agents. Use it with Claude Code, Cursor, or any MCP-compatible client to query and manage your knowledge bases directly from your IDE.
 
-Sinkduce ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the full Agentic RAG pipeline as tools for AI coding agents. Use it with Claude Code, Cursor, or any MCP-compatible client to query your knowledge bases directly from your IDE.
+### Architecture
+
+The MCP server is mounted under `/mcp` on the same FastAPI process as the REST API (default port `18900`). It shares the main app lifespan — the `services` singleton and `task_manager` are reused, so no separate process is needed. Transport is HTTP via the [Streamable HTTP](https://modelcontextprotocol.io/) protocol.
 
 ### Quick Setup (Claude Code)
 
 Add to your Claude Code MCP settings (`~/.claude/settings.json` or project-level `.claude/settings.json`):
 
-JSON
-
-```
+```json
 {
   "mcpServers": {
     "sinkduce": {
-      "command": "python",
-      "args": ["-m", "src.mcp.server"],
-      "cwd": "/path/to/sinkduce"
+      "url": "http://localhost:18900/mcp"
     }
   }
 }
 ```
 
-The MCP server uses **stdio** transport — Claude Code launches it as a subprocess and communicates via stdin/stdout. No port needed.
+Prerequisite: start the backend first (`uvicorn src.main:app --port 18900 --reload` or `docker compose up -d`). Claude Code connects to the running server — no subprocess is spawned.
 
-### Available MCP Tools
+### Available MCP Tools (40 atomic tools)
 
-* **`list_collections`** / **`create_collection`** / **`delete_collection`**: Knowledge base CRUD operations.
-* **`get_collection_config`** / **`update_collection_config`**: Manage specific chunking and embedding settings.
-* **`list_documents`** / **`upload_document`** / **`delete_document`**: Document lifecycle management.
-* **`upload_folder`**: Batch-import documents from a server directory.
-* **`get_task_status`**: Check async parsing and indexing queue progress.
-* **`rag_query`**: Multi-collection Agentic RAG query with source citations.
-* **`search_chunks`**: Raw vector / hybrid chunk retrieval with relevance scores.
-* **`get_doc_summary`** / **`get_collection_summary`** / **`get_conflicts`**: Access high-level summaries and data contradictions.
+**Collections (5)**: `list_collections`, `get_collection`, `create_collection`, `update_collection_config`, `delete_collection`. `update_collection_config` rejects destructive fields (`chunk_mode`, `embedding_*` other than `embedding_provider_id`) that would require a full re-index — change those via the UI.
+
+**Documents (6)**: `list_documents`, `upload_document`, `upload_document_content`, `delete_document`, `get_file_chunks`, `get_document_text`. `upload_document_content` accepts base64-encoded content directly.
+
+**Search (3)**: `search_direct_chunks` (dense/sparse/hybrid retrieval, no LLM answer), `search_agentic_chunks` (full rewrite → decompose → retrieve → grade pipeline, returns chunks), `get_query_history`.
+
+**Tasks (5)**: `list_tasks`, `get_task_status`, `cancel_task`, `retry_task`, `clear_completed_tasks`. Used to monitor async parsing/indexing progress.
+
+**Summaries (4)**: `get_collection_summary`, `get_doc_summary`, `get_conflicts`, `trigger_consolidate`.
+
+**Notes (6)**: `list_notes`, `get_note`, `create_note`, `update_note`, `delete_note`, `trigger_propagation`.
+
+**Meetings (6)**: `list_meetings`, `get_meeting`, `create_meeting`, `update_meeting`, `delete_meeting`, `start_meeting_summary`.
+
+**Hot Words (5)**: `list_hot_words_libraries`, `get_hot_words_library`, `create_hot_words_library`, `update_hot_words_library`, `delete_hot_words_library`.
+
+All tools return JSON strings. Search tools return chunks only — the agent is expected to generate the final answer with its own LLM.
 
 ## 🛠️ Tech Stack & Architecture
 

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sinkduce": {
+      "type": "http",
+      "url": "http://localhost:18900/mcp"
+    }
+  }
+}

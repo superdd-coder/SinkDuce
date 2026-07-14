@@ -34,7 +34,8 @@ def parse_file(path: Path) -> ParsedDocument:
     ext = path.suffix.lower()
     parser = PARSERS.get(ext)
     if parser is None:
-        raise ValueError(f"Unsupported file format: {ext}")
+        supported = ", ".join(sorted(PARSERS.keys()))
+        raise ValueError(f"Unsupported file format: {ext}. Supported: {supported}")
     return parser.parse(path)
 
 

@@ -113,7 +113,9 @@ class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     api_port: int = 18900
     ui_port: int = 18901
-    mcp_port: int = 18902
+    # NOTE: MCP now shares the FastAPI process and is mounted under /mcp on the
+    # same api_port. The legacy ``mcp_port`` field has been removed because no
+    # code reads it — MCP is reached at ``http://<host>:<api_port>/mcp``.
 
 
 class TranscriptionProviderConfig(BaseModel):
