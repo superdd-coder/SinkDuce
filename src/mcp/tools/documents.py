@@ -2,11 +2,27 @@
 
 6 atomic tools:
 - :func:`list_documents` — discover documents via the file index (fast, no Qdrant scroll)
-- :func:`upload_document` — upload from a server filesystem path
-- :func:`upload_document_content` — upload from base64-encoded content (for tools that have bytes in memory)
+- :func:`upload_document_from_staging` — **unified** upload via side-channel staging (zero context leak)
 - :func:`delete_document` — remove document + chunks + summary + file snapshot
 - :func:`get_file_chunks` — list chunks for a document (text + metadata only, no vectors)
 - :func:`get_document_text` — get the full plain text of a document
+- :func:`set_document_definitive` — toggle definitive flag, trigger consolidate
+
+.. warning::
+
+    ``upload_document`` and ``upload_document_content`` have been **removed**
+    from MCP tools.  All uploads now go through the unified staging pattern:
+
+    1. POST content to ``/api/mcp/stage-content`` (regular HTTP side channel):
+       - multipart form (``-F "file=@report.pdf"``) — **recommended**, zero overhead
+       - octet-stream (``--data-binary @file`` + ``X-Filename`` header)
+       - JSON with ``file_path`` — for files already on the server
+       - JSON with ``content_b64`` — fallback for JSON-only clients
+    2. Call :func:`upload_document_from_staging` with the returned ``staging_token``
+       — only the ~36-char UUID enters the LLM context
+
+    This guarantees file content NEVER appears in the conversation transcript,
+    regardless of file size.  Tokens expire after 10 minutes.
 
 Note: ``upload_folder`` (batch directory import) has been intentionally removed
 because it requires server filesystem traversal — not safe for MCP exposure.
@@ -25,7 +41,6 @@ from pathlib import Path
 from typing import Any
 
 from src.mcp.common import (
-    decode_base64_content,
     err,
     ok,
     require_collection,
@@ -128,104 +143,83 @@ async def list_documents(collection: str) -> str:
     return to_json(await run_sync(_run))
 
 
-# ── upload_document ────────────────────────────────────────────
+# ── upload_document_from_staging (UNIFIED UPLOAD) ───────────────
 
 
-async def upload_document(file_path: str, collection: str = "default") -> str:
-    """Upload a document from the **SinkDuce server's** filesystem to a collection.
-
-    ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
-    NOT the display name. Use :func:`list_collections` first to get IDs.
-
-    ``file_path`` is a path on the **remote server**, NOT your local machine.
-    If the file is on your local machine, use :func:`upload_document_content`
-    with base64-encoded content instead.
-
-    Processing is async — use ``list_tasks`` / ``get_task_status`` to check
-    progress.
-    """
-    from src.services import services
-    from src.tasks import task_manager
-
-    path = Path(file_path)
-    if not path.is_file():
-        return to_json(err(f"File not found: {file_path}"))
-
-    def _run() -> dict[str, Any]:
-        if e := require_collection(collection):
-            return e
-        col_config = services.db.get_collection_config(collection)
-        allowed = col_config.get("allowed_file_types")
-        if allowed:
-            ext = path.suffix.lower().lstrip(".")
-            if ext not in allowed:
-                return err(
-                    f"File type '.{ext}' not allowed. Allowed: {', '.join(allowed)}"
-                )
-
-        try:
-            safe_name = safe_filename(path.name)
-        except ValueError as exc:
-            return err(str(exc))
-
-        file_id = uuid.uuid4().hex
-        file_source = f"__file__:{file_id}"
-        file_dir = _files_dir(collection) / file_id
-        file_dir.mkdir(parents=True, exist_ok=True)
-        save_path = file_dir / safe_name
-        shutil.copy2(path, save_path)
-
-        task = task_manager.create_task(
-            filename=safe_name,
-            task_type="upload",
-            file_path=str(save_path),
-            collection=collection,
-            filename_param=file_source,
-            source_label=safe_name,
-            file_id=file_id,
-        )
-        return ok(
-            message="File queued for processing",
-            task_id=task.id,
-            file_id=file_id,
-            filename=safe_name,
-            collection=collection,
-        )
-
-    return to_json(await run_sync(_run))
-
-
-# ── upload_document_content ────────────────────────────────────
-
-
-async def upload_document_content(
-    filename: str,
-    content_b64: str,
+async def upload_document_from_staging(
+    staging_token: str = "",
     collection: str = "default",
+    filename: str = "",
+    file_path: str = "",
 ) -> str:
-    """Upload a document from base64-encoded content (for in-memory bytes).
+    """Upload a document to a collection.
+
+    **To upload a file, use Bash — one command, no context leak**::
+
+        curl -F "file=@/path/to/report.pdf" -F "collection=col_xxx" {base_url}/api/mcp/upload
+
+    That's it.  The server validates, saves, and queues the file for
+    processing — all in one HTTP call.  File bytes travel over HTTP only;
+    they never enter the LLM context.
+
+    **Only use this MCP tool when you already have a staging_token**
+    (e.g. from a prior ``POST /api/mcp/stage-content`` call).  Most of the
+    time you should use the Bash + curl one-shot above instead.
 
     ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
-    NOT the display name. Use :func:`list_collections` first to get IDs.
+    NOT the display name. Use ``list_collections`` first to get IDs.
 
-    Use this when the calling tool has the document bytes in memory and wants
-    to avoid round-tripping through a temp file on disk. ``content_b64`` may
-    include a ``data:...;base64,`` prefix — it will be stripped automatically.
+    ``filename`` overrides the staged filename. ``file_path`` uploads a
+    server-local file directly (rarely needed).
 
-    Supported file types match ``upload_document``: PDF, DOCX, XLSX, PPTX, MD,
-    TXT, CSV, HTML, JSON. The collection's ``allowed_file_types`` filter still
-    applies.
+    Tokens expire after 10 minutes. Processing is async — use ``list_tasks``.
     """
     from src.services import services
     from src.tasks import task_manager
+    from src.mcp.staging import staging_store
 
-    try:
-        safe_name = safe_filename(filename)
-    except ValueError as exc:
-        return to_json(err(str(exc)))
+    raw: bytes
+    use_filename: str
 
+    # ── Way A: server-local file_path ──────────────────────────
+    if file_path and not staging_token:
+        path = Path(file_path)
+        if not path.is_file():
+            return to_json(err(f"File not found: {file_path}"))
+        # Restrict to safe directories
+        resolved = path.resolve()
+        allowed_roots = [Path("data").resolve(), Path("/tmp").resolve()]
+        if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+            return to_json(err(
+                f"File path must be under data/ or /tmp/. Got: {file_path}"
+            ))
+        try:
+            raw = path.read_bytes()
+        except Exception as exc:
+            return to_json(err(f"Failed to read file: {exc}"))
+        use_filename = filename.strip() or path.name
+
+    # ── Way B: staging token ───────────────────────────────────
+    elif staging_token:
+        entry = await staging_store.take(staging_token)
+        if entry is None:
+            return to_json(err(
+                f"Staging token '{staging_token}' not found or expired. "
+                f"Tokens expire after 10 minutes. Re-stage the content and try again."
+            ))
+        raw = entry.content
+        use_filename = filename.strip() if filename.strip() else entry.filename
+
+    else:
+        return to_json(err(
+            "Either staging_token or file_path is required. "
+            "For server-local files, use file_path. "
+            "For external files, first POST to /api/mcp/stage-content then pass the staging_token."
+        ))
+
+    # 2. Validate filename
     try:
-        raw = decode_base64_content(content_b64)
+        safe_name = safe_filename(use_filename)
     except ValueError as exc:
         return to_json(err(str(exc)))
 
@@ -602,8 +596,7 @@ async def set_document_definitive(
 
 __all__ = [
     "list_documents",
-    "upload_document",
-    "upload_document_content",
+    "upload_document_from_staging",
     "delete_document",
     "get_file_chunks",
     "get_document_text",

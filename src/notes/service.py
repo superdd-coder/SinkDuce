@@ -193,7 +193,7 @@ def replace_injection_block(content: str, source_note_id: str, new_distilled: st
     # Match the full block: opening fence + attributes + content + closing :::
     pattern = re.compile(
         r':::distill-block\{[^}]*"' + re.escape(source_note_id) + r'"[^}]*\}\n'
-        r'.*?\n'
+        r'(?:.*?\n)?'
         r':::',
         re.DOTALL,
     )
@@ -226,7 +226,7 @@ def parse_injection_blocks(content: str) -> list[dict]:
     blocks = []
 
     # Try new format first: :::distill-block{...}
-    new_pattern = re.compile(r':::distill-block(\{[^}]+\})\n([\s\S]*?)\n:::', re.DOTALL)
+    new_pattern = re.compile(r':::distill-block(\{[^}]+\})\n([\s\S]*?):::', re.DOTALL)
     for match in new_pattern.finditer(content):
         try:
             attrs = json.loads(match.group(1))

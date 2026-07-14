@@ -5,7 +5,7 @@ import logging
 import shutil
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Meeting, MeetingMode, TranscriptionResult
@@ -54,15 +54,21 @@ def _meeting_to_dict(meeting: Meeting) -> dict:
 
 def _dict_to_meeting(data: dict) -> Meeting:
     if "created_at" in data and isinstance(data["created_at"], str):
-        data["created_at"] = datetime.fromisoformat(data["created_at"])
+        dt = datetime.fromisoformat(data["created_at"])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        data["created_at"] = dt
     if "updated_at" in data and isinstance(data["updated_at"], str):
-        data["updated_at"] = datetime.fromisoformat(data["updated_at"])
+        dt = datetime.fromisoformat(data["updated_at"])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        data["updated_at"] = dt
     return Meeting(**data)
 
 
 def create_meeting(title: str, mode: MeetingMode | None = None) -> Meeting:
     meeting_id = uuid.uuid4().hex
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     meeting = Meeting(
         id=meeting_id,
         title=title,
@@ -109,7 +115,7 @@ def update_meeting(meeting_id: str, **fields) -> Meeting:
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
         for key, value in fields.items():
             setattr(meeting, key, value)
-        meeting.updated_at = datetime.now()
+        meeting.updated_at = datetime.now(timezone.utc)
         _write_json(_meeting_dir(meeting_id) / "meta.json", _meeting_to_dict(meeting))
     return meeting
 

@@ -77,6 +77,10 @@ async def lifespan(app: FastAPI):
     from src.meeting.service import reset_stale_processing_states
     await reset_stale_processing_states()
 
+    # Start the MCP staging store (content side-channel for upload_document_from_staging)
+    from src.mcp.staging import staging_store as _staging_store
+    await _staging_store.start()
+
     # Start the FastMCP session manager in parallel so MCP Streamable HTTP
     # requests can spawn per-session background tasks. Sharing the FastAPI
     # lifespan keeps a single process for HTTP API + MCP.
@@ -84,6 +88,7 @@ async def lifespan(app: FastAPI):
     async with _mcp_lifespan():
         yield
 
+    await _staging_store.stop()
     await task_manager.stop()
 
 
@@ -150,7 +155,9 @@ from src.hot_words.routes import router as hot_words_router
 from src.notes.routes import router as notes_router
 from src.api.routes.visual import router as visual_router
 from src.api.routes.sessions import router as sessions_router
+from src.mcp.staging_routes import router as mcp_staging_router
 
+app.include_router(mcp_staging_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(query_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")

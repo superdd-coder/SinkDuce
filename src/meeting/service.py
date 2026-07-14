@@ -7,7 +7,7 @@ import json
 import logging
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.config import get_config
@@ -2266,7 +2266,7 @@ class MeetingService:
             filename=f"meeting_{meeting_id}_{tab_id}",
             collection=collection_id,
             status=TaskStatus.PROCESSING,
-            created_at=datetime.now(),
+            created_at=datetime.now(timezone.utc),
         )
 
         await upload_handler(

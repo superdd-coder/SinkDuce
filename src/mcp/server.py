@@ -6,8 +6,8 @@ Collections (5):
     list_collections, get_collection, create_collection,
     update_collection_config, delete_collection
 
-Documents (7):
-    list_documents, upload_document, upload_document_content,
+Documents (6):
+    list_documents, upload_document_from_staging,
     delete_document, get_file_chunks, get_document_text,
     set_document_definitive
 
@@ -23,15 +23,16 @@ Summaries (4):
 Notes (6):
     list_notes, get_note, create_note, update_note, delete_note, trigger_propagation
 
-Meetings (6):
-    list_meetings, get_meeting, create_meeting, update_meeting,
-    delete_meeting, start_meeting_summary
+Meetings (9):
+    list_meetings, get_meeting, get_section, get_meeting_transcript,
+    create_meeting, update_meeting, delete_meeting,
+    start_meeting_summary, upload_meeting_audio_from_staging
 
 Hot Words (5):
     list_hot_words_libraries, get_hot_words_library, create_hot_words_library,
     update_hot_words_library, delete_hot_words_library
 
-Total: 5 + 7 + 3 + 5 + 4 + 6 + 6 + 5 = 41 tools.
+Total: 5 + 6 + 3 + 5 + 4 + 6 + 9 + 5 = 43 tools.
 
 Architecture
 ------------
@@ -54,6 +55,11 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("sinkduce")
 
+# ── Resolve base URL for docs that mention the HTTP API ──────
+from src.config import get_config as _get_config
+_cfg = _get_config()
+_base_url = f"http://localhost:{_cfg.server.api_port}"
+
 # ── Collections ──────────────────────────────────────────────
 from src.mcp.tools.collections import (
     list_collections,
@@ -68,15 +74,17 @@ for _t in (list_collections, get_collection, create_collection, update_collectio
 # ── Documents ────────────────────────────────────────────────
 from src.mcp.tools.documents import (
     list_documents,
-    upload_document,
-    upload_document_content,
+    upload_document_from_staging,
     delete_document,
     get_file_chunks,
     get_document_text,
     set_document_definitive,
 )
-for _t in (list_documents, upload_document, upload_document_content, delete_document, get_file_chunks, get_document_text, set_document_definitive):
-    mcp.add_tool(_t)
+for _t in (list_documents, upload_document_from_staging, delete_document, get_file_chunks, get_document_text, set_document_definitive):
+    desc = _t.__doc__
+    if desc and "{base_url}" in desc:
+        desc = desc.replace("{base_url}", _base_url)
+    mcp.add_tool(_t, description=desc)
 
 # ── Search & Query ───────────────────────────────────────────
 from src.mcp.tools.search import (
@@ -124,13 +132,19 @@ for _t in (list_notes, get_note, create_note, update_note, delete_note, trigger_
 from src.mcp.tools.meetings import (
     list_meetings,
     get_meeting,
+    get_section,
+    get_meeting_transcript,
     create_meeting,
     update_meeting,
     delete_meeting,
     start_meeting_summary,
+    upload_meeting_audio_from_staging,
 )
-for _t in (list_meetings, get_meeting, create_meeting, update_meeting, delete_meeting, start_meeting_summary):
-    mcp.add_tool(_t)
+for _t in (list_meetings, get_meeting, get_section, get_meeting_transcript, create_meeting, update_meeting, delete_meeting, start_meeting_summary, upload_meeting_audio_from_staging):
+    desc = _t.__doc__
+    if desc and "{base_url}" in desc:
+        desc = desc.replace("{base_url}", _base_url)
+    mcp.add_tool(_t, description=desc)
 
 # ── Hot Words ────────────────────────────────────────────────
 from src.mcp.tools.hot_words import (

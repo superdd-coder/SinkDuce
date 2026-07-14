@@ -359,7 +359,7 @@ def add_eval_case(collection: str, case: EvalTestCase):
     new_case = case.model_dump()
     if not new_case.get("id"):
         new_case["id"] = str(uuid.uuid4())[:8]
-    new_case["created_at"] = datetime.now().isoformat()
+    new_case["created_at"] = datetime.now(timezone.utc).isoformat()
     cases.append(new_case)
     _save_cases(collection, cases)
     return new_case
@@ -532,7 +532,7 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
                 "query": q,
                 "target_chunk_id": selected[idx - 1]["id"],
                 "target_source": selected[idx - 1]["source"],
-                "created_at": datetime.now().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             })
             if len(new_cases) >= 10:
                 break

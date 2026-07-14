@@ -30,10 +30,9 @@ class TestToolRegistration:
         "create_collection",
         "update_collection_config",
         "delete_collection",
-        # Documents (7)
+        # Documents (6)
         "list_documents",
-        "upload_document",
-        "upload_document_content",
+        "upload_document_from_staging",
         "delete_document",
         "get_file_chunks",
         "get_document_text",
@@ -60,13 +59,16 @@ class TestToolRegistration:
         "update_note",
         "delete_note",
         "trigger_propagation",
-        # Meetings (6)
+        # Meetings (9)
         "list_meetings",
         "get_meeting",
+        "get_section",
+        "get_meeting_transcript",
         "create_meeting",
         "update_meeting",
         "delete_meeting",
         "start_meeting_summary",
+        "upload_meeting_audio_from_staging",
         # Hot Words (5)
         "list_hot_words_libraries",
         "get_hot_words_library",
@@ -75,11 +77,11 @@ class TestToolRegistration:
         "delete_hot_words_library",
     }
 
-    def test_all_40_tools_registered(self):
+    def test_all_43_tools_registered(self):
         from src.mcp.server import mcp
         tools = mcp._tool_manager._tools
-        assert len(tools) == 41, (
-            f"Expected 41 tools, got {len(tools)}: {sorted(tools.keys())}"
+        assert len(tools) == 43, (
+            f"Expected 43 tools, got {len(tools)}: {sorted(tools.keys())}"
         )
 
     def test_tool_set_matches_expected(self):
@@ -152,11 +154,13 @@ class TestModuleImports:
 
     def test_documents_imports(self):
         from src.mcp.tools.documents import (
-            list_documents, upload_document, upload_document_content,
+            list_documents, upload_document_from_staging,
             delete_document, get_file_chunks, get_document_text,
+            set_document_definitive,
         )
-        for fn in (list_documents, upload_document, upload_document_content,
-                   delete_document, get_file_chunks, get_document_text):
+        for fn in (list_documents, upload_document_from_staging,
+                   delete_document, get_file_chunks, get_document_text,
+                   set_document_definitive):
             assert asyncio.iscoroutinefunction(fn)
 
     def test_search_imports(self):
@@ -195,11 +199,13 @@ class TestModuleImports:
 
     def test_meetings_imports(self):
         from src.mcp.tools.meetings import (
-            list_meetings, get_meeting, create_meeting, update_meeting,
-            delete_meeting, start_meeting_summary,
+            list_meetings, get_meeting, get_section, get_meeting_transcript,
+            create_meeting, update_meeting, delete_meeting,
+            start_meeting_summary, upload_meeting_audio_from_staging,
         )
-        for fn in (list_meetings, get_meeting, create_meeting, update_meeting,
-                   delete_meeting, start_meeting_summary):
+        for fn in (list_meetings, get_meeting, get_section, get_meeting_transcript,
+                   create_meeting, update_meeting, delete_meeting,
+                   start_meeting_summary, upload_meeting_audio_from_staging):
             assert asyncio.iscoroutinefunction(fn)
 
     def test_hot_words_imports(self):
@@ -270,8 +276,6 @@ _TOOL_KWARGS_OVERRIDES = {
     "update_note": {"note_id": "test-id", "content": "test"},
     "create_meeting": {"title": "test"},
     "update_meeting": {"meeting_id": "test-id"},
-    "upload_document_content": {"filename": "test.txt", "content_b64": "aGVsbG8="},
-    "upload_document": {"file_path": "/tmp/test.txt"},
     "create_hot_words_library": {"name": "test"},
     "update_hot_words_library": {"library_id": "test-id"},
 }
@@ -284,7 +288,8 @@ _PLACEHOLDER_KWARGS = {
     "collection": "default",
     "source": "test.md",
     "filename": "test.txt",
-    "content_b64": "aGVsbG8=",
+    "staging_token": "test-token",
+    "tab_id": "general",
     "file_path": "/tmp/test.txt",
     "name": "test",
     "query": "test",
@@ -372,6 +377,88 @@ def _patch_context():
 
     mock_get_overrides = MagicMock(return_value={})
 
+    # ── Meeting store (avoid writing real data/meetings/ on disk) ──
+    _now = __import__("datetime").datetime.now()
+    _mock_meeting = MagicMock()
+    _mock_meeting.model_dump.return_value = {
+        "id": "test-meeting-id",
+        "title": "test",
+        "status": "created",
+        "mode": None,
+        "processing_state": "idle",
+        "summary_gen_state": "idle",
+        "blueprint_gen_state": "idle",
+        "speaker_names": None,
+        "hot_words_library_id": None,
+        "tabs": [],
+        "allocated_collections": [],
+        "allocated_file_ids": [],
+        "notes_path": None,
+        "transcript_path": None,
+        "audio_path": None,
+        "has_transcript": False,
+        "has_summary": False,
+        "has_notes": False,
+        "created_at": _now,
+        "updated_at": _now,
+    }
+    _mock_meeting.id = "test-meeting-id"
+    _mock_meeting.title = "test"
+    _mock_meeting.status = MagicMock(value="created")
+    _mock_meeting.mode = None
+    _mock_meeting.processing_state = MagicMock(value="idle")
+    _mock_meeting.summary_gen_state = MagicMock(value="idle")
+    _mock_meeting.blueprint_gen_state = MagicMock(value="idle")
+    _mock_meeting.speaker_names = None
+    _mock_meeting.hot_words_library_id = None
+    _mock_meeting.tabs = []
+    _mock_meeting.allocated_collections = []
+    _mock_meeting.allocated_file_ids = []
+    _mock_meeting.notes_path = None
+    _mock_meeting.transcript_path = None
+    _mock_meeting.audio_path = None
+    _mock_meeting.has_transcript = False
+    _mock_meeting.has_summary = False
+    _mock_meeting.has_notes = False
+    _mock_meeting.created_at = _now
+    _mock_meeting.updated_at = _now
+
+    mock_mstore = MagicMock()
+    mock_mstore.list_meetings.return_value = []
+    mock_mstore.get_meeting.return_value = _mock_meeting
+    mock_mstore.create_meeting.return_value = _mock_meeting
+    mock_mstore.update_meeting.return_value = _mock_meeting
+    mock_mstore.delete_meeting.return_value = True
+    mock_mstore.get_transcript.return_value = None
+    mock_mstore.get_sentences.return_value = None
+    mock_mstore.get_section_md.return_value = None
+    mock_mstore.get_notes.return_value = None
+    mock_mstore.save_notes.return_value = "/fake/notes.md"
+
+    # ── Hot words store (avoid writing real data/hot_words/ on disk) ──
+    _mock_hw_lib = MagicMock()
+    _mock_hw_lib.model_dump.return_value = {
+        "id": "test-hw-id",
+        "name": "test",
+        "description": "",
+        "words": [],
+        "created_at": _now.isoformat(),
+        "updated_at": _now.isoformat(),
+    }
+    _mock_hw_lib.id = "test-hw-id"
+    _mock_hw_lib.name = "test"
+    _mock_hw_lib.description = ""
+    _mock_hw_lib.words = []
+    _mock_hw_lib.created_at = _now.isoformat()
+    _mock_hw_lib.updated_at = _now.isoformat()
+
+    mock_hstore = MagicMock()
+    mock_hstore.list_libraries.return_value = []
+    mock_hstore.get_library.return_value = None
+    mock_hstore.create_library.return_value = _mock_hw_lib
+    mock_hstore.update_library.return_value = _mock_hw_lib
+    mock_hstore.delete_library.return_value = True
+
     stack = ExitStack()
     stack.enter_context(patch("src.services.services", mock_svc, create=True))
     stack.enter_context(patch.object(cstore, "get_collection_meta", mock_cstore.get_collection_meta))
@@ -392,6 +479,24 @@ def _patch_context():
     stack.enter_context(patch("src.tasks.task_manager.retry_task", return_value=None))
     stack.enter_context(patch("src.tasks.task_manager.clear_completed_tasks", return_value=None))
     stack.enter_context(patch("src.tasks.task_manager._task_args", {}))
+    # ── Meeting & hot-words store patches ────────────────────────
+    from src.meeting import store as mstore_mod
+    from src.hot_words import store as hstore_mod
+    stack.enter_context(patch.object(mstore_mod, "list_meetings", mock_mstore.list_meetings))
+    stack.enter_context(patch.object(mstore_mod, "get_meeting", mock_mstore.get_meeting))
+    stack.enter_context(patch.object(mstore_mod, "create_meeting", mock_mstore.create_meeting))
+    stack.enter_context(patch.object(mstore_mod, "update_meeting", mock_mstore.update_meeting))
+    stack.enter_context(patch.object(mstore_mod, "delete_meeting", mock_mstore.delete_meeting))
+    stack.enter_context(patch.object(mstore_mod, "get_transcript", mock_mstore.get_transcript))
+    stack.enter_context(patch.object(mstore_mod, "get_sentences", mock_mstore.get_sentences))
+    stack.enter_context(patch.object(mstore_mod, "get_section_md", mock_mstore.get_section_md))
+    stack.enter_context(patch.object(mstore_mod, "get_notes", mock_mstore.get_notes))
+    stack.enter_context(patch.object(mstore_mod, "save_notes", mock_mstore.save_notes))
+    stack.enter_context(patch.object(hstore_mod, "list_libraries", mock_hstore.list_libraries))
+    stack.enter_context(patch.object(hstore_mod, "get_library", mock_hstore.get_library))
+    stack.enter_context(patch.object(hstore_mod, "create_library", mock_hstore.create_library))
+    stack.enter_context(patch.object(hstore_mod, "update_library", mock_hstore.update_library))
+    stack.enter_context(patch.object(hstore_mod, "delete_library", mock_hstore.delete_library))
     return stack
 
 

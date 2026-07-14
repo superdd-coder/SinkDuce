@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Coroutine
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("task_manager")
 
@@ -53,7 +53,7 @@ class Task:
     message: str = ""
     result: dict[str, Any] | None = None
     error: str | None = None
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -166,7 +166,7 @@ class TaskManager:
         task.status = TaskStatus.FAILED
         task.error = "Cancelled by user"
         task.message = "Cancelled"
-        task.completed_at = datetime.now()
+        task.completed_at = datetime.now(timezone.utc)
         return True
 
     def clear_completed_tasks(self) -> None:
@@ -279,7 +279,7 @@ class TaskManager:
             return
 
         task.status = TaskStatus.PROCESSING
-        task.started_at = datetime.now()
+        task.started_at = datetime.now(timezone.utc)
         task.message = "Processing..."
         # Create cancellation event for cooperative cancellation
         cancel_event = threading.Event()
@@ -307,21 +307,21 @@ class TaskManager:
             task.progress = 100.0
             task.message = "Completed"
             task.result = result
-            task.completed_at = datetime.now()
+            task.completed_at = datetime.now(timezone.utc)
             logger.info("[TASK %s] COMPLETED: %s", task_id, result)
 
         except asyncio.TimeoutError:
             task.status = TaskStatus.FAILED
             task.error = f"Task timed out after {self.timeout}s"
             task.message = f"Failed: timed out after {self.timeout}s"
-            task.completed_at = datetime.now()
+            task.completed_at = datetime.now(timezone.utc)
             logger.error("[TASK %s] TIMED OUT after %ds", task_id, self.timeout)
 
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
             task.message = f"Failed: {str(e)}"
-            task.completed_at = datetime.now()
+            task.completed_at = datetime.now(timezone.utc)
             logger.error("[TASK %s] FAILED: %s", task_id, e, exc_info=True)
 
         finally:
