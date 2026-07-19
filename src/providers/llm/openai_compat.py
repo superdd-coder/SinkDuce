@@ -25,13 +25,28 @@ def _strip_think(text: str) -> str:
 @llm_registry.register("openai_compatible", display_name="OpenAI-Compatible")
 class OpenAICompatLLM(LLMProvider):
     def __init__(self, config: LLMProviderConfig):
+        self._base_url = config.base_url.strip()
         self._client = OpenAI(
-            base_url=config.base_url.strip(),
+            base_url=self._base_url,
             api_key=config.api_key.strip(),
             timeout=httpx.Timeout(1800, connect=30),
         )
         self._model = (config.default_model or config.model).strip()
         self._default_max_tokens = getattr(config, "max_tokens", 0) or 0
+        # Detect DashScope endpoints — they use a different thinking parameter
+        # format (`enable_thinking`) instead of DeepSeek's native format.
+        self._is_dashscope = "dashscope.aliyuncs.com" in self._base_url
+
+    def _build_thinking_extra(self, thinking: bool) -> dict:
+        """Return the correct ``extra_body`` dict for thinking mode.
+
+        DashScope's OpenAI-compatible API expects ``{"enable_thinking": bool}``,
+        while DeepSeek's native API uses
+        ``{"thinking": {"type": "enabled" | "disabled"}}``.
+        """
+        if self._is_dashscope:
+            return {"enable_thinking": thinking}
+        return {"thinking": {"type": "enabled" if thinking else "disabled"}}
 
     def _resolve_temperature(self, temperature: float | None) -> float:
         return temperature if temperature is not None else _DEFAULT_TEMPERATURE
@@ -64,7 +79,7 @@ class OpenAICompatLLM(LLMProvider):
         if response_format:
             kwargs["response_format"] = response_format
         if thinking is not None:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+            kwargs["extra_body"] = self._build_thinking_extra(thinking)
 
         response = self._client.chat.completions.create(**kwargs)
         if not response.choices:
@@ -161,7 +176,7 @@ class OpenAICompatLLM(LLMProvider):
         if response_format:
             kwargs["response_format"] = response_format
         if thinking is not None:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+            kwargs["extra_body"] = self._build_thinking_extra(thinking)
 
         stream = self._client.chat.completions.create(**kwargs)
         in_think = False
@@ -243,7 +258,7 @@ class OpenAICompatLLM(LLMProvider):
         if response_format:
             kwargs["response_format"] = response_format
         if thinking is not None:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+            kwargs["extra_body"] = self._build_thinking_extra(thinking)
 
         stream = self._client.chat.completions.create(**kwargs)
         in_think = False
