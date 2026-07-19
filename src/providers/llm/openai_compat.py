@@ -22,6 +22,27 @@ def _strip_think(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
+def _extract_json_from_raw(raw: str) -> str | None:
+    """Try to extract a JSON object from raw text (may contain <think> tags).
+
+    Uses ``JSONDecoder.raw_decode()`` for proper validation — avoids false
+    positives from bare ``{`` characters in thinking text.  Returns the JSON
+    substring or ``None`` if no valid object is found.
+    """
+    import json as _json
+
+    decoder = _json.JSONDecoder()
+    for idx, ch in enumerate(raw):
+        if ch == "{":
+            try:
+                _obj, end = decoder.raw_decode(raw[idx:])
+                if isinstance(_obj, dict):
+                    return raw[idx : idx + end]
+            except (_json.JSONDecodeError, ValueError):
+                continue
+    return None
+
+
 @llm_registry.register("openai_compatible", display_name="OpenAI-Compatible")
 class OpenAICompatLLM(LLMProvider):
     def __init__(self, config: LLMProviderConfig):
@@ -86,13 +107,29 @@ class OpenAICompatLLM(LLMProvider):
             return ""
         msg = response.choices[0].message
         text = msg.content or ""
-        # DeepSeek thinking mode: content may be empty while reasoning_content
-        # holds the actual response
+        # Some providers (e.g. DashScope with thinking mode) return
+        # empty content when thinking is enabled, putting the actual
+        # response inside reasoning_content.  Fall back to reasoning,
+        # and when json_mode was requested, try extracting JSON directly
+        # from the raw reasoning (answer may be inside think tags).
         if not text.strip():
             reasoning = getattr(msg, "reasoning_content", None)
             if reasoning:
                 logger.info("LLM generate: content empty, using reasoning_content (%d chars)", len(reasoning))
-                text = reasoning
+                # When json_mode was requested, try extracting JSON from raw
+                # reasoning FIRST (before stripping think tags).  DashScope
+                # may put the JSON answer inside <think>...</think> in
+                # reasoning_content, and _strip_think() would delete it.
+                if response_format:
+                    json_text = _extract_json_from_raw(reasoning)
+                    if json_text:
+                        logger.info("LLM generate: extracted JSON from raw reasoning (%d chars)", len(json_text))
+                        return json_text
+                stripped = _strip_think(reasoning)
+                if stripped.strip():
+                    text = stripped
+                else:
+                    text = reasoning
         if not text.strip():
             logger.warning("LLM generate: empty response from model=%s (content=%r, reasoning=%r)",
                            self._model, msg.content, getattr(msg, "reasoning_content", None))

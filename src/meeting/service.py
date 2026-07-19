@@ -347,11 +347,34 @@ from src.prompts import (
 )
 
 
+def _thinking_max_tokens(base: int, thinking: bool | None) -> int:
+    """Scale max_tokens when thinking mode is active.
+
+    Thinking tokens and output tokens share the same max_tokens budget.
+    When thinking is enabled, the model may consume thousands of tokens
+    on reasoning before producing any output.  Scale the budget up so
+    the actual content is not truncated.
+    """
+    if not thinking:
+        return base
+    # At minimum give 2× the base; cap at 32768 to avoid excessive latency.
+    return min(base * 2, 32768)
+
+
 class MeetingService:
     """High-level meeting operations: transcription providers, summary, allocation (v3)."""
 
     def __init__(self) -> None:
-        pass
+        import threading as _threading
+        # Per-(meeting,tab) active section-stream tasks.
+        # Maps "meeting_id:tab_id" → (event_queue, thread).
+        # Prevents duplicate LLM calls when SSE reconnects on page refresh.
+        self._section_stream_lock = _threading.Lock()
+        self._active_section_streams: dict[str, tuple] = {}
+        # Per-meeting active blueprint-stream tasks.
+        # Maps "meeting_id" → (event_queue, thread).
+        self._blueprint_stream_lock = _threading.Lock()
+        self._active_blueprint_streams: dict[str, tuple] = {}
 
     # -- Provider accessors -------------------------------------------------
 
@@ -396,6 +419,10 @@ class MeetingService:
           Runs after Pass 1 completes.  Emits ``blueprint_start`` and
           ``blueprint_done`` events.  State: idle → prefilling → idle.
 
+        Deduplication: if a blueprint task is already running for this
+        meeting, the new SSE connection attaches to the existing event
+        queue instead of spawning duplicate LLM calls.
+
         Yields dicts::
 
           {"event": "state", "data": {"summary": "prefilling"}}
@@ -408,7 +435,38 @@ class MeetingService:
           {"event": "state", "data": {"blueprint": "idle"}}
           {"event": "error", "data": {"message": "..."}}
         """
+        import queue
+        import threading
+
         from src.meeting.models import ProcessingState, GenerationState
+
+        # ── Deduplication: reuse existing task if one is running ────
+        with self._blueprint_stream_lock:
+            existing = self._active_blueprint_streams.get(meeting_id)
+            if existing is not None:
+                eq, thread = existing
+                if thread.is_alive():
+                    logger.info(
+                        "[STREAM] Reusing existing blueprint task for %s",
+                        meeting_id,
+                    )
+                    try:
+                        while True:
+                            try:
+                                event_type, event_data = eq.get(timeout=0.1)
+                            except queue.Empty:
+                                continue
+                            if event_type == "done":
+                                break
+                            yield {"event": event_type, "data": event_data}
+                    except GeneratorExit:
+                        logger.info(
+                            "[STREAM] SSE client disconnected (reuse) for %s",
+                            meeting_id,
+                        )
+                    return
+                else:
+                    del self._active_blueprint_streams[meeting_id]
 
         logger.info("[STREAM] Starting blueprint stream for meeting %s", meeting_id)
 
@@ -594,7 +652,7 @@ class MeetingService:
                                 prompt=blueprint_prompt,
                                 system=MEETING_BLUEPRINT_SYSTEM,
                                 temperature=0.0,
-                                max_tokens=8192,
+                                max_tokens=_thinking_max_tokens(8192, meeting_thinking),
                                 response_format={"type": "json_object"},
                                 thinking=meeting_thinking,
                             )
@@ -656,7 +714,7 @@ class MeetingService:
                             raw_blueprint = llm.generate(
                                 blueprint_prompt,
                                 system=MEETING_BLUEPRINT_SYSTEM,
-                                max_tokens=8192,
+                                max_tokens=_thinking_max_tokens(8192, meeting_thinking),
                                 temperature=0.0,
                                 thinking=meeting_thinking,
                                 response_format={"type": "json_object"},
@@ -759,9 +817,13 @@ class MeetingService:
             finally:
                 bp_executor.shutdown(wait=False)
                 event_queue.put(("done", None))
+                with self._blueprint_stream_lock:
+                    self._active_blueprint_streams.pop(meeting_id, None)
 
         # ── Launch thread ────────────────────────────────────────
         thread = threading.Thread(target=_run_llm, daemon=True)
+        with self._blueprint_stream_lock:
+            self._active_blueprint_streams[meeting_id] = (event_queue, thread)
         thread.start()
 
         # ── Read queue → SSE events ──────────────────────────────
@@ -939,7 +1001,7 @@ class MeetingService:
             raw_blueprint = llm.generate(
                 blueprint_prompt,
                 system=MEETING_BLUEPRINT_SYSTEM,
-                max_tokens=8192,
+                max_tokens=_thinking_max_tokens(8192, meeting_thinking),
                 temperature=0.0,
                 thinking=meeting_thinking,
                 response_format={"type": "json_object"},
@@ -1392,7 +1454,7 @@ class MeetingService:
                         raw = llm.generate(
                             tagger_prompt,
                             system=MEETING_TAGGER_V3_SYSTEM,
-                            max_tokens=16384,
+                            max_tokens=_thinking_max_tokens(16384, meeting_thinking),
                             temperature=0.0,
                             thinking=meeting_thinking,
                             response_format={"type": "json_object"},
@@ -1484,7 +1546,7 @@ class MeetingService:
                         raw = llm.generate(
                             summarizer_prompt,
                             system=MEETING_SUMMARIZER_V3_SYSTEM,
-                            max_tokens=8192,
+                            max_tokens=_thinking_max_tokens(8192, meeting_thinking),
                             thinking=meeting_thinking,
                         )
                         validated = _clean_refs(_normalize_refs(_normalize_brackets(raw)), list(payload_ids))
@@ -1691,6 +1753,10 @@ class MeetingService:
         the main generator reads from a queue so the SSE connection can drop
         without cancelling the work.
 
+        Deduplication: if a generation task is already running for this
+        ``(meeting_id, tab_id)``, the new SSE connection attaches to the
+        existing event queue instead of spawning a duplicate LLM call.
+
         Yields dicts::
 
           {"event": "state", "data": {"section_gen": "prefilling"}}
@@ -1707,8 +1773,38 @@ class MeetingService:
         from src.meeting.pipeline import build_payload
         from src.meeting.schemas import Sentence
 
+        # ── Deduplication: reuse existing task if one is running ────────
+        task_key = f"{meeting_id}:{tab_id}"
+        with self._section_stream_lock:
+            existing = self._active_section_streams.get(task_key)
+            if existing is not None:
+                eq, thread = existing
+                if thread.is_alive():
+                    logger.info(
+                        "[SECTION-STREAM] Reusing existing task for %s", task_key,
+                    )
+                    try:
+                        while True:
+                            try:
+                                event_type, event_data = eq.get(timeout=0.1)
+                            except queue.Empty:
+                                continue
+                            if event_type == "done":
+                                break
+                            yield {"event": event_type, "data": event_data}
+                    except GeneratorExit:
+                        logger.info(
+                            "[SECTION-STREAM] SSE client disconnected (reuse) for %s",
+                            task_key,
+                        )
+                    return
+                else:
+                    # Thread finished — clean up stale entry
+                    del self._active_section_streams[task_key]
+
         event_queue: queue.Queue = queue.Queue()
 
+        # Register this task so reconnecting SSE clients can reuse it
         def _run() -> None:
             try:
                 # ── Load context ──────────────────────────────────
@@ -1822,7 +1918,7 @@ class MeetingService:
                         raw = llm.generate(
                             tagger_prompt,
                             system=MEETING_TAGGER_V3_SYSTEM,
-                            max_tokens=16384,
+                            max_tokens=_thinking_max_tokens(16384, meeting_thinking),
                             temperature=0.0,
                             thinking=meeting_thinking,
                             response_format={"type": "json_object"},
@@ -1908,7 +2004,7 @@ class MeetingService:
                 for text, is_thinking in llm.generate_stream_tagged(
                     summarizer_prompt,
                     system=MEETING_SUMMARIZER_V3_SYSTEM,
-                    max_tokens=8192,
+                    max_tokens=_thinking_max_tokens(8192, meeting_thinking),
                     thinking=meeting_thinking,
                 ):
                     if is_thinking:
@@ -1955,9 +2051,13 @@ class MeetingService:
                 event_queue.put(("error", {"message": str(e)}))
             finally:
                 event_queue.put(("done", None))
+                with self._section_stream_lock:
+                    self._active_section_streams.pop(task_key, None)
 
         # ── Launch background thread ──────────────────────────────
         thread = threading.Thread(target=_run, daemon=True)
+        with self._section_stream_lock:
+            self._active_section_streams[task_key] = (event_queue, thread)
         thread.start()
 
         # ── Read queue → SSE events ──────────────────────────────
@@ -2602,24 +2702,6 @@ def _parse_tagger_response(raw: str) -> dict[str, list[str]]:
     import re as _re
 
     raw_stripped = raw.strip()
-    # Search for {"sentence_ids" specifically (not bare '{' which
-    # appears in reasoning text).  Look from the end — the JSON
-    # should be the last thing in the response.
-    idx = raw_stripped.rfind('{"sentence_ids"')
-    if idx < 0:
-        # Fallback: try any '{' from the end
-        idx = raw_stripped.rfind("{")
-    if idx < 0:
-        # Last resort: try to extract bare integer IDs from the text
-        fallback_ids = _re.findall(r"\b(\d{1,4})\b", raw_stripped)
-        if fallback_ids:
-            logger.warning(
-                "[TAGGER] No JSON found, fallback extracted %d numeric IDs from text",
-                len(fallback_ids),
-            )
-            return {"sentence_ids": _normalize_ids([int(x) for x in fallback_ids])}
-        logger.warning("[TAGGER] No JSON object found in LLM response (%d chars)", len(raw_stripped))
-        return {"sentence_ids": []}
 
     def _normalize_ids(raw_ids: list) -> list[str]:
         """Convert integer IDs → 'stt_XXXX', pass strings through unchanged."""
@@ -2632,6 +2714,20 @@ def _parse_tagger_response(raw: str) -> dict[str, list[str]]:
             else:
                 result.append(str(i))  # legacy: "stt_0001" etc.
         return result
+
+    # Search for {"sentence_ids" specifically (not bare '{' which
+    # appears in reasoning text).  Look from the end — the JSON
+    # should be the last thing in the response.
+    idx = raw_stripped.rfind('{"sentence_ids"')
+    if idx < 0:
+        # Fallback: try any '{' from the end
+        idx = raw_stripped.rfind("{")
+    if idx < 0:
+        # No JSON structure found at all — do NOT attempt regex ID
+        # extraction from reasoning/thinking text (produces hundreds
+        # of false positives).  Return empty and let the caller retry.
+        logger.warning("[TAGGER] No JSON object found in LLM response (%d chars)", len(raw_stripped))
+        return {"sentence_ids": []}
 
     # Try raw_decode first (proper nested-brace handling)
     last_err = ""

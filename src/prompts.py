@@ -288,7 +288,9 @@ MEETING_GENERAL_SUMMARY_PROMPT = """\
 <task>
 Produce a comprehensive meeting-level Markdown document.
 
-Language: Same as the transcript. Do not translate.
+Language: Output MUST be in the same language as the transcript.
+If the transcript is English, write in English.  NEVER switch
+languages — this is a hard failure.
 
 ## Summary
 A concise 3-5 sentence overview of the entire meeting.
@@ -323,48 +325,97 @@ Examples:
 - Finance Director Zhang to update the team dashboard [priority: medium]
 
 ## Detail
-A cleaned-up transcript of the meeting, preserving ALL substantive content.
-Remove only: filler words (um, uh, you know), verbatim repetitions,
-false starts, audio/tech checks ("can you hear me"), and pure
-social small talk with zero business relevance.
+A condensed narrative of the entire meeting, preserving ALL
+substantive content.  Write as a human note-taker would — synthesize
+discussion threads, do NOT reproduce the transcript turn by turn.
 
-Keep EVERYTHING else — every data point, opinion, decision,
-disagreement, question, reaction, offhand remark, and aside, no
-matter how minor.  If someone mentions a number, a name, a date,
-a concern, or a suggestion, it stays.  Err on the side of
-keeping content rather than removing it.
+CONTENT FILTER — what to INCLUDE vs EXCLUDE:
 
-Preserve the original chronological flow and speaker sequence.
-Write in natural prose, one paragraph per contiguous topic or
-speaker turn.  Do not invent headings or segregate content by
-topic — this is a chronological cleaned transcript, not a
-reorganized summary.
+INCLUDE (substance):
+  - Technical data: numbers, specs, parameters, test results
+  - Decisions, conclusions, and agreements reached
+  - Disagreements, open questions, and concerns raised
+  - Action items and commitments (who does what by when)
+  - Key context that explains why a decision was made
 
-SPEAKER REFERENCES — CRITICAL:
-- ALWAYS use [spk:ID] format for speakers (e.g. [spk:0], [spk:1]).
-  The ID ONLY — never append the speaker's name.
-- NEVER use generic role words, pronouns, or descriptive phrases to
-  refer to speakers.  Every speaker attribution MUST use [spk:ID].
-- Example: "[spk:0] stated that the budget needs revision [12]."
-  NOT: "The speaker stated that the budget needs revision."
+EXCLUDE (procedure):
+  - Introductions, greetings, attendance, role descriptions
+  - Meeting logistics: scheduling, screen sharing, agenda order
+  - Meta-discussion: "let's move to the next topic", "I have a hard stop"
+  - Polite filler: thanking, praising, acknowledging without substance
+  - Repeated confirmations ("got it", "understood", "noted") with no new info
+  - Tangents that were explicitly dropped or deferred
 
-SENTENCE REFERENCES — CRITICAL:
-- Every paragraph, every factual claim, and every speaker attribution
-  in the Detail section MUST include [N] refs linking to the source
-  sentences in the transcript.
-- Do NOT write any line of Detail prose without at least one [N] ref.
-  If you cannot find a source sentence for a claim, re-evaluate whether
-  that claim actually appears in the transcript.
-- Place [N] refs after the sentence or clause they support, before
-  the period.
-- Example: "[spk:1] confirmed the Q4 deadline is December 15 [45,47]."
-  NOT: "[spk:1] confirmed the Q4 deadline is December 15." (missing ref)
+Err on the side of KEEPING content — when a statement contains any
+data point, opinion, or implication, keep it even if minor.  But
+pure procedural housekeeping (introductions, logistics, agenda
+navigation) should be removed or compressed to a single line.
+
+PARAGRAPH STRUCTURE — topic-based, NOT turn-based:
+
+Group related discussion into topic paragraphs, even if that means
+merging multiple speaker turns into one paragraph.  A paragraph
+should cover ONE topic thread from start to resolution (or deferral).
+
+WRITING STYLE — final answers only, no discussion journey:
+
+Your job is to state WHAT was decided, concluded, or found — NOT to
+recount WHO said what or HOW the discussion unfolded.  Strip out the
+Q&A process entirely.  If [spk:A] asked a question and [spk:B]
+answered, write only the answer.
+
+BAD (narrates the discussion journey):
+  [spk:A] asked about Topic X, noting Fact 1. [N]
+  [spk:B] explained that the reason is Condition C. [N]
+  [spk:A] confirmed that this means Outcome O. [N]
+
+GOOD (states the final answer directly):
+  Topic X operates under Condition C, resulting in Outcome O [N-N].
+
+BAD (attributes every fact to a speaker):
+  [spk:B] stated the capacity is N units. [spk:C] noted the cost is
+  $M. [spk:B] added that the timeline is D months.
+
+GOOD (states facts directly, speaker only for opinions/decisions):
+  Capacity is N units at a cost of $M with a D-month timeline [N-N].
+  [spk:B] recommended proceeding with Option A.
+
+BAD (every sentence gets a ref — noisy):
+  The system uses N units, each V m³ [ref].  The loading rate is R
+  kg/m³ with a D-day retention time [ref].
+
+GOOD (refs only on key data, combined):
+  The system uses N units of V m³ each at R kg/m³ loading with a
+  D-day retention time [ref-ref].
+
+INFERENCE RULES — what you MAY vs MAY NOT infer:
+
+MAY (simple, single-step, directly from stated numbers):
+  - "tripling X" → "saves roughly two-thirds"
+  - "A is 30% higher than B" → "B is roughly 23% lower than A"
+  - "raised from $5M to $8M" → "a $3M / 60% increase"
+
+MAY NOT (multi-step, domain-specific, or requires outside knowledge):
+  - Financial projections (NPV, IRR, payback period)
+  - Comparing options that were not directly compared in the meeting
+  - Drawing conclusions that require technical domain expertise
+    beyond what is stated in the transcript
+  - ANY inference where you cannot point to the exact source
+    sentences that contain the input numbers
+
+When in doubt, state the raw numbers and let the reader draw
+their own conclusions.
+
+SENTENCE REFERENCES:
+- Use [N] refs for key data points, numbers, decisions, and direct
+  quotes.  Do NOT add refs to every sentence — narrative context
+  and transitional prose do not need refs.
+- Place [N] at the end of the clause it supports.
+- Combine IDs: [67,70] or ranges [67-70].
+- NEVER invent or concatenate IDs.
 
 Output the Markdown document directly — no JSON wrapper, no markdown
 fences, no preamble.  Start immediately with ``## Summary``.
-
-For non-speakers (people mentioned but never appear as [spk:ID]
-in the transcript): use their name as mentioned.
 </task>"""
 
 
@@ -517,7 +568,7 @@ STEP 5 — Output JSON
 Output EXACTLY this JSON (no markdown fences, no extra text):
 
 {{
-  "title": "One-sentence meeting title capturing the core topic, key decision, or outcome",
+  "title": "Short title, max 8 words, capturing the core topic or outcome",
   "taxonomy": {{
     "dimension": "project",
     "explanation": "The user organizes collections by individual project. Each collection name is a distinct project identifier."
@@ -568,12 +619,27 @@ _MEETING_V3_SHARED_SYSTEM = (
     "the <task> explicitly asks for them."
     "\n\n"
     "CRITICAL — LANGUAGE: Always output in the SAME language as the "
-    "transcript."
+    "transcript.  NEVER switch to a different language — if the "
+    "transcript is in English, output MUST be in English; if in "
+    "Chinese, output MUST be in Chinese.  Outputting in a language "
+    "different from the transcript is a hard failure."
     "\n\n"
     "TRANSCRIPT FORMAT: Each line is [N] [spk:ID] {text} where [N] is "
     "a bare integer sentence number and [spk:ID] is a speaker identifier.  "
-    "Cite sentences as [67] (bare integer, no prefix).  Cite speakers as "
-    "[spk:ID] — the ID ONLY, never append the speaker's name."
+    "Cite sentences as [67] (bare integer, no prefix)."
+    "\n\n"
+    "SPEAKER REFERENCES:\n"
+    "- For meeting participants (those with [spk:X] in the transcript): "
+    "ALWAYS use [spk:ID].  NEVER use their name — you do not know it.\n"
+    "- For non-participants mentioned in the transcript (e.g. people "
+    "referenced but not present): use their name as mentioned.\n"
+    "- NEVER infer or guess that [spk:X] corresponds to a name mentioned "
+    "elsewhere in the transcript.  Even if a name appears frequently, "
+    "treat [spk:X] and the name as separate identities unless the "
+    "transcript text explicitly states the mapping (e.g. \"[spk:2] "
+    "introduced herself as Anjali\").  When in doubt, use [spk:ID].\n"
+    "- Use [spk:ID] only when attributing a claim, decision, or action "
+    "to a person.  Do NOT prefix every sentence with the speaker tag."
     "\n\n"
     "HARD RULES:\n"
     "- NEVER invent or guess sentence numbers or speaker IDs.  Only use "
@@ -872,7 +938,9 @@ This meeting covers multiple sections (listed in
 NOT include their content in your output.  Focus exclusively on
 <target-section>.
 
-Language: Same as the transcript.  Do not translate.
+Language: Output MUST be in the same language as the transcript.
+If the transcript is English, write in English.  If Chinese, write
+in Chinese.  NEVER switch languages — this is a hard failure.
 
 Produce a Markdown document with these sections:
 
@@ -920,37 +988,93 @@ Example:
 - [spk:0] reported Q3 revenue at $2.1M, a 15% increase YoY. [12,15]
 
 ## Detail
-A cleaned, condensed narrative of the discussion about this section.
-Remove only: filler words (um, uh, you know), verbatim repetitions,
-false starts, audio/tech checks, greetings, jokes, metaphors, and
-pure social small talk with zero business relevance.
+A condensed narrative of the discussion about this section.
+Write as a human note-taker would — synthesize discussion threads,
+do NOT reproduce the transcript turn by turn.
 
-Keep ALL substantive content — data, opinions, decisions,
-disagreements, questions, and action items.  Be thorough and
-detailed; this section may be long.  Write in natural prose, one
-paragraph per contiguous topic or speaker turn.  Preserve the
-original chronological flow.  Do NOT force sub-sections or bullet
-points — use paragraph breaks for topic transitions only.
+CONTENT FILTER — what to INCLUDE vs EXCLUDE:
 
-SPEAKER REFERENCES — CRITICAL:
-- ALWAYS use [spk:ID] format for speakers (e.g. [spk:0], [spk:1]).
-  The ID ONLY — never append the speaker's name.
-- NEVER use generic role words, pronouns, or descriptive phrases to
-  refer to speakers.  Every speaker attribution MUST use [spk:ID].
-- Example: "[spk:0] stated that the budget needs revision [12]."
-  NOT: "The speaker stated that the budget needs revision."
+INCLUDE (substance):
+  - Technical data: numbers, specs, parameters, test results
+  - Decisions, conclusions, and agreements reached
+  - Disagreements, open questions, and concerns raised
+  - Action items and commitments (who does what by when)
+  - Key context that explains why a decision was made
 
-SENTENCE REFERENCES — CRITICAL:
-- Every paragraph, every factual claim, and every speaker attribution
-  in the Detail section MUST include [N] refs linking to the source
-  sentences in the transcript.
-- Do NOT write any line of Detail prose without at least one [N] ref.
-  If you cannot find a source sentence for a claim, re-evaluate whether
-  that claim actually appears in the transcript.
-- Place [N] refs after the sentence or clause they support, before
-  the period.
-- Example: "[spk:1] confirmed the Q4 deadline is December 15 [45,47]."
-  NOT: "[spk:1] confirmed the Q4 deadline is December 15." (missing ref)
+EXCLUDE (procedure):
+  - Introductions, greetings, attendance, role descriptions
+  - Meeting logistics: scheduling, screen sharing, agenda order
+  - Meta-discussion: "let's move to the next topic", "I have a hard stop"
+  - Polite filler: thanking, praising, acknowledging without substance
+  - Repeated confirmations ("got it", "understood", "noted") with no new info
+  - Tangents that were explicitly dropped or deferred
+
+PARAGRAPH STRUCTURE — topic-based, NOT turn-based:
+
+Group related discussion into topic paragraphs, even if that means
+merging multiple speaker turns into one paragraph.  A paragraph
+should cover ONE topic thread from start to resolution (or deferral).
+
+When the Detail section covers multiple distinct topics, use markdown
+sub-headings (### level) to separate them.  ALWAYS leave a blank
+line between a sub-heading and the paragraph that follows it.
+
+WRITING STYLE — final answers only, no discussion journey:
+
+Your job is to state WHAT was decided, concluded, or found — NOT to
+recount WHO said what or HOW the discussion unfolded.  Strip out the
+Q&A process entirely.  If [spk:A] asked a question and [spk:B]
+answered, write only the answer.
+
+BAD (narrates the discussion journey):
+  [spk:A] asked about Topic X, noting Fact 1. [N]
+  [spk:B] explained that the reason is Condition C. [N]
+  [spk:A] confirmed that this means Outcome O. [N]
+
+GOOD (states the final answer directly):
+  Topic X operates under Condition C, resulting in Outcome O [N-N].
+
+BAD (attributes every fact to a speaker):
+  [spk:B] stated the capacity is N units. [spk:C] noted the cost is
+  $M. [spk:B] added that the timeline is D months.
+
+GOOD (states facts directly, speaker only for opinions/decisions):
+  Capacity is N units at a cost of $M with a D-month timeline [N-N].
+  [spk:B] recommended proceeding with Option A.
+
+BAD (every sentence gets a ref — noisy):
+  The system uses N units, each V m³ [ref].  The loading rate is R
+  kg/m³ with a D-day retention time [ref].
+
+GOOD (refs only on key data, combined):
+  The system uses N units of V m³ each at R kg/m³ loading with a
+  D-day retention time [ref-ref].
+
+INFERENCE RULES — what you MAY vs MAY NOT infer:
+
+MAY (simple, single-step, directly from stated numbers):
+  - "tripling X" → "saves roughly two-thirds"
+  - "A is 30% higher than B" → "B is roughly 23% lower than A"
+  - "raised from $5M to $8M" → "a $3M / 60% increase"
+
+MAY NOT (multi-step, domain-specific, or requires outside knowledge):
+  - Financial projections (NPV, IRR, payback period)
+  - Comparing options that were not directly compared in the meeting
+  - Drawing conclusions that require technical domain expertise
+    beyond what is stated in the transcript
+  - ANY inference where you cannot point to the exact source
+    sentences that contain the input numbers
+
+When in doubt, state the raw numbers and let the reader draw
+their own conclusions.
+
+SENTENCE REFERENCES:
+- Use [N] refs for key data points, numbers, decisions, and direct
+  quotes.  Do NOT add refs to every sentence — narrative context
+  and transitional prose do not need refs.
+- Place [N] at the end of the clause it supports.
+- Combine IDs: [67,70] or ranges [67-70].
+- NEVER invent or concatenate IDs.
 </task>
 
 <focused-sentences>
@@ -962,7 +1086,13 @@ SENTENCE REFERENCES — CRITICAL:
     When in doubt, rely on [FOCUS] sentences.  The full
     <transcript> above provides additional background — use it
     only to confirm topic boundaries, never to pull in extra
-    content beyond the sentences listed here. ===
+    content beyond the sentences listed here.
+
+    IMPORTANT: These sentences are listed chronologically for
+    reference, NOT as a writing outline.  In your Detail section,
+    group them by topic — merge related sentences from different
+    speakers into the same paragraph.  Do NOT write one paragraph
+    per sentence or per speaker turn. ===
 {merged_sentences}
 </focused-sentences>
 
