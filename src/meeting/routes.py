@@ -160,7 +160,14 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
     )
     path = store.save_audio(meeting_id, content, ext, original_filename=file.filename)
     logger.info("[UPLOAD-AUDIO] Saved to %s", path)
-    updated = store.update_meeting(meeting_id, mode=MeetingMode.upload, status=MeetingStatus.created)
+    updated = store.update_meeting(
+        meeting_id,
+        mode=MeetingMode.upload,
+        # Only reset to created if there's no transcript yet (i.e. pure upload flow).
+        # When coming from record mode, save_realtime_transcript already set status
+        # to completed — keep it so the frontend can immediately call /transcribe.
+        **({} if meeting.status == MeetingStatus.completed else {"status": MeetingStatus.created}),
+    )
     logger.info("[UPLOAD-AUDIO] Meeting %s updated: status=%s audio_path=%s", meeting_id, updated.status.value, updated.audio_path)
     return updated.model_dump()
 

@@ -22,16 +22,52 @@ def _strip_think(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
+def _extract_json_from_raw(raw: str) -> str | None:
+    """Try to extract a JSON object from raw text (may contain <think> tags).
+
+    Uses ``JSONDecoder.raw_decode()`` for proper validation — avoids false
+    positives from bare ``{`` characters in thinking text.  Returns the JSON
+    substring or ``None`` if no valid object is found.
+    """
+    import json as _json
+
+    decoder = _json.JSONDecoder()
+    for idx, ch in enumerate(raw):
+        if ch == "{":
+            try:
+                _obj, end = decoder.raw_decode(raw[idx:])
+                if isinstance(_obj, dict):
+                    return raw[idx : idx + end]
+            except (_json.JSONDecodeError, ValueError):
+                continue
+    return None
+
+
 @llm_registry.register("openai_compatible", display_name="OpenAI-Compatible")
 class OpenAICompatLLM(LLMProvider):
     def __init__(self, config: LLMProviderConfig):
+        self._base_url = config.base_url.strip()
         self._client = OpenAI(
-            base_url=config.base_url.strip(),
+            base_url=self._base_url,
             api_key=config.api_key.strip(),
             timeout=httpx.Timeout(1800, connect=30),
         )
         self._model = (config.default_model or config.model).strip()
         self._default_max_tokens = getattr(config, "max_tokens", 0) or 0
+        # Detect DashScope endpoints — they use a different thinking parameter
+        # format (`enable_thinking`) instead of DeepSeek's native format.
+        self._is_dashscope = "dashscope.aliyuncs.com" in self._base_url
+
+    def _build_thinking_extra(self, thinking: bool) -> dict:
+        """Return the correct ``extra_body`` dict for thinking mode.
+
+        DashScope's OpenAI-compatible API expects ``{"enable_thinking": bool}``,
+        while DeepSeek's native API uses
+        ``{"thinking": {"type": "enabled" | "disabled"}}``.
+        """
+        if self._is_dashscope:
+            return {"enable_thinking": thinking}
+        return {"thinking": {"type": "enabled" if thinking else "disabled"}}
 
     def _resolve_temperature(self, temperature: float | None) -> float:
         return temperature if temperature is not None else _DEFAULT_TEMPERATURE
@@ -64,20 +100,36 @@ class OpenAICompatLLM(LLMProvider):
         if response_format:
             kwargs["response_format"] = response_format
         if thinking is not None:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+            kwargs["extra_body"] = self._build_thinking_extra(thinking)
 
         response = self._client.chat.completions.create(**kwargs)
         if not response.choices:
             return ""
         msg = response.choices[0].message
         text = msg.content or ""
-        # DeepSeek thinking mode: content may be empty while reasoning_content
-        # holds the actual response
+        # Some providers (e.g. DashScope with thinking mode) return
+        # empty content when thinking is enabled, putting the actual
+        # response inside reasoning_content.  Fall back to reasoning,
+        # and when json_mode was requested, try extracting JSON directly
+        # from the raw reasoning (answer may be inside think tags).
         if not text.strip():
             reasoning = getattr(msg, "reasoning_content", None)
             if reasoning:
                 logger.info("LLM generate: content empty, using reasoning_content (%d chars)", len(reasoning))
-                text = reasoning
+                # When json_mode was requested, try extracting JSON from raw
+                # reasoning FIRST (before stripping think tags).  DashScope
+                # may put the JSON answer inside <think>...</think> in
+                # reasoning_content, and _strip_think() would delete it.
+                if response_format:
+                    json_text = _extract_json_from_raw(reasoning)
+                    if json_text:
+                        logger.info("LLM generate: extracted JSON from raw reasoning (%d chars)", len(json_text))
+                        return json_text
+                stripped = _strip_think(reasoning)
+                if stripped.strip():
+                    text = stripped
+                else:
+                    text = reasoning
         if not text.strip():
             logger.warning("LLM generate: empty response from model=%s (content=%r, reasoning=%r)",
                            self._model, msg.content, getattr(msg, "reasoning_content", None))
@@ -161,7 +213,7 @@ class OpenAICompatLLM(LLMProvider):
         if response_format:
             kwargs["response_format"] = response_format
         if thinking is not None:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+            kwargs["extra_body"] = self._build_thinking_extra(thinking)
 
         stream = self._client.chat.completions.create(**kwargs)
         in_think = False
@@ -243,7 +295,7 @@ class OpenAICompatLLM(LLMProvider):
         if response_format:
             kwargs["response_format"] = response_format
         if thinking is not None:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+            kwargs["extra_body"] = self._build_thinking_extra(thinking)
 
         stream = self._client.chat.completions.create(**kwargs)
         in_think = False
