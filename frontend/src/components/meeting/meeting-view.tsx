@@ -118,6 +118,18 @@ export function MeetingView() {
   const recorder = useAudioRecorder(realtimeEnabled && hasRealtimeProvider ? transcription.sendAudioData : undefined)
   const mediaBarRef = useRef<MediaBarHandle>(null)
 
+  // Auto-open floating transcript panel when live transcription starts
+  const prevIsTranscribingRef = useRef(false)
+  useEffect(() => {
+    if (realtimeEnabled && hasRealtimeProvider) {
+      // Open on the rising edge: false → true transition
+      if (transcription.isTranscribing && !prevIsTranscribingRef.current) {
+        setFloatingOpen(true)
+      }
+    }
+    prevIsTranscribingRef.current = transcription.isTranscribing
+  }, [realtimeEnabled, hasRealtimeProvider, transcription.isTranscribing])
+
   // When realtime transcription finalizes (user stops recording), the hook
   // persists segments to the backend. Refetch the meeting so the new
   // transcript_path / status flip the Summarize + Allocate buttons visible.
@@ -294,7 +306,7 @@ export function MeetingView() {
     }
   }, [meeting?.processing_state, activeMeeting, fetchTranscript])
 
-  // When recording stops, upload audio
+  // When recording stops, upload audio then auto-trigger file transcription
   useEffect(() => {
     if (recorder.audioBlob && activeMeeting) {
       const file = new File([recorder.audioBlob], "recording.webm", { type: recorder.audioBlob.type })
@@ -305,8 +317,21 @@ export function MeetingView() {
           toast.success("Audio uploaded")
           recorder.reset()
           fetchMeetings()
+
+          // Auto-trigger file transcription if a cloud/file provider is configured.
+          // This replaces the realtime WebSocket segments with a full-quality
+          // transcription (speaker diarization, punctuation, etc.) from the
+          // configured cloud API, then proceeds to Summary & Section generation.
+          if (hasFileProvider) {
+            transcribeMeeting(activeMeeting, languageHintsRef.current)
+              .then(() => {
+                toast.info("File transcription started")
+                fetchMeeting(activeMeeting)
+              })
+              .catch((err) => toast.error(`Transcription failed: ${err instanceof Error ? err.message : String(err)}`))
+          }
         })
-        .catch((err) => toast.error(`Upload failed: ${err}`))
+        .catch((err) => toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`))
     }
   }, [recorder.audioBlob])
 
