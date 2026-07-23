@@ -332,13 +332,30 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
             len(sentences), meeting_id,
         )
 
-        # Auto-trigger summary generation
-        task_manager.create_task(
-            filename=f"meeting_summary:{meeting_id}",
-            task_type="meeting_summary",
-            meeting_id=meeting_id,
+        # Auto-trigger summary generation — only if there's no file transcription
+        # provider configured. When a file provider exists, the upload-audio →
+        # transcribe → transcribe_handler path will trigger summary #2 with
+        # higher-quality segments (punctuation, diarization), making summary #1
+        # a wasted LLM call.
+        from src.config import get_config
+        cfg = get_config()
+        has_file_provider = (
+            cfg.transcription.active_file_provider is not None
+            or cfg.transcription.get_local_file_provider() is not None
         )
-        logger.info("[SAVE-TRANSCRIPT] Auto-triggered meeting_summary for %s", meeting_id)
+        if not has_file_provider:
+            task_manager.create_task(
+                filename=f"meeting_summary:{meeting_id}",
+                task_type="meeting_summary",
+                meeting_id=meeting_id,
+            )
+            logger.info("[SAVE-TRANSCRIPT] Auto-triggered meeting_summary for %s (no file provider)", meeting_id)
+        else:
+            logger.info(
+                "[SAVE-TRANSCRIPT] Skipping summary #1 for %s — file provider configured, "
+                "summary #2 will run after file transcription",
+                meeting_id,
+            )
     except Exception as e:
         logger.warning("[SAVE-TRANSCRIPT] Failed to auto-trigger summary (non-fatal): %s", e)
 

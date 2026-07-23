@@ -40,11 +40,17 @@ export function useTranscription(meetingId: string | null) {
   const meetingIdRef = useRef(meetingId)
   meetingIdRef.current = meetingId
 
+  // For time offset: the hook needs to know the current recording duration
+  // when a new session starts.  Store the ref so the calling component
+  // can update it (e.g. from useAudioRecorder.duration).
+  const durationRef = useRef<number>(0)
+
   // Reset segments when meeting changes
   const prevMeetingIdRef = useRef(meetingId)
   if (prevMeetingIdRef.current !== meetingId) {
     prevMeetingIdRef.current = meetingId
     segmentMapRef.current.clear()
+    durationRef.current = 0
     setState({
       isConnected: false,
       isTranscribing: false,
@@ -75,7 +81,8 @@ export function useTranscription(meetingId: string | null) {
       wsUrl += `?${params}`
     }
 
-    console.log("[RealtimeTranscription] Connecting to", wsUrl)
+    const offset = durationRef.current
+
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
@@ -96,8 +103,8 @@ export function useTranscription(meetingId: string | null) {
         if (data.type === "transcript") {
           const key = makeKey(data)
           const seg: InternalSegment = {
-            start: data.start ?? 0,
-            end: data.end ?? 0,
+            start: (data.start ?? 0) + offset,
+            end: (data.end ?? 0) + offset,
             text: data.text ?? "",
             speaker_id: data.speaker_id,
             __key: key,
@@ -124,15 +131,6 @@ export function useTranscription(meetingId: string | null) {
             .sort((a, b) => b.start - a.start)
           const partialText = partialEntries[0]?.text ?? ""
 
-          console.log(
-            "[RealtimeTranscription]",
-            data.is_final ? "FINAL" : "partial",
-            "key=" + key,
-            "finals=" + finals.length,
-            "partial=" + partialText.slice(0, 30),
-            "mapSize=" + segmentMapRef.current.size,
-          )
-
           setState((prev) => ({
             ...prev,
             segments: finals,
@@ -156,9 +154,22 @@ export function useTranscription(meetingId: string | null) {
   }, [])
 
   const startTranscription = useCallback((languageHints?: string[]) => {
-    console.log("[RealtimeTranscription] Starting transcription")
-    segmentMapRef.current.clear()
-    setState({ isConnected: false, isTranscribing: true, segments: [], currentPartial: "", error: null })
+    // Preserve existing segments from previous sessions — we APPEND
+    // new segments on toggle-reopen, not replace.
+    const existingFinals = Array.from(segmentMapRef.current.values())
+      .filter((s) => !s.__partial)
+      .sort((a, b) => a.start - b.start)
+    // Keep existing finals in the map; clear only partials.
+    for (const [key, seg] of segmentMapRef.current) {
+      if (seg.__partial) segmentMapRef.current.delete(key)
+    }
+    setState({
+      isConnected: false,
+      isTranscribing: true,
+      segments: existingFinals.map(({ __key, __partial, ...rest }) => rest),
+      currentPartial: "",
+      error: null,
+    })
     connect(languageHints)
   }, [connect])
 
@@ -242,5 +253,6 @@ export function useTranscription(meetingId: string | null) {
     sendAudioData,
     setSegments,
     setOnFinalized,
+    durationRef,
   }
 }
