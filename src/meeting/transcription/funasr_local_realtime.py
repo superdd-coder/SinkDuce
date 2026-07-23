@@ -83,7 +83,7 @@ class FunASRLocalRealtimeTranscription(RealtimeTranscriptionProvider):
         # Sentence tracking — accumulate incremental text into one segment
         self._sentence_counter: int = 0
         self._accumulated_text: str = ""
-        self._current_key: str = ""
+        self._current_key: str = "local-1"   # first key, set once in __init__
         self._sentence_start_s: float = 0.0
         self._silence_chunks: int = 0
         self._last_text_end_s: float = 0.0  # end time of last chunk that had text
@@ -98,9 +98,11 @@ class FunASRLocalRealtimeTranscription(RealtimeTranscriptionProvider):
         self._cache = {}
         self._buffer = bytearray()
         self._audio_pos_s = 0.0
-        self._sentence_counter = 0
+        # Do NOT reset _sentence_counter / _current_key here — they must
+        # persist across toggle (reconnect) cycles so that new segments
+        # get unique keys that don't collide with previously finalized
+        # segments in the frontend's segmentMapRef.
         self._accumulated_text = ""
-        self._current_key = "local-1"
         self._sentence_start_s = 0.0
         self._silence_chunks = 0
         self._last_text_end_s = 0.0

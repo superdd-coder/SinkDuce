@@ -36,6 +36,12 @@ export function useTranscription(meetingId: string | null) {
   // truth for "what segments exist"; setState just mirrors it.
   const segmentMapRef = useRef<Map<string, InternalSegment>>(new Map())
 
+  // Incremented on each startTranscription() call so we can prefix every
+  // key with the session number.  This prevents keys from a new session
+  // (e.g. DashScope sentence_id or FunASR local-N) from colliding with
+  // keys that are already in the map from a previous session.
+  const sessionCounterRef = useRef(0)
+
   const wsRef = useRef<WebSocket | null>(null)
   const meetingIdRef = useRef(meetingId)
   meetingIdRef.current = meetingId
@@ -50,6 +56,7 @@ export function useTranscription(meetingId: string | null) {
   if (prevMeetingIdRef.current !== meetingId) {
     prevMeetingIdRef.current = meetingId
     segmentMapRef.current.clear()
+    sessionCounterRef.current = 0
     durationRef.current = 0
     setState({
       isConnected: false,
@@ -82,6 +89,9 @@ export function useTranscription(meetingId: string | null) {
     }
 
     const offset = durationRef.current
+    // Capture the session counter for this connection so keys are
+    // namespaced per session and never collide across toggles.
+    const session = sessionCounterRef.current
 
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
@@ -101,7 +111,7 @@ export function useTranscription(meetingId: string | null) {
           return
         }
         if (data.type === "transcript") {
-          const key = makeKey(data)
+          const key = `s${session}:${makeKey(data)}`
           const seg: InternalSegment = {
             start: (data.start ?? 0) + offset,
             end: (data.end ?? 0) + offset,
@@ -154,6 +164,10 @@ export function useTranscription(meetingId: string | null) {
   }, [])
 
   const startTranscription = useCallback((languageHints?: string[]) => {
+    // Increment session counter so new segments get unique keys that
+    // cannot collide with keys already in the map from previous sessions.
+    sessionCounterRef.current += 1
+
     // Preserve existing segments from previous sessions — we APPEND
     // new segments on toggle-reopen, not replace.
     const existingFinals = Array.from(segmentMapRef.current.values())
