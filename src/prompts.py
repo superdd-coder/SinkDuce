@@ -1075,6 +1075,26 @@ SENTENCE REFERENCES:
 - Place [N] at the end of the clause it supports.
 - Combine IDs: [67,70] or ranges [67-70].
 - NEVER invent or concatenate IDs.
+
+FORMAT — the Detail section MUST use this structure:
+
+When the section covers ONE topic:
+  ## Detail
+  A standalone paragraph (no sub-heading needed).
+
+When the section covers MULTIPLE topics:
+  ## Detail
+  ### Topic A Name
+  Paragraph describing topic A.  Use [N] refs where appropriate.
+
+  ### Topic B Name
+  Paragraph describing topic B.  Use [N] refs where appropriate.
+
+CRITICAL: Every sub-heading (###) MUST be followed by a blank line
+before the paragraph begins.  Each paragraph MUST be separated from
+the next sub-heading by a blank line.  Without these blank lines the
+output is unreadable wall-of-text — this is a hard formatting
+requirement.
 </task>
 
 <focused-sentences>
