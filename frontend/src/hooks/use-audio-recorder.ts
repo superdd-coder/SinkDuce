@@ -61,42 +61,51 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
 
   const startRecording = useCallback(async () => {
     try {
-      let systemStream: MediaStream | null = null
+      // Step 1: mic — silent if already permitted, one-time prompt otherwise.
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+
+      // Step 2: system audio — required.  Browser forces a picker dialog
+      // every time; user MUST pick a tab/window with "Share audio" checked.
+      let systemAudioStream: MediaStream
       try {
-        systemStream = await navigator.mediaDevices.getDisplayMedia({
+        const systemStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
           audio: true,
         })
-      } catch {
-        // User declined screen share, fall back to mic only
-      }
-
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-
-      let finalStream: MediaStream
-      if (systemStream && systemStream.getAudioTracks().length > 0) {
-        const audioCtx = new AudioContext({ sampleRate: 16000 })
-        audioCtxRef.current = audioCtx
-        const destination = audioCtx.createMediaStreamDestination()
-
-        const micSource = audioCtx.createMediaStreamSource(micStream)
-        micSource.connect(destination)
-
-        const sysSource = audioCtx.createMediaStreamSource(
-          new MediaStream(systemStream.getAudioTracks())
-        )
-        sysSource.connect(destination)
-
-        finalStream = destination.stream
         systemStream.getVideoTracks().forEach((t) => t.stop())
-      } else {
-        finalStream = micStream
+        const audioTracks = systemStream.getAudioTracks()
+        if (audioTracks.length === 0) {
+          throw new Error(
+            "No system audio captured. Please check \"Share audio\" when selecting a window."
+          )
+        }
+        systemAudioStream = new MediaStream(audioTracks)
+      } catch (e) {
+        // If the inner error is already our "No system audio" message, re-throw it.
+        // Otherwise it's a DOMException (user cancelled) — throw a friendlier message.
+        if (e instanceof Error && e.message.startsWith("No system audio")) throw e
+        throw new Error(
+          "Recording requires system audio. Please select a window and enable \"Share audio\"."
+        )
       }
+
+      // Mix mic + system audio
+      const audioCtx = new AudioContext({ sampleRate: 16000 })
+      audioCtxRef.current = audioCtx
+      const destination = audioCtx.createMediaStreamDestination()
+      const micSource = audioCtx.createMediaStreamSource(micStream)
+      micSource.connect(destination)
+      const sysSource = audioCtx.createMediaStreamSource(systemAudioStream)
+      sysSource.connect(destination)
+      const finalStream: MediaStream = destination.stream
 
       streamRef.current = finalStream
 
-      // Set up real-time PCM capture via AudioWorklet for streaming transcription
-      if (onAudioChunkRef.current) {
+      // Set up real-time PCM capture via AudioWorklet for streaming transcription.
+      // ALWAYS build the pipeline — even if Live captions is off at record start.
+      // The user may toggle it on mid-recording; without the pipeline PCM chunks
+      // would never reach the WebSocket.
+      {
         try {
           const workletCtx = new AudioContext({ sampleRate: 16000 })
           audioCtxRef.current = workletCtx

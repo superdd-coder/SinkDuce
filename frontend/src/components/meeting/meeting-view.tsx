@@ -118,6 +118,10 @@ export function MeetingView() {
   const recorder = useAudioRecorder(realtimeEnabled && hasRealtimeProvider ? transcription.sendAudioData : undefined)
   const mediaBarRef = useRef<MediaBarHandle>(null)
 
+  // Keep transcription.durationRef in sync with recording duration so
+  // toggle-reopen timestamps land at current position, not at 0.
+  transcription.durationRef.current = recorder.duration
+
   // Auto-open floating transcript panel when live transcription starts
   const prevIsTranscribingRef = useRef(false)
   useEffect(() => {
@@ -158,18 +162,19 @@ export function MeetingView() {
     }
   }
 
-  // Start/stop realtime transcription when recording starts/stops
-  const prevRecordingRef = useRef(false)
+  // Start/stop realtime transcription when recording starts/stops,
+  // and when realtimeEnabled is toggled during recording.
   useEffect(() => {
-    const wasRecording = prevRecordingRef.current
-    prevRecordingRef.current = recorder.isRecording
-    if (!hasRealtimeProvider || !realtimeEnabled) return
-    if (recorder.isRecording && !wasRecording) {
+    if (!hasRealtimeProvider) return
+
+    const shouldTranscribe = recorder.isRecording && realtimeEnabled
+
+    if (shouldTranscribe && !transcription.isTranscribing) {
       transcription.startTranscription(["auto"])
-    } else if (!recorder.isRecording && wasRecording) {
+    } else if (!shouldTranscribe && transcription.isTranscribing) {
       transcription.stopTranscription()
     }
-  }, [recorder.isRecording, hasRealtimeProvider, realtimeEnabled])
+  }, [recorder.isRecording, hasRealtimeProvider, realtimeEnabled, transcription.isTranscribing])
 
   // Fetch meetings list
   const fetchMeetings = useCallback(async () => {
@@ -653,6 +658,7 @@ export function MeetingView() {
                 onChangeLanguageHints={updateLanguageHints}
                 showLanguageSelector={!!meeting.audio_path}
                 onTimeUpdate={setPlaybackTime}
+                recorderError={recorder.error}
               />
             </div>
 

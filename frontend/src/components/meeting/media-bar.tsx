@@ -38,6 +38,7 @@ interface MediaBarProps {
   onChangeLanguageHints?: (hints: string[]) => void
   showLanguageSelector?: boolean
   onTimeUpdate?: (time: number) => void
+  recorderError?: string | null
 }
 
 export interface MediaBarHandle {
@@ -75,6 +76,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   onChangeLanguageHints,
   showLanguageSelector,
   onTimeUpdate,
+  recorderError,
 }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -157,26 +159,43 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   // Recording state
   if (isRecording || isPaused) {
     return (
-      <div className="flex items-center gap-3 py-3 px-0">
-        <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
-        <span className="t-mono-family text-sm tabular-nums">{formatDuration(duration)}</span>
-        <div className="flex-1 flex items-center gap-1">
-          {Array.from({ length: 20 }).map((_, i) => (
-            <div
-              key={i}
-              className="w-1 bg-primary/40 rounded-full animate-pulse"
-              style={{ height: `${Math.random() * 16 + 4}px`, animationDelay: `${i * 50}ms` }}
-            />
-          ))}
+      <div className="flex flex-col gap-2 py-3 px-0">
+        <div className="flex items-center gap-3">
+          <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
+          <span className="t-mono-family text-sm tabular-nums">{formatDuration(duration)}</span>
+          <div className="flex-1 flex items-center gap-1">
+            {Array.from({ length: 20 }).map((_, i) => (
+              <div
+                key={i}
+                className="w-1 bg-primary/40 rounded-full animate-pulse"
+                style={{ height: `${Math.random() * 16 + 4}px`, animationDelay: `${i * 50}ms` }}
+              />
+            ))}
+          </div>
+          <Button variant="outline" size="sm" onClick={isPaused ? onResumeRecord : onPauseRecord}>
+            <Pause className="h-4 w-4 mr-1" />
+            {isPaused ? "Resume" : "Pause"}
+          </Button>
+          <Button variant="destructive" size="sm" onClick={onStopRecord}>
+            <Square className="h-4 w-4 mr-1" />
+            Stop
+          </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={isPaused ? onResumeRecord : onPauseRecord}>
-          <Pause className="h-4 w-4 mr-1" />
-          {isPaused ? "Resume" : "Pause"}
-        </Button>
-        <Button variant="destructive" size="sm" onClick={onStopRecord}>
-          <Square className="h-4 w-4 mr-1" />
-          Stop
-        </Button>
+        {hasRealtimeProvider && onToggleRealtime && (
+          <button
+            type="button"
+            onClick={onToggleRealtime}
+            className={cn(
+              "flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors self-start",
+              realtimeEnabled
+                ? "border-primary/30 text-primary"
+                : "border-border text-muted-foreground"
+            )}
+          >
+            <div className={cn("w-2 h-2 rounded-full", realtimeEnabled ? "bg-green-500" : "bg-muted-foreground/30")} />
+            Live captions
+          </button>
+        )}
       </div>
     )
   }
@@ -425,7 +444,14 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 
   // No audio — upload / record
   return (
-    <div className="flex items-center gap-2 py-3 px-0">
+    <div className="flex flex-col gap-2 py-3 px-0">
+      {recorderError && (
+        <div className="flex items-center gap-2 p-3 border border-destructive/50 rounded-lg bg-destructive/10 text-destructive">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span className="text-sm flex-1">{recorderError}</span>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
       <input
         ref={inputRef}
         type="file"
@@ -461,6 +487,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
           Live captions
         </button>
       )}
+      </div>
     </div>
   )
 })
