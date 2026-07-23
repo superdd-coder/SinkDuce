@@ -1,9 +1,10 @@
 import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from "react"
 import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages } from "lucide-react"
+import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages, Trash2 } from "lucide-react"
 import type { MeetingStatus, HotWordsLibrarySummary, LanguageHintOption } from "@/api/client"
 
 interface MediaBarProps {
@@ -39,6 +40,7 @@ interface MediaBarProps {
   showLanguageSelector?: boolean
   onTimeUpdate?: (time: number) => void
   recorderError?: string | null
+  onDiscard?: () => void
 }
 
 export interface MediaBarHandle {
@@ -77,9 +79,12 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   showLanguageSelector,
   onTimeUpdate,
   recorderError,
+  onDiscard,
 }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
 
   // Hot Words dropdown
   const [hwOpen, setHwOpen] = useState(false)
@@ -176,10 +181,16 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             <Pause className="h-4 w-4 mr-1" />
             {isPaused ? "Resume" : "Pause"}
           </Button>
-          <Button variant="destructive" size="sm" onClick={onStopRecord}>
+          <Button variant="default" size="sm" onClick={onStopRecord}>
             <Square className="h-4 w-4 mr-1" />
-            Stop
+            Finish
           </Button>
+          {onDiscard && (
+            <Button variant="destructive" size="sm" onClick={() => setDiscardConfirmOpen(true)}>
+              <Trash2 className="h-4 w-4 mr-1" />
+              Discard
+            </Button>
+          )}
         </div>
         {hasRealtimeProvider && onToggleRealtime && (
           <button
@@ -195,6 +206,22 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             <div className={cn("w-2 h-2 rounded-full", realtimeEnabled ? "bg-green-500" : "bg-muted-foreground/30")} />
             Live captions
           </button>
+        )}
+        {onDiscard && (
+          <Dialog open={discardConfirmOpen} onOpenChange={setDiscardConfirmOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Discard Recording</DialogTitle>
+              </DialogHeader>
+              <p className="text-sm text-muted-foreground">
+                This will stop the recording and permanently delete all audio, captions, and transcript data. This action cannot be undone.
+              </p>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setDiscardConfirmOpen(false)}>Cancel</Button>
+                <Button variant="destructive" onClick={() => { setDiscardConfirmOpen(false); onDiscard() }}>Discard</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
         )}
       </div>
     )

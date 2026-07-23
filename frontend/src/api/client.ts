@@ -762,6 +762,12 @@ export const deleteMeeting = (id: string) =>
     method: "DELETE",
   })
 
+
+export const discardMeetingRecording = (id: string) =>
+  request<Meeting>(`/meetings/${id}/discard`, {
+    method: "POST",
+  })
+
 export const uploadMeetingAudio = async (id: string, file: File) => {
   const formData = new FormData()
   formData.append("file", file)

@@ -117,6 +117,20 @@ async def delete_meeting(meeting_id: str):
     return {"message": "Meeting deleted"}
 
 
+
+@router.post("/meetings/{meeting_id}/discard")
+async def discard_meeting_recording(meeting_id: str):
+    """Discard all recording data: stop recording, delete audio + transcript, reset to 'created'."""
+    logger.info("[DISCARD] Meeting %s", meeting_id)
+    try:
+        meeting = store.discard_recording(meeting_id)
+    except FileNotFoundError as exc:
+        logger.warning("[DISCARD] Meeting %s NOT FOUND", meeting_id)
+        return {"error": str(exc)}
+    logger.info("[DISCARD] Meeting %s discarded successfully", meeting_id)
+    return meeting.model_dump()
+
+
 @router.put("/meetings/{meeting_id}")
 async def update_meeting(meeting_id: str, body: dict = Body()):
     logger.info("[UPDATE] Meeting %s fields=%s", meeting_id, list(body.keys()))

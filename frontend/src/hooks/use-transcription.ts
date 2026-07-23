@@ -103,6 +103,8 @@ export function useTranscription(meetingId: string | null) {
 
     ws.onmessage = (event) => {
       try {
+        // Ignore messages after discard (ws.close is async, callbacks may still fire)
+        if (!wsRef.current) return
         const data = JSON.parse(event.data)
         if (data.error) {
           console.error("[RealtimeTranscription] Server error:", data.error)
@@ -187,8 +189,25 @@ export function useTranscription(meetingId: string | null) {
     connect(languageHints)
   }, [connect])
 
-  const stopTranscription = useCallback(() => {
-    console.log("[RealtimeTranscription] Stopping transcription")
+  const stopTranscription = useCallback((opts?: { discard?: boolean }) => {
+    const discard = opts?.discard ?? false
+    console.log("[RealtimeTranscription] Stopping transcription", discard ? "(discard)" : "")
+
+    if (discard) {
+      // Discard mode: close WebSocket immediately, clear everything, skip save.
+      segmentMapRef.current.clear()
+      sessionCounterRef.current = 0
+      setState({
+        isConnected: false,
+        isTranscribing: false,
+        segments: [],
+        currentPartial: "",
+        error: null,
+      })
+      disconnect()
+      return
+    }
+
     // Promote any still-partial segments to final so the user's last
     // sentence is captured in the transcript when they stop recording.
     for (const seg of segmentMapRef.current.values()) {

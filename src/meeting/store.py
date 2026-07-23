@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import Meeting, MeetingMode, TranscriptionResult
+from .models import Meeting, MeetingMode, MeetingStatus, ProcessingState, GenerationState, TranscriptionResult
 from .webm_fixer import fix_webm_duration
 
 logger = logging.getLogger("meeting.store")
@@ -261,3 +261,65 @@ def delete_pipeline_data(meeting_id: str) -> None:
                 if md.exists():
                     md.unlink()
     logger.info("Deleted pipeline data for meeting %s", meeting_id)
+
+
+def discard_recording(meeting_id: str) -> Meeting:
+    """Delete all recording-related data and reset the meeting to 'created'.
+
+    Removes audio file, transcript, pipeline data (sentences, section mds),
+    summary, notes, and allocated-collection metadata.  The meeting record
+    itself is kept so the user can start a new recording in the same slot.
+    """
+    meeting = get_meeting(meeting_id)
+    if meeting is None:
+        raise FileNotFoundError(f"Meeting {meeting_id} not found")
+
+    # 1. Delete audio file
+    if meeting.audio_path:
+        p = Path(meeting.audio_path)
+        if p.exists():
+            p.unlink()
+            logger.info("[DISCARD] Deleted audio %s for meeting %s", p, meeting_id)
+
+    # 2. Delete transcript file
+    if meeting.transcript_path:
+        p = Path(meeting.transcript_path)
+        if p.exists():
+            p.unlink()
+            logger.info("[DISCARD] Deleted transcript %s for meeting %s", p, meeting_id)
+
+    # 3. Delete pipeline data (sentences, section mds)
+    try:
+        delete_pipeline_data(meeting_id)
+    except Exception as exc:
+        logger.warning("[DISCARD] Failed to delete pipeline data: %s", exc)
+
+    # 4. Delete notes file
+    if meeting.notes_path:
+        p = Path(meeting.notes_path)
+        if p.exists():
+            p.unlink()
+            logger.info("[DISCARD] Deleted notes %s for meeting %s", p, meeting_id)
+
+    # 5. Reset meeting fields
+    updated = update_meeting(
+        meeting_id,
+        status=MeetingStatus.created,
+        audio_path=None,
+        transcript_path=None,
+        notes_path=None,
+        summary=None,
+        detail=None,
+        transcription_error=None,
+        processing_state=ProcessingState.idle.value,
+        summary_gen_state=GenerationState.idle.value,
+        blueprint_gen_state=GenerationState.idle.value,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        tabs=None,
+        allocated_collections=[],
+        allocated_file_ids=[],
+        speaker_names=None,
+    )
+    logger.info("[DISCARD] Meeting %s fully discarded, reset to 'created'", meeting_id)
+    return updated

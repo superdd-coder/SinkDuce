@@ -8,7 +8,7 @@ import { useAppStore } from "@/stores/app-store"
 import { useAudioRecorder } from "@/hooks/use-audio-recorder"
 import { useTranscription } from "@/hooks/use-transcription"
 import {
-  getMeetings, getMeeting, deleteMeeting,
+  getMeetings, getMeeting, deleteMeeting, discardMeetingRecording,
   uploadMeetingAudio, transcribeMeeting, cancelTranscribeMeeting,
   getMeetingTranscript, updateMeeting,
   getRealtimeTranscriptionProviders, getFileTranscriptionProviders,
@@ -54,6 +54,7 @@ export function MeetingView() {
   const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
   const [floatingOpen, setFloatingOpen] = useState(false)
+  const discardingRef = useRef(false)
   const floatingPanelRef = useRef<HTMLDivElement>(null)
   const [playbackTime, setPlaybackTime] = useState(0)
 
@@ -314,6 +315,12 @@ export function MeetingView() {
   // When recording stops, upload audio then auto-trigger file transcription
   useEffect(() => {
     if (recorder.audioBlob && activeMeeting) {
+      // Skip upload if user clicked Discard
+      if (discardingRef.current) {
+        discardingRef.current = false
+        recorder.reset()
+        return
+      }
       const file = new File([recorder.audioBlob], "recording.webm", { type: recorder.audioBlob.type })
       uploadMeetingAudio(activeMeeting, file)
         .then((m) => {
@@ -382,6 +389,25 @@ export function MeetingView() {
       toast.info("Transcription cancelled")
     } catch (err) {
       toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const handleDiscard = async () => {
+    if (!activeMeeting) return
+    // Set flag BEFORE stopping recorder so the audioBlob effect skips upload
+    discardingRef.current = true
+    // Stop realtime transcription first (discard: clears segments, closes WS, skips save)
+    transcription.stopTranscription({ discard: true })
+    // Then stop the recorder
+    recorder.stopRecording()
+    setRealtimeEnabled(false)
+    try {
+      await discardMeetingRecording(activeMeeting)
+      toast.success("Recording discarded")
+      fetchMeeting(activeMeeting)
+      fetchMeetings()
+    } catch (err) {
+      toast.error(`Discard failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -659,6 +685,7 @@ export function MeetingView() {
                 showLanguageSelector={!!meeting.audio_path}
                 onTimeUpdate={setPlaybackTime}
                 recorderError={recorder.error}
+                onDiscard={handleDiscard}
               />
             </div>
 
