@@ -434,7 +434,7 @@ function TranscriptionProviderCard({ provider, kind, onEdit, onRefresh, onDelete
 // ── Main View ──
 
 export function LLMProviderView() {
-  const { providers, setProviders } = useAppStore()
+  const { providers, setProviders, developerMode, toggleDeveloperMode } = useAppStore()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProvider, setEditingProvider] = useState<LLMProvider | null>(null)
   const [modelDownloadOpen, setModelDownloadOpen] = useState(false)
@@ -1512,6 +1512,35 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                 <Button variant="default" onClick={() => setModelDownloadOpen(true)} className="font-light uppercase">
                   <Download className="h-4 w-4 mr-2" />Download Models
                 </Button>
+              </div>
+            </div>
+
+            {/* Developer Mode */}
+            <div className="pb-6">
+              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">DEVELOPER MODE</h3>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Enable developer tools</span>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={toggleDeveloperMode}
+                  className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
+                  style={{
+                    fontSize: "10px",
+                    fontWeight: 500,
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
+                    padding: "3px 8px",
+                    borderRadius: "2px",
+                    color: developerMode ? "var(--color-primary-foreground)" : "var(--color-muted-foreground)",
+                  }}
+                >
+                  <span className="relative z-10">{developerMode ? "ON" : "OFF"}</span>
+                  <span
+                    className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${developerMode ? "scale-x-100" : "scale-x-0"}`}
+                    style={{ transformOrigin: "left" }}
+                  />
+                </button>
               </div>
             </div>
 

@@ -127,8 +127,23 @@ export function AppLayout() {
               <V />
             </div>
           ))}
-          <div className="relative z-40 bg-background">
-            <LogViewer open={logPanelOpen} onClose={toggleLogPanel} />
+          <div
+            className="relative z-40 bg-background overflow-hidden"
+            style={{
+              height: logPanelOpen ? 280 : 0,
+              transition: "height 350ms cubic-bezier(0.4,0,0.2,1)",
+            }}
+          >
+            <div
+              style={{
+                height: 280,
+                transform: `translateY(${logPanelOpen ? 0 : 10}px)`,
+                opacity: logPanelOpen ? 1 : 0,
+                transition: "transform 350ms cubic-bezier(0.4,0,0.2,1), opacity 300ms ease-out",
+              }}
+            >
+              <LogViewer open={logPanelOpen} onClose={toggleLogPanel} />
+            </div>
           </div>
         </main>
       </div>

@@ -171,6 +171,9 @@ interface AppState {
   logPanelOpen: boolean
   toggleLogPanel: () => void
 
+  developerMode: boolean
+  toggleDeveloperMode: () => void
+
   activeMeeting: string | null
   setActiveMeeting: (id: string | null) => void
 
@@ -459,6 +462,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   logPanelOpen: false,
   toggleLogPanel: () => set((s) => ({ logPanelOpen: !s.logPanelOpen })),
+
+  developerMode: false,
+  toggleDeveloperMode: () => set((s) => ({ developerMode: !s.developerMode })),
 
   activeMeeting: null,
   setActiveMeeting: (id) => set({ activeMeeting: id }),

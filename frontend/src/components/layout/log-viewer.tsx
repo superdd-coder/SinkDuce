@@ -74,8 +74,6 @@ export function LogViewer({ open, onClose }: { open: boolean; onClose: () => voi
     }
   }, [logs, autoScroll])
 
-  if (!open) return null
-
   const formatTime = (t: number) => {
     const d = new Date(t * 1000)
     return d.toLocaleTimeString("en-GB", { hour12: false })

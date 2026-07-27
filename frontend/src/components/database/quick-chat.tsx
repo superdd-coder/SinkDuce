@@ -82,38 +82,15 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [msgCount, setMsgCount] = useState(0)
   const [loadingHistory, setLoadingHistory] = useState(true)
-  const [panelVisible, setPanelVisible] = useState(false)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
   const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const prevOpenRef = useRef(open)
-  const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
   const [hintMessage, setHintMessage] = useState(HINT_MESSAGES[0])
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // ── Coordinated open/close: button + panel animate simultaneously ──
-
-  useEffect(() => {
-    if (open === prevOpenRef.current) return
-    prevOpenRef.current = open
-    if (animTimerRef.current) clearTimeout(animTimerRef.current)
-
-    if (open) {
-      setPanelVisible(true)
-    } else {
-      animTimerRef.current = setTimeout(() => {
-        setPanelVisible(false)
-      }, ANIM_DURATION)
-    }
-
-    return () => {
-      if (animTimerRef.current) clearTimeout(animTimerRef.current)
-    }
-  }, [open])
 
   // ── Init session ──
 
@@ -551,14 +528,24 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           transitionDuration: `${ANIM_DURATION}ms`,
         }}
       >
-        {panelVisible && panelContent}
+        <div
+          className="h-full"
+          style={{
+            transform: `translateX(${open ? 0 : 12}px)`,
+            opacity: open ? 1 : 0,
+            transition: open
+              ? `transform ${ANIM_DURATION}ms cubic-bezier(0.34,1.56,0.64,1), opacity ${ANIM_DURATION}ms ease-out`
+              : `transform ${ANIM_DURATION}ms ease-out, opacity ${ANIM_DURATION}ms ease-out`,
+          }}
+        >
+          {panelContent}
+        </div>
       </div>
 
       {/* ── Floating button + hint bubble ── */}
       <div
         className={cn(
               "fixed right-6 z-50",
-              open && "hidden",
             )}
         style={{
           bottom: "24px",

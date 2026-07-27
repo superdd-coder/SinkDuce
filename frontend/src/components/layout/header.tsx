@@ -6,7 +6,7 @@ import { getHealth } from "@/api/client"
 import { cn } from "@/lib/utils"
 
 export function Header() {
-  const { isOnline, setOnline, toggleLogPanel, sidebarOpen } = useAppStore()
+  const { isOnline, setOnline, toggleLogPanel, sidebarOpen, developerMode } = useAppStore()
 
   useEffect(() => {
     const check = async () => {
@@ -64,6 +64,7 @@ export function Header() {
 
         <div className="flex-1" />
 
+        {developerMode && (
         <Button
           variant="ghost"
           size="icon"
@@ -73,6 +74,7 @@ export function Header() {
         >
           <Terminal className="h-3.5 w-3.5" />
         </Button>
+        )}
 
         <div className="flex items-center gap-1.5 text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80">
           <span
