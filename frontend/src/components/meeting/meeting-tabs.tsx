@@ -37,6 +37,8 @@ interface Props {
   partialText?: string
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
+  forceTranscriptTab?: number
+  tabBarOffset?: number
   floatingPanelOpen?: boolean
   canShift?: boolean
   playbackTime?: number
@@ -92,7 +94,7 @@ function renderInline(text: string, onRefClick: (id: string) => void): ReactNode
         parts.push(
           <button
             key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-muted hover:bg-primary/20 t-mono-family align-baseline"
+            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.20)] t-mono-family align-baseline cursor-pointer mr-1"
             onClick={(e) => { e.stopPropagation(); onRefClick(start.id) }}
             title={`Sources: ${allInRange.join(", ")}`}
           >
@@ -849,6 +851,8 @@ export function MeetingTabs({
   partialText,
   focusRef,
   activeSectionTag,
+  forceTranscriptTab,
+  tabBarOffset = 0,
   floatingPanelOpen,
   canShift = true,
   playbackTime = 0,
@@ -897,6 +901,10 @@ export function MeetingTabs({
       setMainTab("notes")
     }
   }, [hasSummary])
+  useEffect(() => {
+    if (forceTranscriptTab) setMainTab("transcript")
+  }, [forceTranscriptTab])
+  const contentStickyOffset = tabBarOffset + 36
   const [selectedSummaryId, setSelectedSummaryId] = useState("tab_general")
   const [tabMdContents, setTabMdContents] = useState<Record<string, string>>({})
 
@@ -1450,7 +1458,7 @@ export function MeetingTabs({
           "sticky flex items-center border-b border-border px-2 shrink-0 transition-[margin-right] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] bg-background z-10",
           floatingPanelOpen && canShift ? "-mr-[320px]" : "mr-0",
         )}
-        style={{ top: 0 }}
+        style={{ top: tabBarOffset }}
       >
         <div ref={tabContainerRef} className="flex items-center relative">
           <button
@@ -1772,7 +1780,7 @@ export function MeetingTabs({
                 onRefClick={handleRefClick}
                 speakerNames={speakerNames}
                 actionsDisabled={ingestingTabs.has(selectedSummaryId)}
-                stickyOffset={36}
+                stickyOffset={contentStickyOffset}
                 title={
                   isGeneral
                     ? "General"
@@ -2049,7 +2057,7 @@ export function MeetingTabs({
             value={notesDraft}
             onChange={handleNotesChange}
             minHeight="400px"
-            stickyToolbarOffset={36}
+            stickyToolbarOffset={contentStickyOffset}
             placeholder="Write your meeting notes here (Markdown supported)..."
           />
         </div>

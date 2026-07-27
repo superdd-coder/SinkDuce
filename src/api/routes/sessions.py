@@ -66,6 +66,14 @@ class SessionDetailResponse(BaseModel):
 
 # ── helpers ───────────────────────────────────────────────────────
 
+
+def _num_to_stt(num: int) -> str:
+    """Convert segment index to stt_XXXX format (matching Summary's ref convention).
+    1 -> 'stt_0001', 123 -> 'stt_0123'
+    """
+    return f"stt_{num:04d}"
+
+
 def _get_store():
     store = services.session_store
     if store is None:
@@ -97,7 +105,7 @@ def list_sessions():
     store = _get_store()
     sessions = store.list_sessions()
     # Filter out quick-chat sessions — they are collection-scoped, not user-facing
-    sessions = [s for s in sessions if not s.id.startswith("quick_")]
+    sessions = [s for s in sessions if not s.id.startswith("quick_") and not s.id.startswith("meeting_")]
     return [_session_response(s, store) for s in sessions]
 
 
@@ -110,6 +118,24 @@ def create_session(body: SessionCreateRequest = Body(...)):
         collections=body.collections,
         session_id=body.id,
     )
+
+    # Meeting sessions: load transcript as system message
+    if session.id.startswith("meeting_"):
+        meeting_id = session.id[len("meeting_"):]
+        try:
+            from src.meeting.store import get_meeting, get_transcript
+            meeting = get_meeting(meeting_id)
+            transcript = get_transcript(meeting_id)
+            if transcript and transcript.segments:
+                lines = []
+                for i, seg in enumerate(transcript.segments, start=1):
+                    spk = seg.speaker_id or "unknown"
+                    lines.append(f"[{i}] {spk}: {seg.text}")
+                transcript_text = "\n".join(lines)
+                store.add_message(session.id, role="system", content=transcript_text)
+        except Exception:
+            logger.exception("Failed to load transcript for meeting %s", meeting_id)
+
     return _session_response(session, store)
 
 

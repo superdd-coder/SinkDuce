@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react"
 import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -23,6 +23,7 @@ import { MeetingList } from "./meeting-list"
 import { MediaBar } from "./media-bar"
 import type { MediaBarHandle } from "./media-bar"
 
+import { MeetingQuickChat } from "./meeting-quick-chat"
 import { DEFAULT_LANGUAGE_HINTS } from "./language-hints-selector"
 
 export function MeetingView() {
@@ -51,12 +52,19 @@ export function MeetingView() {
   const [titleDraft, setTitleDraft] = useState("")
   const [audioVersion, setAudioVersion] = useState(0)
   const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false)
-  const [focusRef, setFocusRef] = useState<{ id: string; ts: number } | null>(null)
+  const [focusRef, setFocusRef] = useState<{ id: string; ts: number; fromChat?: boolean } | null>(null)
   const [activeSectionTag, setActiveSectionTag] = useState("")
   const [floatingOpen, setFloatingOpen] = useState(false)
   const discardingRef = useRef(false)
   const floatingPanelRef = useRef<HTMLDivElement>(null)
   const [playbackTime, setPlaybackTime] = useState(0)
+  const [quickChatOpen, setQuickChatOpen] = useState(false)
+  const [transcriptJumpCounter, setTranscriptJumpCounter] = useState(0)
+  const mediaBarWrapperRef = useRef<HTMLDivElement>(null)
+  const [mediaBarHeight, setMediaBarHeight] = useState(0)
+
+  // Transcript floating panel and Meeting Chat sidebar are mutually exclusive
+
 
   // When the main content area is wide enough, we left-shift the centered column
   // and absolutely position the floating panel (current "balanced" design).
@@ -83,12 +91,28 @@ export function MeetingView() {
 
   // Open floating transcript when sentence reference is clicked
   useEffect(() => {
-    if (focusRef) setFloatingOpen(true)
+    if (focusRef && !focusRef.fromChat) { setFloatingOpen(true); setQuickChatOpen(false) }
   }, [focusRef?.ts])
+
+  // Measure media bar height so tab bar can adjust its sticky top offset
+  // Uses ResizeObserver to avoid render-loop: effect re-runs when meeting
+  // loads only, but the observer keeps height in sync without extra renders.
+  useLayoutEffect(() => {
+    const el = mediaBarWrapperRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      setMediaBarHeight(el.offsetHeight)
+    })
+    ro.observe(el)
+    setMediaBarHeight(el.offsetHeight)
+    return () => ro.disconnect()
+  }, [meeting?.id])
 
   // Close floating panel when switching meetings
   useEffect(() => {
     setFloatingOpen(false)
+    setTranscriptJumpCounter(0)
+    setFocusRef(null)
   }, [activeMeeting])
 
   // Track floating panel position on scroll — direct DOM manipulation for smooth 60fps
@@ -432,6 +456,40 @@ export function MeetingView() {
     mediaBarRef.current?.seekTo(startTime)
   }
 
+  const handleRefClick = (sentenceId: string) => {
+    // Switch to transcript tab and increment counter to trigger tab switch via useEffect
+    setTranscriptJumpCounter((c) => c + 1)
+    setActiveSectionTag("")
+    // Use same priority as transcriptSegments prop: prefer real-time segments
+    // over backend transcript, so the _idx_ matches the TranscriptTab's segments.
+    const backendSegments = transcript
+    const realtimeSegments = transcription.segments
+    const allSegments = realtimeSegments.length > 0 ? realtimeSegments : backendSegments
+    let idx = allSegments.findIndex((seg: any) => seg.sentence_id === sentenceId)
+    // Fallback: index-based matching (stt_0005 -> index 4) when sentence_id differs
+    if (idx === -1) {
+      const numMatch = sentenceId.match(/^stt_(\d+)$/)
+      if (numMatch) {
+        const num = parseInt(numMatch[1], 10)
+        idx = num - 1 // convert 1-based to 0-based
+      }
+    }
+    if (idx >= 0 && idx < allSegments.length) {
+      const seg = allSegments[idx]
+      handleSegmentClick(seg.start)
+      // Double-rAF: after transcriptJumpCounter triggers the tab switch,
+      // wait for the browser to commit layout before firing focusRef.
+      // The first rAF sees the DOM update; the second confirms the layout is done,
+      // so the TranscriptTab container has real dimensions when the effect fires.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setFocusRef({ id: "_idx_" + idx, ts: Date.now(), fromChat: true })
+        })
+      })
+    }
+  }
+
+
   const handleMeetingUpdate = useCallback((m: Meeting) => {
     setMeeting(m)
     if (activeMeeting) {
@@ -493,8 +551,8 @@ export function MeetingView() {
               "flex-1 flex flex-col min-h-0 max-w-[800px] mx-auto w-full transition-transform duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
               floatingOpen && canShift ? "-translate-x-[196px]" : "translate-x-0",
             )}>
-              {/* Header — sticky title on the left, metadata (CREATED/SPEAKERS/COLLECTIONS) on the right */}
-              <div data-meeting-title className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0 sticky top-0 z-20 bg-background">
+              {/* Header — title on the left, metadata (CREATED/SPEAKERS/COLLECTIONS) on the right */}
+              <div data-meeting-title className="flex items-start justify-between gap-4 px-4 pt-3 shrink-0 ">
               {editingTitle ? (
                 <div className="flex items-center gap-1 flex-1 min-w-0">
                   <input
@@ -648,8 +706,8 @@ export function MeetingView() {
               )}
             </div>
 
-            {/* Media Bar — full width */}
-            <div className="px-4 pt-1 pb-2">
+            {/* Media Bar — full width, sticky at the top */}
+            <div ref={mediaBarWrapperRef} className="px-4 pt-1 pb-2 sticky top-0 z-20 bg-background">
               <MediaBar
                 ref={mediaBarRef}
                 meetingId={meeting.id}
@@ -709,13 +767,16 @@ export function MeetingView() {
                 notesContent={meeting.notes_content ?? ""}
                 onMeetingUpdate={handleMeetingUpdate}
                 onSeekTo={handleSegmentClick}
-                onFocusSentence={(id) => { setFocusRef({ id, ts: Date.now() }); setFloatingOpen(true) }}
+                onFocusSentence={(id) => { setFocusRef({ id, ts: Date.now() }); setFloatingOpen(true); setQuickChatOpen(false) }}
                 onActiveTabChange={setActiveSectionTag}
                 transcriptSegments={transcription.segments.length > 0 ? transcription.segments : transcript}
                 partialText={transcription.currentPartial}
                 focusRef={focusRef}
                 activeSectionTag={activeSectionTag}
                 floatingPanelOpen={floatingOpen}
+                forceTranscriptTab={transcriptJumpCounter}
+                tabBarOffset={mediaBarHeight}
+
                 canShift={canShift}
                 playbackTime={playbackTime}
                 className="flex-1 min-w-0"
@@ -797,6 +858,19 @@ export function MeetingView() {
           </div>
         )}
       </div>
+
+
+      {/* Quick Chat — always mounted for floating button, sidebar shown on demand */}
+      {activeMeeting && (
+        <MeetingQuickChat
+          meetingId={activeMeeting}
+          meetingTitle={meeting?.title ?? ""}
+          open={quickChatOpen}
+          onOpen={() => { setQuickChatOpen(true); setFloatingOpen(false) }}
+          onClose={() => setQuickChatOpen(false)}
+          onRefClick={handleRefClick}
+        />
+      )}
 
       {/* Dialogs */}
 

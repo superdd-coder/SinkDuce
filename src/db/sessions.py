@@ -233,25 +233,48 @@ class SessionStore:
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 
-    def count_messages(self, session_id: str) -> int:
-        """Count total messages in a session."""
+    def count_messages(self, session_id: str, exclude_system: bool = False) -> int:
+        """Count total messages in a session.
+
+        When *exclude_system* is True, system messages are excluded from the
+        count.  This is useful for truncation logic where system messages
+        (e.g. transcript context) should not count toward the message limit.
+        """
         with self._lock:
             conn = self._get_conn()
-            row = conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
+            if exclude_system:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role != 'system'",
+                    (session_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
         return row[0] if row else 0
 
     def trim_messages(self, session_id: str, keep_last: int) -> int:
-        """Delete oldest messages, keeping only the most recent *keep_last*. Returns number deleted."""
+        """Delete oldest messages, keeping only the most recent *keep_last*.
+
+        System messages (role='system') are **never** deleted — they carry
+        persistent context such as transcript text that must survive
+        truncation.  Returns number of messages deleted.
+        """
         with self._lock:
             conn = self._get_conn()
-            rows = conn.execute(
-                "SELECT id FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+            # Always keep system messages + the most recent *keep_last* non-system messages
+            system_rows = conn.execute(
+                "SELECT id FROM messages WHERE session_id = ? AND role = 'system'",
+                (session_id,),
+            ).fetchall()
+            system_ids = {r["id"] for r in system_rows}
+
+            non_system_rows = conn.execute(
+                "SELECT id FROM messages WHERE session_id = ? AND role != 'system' ORDER BY created_at DESC LIMIT ?",
                 (session_id, keep_last),
             ).fetchall()
-            keep_ids = [r["id"] for r in rows]
+            keep_ids = system_ids | {r["id"] for r in non_system_rows}
             if not keep_ids:
                 return 0
             placeholders = ",".join("?" * len(keep_ids))
