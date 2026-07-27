@@ -22,6 +22,21 @@ const MAX_MESSAGES = 30
 const ANIM_DURATION = 350
 const SIDEBAR_W = 400
 
+// ── Hint bubble config ──
+const HINT_MESSAGES = [
+  "Chat with this meeting?",
+  "Ask a question?",
+  "Quick Q&A?",
+  "Got a question?",
+  "Ask anything...",
+  "Curious about the discussion?",
+  "Ask about the meeting?",
+]
+const HINT_SHOW_DURATION = 4000
+const HINT_INITIAL_DELAY = 1000
+const HINT_MIN_INTERVAL = 5000
+const HINT_MAX_INTERVAL = 15000
+
 // ── Diamond icon (split paths for independent hover rotation) ──
 
 function DiamondIcon({ className }: { className?: string }) {
@@ -64,33 +79,15 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [msgCount, setMsgCount] = useState(0)
   const [loadingHistory, setLoadingHistory] = useState(true)
-  const [panelVisible, setPanelVisible] = useState(false)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
   const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const prevOpenRef = useRef(open)
-  const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // ── Coordinated open/close: button + panel animate simultaneously ──
-
-  useEffect(() => {
-    if (open === prevOpenRef.current) return
-    prevOpenRef.current = open
-    if (animTimerRef.current) clearTimeout(animTimerRef.current)
-
-    if (open) {
-      setPanelVisible(true)
-    } else {
-      animTimerRef.current = setTimeout(() => {
-        setPanelVisible(false)
-      }, ANIM_DURATION)
-    }
-
-    return () => {
-      if (animTimerRef.current) clearTimeout(animTimerRef.current)
-    }
-  }, [open])
+  // ── Hint bubble state ──
+  const [hintVisible, setHintVisible] = useState(false)
+  const [hintExiting, setHintExiting] = useState(false)
+  const [hintMessage, setHintMessage] = useState(HINT_MESSAGES[0])
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Init session ──
 
@@ -160,6 +157,33 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
       textareaRef.current.style.height = "auto"
     }
   }, [streaming])
+
+  // ── Hint bubble cycle ──
+  useEffect(() => {
+    if (open) return
+    const scheduleHint = () => {
+      const msg = HINT_MESSAGES[Math.floor(Math.random() * HINT_MESSAGES.length)]
+      setHintMessage(msg)
+      setHintVisible(true)
+      setHintExiting(false)
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+      hintTimerRef.current = setTimeout(() => {
+        // Start exit animation
+        setHintExiting(true)
+        // After retract animation completes (350ms), unmount + schedule next
+        hintTimerRef.current = setTimeout(() => {
+          setHintVisible(false)
+          setHintExiting(false)
+          const delay = HINT_MIN_INTERVAL + Math.random() * (HINT_MAX_INTERVAL - HINT_MIN_INTERVAL)
+          hintTimerRef.current = setTimeout(scheduleHint, delay)
+        }, 500)
+      }, HINT_SHOW_DURATION)
+    }
+    hintTimerRef.current = setTimeout(scheduleHint, HINT_INITIAL_DELAY)
+    return () => {
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+    }
+  }, [meetingId, open])
 
   // ── Send ──
 
@@ -514,24 +538,68 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
           transitionDuration: `${ANIM_DURATION}ms`,
         }}
       >
-        {panelVisible && panelContent}
+        <div
+          className="h-full"
+          style={{
+            transform: `translateX(${open ? 0 : 12}px)`,
+            opacity: open ? 1 : 0,
+            transition: open
+              ? `transform ${ANIM_DURATION}ms cubic-bezier(0.34,1.56,0.64,1), opacity ${ANIM_DURATION}ms ease-out`
+              : `transform ${ANIM_DURATION}ms ease-out, opacity ${ANIM_DURATION}ms ease-out`,
+          }}
+        >
+          {panelContent}
+        </div>
       </div>
 
-      {/* ── Floating button ── */}
-      <button
-        onClick={open ? onClose : onOpen}
+      {/* ── Floating button + hint bubble ── */}
+      <div
         className={cn(
-          "fixed right-6 z-50 transition-all ease-out quick-chat-btn",
-          open && "quick-chat-btn-spinning",
-        )}
+              "fixed right-6 z-50",
+            )}
         style={{
-          color: "var(--ze-green, #1A5E3D)",
+          bottom: "24px",
           transform: open ? `translateX(-${SIDEBAR_W}px)` : "translateX(0)",
+          transition: "transform 0.35s ease-out",
         }}
-        aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
       >
-        <DiamondIcon className="w-8 h-8" />
-      </button>
+        <div className="relative qc-float-group">
+          {/* Hint bubble */}
+          {(hintVisible || hintExiting) && !open && (
+          <div
+            className={cn(
+              "absolute right-full",
+              "mr-3 px-2.5 py-1.5",
+              "rounded-full whitespace-nowrap",
+              "bg-background/70 backdrop-blur-md",
+              "border border-border/50",
+              "shadow-sm",
+              "-top-6",
+              hintExiting ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]" : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]",
+            )}
+            style={{
+              color: "var(--ze-green, #1A5E3D)",
+              pointerEvents: "none",
+            }}
+          >
+            <span className="text-[11px] font-medium whitespace-nowrap">{hintMessage}</span>
+          </div>
+          )}
+          <button
+            onClick={open ? onClose : onOpen}
+            className={cn(
+              "relative transition-all ease-out quick-chat-btn",
+              open && "quick-chat-btn-spinning",
+            )}
+            style={{
+              color: "var(--ze-green, #1A5E3D)",
+            }}
+            aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
+          >
+            <DiamondIcon className="w-10 h-10" />
+          </button>
+        </div>
+      </div>
     </>
   )
 }

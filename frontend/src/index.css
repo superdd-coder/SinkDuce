@@ -1212,13 +1212,12 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   transform: rotate(-180deg);
 }
 
-/* ── Quick Chat floating button · gentle float bob ── */
+/* ── Quick Chat floating button · gentle float bob (wrapper) ── */
 @keyframes qc-float {
   0%, 100% { bottom: 24px; }
   50%      { bottom: 32px; }
 }
 .quick-chat-btn {
-  animation: qc-float 3s ease-in-out infinite;
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.12));
   transition:
     filter 0.3s ease,
@@ -1228,6 +1227,12 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.18));
 }
 
+
+/* ── Quick Chat float group — the wrapper that floats both icon + bubble ── */
+.qc-float-group {
+  animation: qc-float 3s ease-in-out infinite;
+  position: relative;
+}
 /* ── Quick Chat floating button · continuous spin when sidebar open ── */
 @keyframes qc-spin-cw {
   from { transform: rotate(0deg); }
@@ -1242,5 +1247,18 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .quick-chat-btn-spinning .diamond-inner {
   animation: qc-spin-ccw 6s linear infinite;
+}
+
+/* ── Quick Chat hint bubble · emerge from diamond ── */
+@keyframes hint-emerge {
+  0% { opacity: 0; transform: translateX(16px) translateY(4px) scale(0.3); }
+  35% { opacity: 1; transform: translateX(-2px) translateY(-1px) scale(1.06); }
+  60% { transform: translateX(1px) translateY(1px) scale(0.95); }
+  85% { transform: translateX(0) translateY(-0.5px) scale(1.02); }
+  100% { opacity: 1; transform: translateX(0) translateY(0) scale(1); }
+}
+@keyframes hint-retract {
+  0% { opacity: 1; transform: scale(1) translateX(0) translateY(0); }
+  100% { opacity: 0; transform: scale(0.5) translateX(20px) translateY(6px); }
 }
 }

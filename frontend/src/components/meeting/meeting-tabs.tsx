@@ -13,15 +13,17 @@ import {
   regenerateSection, getSectionMd,
   saveSectionMd, updateMeeting, getMeeting,
   allocateSection, deleteSectionAllocation, createCollection,
-  generateSectionDescription,
+  generateSectionDescription, getSummaryTranslations, getActiveTranslations,
   type Meeting, type MeetingTab, type ExtractReceipt,
   type TranscriptSegment,
 } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
 import { useBlueprintStream } from "@/hooks/use-blueprint-stream"
 import { useSectionStream, startSectionStream } from "@/hooks/use-section-stream"
+import { useTranslationStream, startTranslationStream } from "@/hooks/use-translation-stream"
 import { toast } from "sonner"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
+import { SummaryTranslateControl } from "./summary-translate-control"
 
 const SAVE_DELAY = 800
 
@@ -204,6 +206,7 @@ function EditableSectionContent({
   metadata,
   toolbar,
   actionsDisabled,
+  editDisabled,
   stickyOffset = 0,
 }: {
   content: string
@@ -215,6 +218,7 @@ function EditableSectionContent({
   metadata?: ReactNode
   toolbar?: ReactNode
   actionsDisabled?: boolean
+  editDisabled?: boolean
   stickyOffset?: number
 }) {
   const [editing, setEditing] = useState(false)
@@ -268,7 +272,7 @@ function EditableSectionContent({
         </div>
         <div className="flex items-center justify-between px-6 pb-1">
           <div className="flex-1 h-px bg-border" />
-          {!editing && !actionsDisabled && (
+          {!editing && !actionsDisabled && !editDisabled && (
             <Button variant="ghost" size="icon" className="h-7 w-7 ml-2 shrink-0" onClick={() => setEditing(true)} title="Edit">
               <Pencil className="h-3.5 w-3.5" />
             </Button>
@@ -284,7 +288,7 @@ function EditableSectionContent({
       {toolbar}
 
       {/* Section tabs: divider + edit (below metadata/toolbar, above content) */}
-      {!title && !editing && !actionsDisabled && (
+      {!title && !editing && !actionsDisabled && !editDisabled && (
       <div className="flex items-center justify-between px-6 pt-3 pb-1">
         <div className="flex-1 h-px bg-border" />
         <Button variant="ghost" size="icon" className="h-7 w-7 ml-2 shrink-0" onClick={() => setEditing(true)} title="Edit">
@@ -908,6 +912,96 @@ export function MeetingTabs({
   const [selectedSummaryId, setSelectedSummaryId] = useState("tab_general")
   const [tabMdContents, setTabMdContents] = useState<Record<string, string>>({})
 
+  // ── Summary translation ──────────────────────────────────
+  // Per-tab language view (null = original). Persisted to localStorage so the
+  // last-selected language is restored when the user returns to a tab.
+  const langStorageKey = useCallback(
+    (tabId: string) => `meeting:summaryLang:${meetingId}:${tabId}`,
+    [meetingId],
+  )
+  const [summaryLang, setSummaryLang] = useState<Record<string, string | null>>({})
+  const [translations, setTranslations] = useState<Record<string, Record<string, string>>>({})
+  const [availableLangs, setAvailableLangs] = useState<Record<string, string[]>>({})
+
+  const refreshTranslations = useCallback(async (tabId: string) => {
+    try {
+      const res = await getSummaryTranslations(meetingId, tabId)
+      setAvailableLangs((prev) => ({ ...prev, [tabId]: res.languages ?? [] }))
+    } catch { /* non-fatal: green dots just won't show */ }
+  }, [meetingId])
+
+  const handleTranslationDone = useCallback((tabId: string, lang: string, md: string, cached: boolean) => {
+    setTranslations((prev) => ({ ...prev, [tabId]: { ...prev[tabId], [lang]: md } }))
+    setAvailableLangs((prev) => ({
+      ...prev,
+      [tabId]: Array.from(new Set([...(prev[tabId] ?? []), lang])),
+    }))
+    if (!cached) toast.success(`Translation ready (${lang})`)
+  }, [])
+
+  const handleTranslationError = useCallback((tabId: string, _lang: string, message: string, kind: "remote" | "network") => {
+    if (kind === "network") {
+      // Transient connection drop (e.g. flaky network).  Keep the persisted
+      // language view so a reload resumes the stream; don't revert or clear.
+      toast.warning("Translation connection lost — it will resume on reload")
+      return
+    }
+    // Genuine backend failure (e.g. content moderation): revert to original
+    // and clear the persisted view so it isn't retried automatically.
+    toast.error(`Translation failed: ${message}`)
+    setSummaryLang((prev) => ({ ...prev, [tabId]: null }))
+    try { localStorage.removeItem(langStorageKey(tabId)) } catch { /* ignore */ }
+  }, [langStorageKey])
+
+  const handleSelectLang = useCallback((tabId: string, lang: string | null) => {
+    setSummaryLang((prev) => ({ ...prev, [tabId]: lang }))
+    try {
+      if (lang) localStorage.setItem(langStorageKey(tabId), lang)
+      else localStorage.removeItem(langStorageKey(tabId))
+    } catch { /* localStorage unavailable */ }
+    if (!lang) return
+    if (translations[tabId]?.[lang]) return   // already cached client-side
+    // Single streaming path: the backend serves cache instantly, re-attaches
+    // to an in-progress task (replaying missed tokens), or starts fresh.
+    startTranslationStream(meetingId, tabId, lang)
+  }, [meetingId, translations, langStorageKey])
+
+  // Restore the persisted language view + green-dot list when the tab changes.
+  useEffect(() => {
+    const tabId = selectedSummaryId
+    let stored: string | null = null
+    try { stored = localStorage.getItem(langStorageKey(tabId)) } catch { /* ignore */ }
+    refreshTranslations(tabId)
+    if (stored && !translations[tabId]?.[stored]) {
+      // Cache-aware stream: revisiting never re-generates; an in-progress
+      // translation (e.g. after a refresh) replays and continues.
+      void handleSelectLang(tabId, stored)
+      return
+    }
+    if (stored) {
+      setSummaryLang((prev) => ({ ...prev, [tabId]: stored }))
+      return
+    }
+    // No persisted preference — fall back to server-side truth: if a
+    // translation is actively generating for this tab (e.g. the user refreshed
+    // mid-stream and localStorage was unavailable), reconnect to it.
+    getActiveTranslations(meetingId)
+      .then(({ active }) => {
+        const act = active?.find((a) => a.tab_id === tabId)
+        if (act) void handleSelectLang(tabId, act.language)
+      })
+      .catch(() => { /* non-fatal */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSummaryId])
+
+  // Subscribe to the translation stream for the currently-viewed tab+language.
+  // Managed globally: survives view switches, replays missed tokens on refresh.
+  const activeSummaryLang = summaryLang[selectedSummaryId] ?? null
+  const tStream = useTranslationStream(meetingId, selectedSummaryId, activeSummaryLang, {
+    onDone: handleTranslationDone,
+    onError: handleTranslationError,
+  })
+
   // ── Section SSE streaming ────────────────────────────────
   const isGeneralSelected = selectedSummaryId === "tab_general"
   const onSectionCompletedAwayRef = useRef(onMeetingUpdate)
@@ -1448,6 +1542,17 @@ export function MeetingTabs({
   const isGeneral = selectedSummaryId === "tab_general"
   const isTabGenerating = selectedTab?.processing_state === "generating"
 
+  // ── Summary translation view ─────────────────────────────
+  // Content priority: live stream > cached translation > original summary.
+  const activeLang = activeSummaryLang
+  const activeTranslation = activeLang ? translations[selectedSummaryId]?.[activeLang] : undefined
+  const streamingTranslationMd = activeLang ? tStream.streamingMd : ""
+  const isTranslating = !!(activeLang && tStream.isStreaming)
+  const viewingTranslation = !!activeLang && (isTranslating || !!streamingTranslationMd || !!activeTranslation)
+  const displayContent = streamingTranslationMd
+    ? streamingTranslationMd
+    : (activeTranslation ?? getTabContent(selectedSummaryId))
+
   return (
     <div className={cn("flex flex-col", className)}>
 
@@ -1775,11 +1880,12 @@ export function MeetingTabs({
           ) : (
             <>
               <EditableSectionContent
-                content={getTabContent(selectedSummaryId)}
+                content={displayContent}
                 onSave={async (draft) => handleSaveSection(selectedSummaryId, draft)}
                 onRefClick={handleRefClick}
                 speakerNames={speakerNames}
                 actionsDisabled={ingestingTabs.has(selectedSummaryId)}
+                editDisabled={viewingTranslation}
                 stickyOffset={contentStickyOffset}
                 title={
                   isGeneral
@@ -1797,7 +1903,16 @@ export function MeetingTabs({
                         </span>
                       ) : ""
                 }
-                actionButtons={null}
+                actionButtons={
+                  <SummaryTranslateControl
+                    generatedLangs={availableLangs[selectedSummaryId] ?? []}
+                    activeLang={activeLang}
+                    translating={isTranslating}
+                    disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId)}
+                    onSelect={(lang) => void handleSelectLang(selectedSummaryId, lang)}
+                    onOpen={() => void refreshTranslations(selectedSummaryId)}
+                  />
+                }
                 toolbar={
                   isGeneral ? (
                     <div className="px-4 pt-3 pb-4 space-y-3">

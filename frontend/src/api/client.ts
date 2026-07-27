@@ -1055,6 +1055,100 @@ export const generateSectionDescription = (meetingId: string, sectionName: strin
     body: JSON.stringify({ section_name: sectionName }),
   })
 
+// ── Summary Translation ──
+
+/** Target languages offered by the summary translation dropdown.
+ *  `code` matches the backend file naming (`{tab_id}_{LANG}.md`). */
+export const TRANSLATE_LANGUAGES: { code: string; label: string }[] = [
+  { code: "CN", label: "中文" },
+  { code: "EN", label: "English" },
+  { code: "JA", label: "日本語" },
+  { code: "KO", label: "한국어" },
+  { code: "FR", label: "Français" },
+  { code: "DE", label: "Deutsch" },
+  { code: "ES", label: "Español" },
+]
+
+export const getSummaryTranslations = (meetingId: string, tabId: string) =>
+  request<{ languages: string[] }>(`/meetings/${meetingId}/sections/${tabId}/translations`)
+
+export const getActiveTranslations = (meetingId: string) =>
+  request<{ active: { tab_id: string; language: string }[] }>(
+    `/meetings/${meetingId}/translations/active`,
+  )
+
+export interface TranslationStreamCallbacks {
+  onState?: (data: { translation_gen?: string }) => void
+  onToken?: (text: string) => void
+  onDone?: (data: { tab_id: string; language: string; md: string; cached: boolean }) => void
+  /** kind "remote" = the backend reported a real failure (HTTP error or an
+   *  `error` SSE event, e.g. content moderation); kind "network" = the
+   *  connection dropped client-side (teardown, server unreachable). */
+  onError?: (message: string, kind: "remote" | "network") => void
+}
+
+/** Connect to the summary translation streaming endpoint and invoke callbacks.
+ *  The endpoint serves cached files instantly, re-attaches to in-progress
+ *  tasks (replaying missed tokens), or starts a fresh generation. */
+export function streamTranslation(
+  meetingId: string,
+  tabId: string,
+  lang: string,
+  callbacks: TranslationStreamCallbacks,
+): AbortController {
+  const controller = new AbortController()
+  const decoder = new SSEDecoder()
+
+  fetch(
+    `/api/meetings/${meetingId}/sections/${tabId}/translate/stream?lang=${encodeURIComponent(lang)}`,
+    { signal: controller.signal },
+  ).then(async (resp) => {
+    if (!resp.ok) {
+      callbacks.onError?.(`HTTP ${resp.status}: ${await resp.text()}`, "remote")
+      return
+    }
+    const reader = resp.body?.getReader()
+    if (!reader) return
+    const utf8 = new TextDecoder("utf-8")
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const text = utf8.decode(value, { stream: true })
+
+      for (const [event, data] of decoder.push(text)) {
+        switch (event) {
+          case "state": {
+            callbacks.onState?.(JSON.parse(data) as { translation_gen?: string })
+            break
+          }
+          case "token":
+            callbacks.onToken?.(JSON.parse(data) as string)
+            break
+          case "translation_done": {
+            callbacks.onDone?.(
+              JSON.parse(data) as { tab_id: string; language: string; md: string; cached: boolean },
+            )
+            break
+          }
+          case "error": {
+            callbacks.onError?.((JSON.parse(data) as { message: string }).message, "remote")
+            break
+          }
+        }
+      }
+    }
+  }).catch((err: unknown) => {
+    // Aborts (intentional or page teardown via pagehide) are not errors.
+    if (err instanceof DOMException && err.name === "AbortError") return
+    // A genuine mid-stream connection drop — transient, resumable on reload.
+    callbacks.onError?.(err instanceof Error ? err.message : String(err), "network")
+  })
+
+  return controller
+}
+
+
 // ── Transcription Providers ──
 
 export interface TranscriptionProvider {

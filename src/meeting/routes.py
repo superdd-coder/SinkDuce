@@ -811,6 +811,40 @@ async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Bod
     return {"ok": True, "path": path}
 
 
+@router.get("/meetings/{meeting_id}/sections/{tab_id}/translate/stream")
+async def stream_section_translation(meeting_id: str, tab_id: str, lang: str):
+    """SSE stream of a summary translation into `lang`.
+
+    Single code path for all cases: serves the cached file instantly when one
+    exists, re-attaches to an in-progress task (replaying missed tokens), or
+    starts a fresh generation.  Translation files are never ingested.
+    """
+    from src.meeting.service import meeting_service as _svc
+
+    def _stream():
+        for evt in _svc.generate_translation_stream(meeting_id, tab_id, lang):
+            yield _sse_event(evt["event"], evt["data"])
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.get("/meetings/{meeting_id}/sections/{tab_id}/translations")
+async def list_section_translations(meeting_id: str, tab_id: str):
+    """List the language codes that already have a translation file."""
+    from src.meeting.service import meeting_service as _svc
+    return {"languages": _svc.list_summary_translations(meeting_id, tab_id)}
+
+
+@router.get("/meetings/{meeting_id}/translations/active")
+async def list_active_translations(meeting_id: str):
+    """List the (tab_id, language) pairs currently being translated.
+
+    Lets the frontend re-attach in-progress streams after a browser refresh.
+    """
+    from src.meeting.service import meeting_service as _svc
+    return {"active": _svc.list_active_translations(meeting_id)}
+
+
 @router.post("/meetings/{meeting_id}/generate-section-description")
 async def generate_section_description(meeting_id: str, body: dict = Body()):
     """Generate a section description via LLM based on section name + General Summary."""
