@@ -235,6 +235,37 @@ def get_section_md(meeting_id: str, tab_id: str) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
+def translation_md_path(meeting_id: str, tab_id: str, lang: str) -> Path:
+    """Path of a translated summary: `{tab_id}_{LANG}.md` (never ingested)."""
+    return _meeting_dir(meeting_id) / f"{tab_id}_{lang.upper()}.md"
+
+
+def save_translation_md(meeting_id: str, tab_id: str, lang: str, content: str) -> str:
+    """Write a translated summary markdown to its language file."""
+    path = translation_md_path(meeting_id, tab_id, lang)
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+
+
+def get_translation_md(meeting_id: str, tab_id: str, lang: str) -> str | None:
+    """Read a translated summary markdown or None."""
+    path = translation_md_path(meeting_id, tab_id, lang)
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def list_translation_langs(meeting_id: str, tab_id: str) -> list[str]:
+    """Return the language codes that already have a translation file."""
+    prefix = f"{tab_id}_"
+    langs = [
+        p.stem[len(prefix):]
+        for p in _meeting_dir(meeting_id).glob(f"{prefix}*.md")
+        if p.stem[len(prefix):]
+    ]
+    return sorted(langs)
+
+
 def delete_pipeline_data(meeting_id: str) -> None:
     """Remove all derived pipeline data (sentences, section mds).
 

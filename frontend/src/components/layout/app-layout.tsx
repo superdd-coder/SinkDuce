@@ -127,7 +127,9 @@ export function AppLayout() {
               <V />
             </div>
           ))}
-          <LogViewer open={logPanelOpen} onClose={toggleLogPanel} />
+          <div className="relative z-40 bg-background">
+            <LogViewer open={logPanelOpen} onClose={toggleLogPanel} />
+          </div>
         </main>
       </div>
 

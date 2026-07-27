@@ -656,6 +656,71 @@ MEETING_SUMMARIZER_V3_SYSTEM = _MEETING_V3_SHARED_SYSTEM
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Meeting — Summary Translation
+# ═══════════════════════════════════════════════════════════════════════
+
+# Supported target languages for summary translation.  Maps the short
+# upper-case code (used in the translation file name `{tab_id}_{LANG}.md`
+# and in the API) to the full language name injected into the prompt.
+TRANSLATION_LANG_NAMES: dict[str, str] = {
+    "CN": "Chinese (Simplified)",
+    "EN": "English",
+    "JA": "Japanese",
+    "KO": "Korean",
+    "FR": "French",
+    "DE": "German",
+    "ES": "Spanish",
+}
+
+# MEETING_TRANSLATION_SYSTEM
+#   Purpose: System prompt for translating a generated meeting summary into
+#     a target language.  Unlike _MEETING_V3_SHARED_SYSTEM (which hard-forces
+#     same-language output), this prompt explicitly authorizes the language
+#     switch while preserving markdown structure and citation markers.
+#   Role: system
+#   Called by: src/meeting/service.py → MeetingService.translate_summary
+#   Template vars: (none)
+MEETING_TRANSLATION_SYSTEM = (
+    "You are a professional translator.  Translate the given document into "
+    "the target language specified by the user.  Output ONLY the translated "
+    "document — no preamble, no commentary, no markdown fences."
+    "\n\n"
+    "RULES:\n"
+    "- Preserve the markdown structure exactly: headings, lists, bold, "
+    "italic, and line breaks carry over unchanged.\n"
+    "- Keep citation markers such as [67], speaker tags such as "
+    "[spk:ID], and priority tags such as [priority: high] verbatim — never translate, reorder, or drop them.\n"
+    "- Translate naturally and fluently into the target language; prefer "
+    "idiomatic phrasing over word-for-word literalness.\n"
+    "- Render proper nouns (people, products, organizations) according to "
+    "the conventions of the target language.\n"
+    "- Keep the same level of detail — translate everything, add nothing."
+)
+
+# MEETING_TRANSLATION_PROMPT
+#   Purpose: User prompt that supplies the source summary markdown followed
+#     by the target language.  The target language is placed AFTER the source
+#     document so the model reads the full content before the instruction.
+#   Role: user
+#   Called by: src/meeting/service.py → MeetingService.translate_summary
+#   Template vars: {source_md} — the original summary markdown to translate
+#                  {target_language} — full target language name
+#                    (e.g. "Chinese (Simplified)")
+MEETING_TRANSLATION_PROMPT = """\
+<document>
+{source_md}
+</document>
+
+<task>
+Translate the document above into {target_language}.  Follow every rule \
+from your instructions: keep the markdown structure, keep citation markers \
+like [67], speaker tags like [spk:ID], and priority tags like [priority: high] verbatim, and output only the \
+translated document.
+</task>
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Meeting v3 — Full-Transcript Tagger (one-shot, replaces per-chunk loop)
 # ═══════════════════════════════════════════════════════════════════════
 
