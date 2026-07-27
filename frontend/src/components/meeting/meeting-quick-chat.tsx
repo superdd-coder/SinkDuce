@@ -552,14 +552,15 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
   const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|(\[(?:ref:)?\s*(stt_\d+(?:\s*[-–,]\s*stt_\d+)*)\s*\])|(【(?:ref:)?\s*(stt_\d+(?:\s*[-–,]\s*stt_\d+)*)\s*】)|(\[priority:\s*(high|medium|low)\s*\])|(【priority:\s*(high|medium|low)\s*】)|\[(\d+(?:\s*[-–,]\s*\d+)*)\]/gi
   let lastIdx = 0
   let match
+  regex.lastIndex = 0
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIdx) {
       parts.push(<span key={`t${lastIdx}`}>{text.slice(lastIdx, match.index)}</span>)
     }
     if (match[1]) {
-      parts.push(<strong key={`b${lastIdx}`}>{match[2]}</strong>)
+      parts.push(<strong key={`b${lastIdx}`}>{renderInlineWithRefs(match[2], onRefClick)}</strong>)
     } else if (match[3]) {
-      parts.push(<em key={`i${lastIdx}`}>{match[4]}</em>)
+      parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick)}</em>)
     } else if (match[5]) {
       parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
     } else if (match[8] || match[10] || match[15]) {
@@ -582,7 +583,7 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
         parts.push(
           <button
             key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-muted hover:bg-primary/20 t-mono-family align-baseline cursor-pointer"
+            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.20)] t-mono-family align-baseline cursor-pointer mr-1"
             onClick={(e) => { e.stopPropagation(); onRefClick?.(sttIds[0]) }}
             title={`Sources: ${sttIds.join(", ")}`}
           >
@@ -624,18 +625,21 @@ function TimeContent({ content, onRefClick }: {
   return (
     <>
       {content.split("\n").map((line, i) => {
-        if (/^###(?!#)/.test(line)) {
-          return <h3 key={i} className="text-sm font-semibold mt-3 mb-1">{renderInlineWithRefs(line.replace(/^#+\s*/, ""), onRefClick)}</h3>
+        if (line.startsWith("### ")) {
+          return <h3 key={i} className="text-sm font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(4), onRefClick)}</h3>
         }
-        if (/^##(?!#)/.test(line)) {
-          return <h2 key={i} className="text-base font-semibold mt-3 mb-1">{renderInlineWithRefs(line.replace(/^#+\s*/, ""), onRefClick)}</h2>
+        if (line.startsWith("## ")) {
+          return <h2 key={i} className="text-base font-semibold mt-3 mb-1">{renderInlineWithRefs(line.slice(3), onRefClick)}</h2>
         }
-        if (/^#(?!#)/.test(line)) {
-          return <h1 key={i} className="text-lg font-bold mt-3 mb-1">{renderInlineWithRefs(line.replace(/^#+\s*/, ""), onRefClick)}</h1>
+        if (line.startsWith("# ")) {
+          return <h1 key={i} className="text-lg font-bold mt-3 mb-1">{renderInlineWithRefs(line.slice(2), onRefClick)}</h1>
         }
         if (!line.trim()) return <div key={i} className="h-2" />
         if (/^\s*[-*+]\s/.test(line)) {
           return <li key={i} className="text-sm leading-relaxed ml-4">{renderInlineWithRefs(line.replace(/^\s*[-*+]\s/, ""), onRefClick)}</li>
+        }
+        if (/^>\s/.test(line)) {
+          return <blockquote key={i} className="border-l-2 border-muted-foreground/30 pl-3 italic text-muted-foreground text-xs leading-relaxed mb-1">{renderInlineWithRefs(line.replace(/^>\s*/, ""), onRefClick)}</blockquote>
         }
         return <p key={i} className="text-sm leading-relaxed mb-1">{renderInlineWithRefs(line, onRefClick)}</p>
       })}

@@ -240,6 +240,13 @@ export function TranscriptTab({
           const displayName = seg.speaker_id
             ? speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`
             : null
+          // Extract sentence number from sentence_id (e.g. "abc_stt_0007" -> 7)
+          const sentNum: number | null = (() => {
+            const id = seg.sentence_id
+            if (!id) return null
+            const m = id.match(/stt_0*(\d+)/)
+            return m ? parseInt(m[1], 10) : null
+          })()
           // Find original index in full segments array for highlight matching
           const origIdx = segments.indexOf(seg)
           return (
@@ -256,6 +263,11 @@ export function TranscriptTab({
               onClick={() => onSegmentClick?.(seg.start)}
             >
               <div className="flex items-center gap-2 mb-1">
+                {sentNum != null && (
+                  <span className="inline-flex items-center justify-center w-7 shrink-0 text-[10px] t-mono-family text-muted-foreground/60">
+                    {sentNum}
+                  </span>
+                )}
                 {displayName && (
                   <span className="text-xs font-light text-primary bg-primary/10 px-1.5 py-0.5 rounded">
                     {highlight(displayName)}

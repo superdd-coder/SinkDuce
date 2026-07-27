@@ -94,7 +94,7 @@ function renderInline(text: string, onRefClick: (id: string) => void): ReactNode
         parts.push(
           <button
             key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-muted hover:bg-primary/20 t-mono-family align-baseline"
+            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.20)] t-mono-family align-baseline cursor-pointer mr-1"
             onClick={(e) => { e.stopPropagation(); onRefClick(start.id) }}
             title={`Sources: ${allInRange.join(", ")}`}
           >

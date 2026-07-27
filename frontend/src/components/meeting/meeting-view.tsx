@@ -111,6 +111,8 @@ export function MeetingView() {
   // Close floating panel when switching meetings
   useEffect(() => {
     setFloatingOpen(false)
+    setTranscriptJumpCounter(0)
+    setFocusRef(null)
   }, [activeMeeting])
 
   // Track floating panel position on scroll — direct DOM manipulation for smooth 60fps
