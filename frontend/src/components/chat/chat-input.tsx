@@ -82,7 +82,7 @@ export function ChatInput() {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
-  const readyProviders = providers.filter((p) => p.status === "ready" || !p.status)
+  const readyProviders = providers.filter((p) => (p.status === "ready" || p.status === "unknown" || !p.status))
   const currentProvider = activeProvider
     ? readyProviders.find((p) => p.id === activeProvider)
     : readyProviders.find((p) => p.is_default) || readyProviders[0]
@@ -190,11 +190,11 @@ export function ChatInput() {
             Think
           </button>
 
-          <div className="w-px h-3 bg-border hidden lg:block" />
+          <div className="w-px h-3 bg-border" />
 
           {/* Provider/Model cascading menu */}
           {readyProviders.length > 0 && (
-            <div className="relative hidden lg:block" ref={providerMenuRef}>
+            <div className="relative" ref={providerMenuRef}>
               <button
                 type="button"
                 ref={providerButtonRef}
