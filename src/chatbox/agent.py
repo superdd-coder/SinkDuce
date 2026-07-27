@@ -208,6 +208,32 @@ class ChatResponse:
 # Helpers
 # ═══════════════════════════════════════════════════════════════════
 
+def _build_speaker_mapping(meeting_id: str) -> str:
+    """Build speaker mapping string for meeting chat.
+
+    Reads speaker_names from the meeting store and formats as:
+        Current speaker mapping:
+        - speaker1: John
+        - speaker2: Sarah
+
+    Injected as ephemeral context before each user message.
+    """
+    try:
+        from src.meeting.store import get_meeting
+        meeting = get_meeting(meeting_id)
+    except Exception:
+        return "No speaker names configured for this meeting."
+    if meeting is None or meeting.speaker_names is None:
+        return "No speaker names configured for this meeting."
+    lines = ["Current speaker mapping:"]
+    for spk_id, name in meeting.speaker_names.items():
+        display_name = name if name else "(unnamed)"
+        lines.append(f"- {spk_id}: {display_name}")
+    if not meeting.speaker_names:
+        return "No speaker names configured for this meeting."
+    return "\n".join(lines)
+
+
 def _format_current_time() -> str:
     """Return current local time with timezone, e.g. '2026-07-03 14:30 CST (UTC+08:00)'."""
     now = datetime.now().astimezone()
@@ -233,6 +259,8 @@ _MAX_HISTORY_MESSAGES = 50
 _QUICK_MAX_MESSAGES = 30
 _QUICK_WARN_THRESHOLD = 20
 _QUICK_TRIM_KEEP = 5
+_MEETING_MAX_MESSAGES = 50
+_MEETING_TRIM_KEEP = 10
 _TOTAL_MAX_TOKENS = 128000  # generous ceiling
 
 
@@ -265,6 +293,10 @@ class ChatboxAgent:
     def _resolve_tools_and_prompt(self, mode: str, session_id: str, collections: list[str] | None = None):
         """Return (tools, system_prompt, catalog_text) for the given mode."""
         if mode == "direct":
+            # Meeting chat: no tools, no catalog, use meeting-specific prompt
+            if session_id.startswith("meeting_"):
+                from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
+                return [], MEETING_CHAT_SYSTEM_PROMPT, ""
             tools = LOOKUP_TOOL
             # Fold collection context into the system prompt.
             # Use %s to avoid KeyError if the name contains {} etc.
@@ -276,20 +308,29 @@ class ChatboxAgent:
         catalog_text = self._build_catalog_text(session_id, collections=collections)
         return TOOLS, self._system_prompt, catalog_text
 
-    def _check_quick_truncation(self, session_id: str) -> int | None:
-        """Check and enforce quick-chat message limits.
+    def _check_session_truncation(self, session_id: str) -> int | None:
+        """Check and enforce session message limits.
+
+        For quick_ sessions: trim at _QUICK_MAX_MESSAGES, keep _QUICK_TRIM_KEEP.
+        For meeting_ sessions: trim at _MEETING_MAX_MESSAGES, keep _MEETING_TRIM_KEEP.
+        Count excludes system messages so transcript context is not counted
+        as conversation turns.
 
         Returns the current message count BEFORE any truncation, or None if
-        not a quick session.
+        not a quick or meeting session.
         """
-        if not session_id.startswith("quick_"):
+        if session_id.startswith("quick_"):
+            max_msgs, trim_keep = _QUICK_MAX_MESSAGES, _QUICK_TRIM_KEEP
+        elif session_id.startswith("meeting_"):
+            max_msgs, trim_keep = _MEETING_MAX_MESSAGES, _MEETING_TRIM_KEEP
+        else:
             return None
-        count = self._store.count_messages(session_id)
-        if count >= _QUICK_MAX_MESSAGES:
-            logger.info("Quick session %s hit %d messages, trimming to %d",
-                        session_id, count, _QUICK_TRIM_KEEP)
-            self._store.trim_messages(session_id, _QUICK_TRIM_KEEP)
-            return _QUICK_TRIM_KEEP  # after trim, count = keep_last
+        count = self._store.count_messages(session_id, exclude_system=True)
+        if count >= max_msgs:
+            logger.info("Session %s hit %d messages, trimming to %d",
+                        session_id, count, trim_keep)
+            self._store.trim_messages(session_id, trim_keep)
+            return trim_keep  # after trim, count = keep_last
         return count
 
     def _build_catalog_text(self, session_id: str, *, collections: list[str] | None = None) -> str:
@@ -339,6 +380,7 @@ class ChatboxAgent:
         collections: list[str] | None = None,
         system_prompt: str | None = None,
         catalog_text: str | None = None,
+        pre_message_context: str | None = None,
     ) -> list[dict]:
         """Build OpenAI-compatible messages array for the LLM call."""
         messages: list[dict] = []
@@ -376,6 +418,12 @@ class ChatboxAgent:
         if extra_messages:
             messages.extend(extra_messages)
 
+        # Ephemeral context (e.g. speaker mapping for meeting chat) —
+        # injected after history but before the user message to preserve
+        # KV-cache hit for the prefix (system prompt + transcript + history).
+        if pre_message_context:
+            messages.append({"role": "system", "content": pre_message_context})
+
         # Current user message — only if not already the last history message
         # (it was saved before the LLM call and loaded above).
         # Prepend current time with timezone so the LLM has temporal context
@@ -394,9 +442,14 @@ class ChatboxAgent:
             return ChatResponse(answer="")
 
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(mode, session_id)
-        self._check_quick_truncation(session_id)
+        self._check_session_truncation(session_id)
 
         collections = self._get_collections(session_id)
+        # Speaker mapping for meeting sessions (ephemeral, per-message)
+        meeting_speaker_mapping = None
+        if session_id.startswith("meeting_"):
+            meeting_id = session_id[len("meeting_"):]
+            meeting_speaker_mapping = _build_speaker_mapping(meeting_id)
         total_tool_calls = 0
 
         # Save user message
@@ -411,6 +464,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
+                pre_message_context=meeting_speaker_mapping,
             )
 
             # CHECKPOINT: log multimodal messages
@@ -626,6 +680,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
+                pre_message_context=meeting_speaker_mapping,
             )
             final_answer = _force_generate_answer(self._llm, messages)
 
@@ -678,7 +733,14 @@ class ChatboxAgent:
         )
 
         # Quick-chat truncation check
-        msg_count = self._check_quick_truncation(session_id)
+        msg_count = self._check_session_truncation(session_id)
+
+        # Speaker mapping for meeting sessions (ephemeral, per-message)
+        meeting_speaker_mapping = None
+        if session_id.startswith("meeting_"):
+            meeting_id = session_id[len("meeting_"):]
+            meeting_speaker_mapping = _build_speaker_mapping(meeting_id)
+
         _quick_warn = (
             msg_count is not None
             and msg_count >= _QUICK_WARN_THRESHOLD
@@ -704,6 +766,7 @@ class ChatboxAgent:
                 session_id, user_message, extra_messages=extra_messages,
                 collections=collections,
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
+                pre_message_context=meeting_speaker_mapping,
             )
 
             # ── Streaming LLM call (real token-by-token, threaded) ──

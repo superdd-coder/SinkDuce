@@ -141,8 +141,10 @@ export function TranscriptTab({
   useEffect(() => {
     if (!focusRef?.id || !containerRef.current) return
     const container = containerRef.current
-    const idx = segments.findIndex((seg) => seg.sentence_id?.endsWith(focusRef.id))
-    if (idx === -1) return
+    const idx = focusRef.id.startsWith("_idx_")
+      ? parseInt(focusRef.id.slice(5), 10)
+      : segments.findIndex((seg) => seg.sentence_id?.endsWith(focusRef.id))
+    if (idx === -1 || isNaN(idx)) return
     setFocusedIdx(idx)
     // Defer slightly so the layout (especially the floating panel width
     // transition) has a chance to settle before we measure positions.
@@ -150,13 +152,21 @@ export function TranscriptTab({
       const items = container.querySelectorAll("[data-seg-idx]")
       const el = items[idx] as HTMLElement | undefined
       if (!el) return
-      // Manual scrollTop — never propagates to document viewport,
-      // unlike scrollIntoView which can leak when the container is mid-animation.
-      const containerTop = container.getBoundingClientRect().top
-      const elTop = el.getBoundingClientRect().top
-      const offset = elTop - containerTop + container.scrollTop
-        - container.clientHeight / 2 + el.offsetHeight / 2
-      container.scrollTo({ top: offset, behavior: "smooth" })
+      // When the container has overflow (floating panel portal), use manual
+      // scrollTo to avoid leaking scroll to the document viewport during
+      // the width-transition animation.
+      // When the container does NOT overflow (transcript tab — its flex parent
+      // has auto height), fall back to scrollIntoView which targets the nearest
+      // scrollable ancestor (the meeting content scroll area).
+      if (container.scrollHeight > container.clientHeight) {
+        const containerTop = container.getBoundingClientRect().top
+        const elTop = el.getBoundingClientRect().top
+        const offset = elTop - containerTop + container.scrollTop
+          - container.clientHeight / 2 + el.offsetHeight / 2
+        container.scrollTo({ top: offset, behavior: "smooth" })
+      } else {
+        el.scrollIntoView({ behavior: "smooth", block: "center" })
+      }
     })
     // Clear highlight after 2s
     const timer = setTimeout(() => setFocusedIdx(-1), 2000)
@@ -391,7 +401,7 @@ function SpeakerCard({
   }
 
   return (
-    <div className="border border-emerald-600/50 rounded-xl p-3 space-y-2 shadow-[0_0_12px_rgba(5,150,105,0.12)]">
+    <div className="border border-primary/35 rounded-xl p-3 space-y-2" style={{ boxShadow: '0 0 12px color-mix(in srgb, var(--ze-green) 12%, transparent)' }}>
       {/* Speaker header */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-light text-primary bg-primary/10 px-2 py-1 rounded">

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { Header } from "./header"
+import { cn } from "@/lib/utils"
 import { Sidebar } from "./sidebar"
 import { LogViewer } from "./log-viewer"
 import { ChatView } from "@/components/chat/chat-view"
@@ -25,7 +26,6 @@ const views = {
 
 export function AppLayout() {
   const { sidebarView, logPanelOpen, toggleLogPanel } = useAppStore()
-  const View = views[sidebarView]
 
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false)
   const [minimized, setMinimized] = useState(false)
@@ -116,9 +116,17 @@ export function AppLayout() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-hidden flex flex-col">
-          <div className="flex-1 overflow-hidden animate-tab-in" key={sidebarView}>
-            <View />
-          </div>
+          {Object.entries(views).map(([key, V]) => (
+            <div
+              key={key}
+              className={cn(
+                "flex-1 overflow-hidden",
+                key === sidebarView ? "flex flex-col animate-tab-in" : "hidden",
+              )}
+            >
+              <V />
+            </div>
+          ))}
           <LogViewer open={logPanelOpen} onClose={toggleLogPanel} />
         </main>
       </div>
