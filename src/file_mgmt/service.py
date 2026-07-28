@@ -74,10 +74,9 @@ def _open_db(collection_id: str):
     try:
         return get_db(collection_id)
     except FileNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Collection '{collection_id}' file-management DB not initialized",
-        )
+        from src.file_mgmt.store import init_collection_db
+        init_collection_db(collection_id)
+        return get_db(collection_id)
 
 
 def _row_to_folder(row) -> FolderOut:
@@ -402,6 +401,18 @@ def update_folder(
             row = conn.execute(
                 "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
             ).fetchone()
+
+            # Sync group name if this folder is bound to a node_group
+            if "name" in updates and updates["name"] is not None:
+                grp = conn.execute(
+                    "SELECT group_id FROM node_groups WHERE folder_id=?",
+                    (folder_id,),
+                ).fetchone()
+                if grp:
+                    conn.execute(
+                        "UPDATE node_groups SET name=? WHERE group_id=?",
+                        (updates["name"], grp["group_id"]),
+                    )
 
         if "name" in updates and updates["name"] is not None:
             emit_event("folder.renamed", collection_id, {"folder_id": folder_id})
