@@ -1,4 +1,4 @@
-"""FastAPI routes for file-management metadata CRUD (Phase 2–4).
+"""FastAPI routes for file-management metadata CRUD (Phase 2–5).
 
 All routes are mounted under /api/file-mgmt by main.py.
 """
@@ -11,8 +11,10 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from src.file_mgmt import service
 from src.file_mgmt.models import (
+    ArchiveToggle,
     ChainCreate,
     ChainUpdate,
+    EndChainRequest,
     FolderCreate,
     FolderUpdate,
     GroupCreate,
@@ -161,9 +163,14 @@ def update_node(collection_id: str, node_id: str, req: NodeUpdate):
     return service.update_node(collection_id, node_id, req)
 
 
-@router.delete("/{collection_id}/nodes/{node_id}", status_code=204)
+@router.delete("/{collection_id}/nodes/{node_id}")
 def delete_node(collection_id: str, node_id: str):
-    service.delete_node(collection_id, node_id)
+    """Delete a node. Returns affected_files dict if files need UI confirmation."""
+    result = service.delete_node(collection_id, node_id)
+    if result and result.get("affected_files"):
+        return result
+    from fastapi.responses import Response
+    return Response(status_code=204)
 
 
 @router.post("/{collection_id}/nodes/{node_id}/reorder")
@@ -353,3 +360,25 @@ async def attach_upload_file_to_node(
     return service.attach_file_to_node(
         collection_id, node_id, file_id=None, upload_file=(file_bytes, file.filename or "unnamed"),
     )
+
+
+# ════════════════════════════════════════════════════════════════════
+# Phase 5: Archive / End Chain / Manual Archive
+# ════════════════════════════════════════════════════════════════════
+
+
+@router.post("/{collection_id}/nodes/{node_id}/end-chain")
+def end_chain_endpoint(collection_id: str, node_id: str, req: EndChainRequest):
+    """End a branch chain: grey attachments, compute archive candidates."""
+    return service.end_chain(collection_id, node_id, req)
+
+
+@router.patch("/{collection_id}/files/{file_id}/archive")
+def toggle_file_archive(collection_id: str, file_id: str, req: ArchiveToggle):
+    """Manually archive or unarchive a file (file-level).
+
+    - archived=True:  set files.archived=1, Qdrant chunks archived
+    - archived=False: restore file, Qdrant current version chunks active
+    Requires version for optimistic locking.
+    """
+    return service.toggle_archive(collection_id, file_id, req)

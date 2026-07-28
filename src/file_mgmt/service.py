@@ -1,4 +1,4 @@
-"""Business logic for file-management metadata CRUD (Phase 2–4).
+"""Business logic for file-management metadata CRUD (Phase 2–5).
 
 Pure functions: each takes collection_id as the first argument,
 opens a per-collection SQLite connection via store.get_db(),
@@ -20,13 +20,15 @@ from fastapi import HTTPException
 
 from src.file_mgmt.events import emit_event
 from src.file_mgmt.models import (
+    ArchiveToggle,
     ChainCreate,
     ChainOut,
     ChainUpdate,
+    EndChainRequest,
+    FileDetail,
     FileOut,
     FilePathOut,
     FileSummary,
-    FileDetail,
     FileVersionOut,
     FolderCreate,
     FolderOut,
@@ -922,21 +924,99 @@ def update_node(
         conn.close()
 
 
-def delete_node(collection_id: str, node_id: str) -> None:
+def delete_node(collection_id: str, node_id: str) -> dict | None:
+    """Delete a node and handle associated files.
+
+    - If type 'end': just delete the node.
+    - For other nodes:
+      a. Remove node's derived file_paths (source_node_id = node_id)
+      b. For each file attachment:
+         - If file has other node attachments OR persistent paths → just delete this file_nodes row
+         - If this is the file's only attachment and no persistent paths → affected_files candidate
+    - Delete affected node messages.
+
+    Returns None for simple deletes, or dict with affected_files for the UI to handle.
+    """
     conn = _open_db(collection_id)
     try:
+        affected_files: list[dict] = []
+        result: dict | None = None
+
         with conn:
             node = conn.execute(
-                "SELECT node_id FROM nodes WHERE node_id=?", (node_id,)
+                "SELECT * FROM nodes WHERE node_id=?", (node_id,)
             ).fetchone()
             if not node:
                 raise HTTPException(404, f"Node '{node_id}' not found")
 
+            # Get all file attachments BEFORE deleting anything
+            fn_rows = conn.execute(
+                "SELECT file_id FROM file_nodes WHERE node_id=?", (node_id,)
+            ).fetchall()
+            attached_file_ids = [fn["file_id"] for fn in fn_rows]
+
+            # Check each attached file's state
+            for fid in attached_file_ids:
+                # Does this file have other node attachments?
+                other_attachments = conn.execute(
+                    "SELECT 1 FROM file_nodes WHERE file_id=? AND node_id!=? LIMIT 1",
+                    (fid, node_id),
+                ).fetchone()
+
+                # Does this file have persistent paths (source_node_id=NULL)?
+                persistent = conn.execute(
+                    "SELECT 1 FROM file_paths WHERE file_id=? AND source_node_id IS NULL LIMIT 1",
+                    (fid,),
+                ).fetchone()
+
+                if other_attachments or persistent:
+                    # File survives — just remove this node's derived paths
+                    conn.execute(
+                        "DELETE FROM file_paths WHERE file_id=? AND source_node_id=?",
+                        (fid, node_id),
+                    )
+                else:
+                    # This file has NO other references → affected
+                    file_info = conn.execute(
+                        "SELECT * FROM files WHERE file_id=?", (fid,)
+                    ).fetchone()
+                    if file_info:
+                        ver = conn.execute(
+                            "SELECT storage_file_id FROM file_versions WHERE version_id=?",
+                            (file_info["current_version_id"],),
+                        ).fetchone()
+                        affected_files.append({
+                            "file_id": fid,
+                            "filename": ver["storage_file_id"] if ver else "",
+                            "has_only_this_node": True,
+                        })
+
+            # Delete file_nodes for this node
+            conn.execute(
+                "DELETE FROM file_nodes WHERE node_id=?", (node_id,)
+            )
+
+            # Delete derived paths for this node (cleanup any remaining)
+            conn.execute(
+                "DELETE FROM file_paths WHERE source_node_id=?", (node_id,)
+            )
+
+            # Delete node's messages (from message flow)
+            conn.execute(
+                "DELETE FROM messages WHERE owner_type='node' AND owner_id=?",
+                (node_id,),
+            )
+
+            # Delete the node itself
             conn.execute(
                 "DELETE FROM nodes WHERE node_id=?", (node_id,)
             )
 
+            if affected_files:
+                result = {"affected_files": affected_files}
+
         emit_event("node.deleted", collection_id, {"node_id": node_id})
+        return result
     finally:
         conn.close()
 
@@ -1627,6 +1707,73 @@ def _mark_qdrant_chunks_archived(collection_id: str, file_id: str) -> int:
         return 0
 
 
+def _restore_qdrant_chunks_for_file(collection_id: str, file_id: str) -> int:
+    """Restore Qdrant chunks for the CURRENT version of a file (archived→false, is_current→true).
+
+    Only touches chunks belonging to the current version_id. Old versions keep archived=true.
+    Returns updated count.
+    """
+    _log = logging.getLogger("file_mgmt.service")
+    try:
+        from src.services import services
+        if services.db is None:
+            _log.warning("Qdrant not available, skipping restore for %s", file_id)
+            return 0
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        # Get current version_id
+        conn = get_db(collection_id)
+        try:
+            file_row = conn.execute(
+                "SELECT current_version_id FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row or not file_row["current_version_id"]:
+                return 0
+            current_version_id = file_row["current_version_id"]
+        finally:
+            conn.close()
+
+        # Scroll all chunks for this file, restore only current version
+        filter_cond = Filter(
+            must=[FieldCondition(key="file_id", match=MatchValue(value=file_id))]
+        )
+        all_pts = []
+        offset = None
+        restored = 0
+        while True:
+            pts, offset = services.db.client.scroll(
+                collection_name=collection_id,
+                scroll_filter=filter_cond,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=True,
+            )
+            for p in pts:
+                payload = dict(p.payload or {})
+                if payload.get("version_id") == current_version_id:
+                    payload["archived"] = False
+                    payload["is_current"] = True
+                    restored += 1
+                # old versions: keep archived=true, is_current=false
+                all_pts.append((str(p.id), p.vector, payload))
+            if offset is None:
+                break
+
+        if all_pts:
+            from qdrant_client.models import PointStruct
+            points = [
+                PointStruct(id=id_, vector=vec, payload=pl)
+                for id_, vec, pl in all_pts
+            ]
+            services.db.client.upsert(collection_name=collection_id, points=points)
+
+        return restored
+    except Exception:
+        _log.warning("Failed to restore Qdrant chunks for %s", file_id, exc_info=True)
+        return 0
+
+
 def _delete_qdrant_chunks_by_file_id(collection_id: str, file_id: str) -> int:
     """Delete all Qdrant chunks for a given file_id. Returns deleted count."""
     import logging as _logging
@@ -2111,6 +2258,199 @@ def update_file(
         return _row_to_file_out(row, conn)
     finally:
         conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Phase 5: Archive / End Chain / Toggle Archive / Enhanced Delete Node
+# ════════════════════════════════════════════════════════════════════
+
+
+def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
+    """End a branch chain: grey attachments, compute archive candidates.
+
+    Steps:
+    1. Validate node is 'end' type on a branch chain with no existing end node
+    2. Get all nodes on this chain
+    3. For each non-inherited node: grey all file attachments
+    4. For each file: check if it has any surviving references
+    5. Return summary: {greyed_files, archive_candidates, inherited_files}
+    """
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            # 1. Validate node
+            node = conn.execute(
+                "SELECT * FROM nodes WHERE node_id=?", (node_id,)
+            ).fetchone()
+            if not node:
+                raise HTTPException(404, f"Node '{node_id}' not found")
+            if node["node_type"] != "end":
+                raise HTTPException(400, "Node is not an 'end' type node")
+
+            chain_id = node["chain_id"]
+            chain = conn.execute(
+                "SELECT * FROM chains WHERE chain_id=?", (chain_id,)
+            ).fetchone()
+            if not chain:
+                raise HTTPException(500, "Node's chain not found")
+            if chain["parent_chain_id"] is None:
+                raise HTTPException(400, "Cannot end the main chain")
+
+            # Check for existing end node (exclude the current node)
+            existing_end = conn.execute(
+                'SELECT node_id FROM nodes WHERE chain_id=? AND node_type="end" AND node_id != ?',
+                (chain_id, node_id),
+            ).fetchone()
+            if existing_end:
+                raise HTTPException(
+                    409,
+                    "This chain already has an end node. "
+                    "Use reopen_chain first to re-open it.",
+                )
+
+            # 2. Get all nodes on this chain
+            all_nodes = conn.execute(
+                "SELECT node_id FROM nodes WHERE chain_id=?",
+                (chain_id,),
+            ).fetchall()
+            all_node_ids = {n["node_id"] for n in all_nodes}
+
+            inherit_set = set(req.inherit_node_ids)
+            # Validate inherit_node_ids are on this chain
+            for inh_id in inherit_set:
+                if inh_id not in all_node_ids:
+                    raise HTTPException(
+                        400, f"inherit_node_id '{inh_id}' is not on this chain"
+                    )
+
+            # 3. For each non-inherited node: grey all file attachments
+            greyed_files: set[str] = set()
+            inherited_files: set[str] = set()
+
+            for n_id in all_node_ids:
+                # Get all files attached to this node
+                fn_rows = conn.execute(
+                    "SELECT file_id FROM file_nodes WHERE node_id=?",
+                    (n_id,),
+                ).fetchall()
+
+                for fn in fn_rows:
+                    fid = fn["file_id"]
+                    if n_id in inherit_set:
+                        # Inherited — keep greyed=0
+                        inherited_files.add(fid)
+                    else:
+                        # Mark greyed=1
+                        conn.execute(
+                            "UPDATE file_nodes SET greyed=1 "
+                            "WHERE file_id=? AND node_id=?",
+                            (fid, n_id),
+                        )
+                        greyed_files.add(fid)
+
+            # 4. For each greyed file, check if it needs file-level archive
+            archive_candidates: set[str] = set()
+            for fid in greyed_files:
+                # Check all file_nodes for this file
+                all_fn = conn.execute(
+                    "SELECT node_id, greyed FROM file_nodes WHERE file_id=?",
+                    (fid,),
+                ).fetchall()
+
+                # Does any attachment survive (greyed=0 somewhere)?
+                has_active_attachment = any(fn_r["greyed"] == 0 for fn_r in all_fn)
+
+                # Does it have persistent paths?
+                persistent = conn.execute(
+                    "SELECT 1 FROM file_paths WHERE file_id=? AND source_node_id IS NULL LIMIT 1",
+                    (fid,),
+                ).fetchone()
+
+                # If no active attachments AND no persistent paths → candidate
+                if not has_active_attachment and not persistent:
+                    archive_candidates.add(fid)
+
+            # Build result sets
+            all_greyed_file_ids = list(greyed_files)
+            all_archive_candidate_ids = list(archive_candidates)
+            # Inherited files: those in inherited nodes that are not already greyed
+            all_inherited_file_ids = list(inherited_files - greyed_files)
+
+            result = {
+                "greyed_files": all_greyed_file_ids,
+                "archive_candidates": all_archive_candidate_ids,
+                "inherited_files": all_inherited_file_ids,
+            }
+
+        emit_event(
+            "archive.toggled",
+            collection_id,
+            {"node_id": node_id, "chain_id": chain_id, **result},
+        )
+        return result
+    finally:
+        conn.close()
+
+
+def toggle_archive(
+    collection_id: str, file_id: str, req: ArchiveToggle
+) -> FileSummary:
+    """Archive or unarchive a file (file-level).
+
+    - archived=True:  set files.archived=1, Qdrant chunks archived=true, files removed from folder views
+    - archived=False: set files.archived=0, current version Qdrant chunks restored, files back in folders
+    - Optimistic locking via version
+    """
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+
+            new_archived = 1 if req.archived else 0
+            cursor = conn.execute(
+                "UPDATE files SET archived=?, version=version+1 "
+                "WHERE file_id=? AND version=?",
+                (new_archived, file_id, req.version),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(
+                    409, "File was modified by another user (version conflict)"
+                )
+
+            if req.archived:
+                # Mark all Qdrant chunks as archived
+                _mark_qdrant_chunks_archived(collection_id, file_id)
+
+                # Also mark file_nodes.greyed=1 for all attachments
+                # (so derived paths reflect archive status)
+                conn.execute(
+                    "UPDATE file_nodes SET greyed=1 WHERE file_id=?", (file_id,)
+                )
+            else:
+                # Restore current version Qdrant chunks
+                _restore_qdrant_chunks_for_file(collection_id, file_id)
+
+            row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+
+        if req.archived:
+            emit_event("file.archived", collection_id, {"file_id": file_id})
+        else:
+            emit_event("file.unarchived", collection_id, {"file_id": file_id})
+
+        return _row_to_file_out(row, conn)
+    finally:
+        conn.close()
+
+
+# --- Enhanced delete_node (Phase 5) ---
+
+# Keep original delete_node signature but replace implementation
 
 
 # --- Derived path generation (node attachments) ---
