@@ -45,13 +45,33 @@ class Retriever:
         logger.debug("[Retriever] col=%s mode=%s dim=%d top_k=%d min_score=%.2f",
                      collection, search_mode, len(query_vector), top_k, min_score)
 
+        # Phase 4: Build compound filter to exclude archived/non-current chunks
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        archive_filter = Filter(
+            must_not=[
+                FieldCondition(key="archived", match=MatchValue(value=True)),
+                FieldCondition(key="is_current", match=MatchValue(value=False)),
+            ]
+        )
+        if filter_condition:
+            from qdrant_client.models import Filter as QdrantFilter
+            # Merge: combine with AND logic
+            merged_filter = QdrantFilter(
+                must=[
+                    archive_filter,
+                    filter_condition,
+                ]
+            )
+        else:
+            merged_filter = archive_filter
+
         if search_mode == "hybrid":
             chunks = self._hybrid_retrieve(query, query_vector, collection, top_k,
-                                           filter_condition=filter_condition, llm=llm)
+                                           filter_condition=merged_filter, llm=llm)
         else:
             results = self.db.search(
                 collection=collection, query_vector=query_vector, top_k=top_k,
-                filter_condition=filter_condition,
+                filter_condition=merged_filter,
             )
             chunks = self._to_chunks(results)
 

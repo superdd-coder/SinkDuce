@@ -1,4 +1,4 @@
-"""Business logic for file-management metadata CRUD (Phase 2).
+"""Business logic for file-management metadata CRUD (Phase 2–4).
 
 Pure functions: each takes collection_id as the first argument,
 opens a per-collection SQLite connection via store.get_db(),
@@ -8,8 +8,13 @@ emit_event() after the transaction commits.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import shutil
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import IO
 
 from fastapi import HTTPException
 
@@ -39,6 +44,11 @@ from src.file_mgmt.models import (
     NodeUpdate,
 )
 from src.file_mgmt.store import get_db
+
+logger = logging.getLogger("file_mgmt.service")
+
+COLLECTIONS_DIR = Path("data").resolve() / "collections"
+MAX_VERSIONS = 20
 
 # === Helpers ===
 
@@ -652,6 +662,16 @@ def create_chain(collection_id: str, req: ChainCreate) -> ChainOut:
                 if child:
                     raise HTTPException(
                         400, "Cannot bind a folder that contains sub-folders"
+                    )
+                # Phase 4: also check for files
+                has_files = conn.execute(
+                    "SELECT 1 FROM file_paths WHERE folder_id=? LIMIT 1",
+                    (req.bind_existing_folder_id,),
+                ).fetchone()
+                if has_files:
+                    raise HTTPException(
+                        400,
+                        "Cannot bind a folder that contains files",
                     )
                 conn.execute(
                     "UPDATE folders SET kind='branch', updated_at=? WHERE folder_id=?",
@@ -1398,6 +1418,701 @@ def promote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePat
         conn.close()
 
 
+# ════════════════════════════════════════════════════════════════════
+# Phase 4: File Upload Pipeline
+# ════════════════════════════════════════════════════════════════════
+
+
+def _files_dir(collection_id: str) -> Path:
+    return COLLECTIONS_DIR / collection_id / "files"
+
+
+def _get_supported_file_types(collection_id: str) -> list[str]:
+    """Get supported file types for a collection from config."""
+    from src.config import get_config
+    cfg = get_config()
+    return cfg.parsing.supported_file_types
+
+
+def _is_file_supported(filename: str, collection_id: str) -> bool:
+    """Check if a file type is supported for embedding."""
+    ext = Path(filename).suffix.lower().lstrip(".")
+    return ext in _get_supported_file_types(collection_id)
+
+
+def _write_upload_file(collection_id: str, file_id: str, file_bytes: bytes, filename: str) -> tuple[Path, str]:
+    """Write upload file bytes to disk. Returns (file_path, safe_name)."""
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise HTTPException(400, "Invalid filename")
+    file_dir = _files_dir(collection_id) / file_id
+    file_dir.mkdir(parents=True, exist_ok=True)
+    save_path = file_dir / safe_name
+    save_path.write_bytes(file_bytes)
+    return save_path, safe_name
+
+
+def _ingest_file_to_qdrant(
+    collection_id: str,
+    file_id: str,
+    file_path: Path,
+    version_id: str,
+    *,
+    source_label: str = "",
+) -> int:
+    """Ingest a parsed file into Qdrant. Returns chunk count.
+
+    Reuses existing parsing + chunking + embedding logic from handlers.py.
+    Qdrant payload includes archived/is_current/version_id/created_by.
+    """
+    from src.services import services
+
+    if services.db is None or services.embedding is None:
+        logger.warning(
+            "Qdrant/Embedding not available, skipping ingest for %s/%s",
+            collection_id, file_id,
+        )
+        return 0
+
+    from src.parsers import parse_file
+    from src.rag.chunker import ParagraphChunker
+    from src.rag.markdown_chunker import MarkdownChunker
+    from src.rag.collection_utils import get_collection_embedding
+
+    doc = parse_file(file_path)
+    if not doc.content or not doc.content.strip():
+        raise ValueError(f"No extractable text found for '{file_path.name}'")
+
+    config = services.db.get_collection_config(collection_id)
+    filename = file_path.name
+
+    # Choose chunker
+    use_markdown = doc.file_type == "markdown" or bool(doc.images)
+    if use_markdown:
+        chunker = MarkdownChunker(
+            max_tokens=config.get("chunk_size", 512),
+            buffer_ratio=config.get("buffer_ratio", 0.5),
+            chunk_overlap=config.get("chunk_overlap", 64),
+        )
+    else:
+        chunker = ParagraphChunker(
+            max_tokens=config.get("chunk_size", 512),
+            buffer_ratio=config.get("buffer_ratio", 0.5),
+            chunk_overlap=config.get("chunk_overlap", 64),
+        )
+
+    source = f"__file__:{file_id}"
+    extra_meta = {
+        "file_type": doc.file_type,
+        "ingested_at": __import__("time").time(),
+        "file_id": file_id,
+        "archived": False,
+        "version_id": version_id,
+        "is_current": True,
+        "created_by": "local",
+        "source_label": source_label or filename,
+    }
+    chunks = chunker.chunk_with_metadata(
+        doc.content, source=source, extra_metadata=extra_meta
+    )
+
+    if not chunks:
+        raise ValueError(f"Chunking produced no results for '{filename}'")
+
+    # Embed
+    embedding = get_collection_embedding(config, collection_id)
+    texts = []
+    for c in chunks:
+        parts = []
+        s = c.metadata.get("source", "")
+        if s:
+            parts.append(f"Source: {Path(s).name}")
+        summary = c.metadata.get("summary", "")
+        if summary:
+            parts.append(f"Document: {summary}")
+        context = c.metadata.get("context", "")
+        if context:
+            parts.append(f"Context: {context}")
+        parts.append(c.text)
+        texts.append("\n".join(parts))
+    embeddings = embedding.embed_texts(texts)
+
+    # Upsert
+    ids = []
+    payloads = []
+    for c in chunks:
+        cid = c.metadata.get("chunk_id") or str(uuid.uuid4())
+        c.metadata["chunk_id"] = cid
+        ids.append(cid)
+        payload = {
+            "text": c.text,
+            "parent_id": c.parent_id,
+            "chunk_type": c.chunk_type,
+            "collection": collection_id,
+        }
+        if c.metadata.get("context"):
+            payload["context"] = c.metadata["context"]
+        if c.metadata.get("summary"):
+            payload["summary"] = c.metadata["summary"]
+        payload.update({k: v for k, v in c.metadata.items() if k not in ("context", "summary")})
+        payloads.append(payload)
+
+    services.db.upsert_points(
+        collection=collection_id, ids=ids, vectors=embeddings, payloads=payloads,
+    )
+
+    # Update file index
+    try:
+        from src.collections.file_index import add as add_file_index
+        add_file_index(
+            collection_id, file_id, source,
+            source_label or filename,
+            doc.file_type, len(chunks),
+            file_path.suffix.lower().lstrip("."),
+        )
+    except Exception:
+        logger.warning("Failed to update files.json for %s", file_id, exc_info=True)
+
+    return len(chunks)
+
+
+def _mark_qdrant_chunks_archived(collection_id: str, file_id: str) -> int:
+    """Set archived=true on all Qdrant chunks for a given file_id. Returns updated count."""
+    _log = logging.getLogger("file_mgmt.service")
+    try:
+        from src.services import services
+        if services.db is None:
+            _log.warning("Qdrant not available, skipping archive mark for %s", file_id)
+            return 0
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        count = services.db.count_by_filter(
+            collection_id,
+            Filter(must=[FieldCondition(key="file_id", match=MatchValue(value=file_id))]),
+        )
+        # Update payload: set archived=true, is_current=false via scroll + re-upsert
+        filter_cond = Filter(
+            must=[FieldCondition(key="file_id", match=MatchValue(value=file_id))]
+        )
+        all_points = []
+        offset = None
+        while True:
+            pts, offset = services.db.client.scroll(
+                collection_name=collection_id,
+                scroll_filter=filter_cond,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=True,
+            )
+            for p in pts:
+                payload = dict(p.payload or {})
+                payload["archived"] = True
+                payload["is_current"] = False
+                all_points.append((str(p.id), p.vector, payload))
+            if offset is None:
+                break
+
+        if all_points:
+            from qdrant_client.models import PointStruct
+            points = [
+                PointStruct(id=id_, vector=vec, payload=pl)
+                for id_, vec, pl in all_points
+            ]
+            services.db.client.upsert(collection_name=collection_id, points=points)
+
+        return count
+    except Exception:
+        _log.warning("Failed to mark Qdrant chunks archived for %s", file_id, exc_info=True)
+        return 0
+
+
+def _delete_qdrant_chunks_by_file_id(collection_id: str, file_id: str) -> int:
+    """Delete all Qdrant chunks for a given file_id. Returns deleted count."""
+    import logging as _logging
+    _log = _logging.getLogger("file_mgmt.service")
+
+    try:
+        from src.services import services
+        if services.db is None:
+            _log.warning("Qdrant not available (services.db is None), skipping delete for %s", file_id)
+            return 0
+        return services.db.delete_by_filter(collection_id, "file_id", file_id)
+    except Exception:
+        _log.warning("Failed to delete Qdrant chunks for %s", file_id, exc_info=True)
+        return 0
+
+
+# ── upload_file_to_folder ────────────────────────────────────────
+
+
+def upload_file_to_folder(
+    collection_id: str,
+    folder_id: str,
+    file_bytes: bytes,
+    filename: str,
+    source_node_id: str | None = None,
+) -> FileSummary:
+    """Upload a file to a folder. Creates file record + version + path + optional ingest.
+
+    Steps:
+    1. Validate folder exists
+    2. Generate file_id, store to disk
+    3. Parse, check supported types
+    4. Create file_versions (version_no=1)
+    5. Create files record
+    6. Write file_paths (persistent or derived)
+    7. If supported: ingest to Qdrant
+    8. Create system version message
+    9. emit_event
+    """
+    conn = _open_db(collection_id)
+    try:
+        # PRAGMA must be set before BEGIN
+        conn.execute("PRAGMA defer_foreign_keys=ON")
+        with conn:
+            # 1. Validate folder
+            fld = conn.execute(
+                "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
+            ).fetchone()
+            if not fld:
+                raise HTTPException(404, f"Folder '{folder_id}' not found")
+
+            # 2. Generate IDs and store file
+            file_id = uuid.uuid4().hex
+            version_id = uuid.uuid4().hex
+
+            save_path, safe_name = _write_upload_file(collection_id, file_id, file_bytes, filename)
+            now = _now_iso()
+
+            # 3. Check supported
+            supported = _is_file_supported(safe_name, collection_id)
+            unsupported = 0 if supported else 1
+
+            # 4. Create files record first (current_version_id=NULL to avoid circular FK)
+            conn.execute(
+                """INSERT INTO files
+                   (file_id, current_version_id, is_definitive, archived,
+                    unsupported, created_by, version)
+                   VALUES (?, NULL, 0, 0, ?, 'local', 1)""",
+                (file_id, unsupported),
+            )
+
+            # 5. Create file_versions (now files row exists)
+            conn.execute(
+                """INSERT INTO file_versions
+                   (version_id, file_id, version_no, storage_file_id,
+                    archived, commit_message, created_by, created_at)
+                   VALUES (?, ?, 1, ?, 0, NULL, 'local', ?)""",
+                (version_id, file_id, safe_name, now),
+            )
+
+            # 6. Update files.current_version_id (now version row exists)
+            conn.execute(
+                "UPDATE files SET current_version_id=? WHERE file_id=?",
+                (version_id, file_id),
+            )
+
+            # 6. Write file_paths
+            path_id = uuid.uuid4().hex
+            is_primary = 1 if source_node_id is None else 0
+            conn.execute(
+                """INSERT INTO file_paths
+                   (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
+                   VALUES (?, ?, ?, ?, ?, 'local')""",
+                (path_id, file_id, folder_id, is_primary, source_node_id),
+            )
+
+            # 7. Ingest to Qdrant if supported
+            chunk_count = 0
+            if supported:
+                try:
+                    chunk_count = _ingest_file_to_qdrant(
+                        collection_id, file_id, save_path, version_id,
+                        source_label=safe_name,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Ingest failed for file %s (%s): %s — marking as unsupported",
+                        file_id, safe_name, e,
+                    )
+                    conn.execute(
+                        "UPDATE files SET unsupported=1 WHERE file_id=?",
+                        (file_id,),
+                    )
+                    unsupported = 1
+                    # Still keep the file — just skip embedding
+
+            # 8. Create system version message
+            message_id = uuid.uuid4().hex
+            conn.execute(
+                """INSERT INTO messages
+                   (message_id, owner_type, owner_id, source_node_id, body,
+                    author_type, author_id, created_at, edited_at, edited_by, version)
+                   VALUES (?, 'system_version', ?, NULL, 'Initial upload',
+                    'system', 'local', ?, NULL, NULL, 1)""",
+                (message_id, file_id, now),
+            )
+
+            row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+
+        emit_event(
+            "file.uploaded",
+            collection_id,
+            {
+                "file_id": file_id,
+                "folder_id": folder_id,
+                "chunk_count": chunk_count,
+            },
+        )
+        result = _row_to_file_out(row, conn)
+        result.unsupported = bool(unsupported)
+        return result
+    finally:
+        conn.close()
+
+
+# ── upload_folder ────────────────────────────────────────────────
+
+
+def upload_folder(
+    collection_id: str,
+    parent_folder_id: str,
+    files_data: list[tuple[bytes, str]],
+) -> list[FileSummary]:
+    """Upload an entire folder preserving relative paths.
+
+    Args:
+        files_data: list of (bytes_content, relative_filename) tuples
+    """
+    conn = _open_db(collection_id)
+    now = _now_iso()
+
+    # Validate parent folder
+    try:
+        parent = conn.execute(
+            "SELECT * FROM folders WHERE folder_id=?", (parent_folder_id,)
+        ).fetchone()
+        if not parent:
+            raise HTTPException(404, f"Folder '{parent_folder_id}' not found")
+    finally:
+        conn.close()
+
+    # 1. Group files by relative path, create folders
+    folder_cache: dict[str, str] = {}  # relative_dir -> folder_id
+
+    def _ensure_folder(rel_dir: str) -> str:
+        """Ensure a virtual folder exists for the given relative directory path."""
+        if not rel_dir or rel_dir == ".":
+            return parent_folder_id
+        if rel_dir in folder_cache:
+            return folder_cache[rel_dir]
+
+        parts = Path(rel_dir).parts
+        current_parent = parent_folder_id
+        accumulated = ""
+        for part in parts:
+            accumulated = str(Path(accumulated) / part) if accumulated else part
+            if accumulated in folder_cache:
+                current_parent = folder_cache[accumulated]
+                continue
+
+            conn2 = _open_db(collection_id)
+            try:
+                with conn2:
+                    fid = uuid.uuid4().hex
+                    conn2.execute(
+                        """INSERT INTO folders
+                           (folder_id, parent_folder_id, name, kind, is_system,
+                            created_by, created_at, updated_at, version)
+                           VALUES (?, ?, ?, 'plain', 0, 'local', ?, ?, 1)""",
+                        (fid, current_parent, part, now, now),
+                    )
+            finally:
+                conn2.close()
+            folder_cache[accumulated] = fid
+            current_parent = fid
+        return current_parent
+
+    results: list[FileSummary] = []
+    for file_bytes, relative_path in files_data:
+        # Extract relative dir
+        rel_dir = str(Path(relative_path).parent) if relative_path else "."
+        target_folder_id = _ensure_folder(rel_dir)
+
+        result = upload_file_to_folder(
+            collection_id, target_folder_id, file_bytes, relative_path, source_node_id=None
+        )
+        results.append(result)
+
+    return results
+
+
+# ── upload_file_version ──────────────────────────────────────────
+
+
+def upload_file_version(
+    collection_id: str,
+    file_id: str,
+    file_bytes: bytes,
+    filename: str,
+    commit_message: str = "",
+) -> FileSummary:
+    """Upload a new version of an existing file.
+
+    Steps:
+    1. Get current version_no → new version_no = MAX+1
+    2. Generate new version_id, store new version
+    3. Archive old version (DB + Qdrant)
+    4. Ingest new version to Qdrant
+    5. Update files.current_version_id
+    6. Create system version message
+    7. Check version limit (>20 → warning)
+    8. emit_event
+    """
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            # 1. Check file exists
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+
+            old_version = conn.execute(
+                "SELECT * FROM file_versions WHERE version_id=?",
+                (file_row["current_version_id"],),
+            ).fetchone()
+
+            max_row = conn.execute(
+                "SELECT MAX(version_no) AS m FROM file_versions WHERE file_id=?",
+                (file_id,),
+            ).fetchone()
+            new_version_no = (max_row["m"] or 0) + 1
+            new_version_id = uuid.uuid4().hex
+            now = _now_iso()
+
+            # 2. Store new version
+            save_path, safe_name = _write_upload_file(collection_id, file_id, file_bytes, filename)
+            conn.execute(
+                """INSERT INTO file_versions
+                   (version_id, file_id, version_no, storage_file_id,
+                    archived, commit_message, created_by, created_at)
+                   VALUES (?, ?, ?, ?, 0, ?, 'local', ?)""",
+                (new_version_id, file_id, new_version_no, safe_name, commit_message, now),
+            )
+
+            # 3. Archive old version in DB
+            if old_version:
+                conn.execute(
+                    "UPDATE file_versions SET archived=1 WHERE version_id=?",
+                    (old_version["version_id"],),
+                )
+
+            # Archive old Qdrant chunks
+            _mark_qdrant_chunks_archived(collection_id, file_id)
+
+            # 4. Ingest new version
+            chunk_count = 0
+            if not bool(file_row["unsupported"]):
+                try:
+                    chunk_count = _ingest_file_to_qdrant(
+                        collection_id, file_id, save_path, new_version_id,
+                        source_label=safe_name,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Version ingest failed for file %s: %s", file_id, e
+                    )
+
+            # 5. Update current_version_id
+            conn.execute(
+                "UPDATE files SET current_version_id=? WHERE file_id=?",
+                (new_version_id, file_id),
+            )
+
+            # 6. Create system version message
+            message_id = uuid.uuid4().hex
+            body = commit_message if commit_message else f"Updated to version {new_version_no}"
+            conn.execute(
+                """INSERT INTO messages
+                   (message_id, owner_type, owner_id, source_node_id, body,
+                    author_type, author_id, created_at, edited_at, edited_by, version)
+                   VALUES (?, 'system_version', ?, NULL, ?,
+                    'system', 'local', ?, NULL, NULL, 1)""",
+                (message_id, file_id, body, now),
+            )
+
+            row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+
+        # 9. Version limit warning
+        warning = None
+        if new_version_no > MAX_VERSIONS:
+            warning = (
+                f"File has {new_version_no} versions (limit is {MAX_VERSIONS}). "
+                "Consider cleaning up old versions."
+            )
+
+        emit_event(
+            "file.updated",
+            collection_id,
+            {"file_id": file_id, "version_no": new_version_no},
+        )
+
+        result = _row_to_file_out(row, conn)
+        if warning:
+            result.filename = f"[WARNING] {result.filename}"
+        return result
+    finally:
+        conn.close()
+
+
+# ── delete_file ──────────────────────────────────────────────────
+
+
+def delete_file(collection_id: str, file_id: str) -> None:
+    """Permanently delete a file: Qdrant chunks, disk, DB records, messages.
+
+    Cascading cleanup:
+    1. Delete Qdrant chunks
+    2. Delete disk directory
+    3. Delete file_nodes
+    4. Delete file_paths
+    5. Delete file_versions
+    6. Delete file's messages
+    7. Delete files record
+    8. emit_event
+    """
+    conn = _open_db(collection_id)
+    try:
+        conn.execute("PRAGMA defer_foreign_keys=ON")
+        with conn:
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+
+            # 1. Delete Qdrant chunks
+            _delete_qdrant_chunks_by_file_id(collection_id, file_id)
+
+            # 2. Delete disk directory
+            file_dir = _files_dir(collection_id) / file_id
+            if file_dir.exists():
+                shutil.rmtree(file_dir, ignore_errors=True)
+
+            # 3. Delete file_nodes (FK to files)
+            conn.execute("DELETE FROM file_nodes WHERE file_id=?", (file_id,))
+
+            # 4. Delete file_paths (FK to files)
+            conn.execute("DELETE FROM file_paths WHERE file_id=?", (file_id,))
+
+            # 5. Delete messages (FK to files)
+            conn.execute(
+                "DELETE FROM messages WHERE owner_id=? AND owner_type IN ('file','system_version')",
+                (file_id,),
+            )
+
+            # 6. Nullify files.current_version_id to break circular FK
+            conn.execute(
+                "UPDATE files SET current_version_id=NULL WHERE file_id=?",
+                (file_id,),
+            )
+
+            # 7. Delete file_versions (FK to files)
+            conn.execute("DELETE FROM file_versions WHERE file_id=?", (file_id,))
+
+            # 8. Delete files record
+            conn.execute("DELETE FROM files WHERE file_id=?", (file_id,))
+
+        # Clean up file index
+        try:
+            from src.collections.file_index import remove_by_source as remove_file_index
+            remove_file_index(collection_id, f"__file__:{file_id}")
+        except Exception:
+            logger.warning("Failed to clean up file index for %s", file_id, exc_info=True)
+
+        emit_event("file.deleted", collection_id, {"file_id": file_id})
+    finally:
+        conn.close()
+
+
+# ── update_file ──────────────────────────────────────────────────
+
+
+def update_file(
+    collection_id: str, file_id: str, req: dict
+) -> FileSummary:
+    """Update file metadata: is_definitive toggle, archived toggle (Phase 5).
+
+    Uses optimistic locking: version field must match.
+    """
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+
+            version = req.get("version")
+            if version is None:
+                raise HTTPException(400, "version is required for optimistic locking")
+
+            set_clauses: list[str] = []
+            params: list = []
+
+            if "is_definitive" in req:
+                set_clauses.append("is_definitive = ?")
+                params.append(1 if req["is_definitive"] else 0)
+
+            if "archived" in req:
+                new_archived = 1 if req["archived"] else 0
+                set_clauses.append("archived = ?")
+                params.append(new_archived)
+                # If archiving, also mark Qdrant chunks
+                if new_archived:
+                    _mark_qdrant_chunks_archived(collection_id, file_id)
+                else:
+                    # Unarchiving — mark Qdrant chunks as not archived
+                    # (restore current version chunks only)
+                    pass
+
+            set_clauses.append("version = version + 1")
+            params.extend([file_id, version])
+
+            cursor = conn.execute(
+                f"UPDATE files SET {', '.join(set_clauses)} "
+                "WHERE file_id = ? AND version = ?",
+                params,
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(
+                    409, "File was modified by another user (version conflict)"
+                )
+
+            row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+
+        if "archived" in req and req["archived"]:
+            emit_event("file.archived", collection_id, {"file_id": file_id})
+        elif "archived" in req:
+            emit_event("file.unarchived", collection_id, {"file_id": file_id})
+        if "is_definitive" in req:
+            emit_event("file.updated", collection_id, {"file_id": file_id})
+
+        return _row_to_file_out(row, conn)
+    finally:
+        conn.close()
+
+
 # --- Derived path generation (node attachments) ---
 
 
@@ -1411,17 +2126,45 @@ def attach_file_to_node(
 
     Modes:
     - file_id != None: attach existing file
-    - upload_file != None: Phase 4 will handle actual upload; Phase 3 assumes file_id
+    - upload_file != None: upload new file, then attach via file_id path
     """
     if file_id is None and upload_file is None:
         raise HTTPException(400, "Either file_id or upload_file must be provided")
-    if file_id is None:
-        # Phase 4: upload_file handling — for now, error
-        raise HTTPException(
-            400,
-            "File upload not yet implemented (Phase 4). Provide an existing file_id.",
-        )
+    if file_id is None and upload_file is not None:
+        # Phase 4: upload first, then attach
+        file_bytes, upload_filename = upload_file  # tuple: (bytes, str)
+        conn2 = _open_db(collection_id)
+        try:
+            node = conn2.execute(
+                "SELECT * FROM nodes WHERE node_id=?", (node_id,)
+            ).fetchone()
+            if not node:
+                raise HTTPException(404, f"Node '{node_id}' not found")
 
+            target_folder_id: str | None = None
+            if node["group_id"]:
+                grp = conn2.execute(
+                    "SELECT folder_id FROM node_groups WHERE group_id=?",
+                    (node["group_id"],),
+                ).fetchone()
+                if grp and grp["folder_id"]:
+                    target_folder_id = grp["folder_id"]
+            if not target_folder_id:
+                raise HTTPException(
+                    400,
+                    "Node has no group — cannot auto-determine upload folder. "
+                    "Upload to a folder first, then attach with file_id.",
+                )
+        finally:
+            conn2.close()
+
+        # Upload to the group folder with source_node_id
+        result = upload_file_to_folder(
+            collection_id, target_folder_id, file_bytes, upload_filename, source_node_id=node_id
+        )
+        file_id = result.file_id
+
+    # Now file_id is guaranteed to be set — use Phase 3 attach logic
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -1445,9 +2188,8 @@ def attach_file_to_node(
                 (file_id, node_id),
             ).fetchone()
             if existing:
-                raise HTTPException(
-                    409, f"File '{file_id}' is already attached to node '{node_id}'"
-                )
+                # Already attached — return file info without error
+                return _row_to_file_out(file_row, conn)
 
             # Insert file_nodes
             conn.execute(

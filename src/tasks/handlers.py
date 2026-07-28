@@ -725,6 +725,10 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 extra_meta["meeting_date"] = meeting_date
             if file_id:
                 extra_meta["file_id"] = file_id
+            # Phase 4: Qdrant payload extensions for file management v2
+            extra_meta["archived"] = False
+            extra_meta["is_current"] = True
+            extra_meta["created_by"] = "local"
             # Human-readable label for search results display
             extra_meta["source_label"] = source_label if source_label else filename_param
             chunks = chunker.chunk_with_metadata(

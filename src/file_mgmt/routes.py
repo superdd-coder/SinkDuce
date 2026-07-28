@@ -1,4 +1,4 @@
-"""FastAPI routes for file-management metadata CRUD (Phase 2 + Phase 3).
+"""FastAPI routes for file-management metadata CRUD (Phase 2–4).
 
 All routes are mounted under /api/file-mgmt by main.py.
 """
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from src.file_mgmt import service
 from src.file_mgmt.models import (
@@ -276,3 +276,80 @@ def update_message(collection_id: str, message_id: str, req: MessageUpdate):
 def delete_message(collection_id: str, message_id: str):
     """Delete a message (user messages only)."""
     service.delete_message(collection_id, message_id)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Phase 4: File Upload / Version / Delete / Update
+# ════════════════════════════════════════════════════════════════════
+
+
+@router.post("/{collection_id}/files/upload", status_code=201)
+async def upload_file_to_folder(
+    collection_id: str,
+    file: UploadFile = File(...),
+    folder_id: str = Form(...),
+    source_node_id: Optional[str] = Form(None),
+):
+    """Upload a file to a folder (creates persistent path).
+
+    If source_node_id is provided, creates a derived path instead.
+    """
+    file_bytes = await file.read()
+    return service.upload_file_to_folder(
+        collection_id, folder_id, file_bytes, file.filename or "unnamed",
+        source_node_id=source_node_id,
+    )
+
+
+@router.post("/{collection_id}/files/upload-folder", status_code=201)
+async def upload_entire_folder(
+    collection_id: str,
+    files: list[UploadFile] = File(...),
+    parent_folder_id: str = Form(...),
+):
+    """Upload an entire folder preserving relative paths."""
+    files_data: list[tuple[bytes, str]] = []
+    for f in files:
+        content = await f.read()
+        files_data.append((content, f.filename or "unnamed"))
+    return service.upload_folder(collection_id, parent_folder_id, files_data)
+
+
+@router.post("/{collection_id}/files/{file_id}/versions", status_code=201)
+async def upload_new_version(
+    collection_id: str,
+    file_id: str,
+    file: UploadFile = File(...),
+    commit_message: str = Form(""),
+):
+    """Upload a new version of an existing file."""
+    file_bytes = await file.read()
+    return service.upload_file_version(
+        collection_id, file_id, file_bytes, file.filename or "unnamed",
+        commit_message=commit_message,
+    )
+
+
+@router.patch("/{collection_id}/files/{file_id}")
+def update_file(collection_id: str, file_id: str, req: dict):
+    """Update file metadata (is_definitive, archived). Requires version for optimistic locking."""
+    return service.update_file(collection_id, file_id, req)
+
+
+@router.delete("/{collection_id}/files/{file_id}", status_code=204)
+def delete_file(collection_id: str, file_id: str):
+    """Permanently delete a file and all associated records."""
+    service.delete_file(collection_id, file_id)
+
+
+@router.post("/{collection_id}/nodes/{node_id}/files/upload", status_code=201)
+async def attach_upload_file_to_node(
+    collection_id: str,
+    node_id: str,
+    file: UploadFile = File(...),
+):
+    """Upload a new file and attach it to a node (generates derived paths)."""
+    file_bytes = await file.read()
+    return service.attach_file_to_node(
+        collection_id, node_id, file_id=None, upload_file=(file_bytes, file.filename or "unnamed"),
+    )

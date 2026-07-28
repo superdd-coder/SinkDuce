@@ -73,6 +73,7 @@ class RerankConfig(BaseModel):
 
 class ParsingConfig(BaseModel):
     default_chunk_size: int = 512
+    supported_file_types: list[str] = ["pdf", "docx", "txt", "md", "xlsx", "pptx", "csv", "json", "html"]
 
 
 class RAGConfig(BaseModel):
