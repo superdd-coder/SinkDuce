@@ -549,7 +549,6 @@ useAppStore.subscribe((state) => {
     localStorage.setItem("rag_activeProvider", JSON.stringify(state.activeProvider))
     localStorage.setItem("rag_activeModel", JSON.stringify(state.activeModel))
     localStorage.setItem("rag_selectedCollections", JSON.stringify(state.selectedCollections))
-    localStorage.setItem("rag_sidebarView", JSON.stringify(state.sidebarView))
     localStorage.setItem("rag_sessionId", JSON.stringify(state.sessionId))
   }, 500)
 })

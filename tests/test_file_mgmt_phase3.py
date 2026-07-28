@@ -621,9 +621,9 @@ def test_folder_messages_aggregation():
     bodies = {m["body"] for m in messages}
     assert bodies == {"folder-msg", "file-msg", "node-msg"}
 
-    # Verify chronological order
+   # Verify chronological order
     timestamps = [m["created_at"] for m in messages]
-    assert timestamps == sorted(timestamps), "Messages should be sorted by created_at"
+    assert timestamps == sorted(timestamps, reverse=True), "Messages should be sorted by created_at DESC (newest first)"
 
 
 # ── 10. is_greyed calculation ───────────────────────────────────
@@ -867,7 +867,7 @@ def test_list_files_endpoint():
     assert resp.status_code == 201
 
     # list all files
-    resp = client.get("/api/file-mgmt/p3-12/files")
+    resp = client.get(f"/api/file-mgmt/p3-12/files?folder_id={folder_id}")
     assert resp.status_code == 200
     all_files = resp.json()
     assert len(all_files) >= 2

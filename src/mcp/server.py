@@ -49,11 +49,11 @@ from __future__ import annotations
 
 import logging
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver.server import MCPServer
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("sinkduce")
+mcp = MCPServer(name="sinkduce")
 
 # ── Resolve base URL for docs that mention the HTTP API ──────
 from src.config import get_config as _get_config
@@ -260,12 +260,12 @@ def session_lifespan():
     from contextlib import asynccontextmanager
 
     # Force lazy initialization of the session manager by calling
-    # streamable_http_app() once. After this, mcp._session_manager is set.
+    # streamable_http_app() once. After this, mcp.session_manager is set.
     _ = get_http_app()
 
     @asynccontextmanager
     async def _runner():
-        sm = mcp._session_manager
+        sm = mcp.session_manager
         if sm is None:
             # No HTTP app ever requested (unlikely after get_http_app()) — yield
             # a no-op so the lifespan still works.

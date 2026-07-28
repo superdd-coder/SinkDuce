@@ -80,6 +80,20 @@ def get_folder_messages(
     )
 
 
+@router.get("/{collection_id}/messages")
+def get_collection_messages(collection_id: str):
+    """List messages at the collection (root) level."""
+    return service.list_messages(collection_id, "collection", collection_id)
+
+
+@router.post("/{collection_id}/messages", status_code=201)
+def create_collection_message(collection_id: str, req: MessageCreate):
+    """Add a message at the collection (root) level."""
+    req.owner_type = "collection"
+    req.owner_id = collection_id
+    return service.create_message(collection_id, req)
+
+
 @router.post("/{collection_id}/folders/{folder_id}/messages", status_code=201)
 def create_folder_message(collection_id: str, folder_id: str, req: MessageCreate):
     """Add a message to a folder. Sets owner_type='folder', owner_id=folder_id."""

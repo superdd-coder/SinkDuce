@@ -166,8 +166,10 @@ class FileOut(BaseModel):
     created_by: str = "local"
     version: int = 1
     filename: str = ""      # derived: current version original filename
+    original_ext: str = ""  # derived: extension from filename (e.g. "pdf", "md", "" for none)
     created_at: str = ""    # derived: first version creation timestamp
     is_greyed: bool = False  # derived: greyed status in current folder context
+    task_id: str | None = None  # upload task ID for async ingest polling
 
 
 # Alias used in service signatures (contract section 8)

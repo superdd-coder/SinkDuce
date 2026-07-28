@@ -71,12 +71,9 @@ def _validate_collection(collection_id: str) -> None:
 
 def _open_db(collection_id: str):
     _validate_collection(collection_id)
-    try:
-        return get_db(collection_id)
-    except FileNotFoundError:
-        from src.file_mgmt.store import init_collection_db
-        init_collection_db(collection_id)
-        return get_db(collection_id)
+    from src.file_mgmt.store import init_collection_db
+    init_collection_db(collection_id)  # idempotent: creates, backfills, migrates
+    return get_db(collection_id)
 
 
 def _row_to_folder(row) -> FolderOut:
@@ -273,10 +270,16 @@ def get_folder_tree(collection_id: str) -> list[FolderTree]:
         def build(row) -> FolderTree:
             kids = [build(c) for c in children_map.get(row["folder_id"], [])]
             base = _row_to_folder(row)
+            # Compute accurate file_count
+            fid = row["folder_id"]
+            cnt = conn.execute(
+                "SELECT COUNT(DISTINCT file_id) FROM file_paths WHERE folder_id=?",
+                (fid,),
+            ).fetchone()[0]
             return FolderTree(
                 **base.model_dump(),
                 children=kids,
-                file_count=0,
+                file_count=cnt,
             )
 
         roots = children_map.get(None, [])
@@ -1119,7 +1122,7 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
         msg_rows = conn.execute(
             """SELECT * FROM messages
                WHERE owner_type='node' AND owner_id=?
-               ORDER BY created_at""",
+               ORDER BY created_at DESC""",
             (node_id,),
         ).fetchall()
         node_msgs = [_row_to_message(r) for r in msg_rows]
@@ -1182,6 +1185,8 @@ def _row_to_file_out(row, conn=None) -> FileOut:
         ).fetchone()
         if ver:
             f.filename = ver["storage_file_id"]
+            from pathlib import Path
+            f.original_ext = Path(ver["storage_file_id"]).suffix.lstrip(".") if Path(ver["storage_file_id"]).suffix else ""
             f.created_at = ver["created_at"]
     return f
 
@@ -1297,7 +1302,7 @@ def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
         msg_rows = conn.execute(
             """SELECT * FROM messages
                WHERE owner_type='file' AND owner_id=?
-               ORDER BY created_at""",
+               ORDER BY created_at DESC""",
             (file_id,),
         ).fetchall()
         messages = [MessageOut(**_row_to_message(r).model_dump()) for r in msg_rows]
@@ -1326,7 +1331,16 @@ def list_files(
                 (folder_id,),
             ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM files").fetchall()
+            # Root level: only orphan files (no file_paths entries)
+            # Lazily sync any new files from files.json
+            from src.file_mgmt.store import _migrate_files_json_import
+            _migrate_files_json_import(collection_id)
+
+            rows = conn.execute(
+                """SELECT f.* FROM files f
+                   WHERE f.file_id NOT IN (SELECT file_id FROM file_paths)
+                   ORDER BY f.file_id"""
+            ).fetchall()
 
         results: list[FileSummary] = []
         for r in rows:
@@ -1345,6 +1359,7 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
     """List files in a folder with greyed status.
 
     Deduplicates: same file with multiple paths in this folder shows once.
+    Deduplicates: same file with multiple paths in this folder shows once.
     """
     conn = _open_db(collection_id)
     try:
@@ -1362,31 +1377,6 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
                WHERE fp.folder_id=?
                ORDER BY f.file_id""",
             (folder_id,),
-        ).fetchall()
-
-        seen: set[str] = set()
-        results: list[FileSummary] = []
-        for r in rows:
-            fid = r["file_id"]
-            if fid in seen:
-                continue
-            seen.add(fid)
-            fs = _row_to_file_out(r, conn)
-            # Build a synthetic path_row for greyed calculation
-            path_row = {"source_node_id": r["source_node_id"]}
-            fs.is_greyed = _compute_is_greyed(conn, r, path_row)
-            results.append(fs)
-        return results
-    finally:
-        conn.close()
-
-
-def list_archived_files(collection_id: str) -> list[FileSummary]:
-    """/Archived virtual view: all files where archived=1."""
-    conn = _open_db(collection_id)
-    try:
-        rows = conn.execute(
-            "SELECT * FROM files WHERE archived=1 ORDER BY file_id"
         ).fetchall()
         return [_row_to_file_out(r, conn) for r in rows]
     finally:
@@ -1838,6 +1828,7 @@ def upload_file_to_folder(
 
             # 2. Generate IDs and store file
             file_id = uuid.uuid4().hex
+            file_id_for_cleanup = file_id
             version_id = uuid.uuid4().hex
 
             save_path, safe_name = _write_upload_file(collection_id, file_id, file_bytes, filename)
@@ -1881,25 +1872,38 @@ def upload_file_to_folder(
                 (path_id, file_id, folder_id, is_primary, source_node_id),
             )
 
-            # 7. Ingest to Qdrant if supported
+            # 7. Queue async ingest task via the existing upload pipeline
             chunk_count = 0
+            task_id: str | None = None
             if supported:
                 try:
-                    chunk_count = _ingest_file_to_qdrant(
-                        collection_id, file_id, save_path, version_id,
+                    from src.tasks.task_manager import task_manager
+                    file_source = f"__file__:{file_id}"
+                    task = task_manager.create_task(
+                        filename=safe_name,
+                        task_type="upload",
+                        file_path=str(save_path),
+                        collection=collection_id,
+                        filename_param=file_source,
                         source_label=safe_name,
+                        file_id=file_id,
                     )
+                    task_id = task.id
+                    chunk_count = -1  # pending, actual count unknown yet
                 except Exception as e:
                     logger.warning(
-                        "Ingest failed for file %s (%s): %s — marking as unsupported",
+                        "Failed to queue ingest task for file %s (%s): %s",
                         file_id, safe_name, e,
                     )
+                    err_msg_id = uuid.uuid4().hex
                     conn.execute(
-                        "UPDATE files SET unsupported=1 WHERE file_id=?",
-                        (file_id,),
+                        """INSERT INTO messages
+                           (message_id, owner_type, owner_id, source_node_id, body,
+                            author_type, author_id, created_at, edited_at, edited_by, version)
+                           VALUES (?, 'system_version', ?, NULL, ?,
+                            'system', 'system', ?, NULL, NULL, 1)""",
+                        (err_msg_id, file_id, f"Failed to queue ingest: {e}", now),
                     )
-                    unsupported = 1
-                    # Still keep the file — just skip embedding
 
             # 8. Create system version message
             message_id = uuid.uuid4().hex
@@ -1927,7 +1931,14 @@ def upload_file_to_folder(
         )
         result = _row_to_file_out(row, conn)
         result.unsupported = bool(unsupported)
+        result.task_id = task_id
         return result
+    except Exception:
+        if file_id_for_cleanup:
+            file_dir = _files_dir(collection_id) / file_id_for_cleanup
+            if file_dir.exists():
+                shutil.rmtree(file_dir, ignore_errors=True)
+        raise
     finally:
         conn.close()
 
@@ -2775,7 +2786,7 @@ def list_messages(
         rows = conn.execute(
             """SELECT * FROM messages
                WHERE owner_type=? AND owner_id=?
-               ORDER BY created_at""",
+               ORDER BY created_at DESC""",
             (owner_type, owner_id),
         ).fetchall()
         return [_row_to_message(r) for r in rows]
@@ -2840,7 +2851,7 @@ def list_folder_messages(
             )
             params.append(folder_id)
 
-        sql = " UNION ".join(queries) + " ORDER BY created_at"
+        sql = " UNION ".join(queries) + " ORDER BY created_at DESC"
         rows = conn.execute(sql, params).fetchall()
         return [_row_to_message(r) for r in rows]
     finally:

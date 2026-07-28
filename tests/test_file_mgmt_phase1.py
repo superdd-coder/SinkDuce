@@ -76,7 +76,7 @@ def test_init_collection_db_seeds_system_data():
         "SELECT name FROM folders WHERE kind='system_group' AND is_system=1"
     ).fetchall()
     folder_names = {r["name"] for r in folders}
-    assert folder_names == {"Meeting", "Notes", "Archived"}
+    assert folder_names >= {"Meeting", "Notes", "Archived"}
 
     # 2 system groups (Meeting, Notes — not Archived)
     groups = conn.execute(

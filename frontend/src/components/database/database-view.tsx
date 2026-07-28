@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Loader2 } from "lucide-react"
+import { Loader2, FolderTreeIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/stores/app-store"
 import { getCollectionConfig, getFiles, getFileChunks, deleteDocument, uploadFiles, getTasks, clearCompletedTasks, cancelTask, retryTask, getDocSummary, setDocSummaryInclude, generateDocSummary, type FileListItem, type ChunkDetail, type TaskInfo } from "@/api/client"
@@ -16,6 +16,7 @@ import { InfoPanel } from "./info-panel"
 import { FileDetailDialog } from "./file-detail-dialog"
 import { UploadUI, TaskQueueList } from "./upload-section"
 import { QuickChat } from "./quick-chat"
+import { FolderView } from "@/components/file-mgmt/folder-view"
 
 // Module-level: allows note-editor-dialog to trigger files refresh after ingestion
 let _refreshFilesCallback: (() => void) | null = null
@@ -53,6 +54,8 @@ export function DatabaseView() {
   const [generatingSummaries, setGeneratingSummaries] = useState<Set<string>>(new Set())
   const [quickChatOpen, setQuickChatOpen] = useState(false)
   const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | undefined>(undefined)
+  // Phase 6: view mode for folder view vs timeline view
+  const [dbViewMode, setDbViewMode] = useState<"classic" | "folders" | "timeline">("classic")
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -334,14 +337,45 @@ export function DatabaseView() {
                 </ScrollArea>
               </TabsContent>
 
-              <TabsContent key={`files-${activeTab}`} value="files" className="flex-1 mt-2 overflow-hidden animate-tab-in">
+              <TabsContent key={`files-${activeTab}`} value="files" className="flex-1 flex flex-col mt-2 overflow-hidden min-h-0 animate-tab-in">
+                {/* Phase 6: View mode switcher inside Files tab */}
+                <div className="flex items-center gap-0.5 mb-3">
+                  <div className="flex items-center gap-0.5 bg-muted/50 rounded-md p-0.5">
+                    <button
+                      className={`text-[10px] font-medium uppercase tracking-[0.08em] px-2 py-0.5 rounded ${
+                        dbViewMode === "classic"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      onClick={() => setDbViewMode("classic")}
+                    >
+                      Classic
+                    </button>
+                    <button
+                      className={`text-[10px] font-medium uppercase tracking-[0.08em] px-2 py-0.5 rounded flex items-center gap-1 ${
+                        dbViewMode === "folders"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      onClick={() => setDbViewMode("folders")}
+                    >
+                      <FolderTreeIcon className="h-3 w-3" />
+                      Folders
+                    </button>
+                  </div>
+                </div>
+                {coverage && (
+                  <div className="text-[11px] leading-relaxed px-3 py-1.5 border border-dashed border-border bg-muted/30">
+                    <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground/70">Coverage · </span>
+                    <span className="text-muted-foreground">{coverage}</span>
+                  </div>
+                )}
+                {dbViewMode === "folders" ? (
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <FolderView collectionId={activeCollection} />
+                  </div>
+                ) : (
                 <div className="h-full flex flex-col gap-4">
-                  {coverage && (
-                    <div className="text-[11px] leading-relaxed px-3 py-2 border border-dashed border-border bg-muted/30 t-sans-family">
-                      <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground/70">Coverage · </span>
-                      <span className="text-muted-foreground">{coverage}</span>
-                    </div>
-                  )}
                   {/* Upload UI stays at top, always accessible (not in scroll). */}
                   <UploadUI
                     hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
@@ -445,6 +479,7 @@ export function DatabaseView() {
                     )}
                   </div>
                 </div>
+                )}
               </TabsContent>
 
               <TabsContent key={`config-${activeTab}`} value="config" className="flex-1 mt-2 overflow-hidden min-h-0 animate-tab-in">
