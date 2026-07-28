@@ -170,7 +170,8 @@ app.include_router(meeting_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(visual_router, prefix="/api")
 app.include_router(hot_words_router)
-# Phase 2: app.include_router(file_mgmt_router, prefix="/api/file-mgmt")
+from src.file_mgmt.routes import router as file_mgmt_router
+app.include_router(file_mgmt_router, prefix="/api/file-mgmt")
 
 
 # ── MCP sub-app (mounted at /mcp) ─────────────────────────────
