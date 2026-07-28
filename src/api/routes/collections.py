@@ -12,6 +12,7 @@ from src.api.schemas import (
 from src.collections import store as collections_store
 from src.services import services
 from src.tasks.task_manager import task_manager
+from src.file_mgmt.store import init_collection_db, delete_collection_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -119,6 +120,12 @@ def create_collection(req: CollectionCreateRequest):
     # Store metadata with display name and qdrant_name
     collections_store.create_collection_meta(collection_id, req.name, qdrant_name=collection_id)
 
+    # Initialize per-collection file-management SQLite DB (Phase 1)
+    try:
+        init_collection_db(collection_id)
+    except Exception as e:
+        logger.error("Failed to init file-mgmt DB for %s: %s", collection_id, e)
+
     return {"id": collection_id, "message": f"Collection '{req.name}' created", "dimensions": dimensions}
 
 
@@ -138,6 +145,8 @@ def delete_collection(collection_id: str):
 
     # Delete from Qdrant (using ID as name)
     services.db.delete_collection(collection_id)
+    # Delete file-management SQLite DB
+    delete_collection_db(collection_id)
     # Delete metadata
     collections_store.delete_collection_meta(collection_id)
 
