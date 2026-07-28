@@ -18,6 +18,11 @@ from src.file_mgmt.models import (
     ChainCreate,
     ChainOut,
     ChainUpdate,
+    FileOut,
+    FilePathOut,
+    FileSummary,
+    FileDetail,
+    FileVersionOut,
     FolderCreate,
     FolderOut,
     FolderTree,
@@ -25,6 +30,9 @@ from src.file_mgmt.models import (
     GroupCreate,
     GroupOut,
     GroupUpdate,
+    MessageCreate,
+    MessageOut,
+    MessageUpdate,
     NodeCreate,
     NodeOut,
     NodeReorder,
@@ -972,10 +980,775 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
         if not node:
             raise HTTPException(404, f"Node '{node_id}' not found")
         out = _row_to_node(node)
+
+        # Attachments: file_nodes JOIN files JOIN file_versions
+        att_rows = conn.execute(
+            """SELECT fn.file_id, fn.greyed, f.is_definitive, f.archived,
+                      fv.storage_file_id
+               FROM file_nodes fn
+               JOIN files f ON f.file_id = fn.file_id
+               LEFT JOIN file_versions fv ON fv.version_id = f.current_version_id
+               WHERE fn.node_id=?""",
+            (node_id,),
+        ).fetchall()
+        attachments = []
+        has_definitive = False
+        for a in att_rows:
+            attachments.append({
+                "file_id": a["file_id"],
+                "greyed": bool(a["greyed"]),
+                "is_definitive": bool(a["is_definitive"]),
+                "archived": bool(a["archived"]),
+                "filename": a["storage_file_id"] or "",
+            })
+            if a["is_definitive"]:
+                has_definitive = True
+
+        # Node messages
+        msg_rows = conn.execute(
+            """SELECT * FROM messages
+               WHERE owner_type='node' AND owner_id=?
+               ORDER BY created_at""",
+            (node_id,),
+        ).fetchall()
+        node_msgs = [_row_to_message(r) for r in msg_rows]
+
         return {
             **out.model_dump(),
-            "attachments": [],
-            "messages": [],
+            "attachments": attachments,
+            "messages": [m.model_dump() for m in node_msgs],
+            "has_definitive_file": has_definitive,
         }
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Phase 3: File Paths + Attachments + Messages
+# ════════════════════════════════════════════════════════════════════
+
+# --- Helpers ---
+
+
+def _row_to_message(row) -> MessageOut:
+    from src.file_mgmt.models import MessageOut
+
+    return MessageOut(
+        message_id=row["message_id"],
+        owner_type=row["owner_type"],
+        owner_id=row["owner_id"],
+        source_node_id=row["source_node_id"],
+        body=row["body"],
+        author_type=row["author_type"],
+        author_id=row["author_id"],
+        created_at=row["created_at"],
+        edited_at=row["edited_at"],
+        edited_by=row["edited_by"],
+        version=row["version"],
+    )
+
+
+def _row_to_file_out(row, conn=None) -> FileOut:
+    from src.file_mgmt.models import FileOut
+
+    f = FileOut(
+        file_id=row["file_id"],
+        current_version_id=row["current_version_id"],
+        is_definitive=bool(row["is_definitive"]),
+        archived=bool(row["archived"]),
+        unsupported=bool(row["unsupported"]),
+        created_by=row["created_by"],
+        version=row["version"],
+        filename=row["current_version_id"] or "",
+        created_at="",
+        is_greyed=bool(row["archived"]),
+    )
+    # compute filename from current version
+    if conn and f.current_version_id:
+        ver = conn.execute(
+            "SELECT storage_file_id, created_at FROM file_versions WHERE version_id=?",
+            (f.current_version_id,),
+        ).fetchone()
+        if ver:
+            f.filename = ver["storage_file_id"]
+            f.created_at = ver["created_at"]
+    return f
+
+
+def _row_to_file_path(row, folder_path: str = "", is_greyed: bool = False) -> FilePathOut:
+    from src.file_mgmt.models import FilePathOut
+
+    return FilePathOut(
+        path_id=row["path_id"],
+        file_id=row["file_id"],
+        folder_id=row["folder_id"],
+        is_primary=bool(row["is_primary"]),
+        source_node_id=row["source_node_id"],
+        created_by=row["created_by"],
+        folder_path=folder_path,
+        is_greyed=is_greyed,
+    )
+
+
+def _compute_folder_path(conn, folder_id: str | None) -> str:
+    """Build breadcrumb path like /Financial/Sub by walking up parent_folder_id."""
+    if not folder_id:
+        return ""
+    parts: list[str] = []
+    current = folder_id
+    visited: set[str] = set()
+    while current and current not in visited:
+        row = conn.execute(
+            "SELECT name, parent_folder_id FROM folders WHERE folder_id=?",
+            (current,),
+        ).fetchone()
+        if not row:
+            break
+        parts.append(row["name"])
+        visited.add(current)
+        current = row["parent_folder_id"]
+    parts.reverse()
+    return "/" + "/".join(parts)
+
+
+def _compute_is_greyed(conn, file_row, path_row) -> bool:
+    """Compute is_greyed for a path entry.
+
+    Rules:
+    - files.archived=1 -> True
+    - 派生路径 (source_node_id != NULL): 查 file_nodes.greyed
+    - 持久路径 (source_node_id=NULL) + files.archived=0 -> False
+    """
+    if file_row["archived"]:
+        return True
+    if path_row["source_node_id"] is not None:
+        fn = conn.execute(
+            "SELECT greyed FROM file_nodes WHERE file_id=? AND node_id=?",
+            (file_row["file_id"], path_row["source_node_id"]),
+        ).fetchone()
+        if fn and fn["greyed"]:
+            return True
+    return False
+
+
+# --- File queries (without upload) ---
+
+
+def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
+    from src.file_mgmt.models import FileDetail, MessageOut
+
+    conn = _open_db(collection_id)
+    try:
+        file_row = conn.execute(
+            "SELECT * FROM files WHERE file_id=?", (file_id,)
+        ).fetchone()
+        if not file_row:
+            raise HTTPException(404, f"File '{file_id}' not found")
+
+        base = _row_to_file_out(file_row, conn)
+
+        # file_paths
+        path_rows = conn.execute(
+            "SELECT * FROM file_paths WHERE file_id=?", (file_id,)
+        ).fetchall()
+        paths: list[FilePathOut] = []
+        for pr in path_rows:
+            fp = _compute_folder_path(conn, pr["folder_id"])
+            greyed = _compute_is_greyed(conn, file_row, pr)
+            paths.append(_row_to_file_path(pr, folder_path=fp, is_greyed=greyed))
+
+        # file_versions
+        ver_rows = conn.execute(
+            "SELECT * FROM file_versions WHERE file_id=? ORDER BY version_no",
+            (file_id,),
+        ).fetchall()
+        versions = [_row_to_file_version(r) for r in ver_rows]
+
+        # node associations
+        node_rows = conn.execute(
+            """SELECT n.node_id, n.title, n.node_type, fn.greyed
+               FROM file_nodes fn
+               JOIN nodes n ON n.node_id = fn.node_id
+               WHERE fn.file_id=?""",
+            (file_id,),
+        ).fetchall()
+        nodes = [
+            {
+                "node_id": nr["node_id"],
+                "title": nr["title"],
+                "node_type": nr["node_type"],
+                "greyed": bool(nr["greyed"]),
+            }
+            for nr in node_rows
+        ]
+
+        # messages
+        msg_rows = conn.execute(
+            """SELECT * FROM messages
+               WHERE owner_type='file' AND owner_id=?
+               ORDER BY created_at""",
+            (file_id,),
+        ).fetchall()
+        messages = [MessageOut(**_row_to_message(r).model_dump()) for r in msg_rows]
+
+        return FileDetail(
+            **base.model_dump(),
+            paths=paths,
+            versions=versions,
+            nodes=nodes,
+            messages=messages,
+        )
+    finally:
+        conn.close()
+
+
+def list_files(
+    collection_id: str, folder_id: str | None = None, archived: bool | None = None
+) -> list[FileSummary]:
+    conn = _open_db(collection_id)
+    try:
+        if folder_id:
+            rows = conn.execute(
+                """SELECT DISTINCT f.* FROM files f
+                   JOIN file_paths fp ON fp.file_id = f.file_id
+                   WHERE fp.folder_id=?""",
+                (folder_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM files").fetchall()
+
+        results: list[FileSummary] = []
+        for r in rows:
+            if archived is not None and bool(r["archived"]) != archived:
+                continue
+            fs = _row_to_file_out(r, conn)
+            # For list_files, compute per-file is_greyed from archived flag
+            fs.is_greyed = bool(r["archived"])
+            results.append(fs)
+        return results
+    finally:
+        conn.close()
+
+
+def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary]:
+    """List files in a folder with greyed status.
+
+    Deduplicates: same file with multiple paths in this folder shows once.
+    """
+    conn = _open_db(collection_id)
+    try:
+        # Check folder exists
+        fld = conn.execute(
+            "SELECT folder_id FROM folders WHERE folder_id=?", (folder_id,)
+        ).fetchone()
+        if not fld:
+            raise HTTPException(404, f"Folder '{folder_id}' not found")
+
+        rows = conn.execute(
+            """SELECT DISTINCT f.*, fp.source_node_id, fp.path_id
+               FROM files f
+               JOIN file_paths fp ON fp.file_id = f.file_id
+               WHERE fp.folder_id=?
+               ORDER BY f.file_id""",
+            (folder_id,),
+        ).fetchall()
+
+        seen: set[str] = set()
+        results: list[FileSummary] = []
+        for r in rows:
+            fid = r["file_id"]
+            if fid in seen:
+                continue
+            seen.add(fid)
+            fs = _row_to_file_out(r, conn)
+            # Build a synthetic path_row for greyed calculation
+            path_row = {"source_node_id": r["source_node_id"]}
+            fs.is_greyed = _compute_is_greyed(conn, r, path_row)
+            results.append(fs)
+        return results
+    finally:
+        conn.close()
+
+
+def list_archived_files(collection_id: str) -> list[FileSummary]:
+    """/Archived virtual view: all files where archived=1."""
+    conn = _open_db(collection_id)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM files WHERE archived=1 ORDER BY file_id"
+        ).fetchall()
+        return [_row_to_file_out(r, conn) for r in rows]
+    finally:
+        conn.close()
+
+
+# --- File Paths ---
+
+
+def add_file_path(
+    collection_id: str, file_id: str, folder_id: str, is_primary: bool = False
+) -> FilePathOut:
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            # validate file exists
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+
+            # validate folder exists
+            fld = conn.execute(
+                "SELECT folder_id FROM folders WHERE folder_id=?", (folder_id,)
+            ).fetchone()
+            if not fld:
+                raise HTTPException(404, f"Folder '{folder_id}' not found")
+
+            # check UNIQUE constraint: (file_id, folder_id, NULL) — only for persistent paths
+            existing = conn.execute(
+                """SELECT path_id FROM file_paths
+                   WHERE file_id=? AND folder_id=? AND source_node_id IS NULL""",
+                (file_id, folder_id),
+            ).fetchone()
+            if existing:
+                raise HTTPException(
+                    409,
+                    f"File already has a persistent path in folder '{folder_id}'",
+                )
+
+            path_id = uuid.uuid4().hex
+            conn.execute(
+                """INSERT INTO file_paths
+                   (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
+                   VALUES (?, ?, ?, ?, NULL, 'local')""",
+                (path_id, file_id, folder_id, 1 if is_primary else 0),
+            )
+            row = conn.execute(
+                "SELECT * FROM file_paths WHERE path_id=?", (path_id,)
+            ).fetchone()
+
+        emit_event("file_path.added", collection_id, {"path_id": path_id, "file_id": file_id})
+        fp = _compute_folder_path(conn, folder_id)
+        return _row_to_file_path(row, folder_path=fp, is_greyed=bool(file_row["archived"]))
+    finally:
+        conn.close()
+
+
+def remove_file_path(collection_id: str, file_id: str, path_id: str) -> None:
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            path = conn.execute(
+                "SELECT * FROM file_paths WHERE path_id=? AND file_id=?",
+                (path_id, file_id),
+            ).fetchone()
+            if not path:
+                raise HTTPException(
+                    404, f"Path '{path_id}' not found for file '{file_id}'"
+                )
+            conn.execute("DELETE FROM file_paths WHERE path_id=?", (path_id,))
+
+        emit_event(
+            "file_path.removed",
+            collection_id,
+            {"path_id": path_id, "file_id": file_id},
+        )
+    finally:
+        conn.close()
+
+
+def promote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePathOut:
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            path = conn.execute(
+                "SELECT * FROM file_paths WHERE path_id=? AND file_id=?",
+                (path_id, file_id),
+            ).fetchone()
+            if not path:
+                raise HTTPException(
+                    404, f"Path '{path_id}' not found for file '{file_id}'"
+                )
+
+            if path["source_node_id"] is None:
+                raise HTTPException(400, "Path is already a persistent path")
+
+            conn.execute(
+                "UPDATE file_paths SET source_node_id=NULL WHERE path_id=?",
+                (path_id,),
+            )
+            row = conn.execute(
+                "SELECT * FROM file_paths WHERE path_id=?", (path_id,)
+            ).fetchone()
+
+        emit_event(
+            "file_path.promoted",
+            collection_id,
+            {"path_id": path_id, "file_id": file_id},
+        )
+        file_row = conn.execute(
+            "SELECT * FROM files WHERE file_id=?", (file_id,)
+        ).fetchone()
+        fp = _compute_folder_path(conn, row["folder_id"])
+        return _row_to_file_path(
+            row, folder_path=fp, is_greyed=_compute_is_greyed(conn, file_row, row) if file_row else False,
+        )
+    finally:
+        conn.close()
+
+
+# --- Derived path generation (node attachments) ---
+
+
+def attach_file_to_node(
+    collection_id: str,
+    node_id: str,
+    file_id: str | None = None,
+    upload_file=None,
+) -> FileSummary:
+    """Attach a file to a node, generating derived paths.
+
+    Modes:
+    - file_id != None: attach existing file
+    - upload_file != None: Phase 4 will handle actual upload; Phase 3 assumes file_id
+    """
+    if file_id is None and upload_file is None:
+        raise HTTPException(400, "Either file_id or upload_file must be provided")
+    if file_id is None:
+        # Phase 4: upload_file handling — for now, error
+        raise HTTPException(
+            400,
+            "File upload not yet implemented (Phase 4). Provide an existing file_id.",
+        )
+
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            # validate node
+            node = conn.execute(
+                "SELECT * FROM nodes WHERE node_id=?", (node_id,)
+            ).fetchone()
+            if not node:
+                raise HTTPException(404, f"Node '{node_id}' not found")
+
+            # validate file
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+
+            # Check if already attached
+            existing = conn.execute(
+                "SELECT 1 FROM file_nodes WHERE file_id=? AND node_id=?",
+                (file_id, node_id),
+            ).fetchone()
+            if existing:
+                raise HTTPException(
+                    409, f"File '{file_id}' is already attached to node '{node_id}'"
+                )
+
+            # Insert file_nodes
+            conn.execute(
+                """INSERT INTO file_nodes
+                   (file_id, node_id, version_id, greyed, added_by)
+                   VALUES (?, ?, ?, 0, 'local')""",
+                (file_id, node_id, file_row["current_version_id"]),
+            )
+
+            # Generate derived paths
+            derived_path_count = 0
+
+            # 1) Group folder path
+            if node["group_id"]:
+                grp = conn.execute(
+                    "SELECT folder_id FROM node_groups WHERE group_id=?",
+                    (node["group_id"],),
+                ).fetchone()
+                if grp and grp["folder_id"]:
+                    _upsert_derived_path(conn, file_id, grp["folder_id"], node_id)
+                    derived_path_count += 1
+
+            # 2) Chain folder path (only for branch chains, main chain has no folder)
+            if node["chain_id"]:
+                chain = conn.execute(
+                    "SELECT folder_id FROM chains WHERE chain_id=?",
+                    (node["chain_id"],),
+                ).fetchone()
+                if chain and chain["folder_id"]:
+                    _upsert_derived_path(conn, file_id, chain["folder_id"], node_id)
+                    derived_path_count += 1
+
+        emit_event(
+            "file.uploaded",
+            collection_id,
+            {"file_id": file_id, "node_id": node_id},
+        )
+        return _row_to_file_out(file_row, conn)
+    finally:
+        conn.close()
+
+
+def _upsert_derived_path(
+    conn, file_id: str, folder_id: str, source_node_id: str
+) -> None:
+    """Insert a derived path, ignoring UNIQUE constraint violations.
+
+    If a persistent path (source_node_id=NULL) already exists for (file_id, folder_id),
+    the derived path (source_node_id=N) is still allowed due to the compound UNIQUE.
+    If the exact same derived path already exists, skip it.
+    """
+    existing = conn.execute(
+        """SELECT path_id FROM file_paths
+           WHERE file_id=? AND folder_id=? AND source_node_id=?""",
+        (file_id, folder_id, source_node_id),
+    ).fetchone()
+    if existing:
+        return  # already exists, skip
+
+    path_id = uuid.uuid4().hex
+    conn.execute(
+        """INSERT INTO file_paths
+           (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
+           VALUES (?, ?, ?, 0, ?, 'local')""",
+        (path_id, file_id, folder_id, source_node_id),
+    )
+
+
+def detach_file_from_node(
+    collection_id: str, node_id: str, file_id: str
+) -> None:
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            fn = conn.execute(
+                "SELECT * FROM file_nodes WHERE file_id=? AND node_id=?",
+                (file_id, node_id),
+            ).fetchone()
+            if not fn:
+                raise HTTPException(
+                    404,
+                    f"File '{file_id}' is not attached to node '{node_id}'",
+                )
+
+            # Delete file_nodes record
+            conn.execute(
+                "DELETE FROM file_nodes WHERE file_id=? AND node_id=?",
+                (file_id, node_id),
+            )
+
+            # Delete derived paths for this node
+            conn.execute(
+                "DELETE FROM file_paths WHERE file_id=? AND source_node_id=?",
+                (file_id, node_id),
+            )
+
+        emit_event(
+            "file_path.removed",
+            collection_id,
+            {"file_id": file_id, "node_id": node_id},
+        )
+    finally:
+        conn.close()
+
+
+# --- Message CRUD ---
+
+
+def _row_to_file_version(row) -> FileVersionOut:
+    from src.file_mgmt.models import FileVersionOut
+
+    return FileVersionOut(
+        version_id=row["version_id"],
+        file_id=row["file_id"],
+        version_no=row["version_no"],
+        storage_file_id=row["storage_file_id"],
+        archived=bool(row["archived"]),
+        commit_message=row["commit_message"],
+        created_by=row["created_by"],
+        created_at=row["created_at"],
+    )
+
+
+def create_message(collection_id: str, req: MessageCreate) -> MessageOut:
+    from src.file_mgmt.models import MessageCreate, MessageOut
+
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            now = _now_iso()
+            message_id = uuid.uuid4().hex
+            conn.execute(
+                """INSERT INTO messages
+                   (message_id, owner_type, owner_id, source_node_id, body,
+                    author_type, author_id, created_at, edited_at, edited_by, version)
+                   VALUES (?, ?, ?, ?, ?, 'user', 'local', ?, NULL, NULL, 1)""",
+                (
+                    message_id,
+                    req.owner_type,
+                    req.owner_id,
+                    req.source_node_id,
+                    req.body,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM messages WHERE message_id=?", (message_id,)
+            ).fetchone()
+
+        emit_event(
+            "message.created",
+            collection_id,
+            {"message_id": message_id, "owner_type": req.owner_type, "owner_id": req.owner_id},
+        )
+        return _row_to_message(row)
+    finally:
+        conn.close()
+
+
+def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> MessageOut:
+    from src.file_mgmt.models import MessageUpdate, MessageOut
+
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            msg = conn.execute(
+                "SELECT * FROM messages WHERE message_id=?", (message_id,)
+            ).fetchone()
+            if not msg:
+                raise HTTPException(404, f"Message '{message_id}' not found")
+
+            if msg["author_type"] == "system":
+                raise HTTPException(403, "System messages cannot be edited")
+
+            now = _now_iso()
+            cursor = conn.execute(
+                """UPDATE messages
+                   SET body=?, edited_at=?, edited_by='local', version=version+1
+                   WHERE message_id=? AND version=?""",
+                (req.body, now, message_id, req.version),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(
+                    409, "Message was modified by another user (version conflict)"
+                )
+
+            row = conn.execute(
+                "SELECT * FROM messages WHERE message_id=?", (message_id,)
+            ).fetchone()
+
+        emit_event(
+            "message.updated",
+            collection_id,
+            {"message_id": message_id},
+        )
+        return _row_to_message(row)
+    finally:
+        conn.close()
+
+
+def delete_message(collection_id: str, message_id: str) -> None:
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            msg = conn.execute(
+                "SELECT * FROM messages WHERE message_id=?", (message_id,)
+            ).fetchone()
+            if not msg:
+                raise HTTPException(404, f"Message '{message_id}' not found")
+
+            if msg["author_type"] == "system":
+                raise HTTPException(403, "System messages cannot be deleted")
+
+            conn.execute("DELETE FROM messages WHERE message_id=?", (message_id,))
+
+        emit_event(
+            "message.deleted",
+            collection_id,
+            {"message_id": message_id},
+        )
+    finally:
+        conn.close()
+
+
+def list_messages(
+    collection_id: str, owner_type: str, owner_id: str
+) -> list[MessageOut]:
+    from src.file_mgmt.models import MessageOut
+
+    conn = _open_db(collection_id)
+    try:
+        rows = conn.execute(
+            """SELECT * FROM messages
+               WHERE owner_type=? AND owner_id=?
+               ORDER BY created_at""",
+            (owner_type, owner_id),
+        ).fetchall()
+        return [_row_to_message(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_folder_messages(
+    collection_id: str,
+    folder_id: str,
+    include_node_msgs: bool = True,
+    include_file_msgs: bool = True,
+) -> list[MessageOut]:
+    """Aggregated message stream for a folder.
+
+    Includes:
+    - folder's own messages
+    - file messages (files in this folder via file_paths)
+    - node messages (nodes in groups bound to this folder)
+    """
+    from src.file_mgmt.models import MessageOut
+
+    conn = _open_db(collection_id)
+    try:
+        # Validate folder
+        fld = conn.execute(
+            "SELECT folder_id FROM folders WHERE folder_id=?", (folder_id,)
+        ).fetchone()
+        if not fld:
+            raise HTTPException(404, f"Folder '{folder_id}' not found")
+
+        queries: list[str] = []
+        params: list = []
+
+        # 1. Folder's own messages
+        queries.append(
+            "SELECT m.* FROM messages m WHERE m.owner_type='folder' AND m.owner_id=?"
+        )
+        params.append(folder_id)
+
+        # 2. File messages for files in this folder
+        if include_file_msgs:
+            queries.append(
+                """SELECT m.* FROM messages m
+                   WHERE m.owner_type='file'
+                     AND m.owner_id IN (
+                       SELECT DISTINCT file_id FROM file_paths WHERE folder_id=?
+                     )"""
+            )
+            params.append(folder_id)
+
+        # 3. Node messages for nodes in groups bound to this folder
+        if include_node_msgs:
+            queries.append(
+                """SELECT m.* FROM messages m
+                   WHERE m.owner_type='node'
+                     AND m.owner_id IN (
+                       SELECT n.node_id FROM nodes n
+                       JOIN node_groups g ON g.group_id = n.group_id
+                       WHERE g.folder_id=?
+                     )"""
+            )
+            params.append(folder_id)
+
+        sql = " UNION ".join(queries) + " ORDER BY created_at"
+        rows = conn.execute(sql, params).fetchall()
+        return [_row_to_message(r) for r in rows]
     finally:
         conn.close()

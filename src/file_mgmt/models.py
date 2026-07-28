@@ -167,6 +167,7 @@ class FileOut(BaseModel):
     version: int = 1
     filename: str = ""      # derived: current version original filename
     created_at: str = ""    # derived: first version creation timestamp
+    is_greyed: bool = False  # derived: greyed status in current folder context
 
 
 # Alias used in service signatures (contract section 8)
