@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import logging
 
-from mcp.server.mcpserver.server import MCPServer
+from mcp.server.mcpserver import MCPServer
 
 logger = logging.getLogger(__name__)
 
