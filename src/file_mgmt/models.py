@@ -50,11 +50,20 @@ class GroupCreate(BaseModel):
     name: str
     description: str | None = None
     bind_existing_folder_id: str | None = None
+    # lucide | emoji; optional for backward compat
+    icon_type: str | None = None
+    icon_value: str | None = None
+    icon_color: str | None = None
 
 
 class GroupUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    icon_type: str | None = None
+    icon_value: str | None = None
+    icon_color: str | None = None
+    # Rebind to another plain unbound folder; F-b moves attachment paths only
+    rebind_folder_id: str | None = None
 
 
 class GroupOut(BaseModel):
@@ -64,6 +73,10 @@ class GroupOut(BaseModel):
     description: str | None = None
     created_by: str = "local"
     node_count: int = 0  # derived: nodes assigned to this group
+    icon_type: str | None = None
+    icon_value: str | None = None
+    icon_color: str | None = None
+    is_system: bool = False
 
 
 # ════════════════════════════════════════════════════════════════
@@ -91,6 +104,8 @@ class ChainOut(BaseModel):
     is_main: bool = False       # derived: parent_chain_id is NULL
     has_end_node: bool = False   # derived: chain has an end-type node
     node_count: int = 0          # derived: nodes on this chain
+    # Merge/rejoin node on the parent chain (closed-loop end of a finished branch)
+    merge_node_id: str | None = None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -110,6 +125,8 @@ class NodeUpdate(BaseModel):
     group_id: str | None = None
     order: int | None = None
     event_time: str | None = None
+    node_type: str | None = None
+    chain_id: str | None = None
     version: int
 
 
@@ -142,8 +159,9 @@ class FilePathOut(BaseModel):
     is_primary: bool = False
     source_node_id: str | None = None  # None = persistent path
     created_by: str = "local"
+    archived: bool = False  # path-level archive
     folder_path: str = ""   # derived: breadcrumb path of the folder
-    is_greyed: bool = False  # derived: all attachments to this path are greyed
+    is_greyed: bool = False  # derived: file/path archived or greyed attachment
 
 
 class FileVersionOut(BaseModel):
@@ -219,7 +237,21 @@ class MessageOut(BaseModel):
 # ════════════════════════════════════════════════════════════════
 
 class EndChainRequest(BaseModel):
+    """End a branch and create a merge node on the parent chain.
+
+    Inherit selection is **file-level**: checked files keep their branch paths;
+    unchecked files get path-level archive on the branch folder.
+    ``inherit_node_ids`` remains for backward compatibility (inherit all files
+    on those nodes when ``inherit_file_ids`` is omitted/empty and nodes given).
+    """
+    inherit_file_ids: list[str] = []
     inherit_node_ids: list[str] = []
+    # Merge node fields (applied to the new parent-chain end/merge node)
+    title: str | None = None
+    group_id: str | None = None
+    event_time: str | None = None
+    message_body: str | None = None
+    attachment_file_ids: list[str] = []
 
 
 class ArchiveToggle(BaseModel):

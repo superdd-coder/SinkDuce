@@ -1,8 +1,10 @@
-import { useState, useCallback, useRef } from "react"
-import type { FolderTreeNode, FileSummary } from "@/types/file-mgmt"
+import { useState, useCallback, useRef, useEffect, useMemo } from "react"
+import type { FolderTreeNode, FileSummary, NodeGroup } from "@/types/file-mgmt"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
+import { listGroups } from "@/api/file-mgmt"
 import { Loader2, FolderIcon, Users, GitBranch, Video, FileText, Archive, FileIcon, FileWarning, Star, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { GroupIconView } from "@/components/file-mgmt/timeline-view/group-icons"
 
 export function IconGrid({ collectionId }: { collectionId: string }) {
   const {
@@ -22,8 +24,24 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
   } = useFileMgmtStore()
 
   const [dragOver, setDragOver] = useState(false)
+  const [groups, setGroups] = useState<NodeGroup[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!collectionId) return
+    listGroups(collectionId)
+      .then(setGroups)
+      .catch(() => setGroups([]))
+  }, [collectionId, folderTree])
+
+  const groupByFolderId = useMemo(() => {
+    const m = new Map<string, NodeGroup>()
+    for (const g of groups) {
+      if (g.folder_id) m.set(g.folder_id, g)
+    }
+    return m
+  }, [groups])
 
   // Get subfolders of current folder (or root folders if no current folder)
   const subfolders = getSubfolders(folderTree, currentFolderId)
@@ -153,6 +171,7 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
                 selected={selectedFolderIds.has(folder.folder_id)}
                 onOpen={() => selectFolder(collectionId, folder.folder_id)}
                 onToggle={() => toggleFolderSelection(folder.folder_id)}
+                boundGroup={groupByFolderId.get(folder.folder_id) ?? null}
               />
             ))}
             {currentFolderFiles.map((file) => (
@@ -180,14 +199,19 @@ function FolderIconItem({
   selected,
   onOpen,
   onToggle,
+  boundGroup,
 }: {
   folder: FolderTreeNode
   selected: boolean
   onOpen: () => void
   onToggle: () => void
+  boundGroup?: NodeGroup | null
 }) {
   const Icon = getFolderIcon(folder)
   const color = getFolderColor(folder.kind, folder.name)
+  const useGroupIcon =
+    !!boundGroup &&
+    (folder.kind === "user_group" || folder.kind === "system_group")
 
   return (
     <button
@@ -200,7 +224,13 @@ function FolderIconItem({
       title={folder.name}
     >
       <div className="relative">
-        <Icon className={cn("h-10 w-10", color)} />
+        {useGroupIcon ? (
+          <span className="inline-flex h-10 w-10 items-center justify-center">
+            <GroupIconView source={boundGroup} className="h-10 w-10" />
+          </span>
+        ) : (
+          <Icon className={cn("h-10 w-10", color)} />
+        )}
         {folder.file_count > 0 && (
           <span className="absolute -bottom-0.5 -right-0.5 text-[9px] font-medium bg-muted text-muted-foreground rounded-full px-1 min-w-[14px] text-center">
             {folder.file_count}
@@ -257,10 +287,12 @@ function FileIconItem({
       <span className={cn("text-[11px] text-center truncate w-full leading-tight", isGreyed ? "text-muted-foreground/60" : "text-muted-foreground")}>
         {file.filename}
       </span>
-      {file.archived && (
-        <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">archived</span>
+      {(file.archived || file.is_greyed) && (
+        <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">
+          {file.archived ? "archived" : "path archived"}
+        </span>
       )}
-      {ext && !file.archived && (
+      {ext && !file.archived && !file.is_greyed && (
         <span className="text-[9px] text-muted-foreground/40 uppercase">{ext}</span>
       )}
     </button>

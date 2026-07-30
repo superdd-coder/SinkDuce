@@ -2,12 +2,14 @@ import { useState, useCallback } from "react"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Loader2, Plus, Pencil, Trash2, Bot, Clock, PanelRightClose, PanelRight } from "lucide-react"
-import { cn } from "@/lib/utils"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { Loader2, Plus, PanelRightClose, PanelRight } from "lucide-react"
 import type { Message } from "@/types/file-mgmt"
 import { MessageEditorDialog } from "./message-editor-dialog"
+import { MessageCard } from "../message-card"
+import {
+  NodePreviewSheet,
+  resolveMessageSourceNodeId,
+} from "../node-preview-sheet"
 
 export function MessageSidebar({ collectionId }: { collectionId: string }) {
   const {
@@ -23,6 +25,8 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingMsg, setEditingMsg] = useState<Message | null>(null)
   const [dialogReadonly, setDialogReadonly] = useState(false)
+  const [previewNodeId, setPreviewNodeId] = useState<string | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
 
   const handleAdd = useCallback(
     (content: string) => {
@@ -108,6 +112,11 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
                 onView={handleOpenForView}
                 onEdit={handleStartEdit}
                 onDelete={() => removeMessage(collectionId, msg.message_id)}
+                showFromNode={!!resolveMessageSourceNodeId(msg)}
+                onSourceNodeClick={(nodeId) => {
+                  setPreviewNodeId(nodeId)
+                  setPreviewOpen(true)
+                }}
               />
             ))}
           </div>
@@ -124,103 +133,13 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
         onSave={!editingMsg ? handleAdd : !dialogReadonly ? handleEdit : (() => {})}
         readonly={dialogReadonly}
       />
-    </div>
-  )
-}
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function MessagePreview({ body }: { body: string }) {
-  return (
-    <div className="text-foreground/90 leading-relaxed line-clamp-3 break-words text-[11px] prose prose-xs dark:prose-invert max-w-none [&_p]:my-0 [&_ul]:my-0 [&_ol]:my-0 [&_li]:my-0 [&_h1]:text-xs [&_h2]:text-xs [&_h3]:text-xs [&_h1]:my-0 [&_h2]:my-0 [&_h3]:my-0 [&_code]:text-[10px] [&_pre]:hidden [&_blockquote]:my-0 [&_blockquote]:text-xs">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
-    </div>
-  )
-}
-
-// ─── Message Card ───────────────────────────────────────────────────────────
-
-function MessageCard({
-  msg,
-  onView,
-  onEdit,
-  onDelete,
-}: {
-  msg: Message
-  onView: (msg: Message) => void
-  onEdit: (msg: Message) => void
-  onDelete: () => void
-}) {
-  const isSystem = msg.author_type === "system"
-  const time = msg.created_at
-    ? new Date(msg.created_at).toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : ""
-
-  return (
-    <div
-      className={cn(
-        "rounded-md p-2 text-xs group cursor-pointer hover:bg-accent/60 transition-colors relative",
-        isSystem ? "bg-muted/30 border border-border/30" : "bg-background",
-      )}
-      onClick={() => onView(msg)}
-    >
-      {/* Hover preview card — shows full rendered markdown */}
-      <div className="absolute left-[calc(100%+6px)] bottom-0 z-[9999] hidden group-hover:block pointer-events-none">
-        <div className="w-[320px] max-h-[360px] overflow-y-auto rounded-lg border border-border bg-popover shadow-2xl p-3">
-          <div className="prose prose-xs dark:prose-invert max-w-none text-xs leading-relaxed break-words">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.body || ""}</ReactMarkdown>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-1 mb-0.5">
-        {isSystem ? (
-          <Bot className="h-3 w-3 text-muted-foreground/60" />
-        ) : (
-          <Clock className="h-3 w-3 text-muted-foreground/40" />
-        )}
-        <span className="text-[10px] text-muted-foreground/50">{time}</span>
-        {msg.edited_at && (
-          <span className="text-[9px] text-muted-foreground/40 italic">edited</span>
-        )}
-        {msg.source_node_id && (
-          <span className="text-[9px] text-blue-400/70 bg-blue-400/10 px-1 rounded">
-            from node
-          </span>
-        )}
-        {!isSystem && (
-          <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5">
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              onClick={(e) => {
-                e.stopPropagation()
-                onEdit(msg)
-              }}
-              className="h-5 w-5"
-            >
-              <Pencil className="h-2.5 w-2.5" />
-            </Button>
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              onClick={(e) => {
-                e.stopPropagation()
-                onDelete()
-              }}
-              className="h-5 w-5 text-destructive"
-            >
-              <Trash2 className="h-2.5 w-2.5" />
-            </Button>
-          </div>
-        )}
-      </div>
-      <MessagePreview body={msg.body || ""} />
+      <NodePreviewSheet
+        collectionId={collectionId}
+        nodeId={previewNodeId}
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+      />
     </div>
   )
 }

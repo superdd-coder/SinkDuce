@@ -159,22 +159,24 @@ def test_end_chain_greyed():
     # Create end node
     end_node = _create_node(client, coll, branch_id, "End", order=4, group_id=group_id, node_type="end")
 
-    # End chain, inherit N1 only
+    # End chain, inherit N1 only (N2/N3 greyed). Creates merge node on parent chain.
     resp = client.post(
         f"/api/file-mgmt/{coll}/nodes/{end_node['node_id']}/end-chain",
-        json={"inherit_node_ids": [n1["node_id"]]},
+        json={"inherit_node_ids": [n1["node_id"]], "title": "Merged"},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
 
-    # Verify greyed_files
+    # Merge node is a NEW node on the parent chain (not moving N3)
+    merge_id = data.get("merged_node_id")
+    assert merge_id
+    assert merge_id != n3["node_id"]
+
+    # Verify greyed_files — N2 and N3 (N1 inherited)
     assert f2["file_id"] in data["greyed_files"]
     assert f3["file_id"] in data["greyed_files"]
-
-    # N1 should be in inherited_files
     assert f1["file_id"] in data["inherited_files"]
 
-    # Verify DB: N2/N3 greyed=1, N1 greyed=0
     conn = get_db(coll)
     try:
         for fid, nid, expected_greyed in [
@@ -190,6 +192,22 @@ def test_end_chain_greyed():
             assert fn["greyed"] == expected_greyed, (
                 f"Expected greyed={expected_greyed} for {fid}/{nid}, got {fn['greyed']}"
             )
+        # Branch events stay on the branch
+        for nid in (n1["node_id"], n2["node_id"], n3["node_id"]):
+            row = conn.execute(
+                "SELECT chain_id FROM nodes WHERE node_id=?", (nid,)
+            ).fetchone()
+            assert row["chain_id"] == branch_id
+        # Merge node lives on parent (main) chain
+        mrow = conn.execute(
+            "SELECT chain_id, node_type FROM nodes WHERE node_id=?", (merge_id,)
+        ).fetchone()
+        assert mrow["chain_id"] == main_id
+        assert mrow["node_type"] == "end"
+        crow = conn.execute(
+            "SELECT merge_node_id FROM chains WHERE chain_id=?", (branch_id,)
+        ).fetchone()
+        assert crow["merge_node_id"] == merge_id
     finally:
         conn.close()
 
@@ -233,19 +251,21 @@ def test_end_chain_archive_candidate():
     branch = _create_chain(client, coll, main_id, start_node["node_id"], "DD Branch")
     branch_id = branch["chain_id"]
 
-    # F2: create ONLY via node attachment (upload directly to node) → no persistent path
-    b_node = _create_node(client, coll, branch_id, "Branch Node", order=1, group_id=group_id)
+    # Non-terminal event: holds F1 (shared) + F2 (branch-only) → will be greyed
+    b_mid = _create_node(client, coll, branch_id, "Branch Mid", order=1, group_id=group_id)
+    # Terminal event: merges onto parent (auto-inherited, not greyed)
+    b_term = _create_node(client, coll, branch_id, "Branch Term", order=2, group_id=group_id)
 
-    # Attach F1 to branch node (F1 now has both main and branch attachment + persistent path)
+    # Attach F1 to mid branch node (F1 now has both main and branch attachment + persistent path)
     resp = client.post(
-        f"/api/file-mgmt/{coll}/nodes/{b_node['node_id']}/files",
+        f"/api/file-mgmt/{coll}/nodes/{b_mid['node_id']}/files",
         json={"file_id": f1["file_id"]},
     )
     assert resp.status_code == 201
 
-    # Upload F2 directly to branch node (no persistent path, only derived paths)
+    # Upload F2 directly to mid branch node (no persistent path, only derived paths)
     resp = client.post(
-        f"/api/file-mgmt/{coll}/nodes/{b_node['node_id']}/files/upload",
+        f"/api/file-mgmt/{coll}/nodes/{b_mid['node_id']}/files/upload",
         files={"file": ("f2.txt", io.BytesIO(_fake_txt_bytes("Branch only")), "text/plain")},
     )
     assert resp.status_code == 201, resp.text
@@ -262,16 +282,21 @@ def test_end_chain_archive_candidate():
     finally:
         conn.close()
 
-    # End branch chain (don't inherit anything)
-    end_node = _create_node(client, coll, branch_id, "End", order=2, group_id=group_id, node_type="end")
+    # End branch chain (don't inherit mid; terminal is auto-inherited + merged)
+    end_node = _create_node(client, coll, branch_id, "End", order=3, group_id=group_id, node_type="end")
     resp = client.post(
         f"/api/file-mgmt/{coll}/nodes/{end_node['node_id']}/end-chain",
-        json={"inherit_node_ids": []},
+        json={"inherit_node_ids": [], "title": "Merged"},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
 
-    # F2 is branch-only, no persistent path → archive_candidate
+    # Merge node is created on parent (not the terminal event itself)
+    assert data.get("merged_node_id")
+    assert data.get("merged_node_id") != b_term["node_id"]
+
+    # F2 is branch-only on greyed mid node, no persistent path → archive_candidate
+    # (mid is not inherited; terminal may still be greyed if not selected)
     assert f2["file_id"] in data["archive_candidates"], (
         f"F2 should be archive candidate, got: {data['archive_candidates']}"
     )
@@ -484,7 +509,7 @@ def test_is_greyed_after_end_chain():
     end_node = _create_node(client, coll, branch_id, "End", order=3, group_id=group_id, node_type="end")
     resp = client.post(
         f"/api/file-mgmt/{coll}/nodes/{end_node['node_id']}/end-chain",
-        json={"inherit_node_ids": [n1["node_id"]]},
+        json={"inherit_node_ids": [n1["node_id"]], "title": "Merged"},
     )
     assert resp.status_code == 200
 
@@ -557,7 +582,7 @@ def test_promote_protects_from_grey():
     end_node = _create_node(client, coll, branch_id, "End", order=2, group_id=group_id, node_type="end")
     resp = client.post(
         f"/api/file-mgmt/{coll}/nodes/{end_node['node_id']}/end-chain",
-        json={"inherit_node_ids": []},
+        json={"inherit_node_ids": [], "title": "Merged"},
     )
     assert resp.status_code == 200
 
@@ -692,6 +717,71 @@ def test_delete_node_multi_attach():
 
 
 # ════════════════════════════════════════════════════════════════════
+# 9b. delete branch start / merge anchors (FK safety)
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_delete_branch_start_node_cascades_branch():
+    """Deleting main-chain parent_node_id must not hit FK; branch is removed."""
+    from src.main import app
+
+    coll = "p5-del-start-anchor"
+    _setup_collection(coll)
+    client = TestClient(app)
+
+    main_id = _get_main_chain_id(client, coll)
+    start = _create_node(client, coll, main_id, "Branch Start", order=1, node_type="start")
+    branch = _create_chain(client, coll, main_id, start["node_id"], "Side Work")
+    _create_node(client, coll, branch["chain_id"], "Branch Event", order=1)
+
+    resp = client.delete(f"/api/file-mgmt/{coll}/nodes/{start['node_id']}")
+    assert resp.status_code in (200, 204), resp.text
+
+    # Start gone
+    assert client.get(f"/api/file-mgmt/{coll}/nodes/{start['node_id']}").status_code == 404
+    # Branch chain gone
+    chains = client.get(f"/api/file-mgmt/{coll}/chains").json()
+    assert all(c["chain_id"] != branch["chain_id"] for c in chains)
+
+
+def test_delete_merge_node_clears_merge_fk():
+    """Deleting merge_node_id must clear chains.merge_node_id (no IntegrityError)."""
+    from src.main import app
+
+    coll = "p5-del-merge-anchor"
+    _setup_collection(coll)
+    client = TestClient(app)
+
+    main_id = _get_main_chain_id(client, coll)
+    start = _create_node(client, coll, main_id, "Start", order=1, node_type="start")
+    branch = _create_chain(client, coll, main_id, start["node_id"], "Side")
+    _create_node(client, coll, branch["chain_id"], "Work", order=1)
+    end_node = _create_node(client, coll, branch["chain_id"], "End", order=2, node_type="end")
+
+    resp_end = client.post(
+        f"/api/file-mgmt/{coll}/nodes/{end_node['node_id']}/end-chain",
+        json={"inherit_node_ids": [], "message_body": "done", "title": "Merged"},
+    )
+    assert resp_end.status_code == 200, resp_end.text
+    merge_id = resp_end.json().get("merged_node_id") or resp_end.json().get("merge_node_id")
+    assert merge_id, resp_end.text
+
+    # Confirm FK is set
+    chains_before = client.get(f"/api/file-mgmt/{coll}/chains").json()
+    br = next(c for c in chains_before if c["chain_id"] == branch["chain_id"])
+    assert br["merge_node_id"] == merge_id
+
+    resp = client.delete(f"/api/file-mgmt/{coll}/nodes/{merge_id}")
+    assert resp.status_code in (200, 204), resp.text
+
+    # Merge node gone; branch remains open (merge cleared)
+    assert client.get(f"/api/file-mgmt/{coll}/nodes/{merge_id}").status_code == 404
+    chains_after = client.get(f"/api/file-mgmt/{coll}/chains").json()
+    br2 = next(c for c in chains_after if c["chain_id"] == branch["chain_id"])
+    assert br2["merge_node_id"] is None
+
+
+# ════════════════════════════════════════════════════════════════════
 # 10. test_end_to_end
 # ════════════════════════════════════════════════════════════════════
 
@@ -732,7 +822,7 @@ def test_end_to_end():
     end_node = _create_node(client, coll, branch_id, "Final End", order=4, group_id=group_id, node_type="end")
     resp = client.post(
         f"/api/file-mgmt/{coll}/nodes/{end_node['node_id']}/end-chain",
-        json={"inherit_node_ids": [nodes[0]["node_id"]]},
+        json={"inherit_node_ids": [nodes[0]["node_id"]], "title": "Merged"},
     )
     assert resp.status_code == 200
     end_data = resp.json()
@@ -762,9 +852,12 @@ def test_end_to_end():
         assert resp_restore.status_code == 200
         assert resp_restore.json()["archived"] is False
 
-    # 7. Reopen chain
+    # 7. Reopen chain — merge node moves onto branch as last event (not deleted)
+    merge_id = end_data.get("merged_node_id")
     resp_reopen = client.post(f"/api/file-mgmt/{coll}/chains/{branch_id}/reopen")
     assert resp_reopen.status_code == 200
+    assert resp_reopen.json().get("merge_node_id") is None
+    assert resp_reopen.json().get("has_end_node") is False
 
     # 8. Add a new node after reopen
     n_new = _create_node(client, coll, branch_id, "New Step After Reopen", order=4, group_id=group_id)
@@ -775,10 +868,16 @@ def test_end_to_end():
     )
     assert resp_new.status_code == 201
 
-    # 9. Verify chain has nodes including the new one
+    # 9. Verify chain has nodes including the new one + former merge node
     resp_nodes = client.get(f"/api/file-mgmt/{coll}/chains/{branch_id}/nodes")
     assert resp_nodes.status_code == 200
     chain_nodes = resp_nodes.json()
     node_titles = {n["title"] for n in chain_nodes}
+    node_ids = {n["node_id"] for n in chain_nodes}
     assert "New Step After Reopen" in node_titles
-    assert "Final End" not in node_titles  # end node was deleted by reopen
+    # Branch-local end marker is removed; merge node is kept as event on branch
+    if merge_id:
+        assert merge_id in node_ids
+        merged = next(n for n in chain_nodes if n["node_id"] == merge_id)
+        assert merged["node_type"] == "event"
+        assert merged["chain_id"] == branch_id

@@ -90,7 +90,14 @@ def _row_to_folder(row) -> FolderOut:
     )
 
 
-def _row_to_group(row, node_count: int = 0) -> GroupOut:
+def _row_icon(row, key: str) -> str | None:
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def _row_to_group(row, node_count: int = 0, is_system: bool = False) -> GroupOut:
     return GroupOut(
         group_id=row["group_id"],
         folder_id=row["folder_id"],
@@ -98,10 +105,19 @@ def _row_to_group(row, node_count: int = 0) -> GroupOut:
         description=row["description"],
         created_by=row["created_by"],
         node_count=node_count,
+        icon_type=_row_icon(row, "icon_type"),
+        icon_value=_row_icon(row, "icon_value"),
+        icon_color=_row_icon(row, "icon_color"),
+        is_system=is_system,
     )
 
 
 def _row_to_chain(row, has_end_node: bool = False, node_count: int = 0) -> ChainOut:
+    # merge_node_id may be missing on very old Row objects before backfill
+    try:
+        merge_node_id = row["merge_node_id"]
+    except (KeyError, IndexError):
+        merge_node_id = None
     return ChainOut(
         chain_id=row["chain_id"],
         parent_chain_id=row["parent_chain_id"],
@@ -112,6 +128,7 @@ def _row_to_chain(row, has_end_node: bool = False, node_count: int = 0) -> Chain
         is_main=row["parent_chain_id"] is None,
         has_end_node=has_end_node,
         node_count=node_count,
+        merge_node_id=merge_node_id,
     )
 
 
@@ -193,13 +210,48 @@ def _delete_folder_subtree(conn, folder_id: str) -> None:
         if chain:
             _delete_chain_subtree(conn, chain["chain_id"])
         else:
+            conn.execute("DELETE FROM file_paths WHERE folder_id=?", (folder_id,))
+            conn.execute(
+                "DELETE FROM messages WHERE owner_type='folder' AND owner_id=?",
+                (folder_id,),
+            )
             conn.execute(
                 "DELETE FROM folders WHERE folder_id=?", (folder_id,)
             )
     else:
+        conn.execute("DELETE FROM file_paths WHERE folder_id=?", (folder_id,))
+        conn.execute(
+            "DELETE FROM messages WHERE owner_type='folder' AND owner_id=?",
+            (folder_id,),
+        )
         conn.execute(
             "DELETE FROM folders WHERE folder_id=?", (folder_id,)
         )
+
+
+def _clear_node_inbound_fks(conn, node_id: str) -> None:
+    """Clear or remove rows that reference *node_id* so DELETE FROM nodes succeeds."""
+    # Messages may cite this node as the source of a cross-owner note
+    conn.execute(
+        "UPDATE messages SET source_node_id=NULL WHERE source_node_id=?",
+        (node_id,),
+    )
+    # Closed branches that merge into this main-chain node → reopen loop
+    conn.execute(
+        "UPDATE chains SET merge_node_id=NULL WHERE merge_node_id=?",
+        (node_id,),
+    )
+
+
+def _purge_node_owned_rows(conn, node_id: str) -> None:
+    """Remove rows owned by *node_id* (attachments, derived paths, node messages)."""
+    conn.execute("DELETE FROM file_nodes WHERE node_id=?", (node_id,))
+    conn.execute("DELETE FROM file_paths WHERE source_node_id=?", (node_id,))
+    conn.execute(
+        "DELETE FROM messages WHERE owner_type='node' AND owner_id=?",
+        (node_id,),
+    )
+    _clear_node_inbound_fks(conn, node_id)
 
 
 def _delete_chain_subtree(conn, chain_id: str) -> None:
@@ -210,11 +262,36 @@ def _delete_chain_subtree(conn, chain_id: str) -> None:
     for sc in sub_chains:
         _delete_chain_subtree(conn, sc["chain_id"])
 
-    conn.execute("DELETE FROM nodes WHERE chain_id=?", (chain_id,))
-
     chain = conn.execute(
-        "SELECT folder_id FROM chains WHERE chain_id=?", (chain_id,)
+        "SELECT folder_id, merge_node_id FROM chains WHERE chain_id=?",
+        (chain_id,),
     ).fetchone()
+
+    # If this branch closed onto a merge node on the parent chain, remove that
+    # merge node too (same as reopen_chain) after clearing the FK pointer.
+    merge_id = None
+    if chain is not None:
+        try:
+            merge_id = chain["merge_node_id"]
+        except (KeyError, IndexError):
+            merge_id = None
+    if merge_id:
+        conn.execute(
+            "UPDATE chains SET merge_node_id=NULL WHERE chain_id=?",
+            (chain_id,),
+        )
+        # Merge node lives on parent — purge its deps then delete
+        _purge_node_owned_rows(conn, merge_id)
+        conn.execute("DELETE FROM nodes WHERE node_id=?", (merge_id,))
+
+    # Purge deps for every node on this chain before deleting nodes
+    node_rows = conn.execute(
+        "SELECT node_id FROM nodes WHERE chain_id=?", (chain_id,)
+    ).fetchall()
+    for nr in node_rows:
+        _purge_node_owned_rows(conn, nr["node_id"])
+
+    conn.execute("DELETE FROM nodes WHERE chain_id=?", (chain_id,))
 
     # Delete the chains record BEFORE the folder to avoid FK violation
     # (chains.folder_id REFERENCES folders).  Capture folder_id first.
@@ -222,6 +299,14 @@ def _delete_chain_subtree(conn, chain_id: str) -> None:
     conn.execute("DELETE FROM chains WHERE chain_id=?", (chain_id,))
 
     if folder_id:
+        # Branch folder may still hold derived paths from start/merge anchors
+        # (parent lives on main; paths.source_node_id points at parent, folder_id
+        # at this branch). Clear them or DELETE folder hits FOREIGN KEY.
+        conn.execute("DELETE FROM file_paths WHERE folder_id=?", (folder_id,))
+        conn.execute(
+            "DELETE FROM messages WHERE owner_type='folder' AND owner_id=?",
+            (folder_id,),
+        )
         children = conn.execute(
             "SELECT folder_id FROM folders WHERE parent_folder_id=?",
             (folder_id,),
@@ -450,24 +535,42 @@ def delete_folder(collection_id: str, folder_id: str) -> None:
 
 
 def list_groups(collection_id: str) -> list[GroupOut]:
+    from src.file_mgmt.store import _ensure_node_groups_icon_columns
+
     conn = _open_db(collection_id)
     try:
+        _ensure_node_groups_icon_columns(conn)
+        conn.commit()
         rows = conn.execute(
-            """SELECT g.*, COUNT(n.node_id) AS node_count
+            """SELECT g.*, COUNT(n.node_id) AS node_count,
+                      COALESCE(f.is_system, 0) AS folder_is_system
                FROM node_groups g
                LEFT JOIN nodes n ON n.group_id = g.group_id
+               LEFT JOIN folders f ON f.folder_id = g.folder_id
                GROUP BY g.group_id
                ORDER BY g.name"""
         ).fetchall()
-        return [_row_to_group(r, r["node_count"]) for r in rows]
+        result: list[GroupOut] = []
+        for r in rows:
+            gname = (r["name"] or "").strip().lower()
+            is_sys = bool(r["folder_is_system"]) or gname in (
+                "meeting",
+                "notes",
+                "note",
+            )
+            result.append(_row_to_group(r, r["node_count"], is_sys))
+        return result
     finally:
         conn.close()
 
 
 def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
+    from src.file_mgmt.store import _ensure_node_groups_icon_columns
+
     conn = _open_db(collection_id)
     try:
         with conn:
+            _ensure_node_groups_icon_columns(conn)
             now = _now_iso()
 
             if req.bind_existing_folder_id:
@@ -490,6 +593,14 @@ def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
                         400,
                         "Cannot bind a folder that contains sub-folders",
                     )
+                bound = conn.execute(
+                    "SELECT 1 FROM node_groups WHERE folder_id=? LIMIT 1",
+                    (req.bind_existing_folder_id,),
+                ).fetchone()
+                if bound:
+                    raise HTTPException(
+                        400, "Folder is already bound to another group"
+                    )
                 conn.execute(
                     "UPDATE folders SET kind='user_group', updated_at=? "
                     "WHERE folder_id=?",
@@ -509,16 +620,25 @@ def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
             group_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO node_groups
-                   (group_id, folder_id, name, description, created_by)
-                   VALUES (?, ?, ?, ?, 'local')""",
-                (group_id, folder_id, req.name, req.description),
+                   (group_id, folder_id, name, description, created_by,
+                    icon_type, icon_value, icon_color)
+                   VALUES (?, ?, ?, ?, 'local', ?, ?, ?)""",
+                (
+                    group_id,
+                    folder_id,
+                    req.name,
+                    req.description,
+                    req.icon_type,
+                    req.icon_value,
+                    req.icon_color,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM node_groups WHERE group_id=?", (group_id,)
             ).fetchone()
 
         emit_event("group.created", collection_id, {"group_id": group_id})
-        return _row_to_group(row)
+        return _row_to_group(row, is_system=False)
     finally:
         conn.close()
 
@@ -526,11 +646,14 @@ def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
 def update_group(
     collection_id: str, group_id: str, req: GroupUpdate
 ) -> GroupOut:
+    from src.file_mgmt.store import _ensure_node_groups_icon_columns
+
     updates = req.model_dump(exclude_unset=True)
 
     conn = _open_db(collection_id)
     try:
         with conn:
+            _ensure_node_groups_icon_columns(conn)
             grp = conn.execute(
                 "SELECT * FROM node_groups WHERE group_id=?", (group_id,)
             ).fetchone()
@@ -538,11 +661,19 @@ def update_group(
                 raise HTTPException(404, f"Group '{group_id}' not found")
 
             fld = conn.execute(
-                "SELECT is_system FROM folders WHERE folder_id=?",
+                "SELECT is_system, name FROM folders WHERE folder_id=?",
                 (grp["folder_id"],),
             ).fetchone()
-            if fld and fld["is_system"] and "name" in updates:
-                raise HTTPException(403, "System groups cannot be renamed")
+            gname = (grp["name"] or "").strip().lower()
+            is_system = bool(fld and fld["is_system"]) or gname in (
+                "meeting",
+                "notes",
+                "note",
+            )
+            if is_system:
+                forbidden = {"name", "icon_type", "icon_value", "icon_color"}
+                if forbidden & set(updates.keys()):
+                    raise HTTPException(403, "System groups cannot be modified")
 
             set_clauses: list[str] = []
             params: list = []
@@ -559,6 +690,99 @@ def update_group(
                 set_clauses.append("description = ?")
                 params.append(updates["description"])
 
+            for field in ("icon_type", "icon_value", "icon_color"):
+                if field in updates:
+                    set_clauses.append(f"{field} = ?")
+                    params.append(updates[field])
+
+            # Rebind folder (F-b): move only paths of files attached to this group's nodes
+            if "rebind_folder_id" in updates and updates["rebind_folder_id"] is not None:
+                if is_system:
+                    raise HTTPException(403, "System groups cannot rebind folder")
+                new_fid = updates["rebind_folder_id"]
+                old_fid = grp["folder_id"]
+                if new_fid != old_fid:
+                    new_fld = conn.execute(
+                        "SELECT * FROM folders WHERE folder_id=?", (new_fid,)
+                    ).fetchone()
+                    if not new_fld:
+                        raise HTTPException(404, f"Folder '{new_fid}' not found")
+                    if new_fld["kind"] != "plain":
+                        raise HTTPException(400, "Can only rebind to plain folders")
+                    child = conn.execute(
+                        "SELECT 1 FROM folders WHERE parent_folder_id=? LIMIT 1",
+                        (new_fid,),
+                    ).fetchone()
+                    if child:
+                        raise HTTPException(
+                            400,
+                            "Cannot bind a folder that contains sub-folders",
+                        )
+                    bound = conn.execute(
+                        "SELECT 1 FROM node_groups WHERE folder_id=? AND group_id!=? LIMIT 1",
+                        (new_fid, group_id),
+                    ).fetchone()
+                    if bound:
+                        raise HTTPException(
+                            400, "Folder is already bound to another group"
+                        )
+
+                    # F-b: files attached to nodes of this group that have a path in old folder
+                    if old_fid:
+                        attach_files = conn.execute(
+                            """SELECT DISTINCT fn.file_id FROM file_nodes fn
+                               JOIN nodes n ON n.node_id = fn.node_id
+                               WHERE n.group_id=?""",
+                            (group_id,),
+                        ).fetchall()
+                        for af in attach_files:
+                            fid = af["file_id"]
+                            paths = conn.execute(
+                                """SELECT path_id, source_node_id FROM file_paths
+                                   WHERE file_id=? AND folder_id=?""",
+                                (fid, old_fid),
+                            ).fetchall()
+                            for pr in paths:
+                                source_node_id = pr["source_node_id"]
+                                if source_node_id is None:
+                                    conflict = conn.execute(
+                                        """SELECT path_id FROM file_paths
+                                           WHERE file_id=? AND folder_id=?
+                                             AND source_node_id IS NULL""",
+                                        (fid, new_fid),
+                                    ).fetchone()
+                                else:
+                                    conflict = conn.execute(
+                                        """SELECT path_id FROM file_paths
+                                           WHERE file_id=? AND folder_id=?
+                                             AND source_node_id=?""",
+                                        (fid, new_fid, source_node_id),
+                                    ).fetchone()
+                                if conflict:
+                                    conn.execute(
+                                        "DELETE FROM file_paths WHERE path_id=?",
+                                        (pr["path_id"],),
+                                    )
+                                else:
+                                    conn.execute(
+                                        "UPDATE file_paths SET folder_id=? WHERE path_id=?",
+                                        (new_fid, pr["path_id"]),
+                                    )
+
+                    now = _now_iso()
+                    if old_fid:
+                        conn.execute(
+                            "UPDATE folders SET kind='plain', updated_at=? "
+                            "WHERE folder_id=? AND is_system=0",
+                            (now, old_fid),
+                        )
+                    conn.execute(
+                        "UPDATE folders SET kind='user_group', updated_at=? WHERE folder_id=?",
+                        (now, new_fid),
+                    )
+                    set_clauses.append("folder_id = ?")
+                    params.append(new_fid)
+
             if set_clauses:
                 params.append(group_id)
                 conn.execute(
@@ -570,15 +794,19 @@ def update_group(
             row = conn.execute(
                 "SELECT * FROM node_groups WHERE group_id=?", (group_id,)
             ).fetchone()
+            count = conn.execute(
+                "SELECT COUNT(*) FROM nodes WHERE group_id=?", (group_id,)
+            ).fetchone()[0]
 
         if "name" in updates:
             emit_event("group.renamed", collection_id, {"group_id": group_id})
-        return _row_to_group(row)
+        return _row_to_group(row, count, is_system)
     finally:
         conn.close()
 
 
 def delete_group(collection_id: str, group_id: str) -> None:
+    """Delete a user group: unassign nodes, keep folder (kind → plain)."""
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -592,7 +820,8 @@ def delete_group(collection_id: str, group_id: str) -> None:
                 "SELECT is_system FROM folders WHERE folder_id=?",
                 (grp["folder_id"],),
             ).fetchone()
-            if fld and fld["is_system"]:
+            gname = (grp["name"] or "").strip().lower()
+            if (fld and fld["is_system"]) or gname in ("meeting", "notes", "note"):
                 raise HTTPException(403, "System groups cannot be deleted")
 
             conn.execute(
@@ -601,7 +830,12 @@ def delete_group(collection_id: str, group_id: str) -> None:
             conn.execute(
                 "DELETE FROM node_groups WHERE group_id=?", (group_id,)
             )
-            _delete_folder_subtree(conn, grp["folder_id"])
+            # Keep folder and files; demote to plain so it can be rebound later
+            if grp["folder_id"]:
+                conn.execute(
+                    "UPDATE folders SET kind='plain', updated_at=? WHERE folder_id=? AND is_system=0",
+                    (_now_iso(), grp["folder_id"]),
+                )
 
         emit_event("group.deleted", collection_id, {"group_id": group_id})
     finally:
@@ -612,8 +846,12 @@ def delete_group(collection_id: str, group_id: str) -> None:
 
 
 def list_chains(collection_id: str) -> list[ChainOut]:
+    from src.file_mgmt.store import _ensure_chains_merge_node_id
+
     conn = _open_db(collection_id)
     try:
+        _ensure_chains_merge_node_id(conn)
+        conn.commit()
         rows = conn.execute("SELECT * FROM chains ORDER BY title").fetchall()
         result: list[ChainOut] = []
         for r in rows:
@@ -625,10 +863,14 @@ def list_chains(collection_id: str) -> list[ChainOut]:
                 "SELECT COUNT(*) AS c FROM nodes WHERE chain_id=?",
                 (r["chain_id"],),
             ).fetchone()
+            try:
+                merge_id = r["merge_node_id"]
+            except (KeyError, IndexError):
+                merge_id = None
             result.append(
                 _row_to_chain(
                     r,
-                    has_end_node=end is not None,
+                    has_end_node=end is not None or bool(merge_id),
                     node_count=count["c"],
                 )
             )
@@ -713,6 +955,8 @@ def create_chain(collection_id: str, req: ChainCreate) -> ChainOut:
                 (chain_id, req.parent_chain_id, req.parent_node_id,
                  folder_id, req.title),
             )
+            # Start anchor lives on main — mount branch folder for its attachments
+            _sync_node_derived_paths(conn, req.parent_node_id)
             row = conn.execute(
                 "SELECT * FROM chains WHERE chain_id=?", (chain_id,)
             ).fetchone()
@@ -775,7 +1019,22 @@ def delete_chain(collection_id: str, chain_id: str) -> None:
             if ch["parent_chain_id"] is None:
                 raise HTTPException(403, "Main chain cannot be deleted")
 
+            parent_node_id = ch["parent_node_id"]
             _delete_chain_subtree(conn, chain_id)
+
+            # Parent start-anchor → normal event when no branch still references it
+            if parent_node_id:
+                other = conn.execute(
+                    "SELECT 1 FROM chains WHERE parent_node_id=? LIMIT 1",
+                    (parent_node_id,),
+                ).fetchone()
+                if not other:
+                    conn.execute(
+                        """UPDATE nodes
+                           SET node_type='event', version=version+1
+                           WHERE node_id=?""",
+                        (parent_node_id,),
+                    )
 
         emit_event("chain.deleted", collection_id, {"chain_id": chain_id})
     finally:
@@ -783,25 +1042,87 @@ def delete_chain(collection_id: str, chain_id: str) -> None:
 
 
 def reopen_chain(collection_id: str, chain_id: str) -> ChainOut:
+    """Re-open a closed branch.
+
+    - Clear chains.merge_node_id (loop is open again)
+    - Remove branch-local ``end`` marker nodes (dialog end placeholders)
+    - **Keep** the main-chain merge node: move it onto this branch as the last
+      ``event`` node (preserves title, files, messages)
+    """
+    from src.file_mgmt.store import _ensure_chains_merge_node_id
+
     conn = _open_db(collection_id)
     try:
         with conn:
+            _ensure_chains_merge_node_id(conn)
             ch = conn.execute(
                 "SELECT * FROM chains WHERE chain_id=?", (chain_id,)
             ).fetchone()
             if not ch:
                 raise HTTPException(404, f"Chain '{chain_id}' not found")
 
+            if ch["parent_chain_id"] is None:
+                raise HTTPException(400, "Main chain cannot be reopened")
+
+            # Remove branch-local end markers only (not the merge node on main)
+            end_rows = conn.execute(
+                'SELECT node_id FROM nodes WHERE chain_id=? AND node_type="end"',
+                (chain_id,),
+            ).fetchall()
+            for er in end_rows:
+                _purge_node_owned_rows(conn, er["node_id"])
             conn.execute(
                 'DELETE FROM nodes WHERE chain_id=? AND node_type="end"',
                 (chain_id,),
             )
+
+            try:
+                merge_id = ch["merge_node_id"]
+            except (KeyError, IndexError):
+                merge_id = None
+
+            # Detach merge pointer first (FK)
+            conn.execute(
+                "UPDATE chains SET merge_node_id=NULL WHERE chain_id=?",
+                (chain_id,),
+            )
+
+            if merge_id:
+                merge = conn.execute(
+                    "SELECT * FROM nodes WHERE node_id=?", (merge_id,)
+                ).fetchone()
+                if merge:
+                    max_row = conn.execute(
+                        'SELECT COALESCE(MAX("order"), 0) AS m '
+                        "FROM nodes WHERE chain_id=?",
+                        (chain_id,),
+                    ).fetchone()
+                    new_order = int(max_row["m"]) + 1
+                    # Move merge onto branch as a normal event (last position)
+                    conn.execute(
+                        """UPDATE nodes
+                           SET chain_id=?, node_type='event', "order"=?,
+                               version=version+1
+                           WHERE node_id=?""",
+                        (chain_id, new_order, merge_id),
+                    )
+                    # Ensure attachments get branch-folder derived paths
+                    _sync_node_derived_paths(conn, merge_id)
+
             row = conn.execute(
                 "SELECT * FROM chains WHERE chain_id=?", (chain_id,)
             ).fetchone()
+            end = conn.execute(
+                'SELECT 1 FROM nodes WHERE chain_id=? AND node_type="end" LIMIT 1',
+                (chain_id,),
+            ).fetchone()
+            count = conn.execute(
+                "SELECT COUNT(*) AS c FROM nodes WHERE chain_id=?",
+                (chain_id,),
+            ).fetchone()
 
         emit_event("chain.reopened", collection_id, {"chain_id": chain_id})
-        return _row_to_chain(row)
+        return _row_to_chain(row, has_end_node=end is not None, node_count=count["c"])
     finally:
         conn.close()
 
@@ -830,6 +1151,10 @@ def list_nodes(collection_id: str, chain_id: str) -> list[NodeOut]:
 def create_node(
     collection_id: str, chain_id: str, req: NodeCreate
 ) -> NodeOut:
+    # System end markers may omit title; user event nodes must have a name
+    if req.node_type == "event":
+        if not req.title or not str(req.title).strip():
+            raise HTTPException(400, "Node title is required")
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -910,7 +1235,7 @@ def update_node(
             set_clauses: list[str] = []
             params: list = []
 
-            for field in ("title", "group_id", "order", "event_time"):
+            for field in ("title", "group_id", "order", "event_time", "node_type", "chain_id"):
                 if field in updates:
                     set_clauses.append(f'"{field}" = ?')
                     params.append(updates[field])
@@ -927,6 +1252,10 @@ def update_node(
                 raise HTTPException(
                     409, "Node was modified by another user (version conflict)"
                 )
+
+            # group_id / chain_id change → remount derived folder paths
+            if "group_id" in updates or "chain_id" in updates:
+                _sync_node_derived_paths(conn, node_id)
 
             row = conn.execute(
                 "SELECT * FROM nodes WHERE node_id=?", (node_id,)
@@ -1021,10 +1350,46 @@ def delete_node(collection_id: str, node_id: str) -> dict | None:
                 (node_id,),
             )
 
+            # Break inbound FKs that still point at this node:
+            # - messages.source_node_id
+            # - chains.merge_node_id (reopens closed branches that merged here)
+            _clear_node_inbound_fks(conn, node_id)
+
+            # Branches that start at this node cannot keep a dangling parent_node_id —
+            # remove those branch chains (and their merge node on main, if any).
+            start_branches = conn.execute(
+                "SELECT chain_id FROM chains WHERE parent_node_id=?",
+                (node_id,),
+            ).fetchall()
+            for br in start_branches:
+                # Revert is handled by deleting the branch; parent type reset below
+                # is skipped because parent is the node we're deleting.
+                _delete_chain_subtree(conn, br["chain_id"])
+
             # Delete the node itself
             conn.execute(
                 "DELETE FROM nodes WHERE node_id=?", (node_id,)
             )
+
+            # If node was on a branch chain and it is now empty, clean up the branch
+            chain_id = node["chain_id"]
+            chain_row = conn.execute(
+                "SELECT * FROM chains WHERE chain_id=?", (chain_id,)
+            ).fetchone()
+            if chain_row and chain_row["parent_chain_id"] is not None:
+                # This is a branch chain (not main)
+                remaining = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM nodes WHERE chain_id=?", (chain_id,)
+                ).fetchone()["cnt"]
+                if remaining == 0:
+                    # No nodes left — revert parent node type and delete chain
+                    parent_node_id = chain_row["parent_node_id"]
+                    if parent_node_id:
+                        conn.execute(
+                            "UPDATE nodes SET node_type=?, version=version+1 WHERE node_id=? AND node_type=?",
+                            ("event", parent_node_id, "start"),
+                        )
+                    _delete_chain_subtree(conn, chain_id)
 
             if affected_files:
                 result = {"affected_files": affected_files}
@@ -1093,11 +1458,21 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
         ).fetchone()
         if not node:
             raise HTTPException(404, f"Node '{node_id}' not found")
+
+        # Self-heal: ensure attachments mount group + branch (incl. start/merge anchors)
+        try:
+            with conn:
+                _sync_node_derived_paths(conn, node_id)
+        except Exception:
+            logger.exception(
+                "Failed to sync derived paths for node %s", node_id
+            )
+
         out = _row_to_node(node)
 
         # Attachments: file_nodes JOIN files JOIN file_versions
         att_rows = conn.execute(
-            """SELECT fn.file_id, fn.greyed, f.is_definitive, f.archived,
+            """SELECT fn.file_id, fn.greyed, f.is_definitive, f.archived, f.version,
                       fv.storage_file_id
                FROM file_nodes fn
                JOIN files f ON f.file_id = fn.file_id
@@ -1114,6 +1489,7 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
                 "is_definitive": bool(a["is_definitive"]),
                 "archived": bool(a["archived"]),
                 "filename": a["storage_file_id"] or "",
+                "version": int(a["version"] or 1),
             })
             if a["is_definitive"]:
                 has_definitive = True
@@ -1194,6 +1570,7 @@ def _row_to_file_out(row, conn=None) -> FileOut:
 def _row_to_file_path(row, folder_path: str = "", is_greyed: bool = False) -> FilePathOut:
     from src.file_mgmt.models import FilePathOut
 
+    path_archived = bool(row["archived"]) if "archived" in row.keys() else False
     return FilePathOut(
         path_id=row["path_id"],
         file_id=row["file_id"],
@@ -1201,8 +1578,9 @@ def _row_to_file_path(row, folder_path: str = "", is_greyed: bool = False) -> Fi
         is_primary=bool(row["is_primary"]),
         source_node_id=row["source_node_id"],
         created_by=row["created_by"],
+        archived=path_archived,
         folder_path=folder_path,
-        is_greyed=is_greyed,
+        is_greyed=is_greyed or path_archived,
     )
 
 
@@ -1232,11 +1610,17 @@ def _compute_is_greyed(conn, file_row, path_row) -> bool:
 
     Rules:
     - files.archived=1 -> True
+    - file_paths.archived=1 -> True (path-level archive)
     - 派生路径 (source_node_id != NULL): 查 file_nodes.greyed
     - 持久路径 (source_node_id=NULL) + files.archived=0 -> False
     """
     if file_row["archived"]:
         return True
+    try:
+        if path_row["archived"]:
+            return True
+    except (KeyError, IndexError):
+        pass
     if path_row["source_node_id"] is not None:
         fn = conn.execute(
             "SELECT greyed FROM file_nodes WHERE file_id=? AND node_id=?",
@@ -1245,6 +1629,60 @@ def _compute_is_greyed(conn, file_row, path_row) -> bool:
         if fn and fn["greyed"]:
             return True
     return False
+
+
+def _ensure_path_archive_column(conn) -> None:
+    from src.file_mgmt.store import _ensure_file_paths_archived
+
+    _ensure_file_paths_archived(conn)
+
+
+def _path_has_active_mount(conn, file_id: str) -> bool:
+    """True if file has at least one non-archived path."""
+    row = conn.execute(
+        "SELECT 1 FROM file_paths WHERE file_id=? AND COALESCE(archived, 0)=0 LIMIT 1",
+        (file_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _archive_paths_on_folder(
+    conn, file_id: str, folder_id: str
+) -> list[str]:
+    """Set archived=1 on all paths of file_id in folder_id. Returns path_ids."""
+    rows = conn.execute(
+        """SELECT path_id FROM file_paths
+           WHERE file_id=? AND folder_id=? AND COALESCE(archived, 0)=0""",
+        (file_id, folder_id),
+    ).fetchall()
+    path_ids = [r["path_id"] for r in rows]
+    if path_ids:
+        conn.execute(
+            """UPDATE file_paths SET archived=1
+               WHERE file_id=? AND folder_id=? AND COALESCE(archived, 0)=0""",
+            (file_id, folder_id),
+        )
+    return path_ids
+
+
+def _promote_file_archive_if_needed(conn, collection_id: str, file_id: str) -> bool:
+    """If no active paths remain, set files.archived=1 and mark Qdrant. Returns True if promoted."""
+    if _path_has_active_mount(conn, file_id):
+        return False
+    fr = conn.execute(
+        "SELECT archived FROM files WHERE file_id=?", (file_id,)
+    ).fetchone()
+    if not fr or fr["archived"]:
+        return bool(fr and fr["archived"])
+    conn.execute(
+        "UPDATE files SET archived=1, version=version+1 WHERE file_id=?",
+        (file_id,),
+    )
+    try:
+        _mark_qdrant_chunks_archived(collection_id, file_id)
+    except Exception:
+        pass
+    return True
 
 
 # --- File queries (without upload) ---
@@ -1359,7 +1797,11 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
     """List files in a folder with greyed status.
 
     Deduplicates: same file with multiple paths in this folder shows once.
-    Deduplicates: same file with multiple paths in this folder shows once.
+
+    Path-level archive (``file_paths.archived=1``, e.g. end_chain on a branch
+    folder) still **lists** the file here with ``is_greyed=True`` so branch
+    folders remain inspectable. File-level archive (``files.archived=1``) is
+    excluded (shown under the Archived virtual view instead).
     """
     conn = _open_db(collection_id)
     try:
@@ -1370,15 +1812,32 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
         if not fld:
             raise HTTPException(404, f"Folder '{folder_id}' not found")
 
+        _ensure_path_archive_column(conn)
+        # One row per file: has_active_path=1 if any non-archived path in this folder
         rows = conn.execute(
-            """SELECT DISTINCT f.*, fp.source_node_id, fp.path_id
+            """SELECT f.*,
+                      MAX(CASE WHEN COALESCE(fp.archived, 0)=0 THEN 1 ELSE 0 END)
+                        AS has_active_path
                FROM files f
                JOIN file_paths fp ON fp.file_id = f.file_id
                WHERE fp.folder_id=?
+                 AND f.archived=0
+               GROUP BY f.file_id
                ORDER BY f.file_id""",
             (folder_id,),
         ).fetchall()
-        return [_row_to_file_out(r, conn) for r in rows]
+        result: list = []
+        for r in rows:
+            fs = _row_to_file_out(r, conn)
+            # Path-archived only (no active mount in this folder) → greyed in UI
+            try:
+                has_active = int(r["has_active_path"] or 0) == 1
+            except (KeyError, IndexError, TypeError):
+                has_active = True
+            if not has_active:
+                fs.is_greyed = True
+            result.append(fs)
+        return result
     finally:
         conn.close()
 
@@ -2288,18 +2747,23 @@ def update_file(
 
 
 def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
-    """End a branch chain: grey attachments, compute archive candidates.
+    """End a branch chain and close the loop on the parent chain.
 
     Steps:
-    1. Validate node is 'end' type on a branch chain with no existing end node
-    2. Get all nodes on this chain
-    3. For each non-inherited node: grey all file attachments
-    4. For each file: check if it has any surviving references
-    5. Return summary: {greyed_files, archive_candidates, inherited_files}
+    1. Validate end-type node on a branch chain
+    2. Path-archive non-inherited files on the **branch folder** only
+    3. Promote to file-level archive when no active paths remain
+    4. Create merge node on parent with form fields; attach files + message
+    5. Link chains.merge_node_id → merge node
     """
+    from src.file_mgmt.store import _ensure_chains_merge_node_id
+
     conn = _open_db(collection_id)
     try:
         with conn:
+            _ensure_chains_merge_node_id(conn)
+            _ensure_path_archive_column(conn)
+
             # 1. Validate node
             node = conn.execute(
                 "SELECT * FROM nodes WHERE node_id=?", (node_id,)
@@ -2315,10 +2779,10 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
             ).fetchone()
             if not chain:
                 raise HTTPException(500, "Node's chain not found")
-            if chain["parent_chain_id"] is None:
+            parent_chain_id = chain["parent_chain_id"]
+            if parent_chain_id is None:
                 raise HTTPException(400, "Cannot end the main chain")
 
-            # Check for existing end node (exclude the current node)
             existing_end = conn.execute(
                 'SELECT node_id FROM nodes WHERE chain_id=? AND node_type="end" AND node_id != ?',
                 (chain_id, node_id),
@@ -2330,78 +2794,142 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                     "Use reopen_chain first to re-open it.",
                 )
 
-            # 2. Get all nodes on this chain
             all_nodes = conn.execute(
-                "SELECT node_id FROM nodes WHERE chain_id=?",
+                'SELECT * FROM nodes WHERE chain_id=? ORDER BY "order"',
                 (chain_id,),
             ).fetchall()
             all_node_ids = {n["node_id"] for n in all_nodes}
 
-            inherit_set = set(req.inherit_node_ids)
-            # Validate inherit_node_ids are on this chain
-            for inh_id in inherit_set:
-                if inh_id not in all_node_ids:
-                    raise HTTPException(
-                        400, f"inherit_node_id '{inh_id}' is not on this chain"
-                    )
-
-            # 3. For each non-inherited node: grey all file attachments
-            greyed_files: set[str] = set()
-            inherited_files: set[str] = set()
-
+            # Collect all files on branch nodes
+            branch_files: set[str] = set()
+            files_by_node: dict[str, set[str]] = {}
             for n_id in all_node_ids:
-                # Get all files attached to this node
                 fn_rows = conn.execute(
                     "SELECT file_id FROM file_nodes WHERE node_id=?",
                     (n_id,),
                 ).fetchall()
+                files_by_node[n_id] = {fn["file_id"] for fn in fn_rows}
+                branch_files |= files_by_node[n_id]
 
-                for fn in fn_rows:
-                    fid = fn["file_id"]
-                    if n_id in inherit_set:
-                        # Inherited — keep greyed=0
-                        inherited_files.add(fid)
-                    else:
-                        # Mark greyed=1
-                        conn.execute(
-                            "UPDATE file_nodes SET greyed=1 "
-                            "WHERE file_id=? AND node_id=?",
-                            (fid, n_id),
+            # Resolve inherit set (prefer file ids; fall back to node ids)
+            if req.inherit_file_ids:
+                inherit_files = set(req.inherit_file_ids)
+                for fid in inherit_files:
+                    if fid not in branch_files:
+                        raise HTTPException(
+                            400,
+                            f"inherit_file_id '{fid}' is not attached on this chain",
                         )
-                        greyed_files.add(fid)
+            elif req.inherit_node_ids:
+                inherit_files = set()
+                for inh_id in req.inherit_node_ids:
+                    if inh_id not in all_node_ids:
+                        raise HTTPException(
+                            400, f"inherit_node_id '{inh_id}' is not on this chain"
+                        )
+                    inherit_files |= files_by_node.get(inh_id, set())
+            else:
+                # Default: inherit nothing if client sends empty (explicit)
+                inherit_files = set()
 
-            # 4. For each greyed file, check if it needs file-level archive
-            archive_candidates: set[str] = set()
-            for fid in greyed_files:
-                # Check all file_nodes for this file
-                all_fn = conn.execute(
-                    "SELECT node_id, greyed FROM file_nodes WHERE file_id=?",
-                    (fid,),
-                ).fetchall()
+            non_inherited = branch_files - inherit_files
+            branch_folder_id = chain["folder_id"]
 
-                # Does any attachment survive (greyed=0 somewhere)?
-                has_active_attachment = any(fn_r["greyed"] == 0 for fn_r in all_fn)
+            path_archived: list[str] = []
+            path_ids_archived: list[str] = []
+            file_archived: list[str] = []
 
-                # Does it have persistent paths?
-                persistent = conn.execute(
-                    "SELECT 1 FROM file_paths WHERE file_id=? AND source_node_id IS NULL LIMIT 1",
-                    (fid,),
+            for fid in non_inherited:
+                if branch_folder_id:
+                    pids = _archive_paths_on_folder(conn, fid, branch_folder_id)
+                    path_ids_archived.extend(pids)
+                    if pids:
+                        path_archived.append(fid)
+                if _promote_file_archive_if_needed(conn, collection_id, fid):
+                    file_archived.append(fid)
+
+            # 3. Create merge node on parent chain — title is required
+            if not req.title or not str(req.title).strip():
+                raise HTTPException(400, "Merge node title is required")
+            merge_title = str(req.title).strip()
+            merge_group_id = req.group_id
+            if merge_group_id:
+                g = conn.execute(
+                    "SELECT group_id FROM node_groups WHERE group_id=?",
+                    (merge_group_id,),
                 ).fetchone()
+                if not g:
+                    raise HTTPException(400, f"Group '{merge_group_id}' not found")
 
-                # If no active attachments AND no persistent paths → candidate
-                if not has_active_attachment and not persistent:
-                    archive_candidates.add(fid)
+            max_row = conn.execute(
+                'SELECT COALESCE(MAX("order"), 0) AS m FROM nodes WHERE chain_id=?',
+                (parent_chain_id,),
+            ).fetchone()
+            merge_order = int(max_row["m"]) + 1
+            merge_node_id = uuid.uuid4().hex
+            now = _now_iso()
+            conn.execute(
+                """INSERT INTO nodes
+                   (node_id, chain_id, group_id, node_type, title,
+                    "order", event_time, created_by, created_at, version)
+                   VALUES (?, ?, ?, 'end', ?, ?, ?, 'local', ?, 1)""",
+                (
+                    merge_node_id,
+                    parent_chain_id,
+                    merge_group_id,
+                    merge_title,
+                    merge_order,
+                    req.event_time,
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE chains SET merge_node_id=? WHERE chain_id=?",
+                (merge_node_id, chain_id),
+            )
 
-            # Build result sets
-            all_greyed_file_ids = list(greyed_files)
-            all_archive_candidate_ids = list(archive_candidates)
-            # Inherited files: those in inherited nodes that are not already greyed
-            all_inherited_file_ids = list(inherited_files - greyed_files)
+            # Attach files to merge node (reuse attach helper pieces)
+            for fid in req.attachment_file_ids:
+                fr = conn.execute(
+                    "SELECT * FROM files WHERE file_id=?", (fid,)
+                ).fetchone()
+                if not fr:
+                    raise HTTPException(404, f"Attachment file '{fid}' not found")
+                existing_fn = conn.execute(
+                    "SELECT 1 FROM file_nodes WHERE file_id=? AND node_id=?",
+                    (fid, merge_node_id),
+                ).fetchone()
+                if existing_fn:
+                    continue
+                conn.execute(
+                    """INSERT INTO file_nodes
+                       (file_id, node_id, version_id, greyed, added_by)
+                       VALUES (?, ?, ?, 0, 'local')""",
+                    (fid, merge_node_id, fr["current_version_id"]),
+                )
+
+            # Mount group + branch folder on merge (and heal all branch nodes)
+            _sync_node_derived_paths(conn, merge_node_id)
+            _sync_chain_branch_paths(conn, chain_id)
+
+            if req.message_body and req.message_body.strip():
+                msg_id = uuid.uuid4().hex
+                conn.execute(
+                    """INSERT INTO messages
+                       (message_id, owner_type, owner_id, source_node_id, body,
+                        author_type, author_id, created_at, edited_at, edited_by, version)
+                       VALUES (?, 'node', ?, NULL, ?, 'user', 'local', ?, NULL, NULL, 1)""",
+                    (msg_id, merge_node_id, req.message_body.strip(), now),
+                )
 
             result = {
-                "greyed_files": all_greyed_file_ids,
-                "archive_candidates": all_archive_candidate_ids,
-                "inherited_files": all_inherited_file_ids,
+                "greyed_files": list(path_archived),  # legacy field name
+                "archive_candidates": [],
+                "path_archived_files": path_archived,
+                "path_archived_path_ids": path_ids_archived,
+                "file_archived": file_archived,
+                "inherited_files": list(inherit_files),
+                "merged_node_id": merge_node_id,
             }
 
         emit_event(
@@ -2549,40 +3077,18 @@ def attach_file_to_node(
                 "SELECT 1 FROM file_nodes WHERE file_id=? AND node_id=?",
                 (file_id, node_id),
             ).fetchone()
-            if existing:
-                # Already attached — return file info without error
-                return _row_to_file_out(file_row, conn)
+            if not existing:
+                # Insert file_nodes
+                conn.execute(
+                    """INSERT INTO file_nodes
+                       (file_id, node_id, version_id, greyed, added_by)
+                       VALUES (?, ?, ?, 0, 'local')""",
+                    (file_id, node_id, file_row["current_version_id"]),
+                )
 
-            # Insert file_nodes
-            conn.execute(
-                """INSERT INTO file_nodes
-                   (file_id, node_id, version_id, greyed, added_by)
-                   VALUES (?, ?, ?, 0, 'local')""",
-                (file_id, node_id, file_row["current_version_id"]),
-            )
-
-            # Generate derived paths
-            derived_path_count = 0
-
-            # 1) Group folder path
-            if node["group_id"]:
-                grp = conn.execute(
-                    "SELECT folder_id FROM node_groups WHERE group_id=?",
-                    (node["group_id"],),
-                ).fetchone()
-                if grp and grp["folder_id"]:
-                    _upsert_derived_path(conn, file_id, grp["folder_id"], node_id)
-                    derived_path_count += 1
-
-            # 2) Chain folder path (only for branch chains, main chain has no folder)
-            if node["chain_id"]:
-                chain = conn.execute(
-                    "SELECT folder_id FROM chains WHERE chain_id=?",
-                    (node["chain_id"],),
-                ).fetchone()
-                if chain and chain["folder_id"]:
-                    _upsert_derived_path(conn, file_id, chain["folder_id"], node_id)
-                    derived_path_count += 1
+            # Always sync derived paths (group + branch folder) — covers re-attach
+            # and cases where chain folder was missing on first attach.
+            _sync_node_derived_paths(conn, node_id, file_id=file_id)
 
         emit_event(
             "file.uploaded",
@@ -2618,6 +3124,125 @@ def _upsert_derived_path(
            VALUES (?, ?, ?, 0, ?, 'local')""",
         (path_id, file_id, folder_id, source_node_id),
     )
+
+
+def _branch_folder_ids_for_node(conn, node_id: str) -> set[str]:
+    """Branch folder_ids this node should mount.
+
+    Includes:
+    - The folder of the branch chain the node currently lives on
+    - Folders of branches that use this node as start (parent_node_id)
+      or merge (merge_node_id) — anchors live on the main chain
+    """
+    folders: set[str] = set()
+    node = conn.execute(
+        "SELECT chain_id FROM nodes WHERE node_id=?", (node_id,)
+    ).fetchone()
+    if node and node["chain_id"]:
+        chain = conn.execute(
+            "SELECT folder_id, parent_chain_id FROM chains WHERE chain_id=?",
+            (node["chain_id"],),
+        ).fetchone()
+        if chain and chain["folder_id"] and chain["parent_chain_id"] is not None:
+            folders.add(chain["folder_id"])
+
+    # Start / merge anchors on main (or any parent chain)
+    for row in conn.execute(
+        """SELECT folder_id FROM chains
+           WHERE folder_id IS NOT NULL
+             AND parent_chain_id IS NOT NULL
+             AND (parent_node_id=? OR merge_node_id=?)""",
+        (node_id, node_id),
+    ).fetchall():
+        if row["folder_id"]:
+            folders.add(row["folder_id"])
+    return folders
+
+
+def _sync_node_derived_paths(
+    conn,
+    node_id: str,
+    *,
+    file_id: str | None = None,
+) -> None:
+    """Ensure every attachment on *node_id* has group + branch-folder derived paths.
+
+    - Group folder path when node.group_id is set
+    - Branch folder path when node is on a branch, OR is that branch's start/merge anchor
+    - Drops stale derived paths for this node that point at neither target folder
+      (e.g. after group/chain change). Persistent paths (source_node_id NULL) are
+      never touched.
+    """
+    node = conn.execute(
+        "SELECT * FROM nodes WHERE node_id=?", (node_id,)
+    ).fetchone()
+    if not node:
+        return
+
+    target_folders: set[str] = set()
+
+    if node["group_id"]:
+        grp = conn.execute(
+            "SELECT folder_id FROM node_groups WHERE group_id=?",
+            (node["group_id"],),
+        ).fetchone()
+        if grp and grp["folder_id"]:
+            target_folders.add(grp["folder_id"])
+
+    target_folders |= _branch_folder_ids_for_node(conn, node_id)
+
+    if file_id:
+        file_ids = [file_id]
+    else:
+        file_ids = [
+            r["file_id"]
+            for r in conn.execute(
+                "SELECT file_id FROM file_nodes WHERE node_id=?", (node_id,)
+            ).fetchall()
+        ]
+
+    for fid in file_ids:
+        for folder_id in target_folders:
+            _upsert_derived_path(conn, fid, folder_id, node_id)
+
+        # Remove obsolete derived paths for this node that are not current targets
+        if target_folders:
+            placeholders = ",".join("?" * len(target_folders))
+            conn.execute(
+                f"""DELETE FROM file_paths
+                    WHERE source_node_id=? AND file_id=?
+                      AND folder_id NOT IN ({placeholders})""",
+                (node_id, fid, *target_folders),
+            )
+        else:
+            # No group and not on a branch folder — drop all derived for this node/file
+            conn.execute(
+                "DELETE FROM file_paths WHERE source_node_id=? AND file_id=?",
+                (node_id, fid),
+            )
+
+
+def _sync_chain_branch_paths(conn, chain_id: str) -> None:
+    """Sync derived paths for every node on a branch + its start/merge anchors."""
+    ch = conn.execute(
+        "SELECT * FROM chains WHERE chain_id=?", (chain_id,)
+    ).fetchone()
+    if not ch:
+        return
+    # Nodes living on the branch
+    for row in conn.execute(
+        "SELECT node_id FROM nodes WHERE chain_id=?", (chain_id,)
+    ).fetchall():
+        _sync_node_derived_paths(conn, row["node_id"])
+    # Start / merge anchors (may live on parent chain)
+    if ch["parent_node_id"]:
+        _sync_node_derived_paths(conn, ch["parent_node_id"])
+    try:
+        merge_id = ch["merge_node_id"]
+    except (KeyError, IndexError):
+        merge_id = None
+    if merge_id:
+        _sync_node_derived_paths(conn, merge_id)
 
 
 def detach_file_from_node(

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Loader2, FolderTreeIcon } from "lucide-react"
+import { Loader2, FolderTreeIcon, GitBranchPlus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/stores/app-store"
 import { getCollectionConfig, getFiles, getFileChunks, deleteDocument, uploadFiles, getTasks, clearCompletedTasks, cancelTask, retryTask, getDocSummary, setDocSummaryInclude, generateDocSummary, type FileListItem, type ChunkDetail, type TaskInfo } from "@/api/client"
@@ -17,6 +17,7 @@ import { FileDetailDialog } from "./file-detail-dialog"
 import { UploadUI, TaskQueueList } from "./upload-section"
 import { QuickChat } from "./quick-chat"
 import { FolderView } from "@/components/file-mgmt/folder-view"
+import { TimelineView } from "@/components/file-mgmt/timeline-view"
 
 // Module-level: allows note-editor-dialog to trigger files refresh after ingestion
 let _refreshFilesCallback: (() => void) | null = null
@@ -24,12 +25,33 @@ export function _triggerFilesRefresh() {
   _refreshFilesCallback?.()
 }
 
+type DbViewMode = "classic" | "folders" | "timeline"
+type DbTab = "info" | "files" | "config"
+
+function loadDbUi<T>(key: string, fallback: T): T {
+  try {
+    const v = localStorage.getItem(`rag_${key}`)
+    return v !== null ? (JSON.parse(v) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveDbUi(key: string, value: unknown) {
+  try {
+    localStorage.setItem(`rag_${key}`, JSON.stringify(value))
+  } catch { /* ignore */ }
+}
+
 export function DatabaseView() {
   const { activeCollection, setActiveCollection, removeDeletedCollection, pendingCreateCollection, setPendingCreateCollection, pendingOpenFile, setPendingOpenFile, collections, fetchCollections } = useAppStore()
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState("info")
+  const [activeTab, setActiveTab] = useState<DbTab>(() => {
+    const t = loadDbUi<string>("dbActiveTab", "info")
+    return t === "info" || t === "files" || t === "config" ? t : "info"
+  })
   const [files, setFiles] = useState<FileListItem[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -55,7 +77,21 @@ export function DatabaseView() {
   const [quickChatOpen, setQuickChatOpen] = useState(false)
   const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | undefined>(undefined)
   // Phase 6: view mode for folder view vs timeline view
-  const [dbViewMode, setDbViewMode] = useState<"classic" | "folders" | "timeline">("classic")
+  const [dbViewMode, setDbViewMode] = useState<DbViewMode>(() => {
+    const m = loadDbUi<string>("dbViewMode", "classic")
+    return m === "classic" || m === "folders" || m === "timeline" ? m : "classic"
+  })
+
+  const handleTabChange = useCallback((tab: string) => {
+    const next: DbTab = tab === "info" || tab === "files" || tab === "config" ? tab : "info"
+    setActiveTab(next)
+    saveDbUi("dbActiveTab", next)
+  }, [])
+
+  const handleDbViewMode = useCallback((mode: DbViewMode) => {
+    setDbViewMode(mode)
+    saveDbUi("dbViewMode", mode)
+  }, [])
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -78,10 +114,10 @@ export function DatabaseView() {
 
   // Switch to Info tab when navigating from Meeting page
   useEffect(() => {
-    const handler = () => setActiveTab("info")
+    const handler = () => handleTabChange("info")
     window.addEventListener("show-meeting-log", handler)
     return () => window.removeEventListener("show-meeting-log", handler)
-  }, [])
+  }, [handleTabChange])
 
   // Open file detail from Meeting Log
   useEffect(() => {
@@ -305,7 +341,7 @@ export function DatabaseView() {
               </span>
             </div>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
+            <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col min-h-0">
               <TabsList className="w-fit bg-transparent p-0 gap-5 border-b rounded-none border-border relative">
                 <TabsIndicator renderBeforeHydration />
                 <TabsTrigger
@@ -347,7 +383,7 @@ export function DatabaseView() {
                           ? "bg-background text-foreground shadow-sm"
                           : "text-muted-foreground hover:text-foreground"
                       }`}
-                      onClick={() => setDbViewMode("classic")}
+                      onClick={() => handleDbViewMode("classic")}
                     >
                       Classic
                     </button>
@@ -357,12 +393,23 @@ export function DatabaseView() {
                           ? "bg-background text-foreground shadow-sm"
                           : "text-muted-foreground hover:text-foreground"
                       }`}
-                      onClick={() => setDbViewMode("folders")}
+                      onClick={() => handleDbViewMode("folders")}
                     >
                       <FolderTreeIcon className="h-3 w-3" />
                       Folders
                     </button>
                   </div>
+                    <button
+                      className={`text-[10px] font-medium uppercase tracking-[0.08em] px-2 py-0.5 rounded flex items-center gap-1 ${
+                        dbViewMode === "timeline"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      onClick={() => handleDbViewMode("timeline")}
+                    >
+                      <GitBranchPlus className="h-3 w-3" />
+                      Timeline
+                    </button>
                 </div>
                 {coverage && (
                   <div className="text-[11px] leading-relaxed px-3 py-1.5 border border-dashed border-border bg-muted/30">
@@ -373,6 +420,10 @@ export function DatabaseView() {
                 {dbViewMode === "folders" ? (
                   <div className="flex-1 flex flex-col min-h-0">
                     <FolderView collectionId={activeCollection} />
+                  </div>
+                ) : dbViewMode === "timeline" ? (
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <TimelineView collectionId={activeCollection} />
                   </div>
                 ) : (
                 <div className="h-full flex flex-col gap-4">

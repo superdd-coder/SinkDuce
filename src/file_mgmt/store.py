@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,16 @@ from pathlib import Path
 logger = logging.getLogger("file_mgmt.store")
 
 COLLECTIONS_DIR = Path("data").resolve() / "collections"
+
+# Process-local: collections whose schema backfill already ran successfully.
+# Avoids re-running ALTER on every API call (and races under concurrent open).
+_backfill_done: set[str] = set()
+_backfill_lock = threading.Lock()
+
+
+def _is_duplicate_column_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "duplicate column" in msg
 
 # ────────────────────────────────────────────────────────────────
 # Schema DDL (contract section 2)
@@ -39,7 +50,10 @@ _CREATE_TABLES = [
       folder_id   TEXT UNIQUE REFERENCES folders(folder_id),
       name        TEXT NOT NULL,
       description TEXT,
-      created_by  TEXT NOT NULL DEFAULT 'local'
+      created_by  TEXT NOT NULL DEFAULT 'local',
+      icon_type   TEXT,
+      icon_value  TEXT,
+      icon_color  TEXT
     )''',
     # chains (circular: parent_node_id -> nodes; self-ref parent_chain_id)
     '''CREATE TABLE chains (
@@ -48,7 +62,8 @@ _CREATE_TABLES = [
       parent_node_id  TEXT REFERENCES nodes(node_id),
       folder_id       TEXT UNIQUE REFERENCES folders(folder_id),
       title           TEXT,
-      created_by      TEXT NOT NULL DEFAULT 'local'
+      created_by      TEXT NOT NULL DEFAULT 'local',
+      merge_node_id   TEXT REFERENCES nodes(node_id)
     )''',
     # nodes (chain_id -> chains; group_id -> node_groups)
     '''CREATE TABLE nodes (
@@ -84,7 +99,7 @@ _CREATE_TABLES = [
       created_by      TEXT NOT NULL DEFAULT 'local',
       created_at      TEXT NOT NULL
     )''',
-    # file_paths (multi-path)
+    # file_paths (multi-path; path-level archive)
     '''CREATE TABLE file_paths (
       path_id        TEXT PRIMARY KEY,
       file_id        TEXT REFERENCES files(file_id),
@@ -92,6 +107,7 @@ _CREATE_TABLES = [
       is_primary     INTEGER DEFAULT 0,
       source_node_id TEXT REFERENCES nodes(node_id),
       created_by     TEXT NOT NULL DEFAULT 'local',
+      archived       INTEGER NOT NULL DEFAULT 0,
       UNIQUE(file_id, folder_id, source_node_id)
     )''',
     # file_nodes (file x node N:M)
@@ -124,6 +140,7 @@ _CREATE_INDEXES = [
     'CREATE INDEX idx_nodes_group       ON nodes(group_id)',
     'CREATE INDEX idx_file_paths_folder ON file_paths(folder_id)',
     'CREATE INDEX idx_file_paths_file   ON file_paths(file_id)',
+    'CREATE INDEX idx_file_paths_archived ON file_paths(folder_id, archived)',
     'CREATE INDEX idx_file_nodes_node   ON file_nodes(node_id)',
     'CREATE INDEX idx_file_nodes_file   ON file_nodes(file_id)',
     'CREATE INDEX idx_messages_owner    ON messages(owner_type, owner_id, created_at)',
@@ -142,6 +159,7 @@ EXPECTED_TABLES = {
 EXPECTED_INDEXES = {
     "idx_nodes_chain_order", "idx_nodes_group",
     "idx_file_paths_folder", "idx_file_paths_file",
+    "idx_file_paths_archived",
     "idx_file_nodes_node", "idx_file_nodes_file",
     "idx_messages_owner", "idx_files_archived",
     "idx_folders_parent", "idx_nodes_created_by", "idx_files_created_by",
@@ -228,6 +246,62 @@ def _backfill_system_folders(conn: sqlite3.Connection) -> int:
         logger.info("Backfilled system folder '%s' for existing DB", name)
 
     return created
+
+
+def _ensure_chains_merge_node_id(conn: sqlite3.Connection) -> None:
+    """Add chains.merge_node_id if missing (idempotent, existing DBs)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(chains)").fetchall()}
+    if "merge_node_id" in cols:
+        return
+    try:
+        conn.execute(
+            "ALTER TABLE chains ADD COLUMN merge_node_id TEXT REFERENCES nodes(node_id)"
+        )
+        logger.info("Added chains.merge_node_id column")
+    except sqlite3.OperationalError as e:
+        # Concurrent backfill on another connection may have won the race
+        if not _is_duplicate_column_error(e):
+            raise
+
+
+def _ensure_node_groups_icon_columns(conn: sqlite3.Connection) -> None:
+    """Add node_groups icon_* columns if missing (idempotent, race-safe)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(node_groups)").fetchall()}
+    for col in ("icon_type", "icon_value", "icon_color"):
+        if col in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE node_groups ADD COLUMN {col} TEXT")
+            logger.info("Added node_groups.%s column", col)
+            cols.add(col)
+        except sqlite3.OperationalError as e:
+            # Two requests both saw missing column and both ran ALTER
+            if not _is_duplicate_column_error(e):
+                raise
+            cols.add(col)
+
+
+def _ensure_file_paths_archived(conn: sqlite3.Connection) -> None:
+    """Add file_paths.archived if missing (idempotent path-level archive)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(file_paths)").fetchall()}
+    if "archived" not in cols:
+        try:
+            conn.execute(
+                "ALTER TABLE file_paths ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("Added file_paths.archived column")
+        except sqlite3.OperationalError as e:
+            if not _is_duplicate_column_error(e):
+                raise
+    # Index may be missing on older DBs even after column exists
+    indexes = {
+        row[1] for row in conn.execute("PRAGMA index_list(file_paths)").fetchall()
+    }
+    if "idx_file_paths_archived" not in indexes:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_file_paths_archived "
+            "ON file_paths(folder_id, archived)"
+        )
 
 
 def _cleanup_uncategorized_folder(conn: sqlite3.Connection) -> int:
@@ -451,51 +525,71 @@ def get_db(collection_id: str) -> sqlite3.Connection:
 def init_collection_db(collection_id: str) -> None:
     """Create meta.db with all tables, indexes, and system data.
 
-    Called when a collection is created.  If meta.db already exists this
-    is a no-op (idempotent guard).
+    Safe to call on every request via ``_open_db``:
+    - Creates DB if missing
+    - Runs schema backfill once per process per collection (race-safe)
     """
     path = _db_path(collection_id)
-    already_existed = path.exists()
 
-    if not already_existed:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    # Fast path: already created + backfilled in this process
+    if path.exists() and collection_id in _backfill_done:
+        return
 
-        conn = sqlite3.connect(str(path))
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("BEGIN")
-            conn.execute("PRAGMA defer_foreign_keys=ON")
+    with _backfill_lock:
+        # Re-check under lock
+        path = _db_path(collection_id)
+        already_existed = path.exists()
 
-            for ddl in _CREATE_TABLES:
-                conn.execute(ddl)
-            for idx_ddl in _CREATE_INDEXES:
-                conn.execute(idx_ddl)
-            _seed_system_data(conn)
+        if not already_existed:
+            path.parent.mkdir(parents=True, exist_ok=True)
 
-            conn.commit()
-            logger.info("Initialized meta.db for collection %s", collection_id)
-        except Exception:
-            conn.rollback()
-            for suffix in ("", "-wal", "-shm"):
-                p = path.parent / f"meta.db{suffix}"
-                if p.exists():
-                    try:
-                        p.unlink()
-                    except OSError:
-                        pass
-            logger.exception("Failed to init meta.db for collection %s", collection_id)
-            raise
-        finally:
-            conn.close()
+            conn = sqlite3.connect(str(path))
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA foreign_keys=ON")
+                conn.execute("BEGIN")
+                conn.execute("PRAGMA defer_foreign_keys=ON")
 
-    # Backfill: add any system folders that weren't present in older DBs
-    if already_existed:
+                for ddl in _CREATE_TABLES:
+                    conn.execute(ddl)
+                for idx_ddl in _CREATE_INDEXES:
+                    conn.execute(idx_ddl)
+                _seed_system_data(conn)
+
+                conn.commit()
+                logger.info("Initialized meta.db for collection %s", collection_id)
+            except Exception:
+                conn.rollback()
+                for suffix in ("", "-wal", "-shm"):
+                    p = path.parent / f"meta.db{suffix}"
+                    if p.exists():
+                        try:
+                            p.unlink()
+                        except OSError:
+                            pass
+                logger.exception(
+                    "Failed to init meta.db for collection %s", collection_id
+                )
+                raise
+            finally:
+                conn.close()
+            # Fresh schema already has all columns — no ALTER backfill needed
+            _backfill_done.add(collection_id)
+            return
+
+        if collection_id in _backfill_done:
+            return
+
+        # Backfill: schema / system data for older DBs (once per process)
         conn_backfill = get_db(collection_id)
         try:
             with conn_backfill:
+                _ensure_chains_merge_node_id(conn_backfill)
+                _ensure_node_groups_icon_columns(conn_backfill)
+                _ensure_file_paths_archived(conn_backfill)
                 _backfill_system_folders(conn_backfill)
                 _cleanup_uncategorized_folder(conn_backfill)
+            _backfill_done.add(collection_id)
         finally:
             conn_backfill.close()
 

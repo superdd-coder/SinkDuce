@@ -9,12 +9,21 @@ import type {
   FileDetail,
   FilePath,
   Message,
+  Chain,
+  Node,
+  NodeDetail,
+  EndChainResult,
   FolderCreateRequest,
   FolderUpdateRequest,
   GroupCreateRequest,
   GroupUpdateRequest,
   MessageCreateRequest,
   MessageUpdateRequest,
+  ChainCreateRequest,
+  ChainUpdateRequest,
+  NodeCreateRequest,
+  NodeUpdateRequest,
+  EndChainRequest,
 } from "@/types/file-mgmt"
 
 const BASE = "/api/file-mgmt"
@@ -168,6 +177,9 @@ export const deleteFile = (collectionId: string, fileId: string) =>
 export const getFileDetail = (collectionId: string, fileId: string) =>
   req<FileDetail>(`/${collectionId}/files/${fileId}`)
 
+export const getFileMessages = (collectionId: string, fileId: string) =>
+  req<Message[]>(`/${collectionId}/files/${fileId}/messages`)
+
 // ── Message (shared) ──
 
 // ── Collection-level (root) messages ──
@@ -189,3 +201,116 @@ export const updateMessage = (collectionId: string, messageId: string, body: Mes
 
 export const deleteMessage = (collectionId: string, messageId: string) =>
   req<void>(`/${collectionId}/messages/${messageId}`, { method: "DELETE" })
+
+// ── Chain ──
+
+export const listChains = (collectionId: string) =>
+  req<Chain[]>(`/${collectionId}/chains`)
+
+export const createChain = (collectionId: string, body: ChainCreateRequest) =>
+  req<Chain>(`/${collectionId}/chains`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+
+export const updateChain = (collectionId: string, chainId: string, body: ChainUpdateRequest) =>
+  req<Chain>(`/${collectionId}/chains/${chainId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+
+export const deleteChain = (collectionId: string, chainId: string) =>
+  req<void>(`/${collectionId}/chains/${chainId}`, { method: "DELETE" })
+
+export const reopenChain = (collectionId: string, chainId: string) =>
+  req<Chain>(`/${collectionId}/chains/${chainId}/reopen`, { method: "POST" })
+
+// ── Node ──
+
+export const listNodes = (collectionId: string, chainId: string) =>
+  req<Node[]>(`/${collectionId}/chains/${chainId}/nodes`)
+
+export const createNode = (collectionId: string, chainId: string, body: NodeCreateRequest) =>
+  req<Node>(`/${collectionId}/chains/${chainId}/nodes`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+
+export const updateNode = (collectionId: string, nodeId: string, body: NodeUpdateRequest) =>
+  req<Node>(`/${collectionId}/nodes/${nodeId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+
+export const deleteNode = (collectionId: string, nodeId: string) =>
+  req<void>(`/${collectionId}/nodes/${nodeId}`, { method: "DELETE" })
+
+export const reorderNode = (collectionId: string, nodeId: string, newOrder: number) =>
+  req<Node[]>(`/${collectionId}/nodes/${nodeId}/reorder`, {
+    method: "POST",
+    body: JSON.stringify({ new_order: newOrder }),
+  })
+
+export const getNodeDetail = (collectionId: string, nodeId: string) =>
+  req<NodeDetail>(`/${collectionId}/nodes/${nodeId}`)
+
+// ── Node Messages ──
+
+export const getNodeMessages = (collectionId: string, nodeId: string) =>
+  req<Message[]>(`/${collectionId}/nodes/${nodeId}/messages`)
+
+export const createNodeMessage = (collectionId: string, nodeId: string, body: MessageCreateRequest) =>
+  req<Message>(`/${collectionId}/nodes/${nodeId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ ...body, owner_type: "node", owner_id: nodeId }),
+  })
+
+// ── Node Attachments ──
+
+export const attachFileToNode = (collectionId: string, nodeId: string, fileId: string) =>
+  req<{ file_id: string }>(`/${collectionId}/nodes/${nodeId}/files`, {
+    method: "POST",
+    body: JSON.stringify({ file_id: fileId }),
+  })
+
+/** Upload a new file and attach to node (group + branch derived paths). */
+export const uploadFileToNode = async (
+  collectionId: string,
+  nodeId: string,
+  file: File,
+): Promise<FileSummary> => {
+  const formData = new FormData()
+  formData.append("file", file)
+  const res = await fetch(`${BASE}/${collectionId}/nodes/${nodeId}/files/upload`, {
+    method: "POST",
+    body: formData,
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`API ${res.status}: ${body}`)
+  }
+  return res.json()
+}
+
+export const detachFileFromNode = (collectionId: string, nodeId: string, fileId: string) =>
+  req<void>(`/${collectionId}/nodes/${nodeId}/files/${fileId}`, { method: "DELETE" })
+
+// ── End Chain ──
+
+export const endChain = (collectionId: string, nodeId: string, body: EndChainRequest) =>
+  req<EndChainResult>(`/${collectionId}/nodes/${nodeId}/end-chain`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+
+// ── File (additional) ──
+
+export const updateFile = (
+  collectionId: string,
+  fileId: string,
+  body: { is_definitive?: boolean; archived?: boolean; version: number }
+) =>
+  req<FileSummary>(`/${collectionId}/files/${fileId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })

@@ -234,13 +234,21 @@ export const useAppStore = create<AppState>((set) => ({
     if (state.sidebarView === "meeting" && view !== "meeting" && state.navigationGuard) {
       if (!state.navigationGuard()) return
     }
+    try {
+      localStorage.setItem("rag_sidebarView", JSON.stringify(view))
+    } catch { /* ignore */ }
     set({ sidebarView: view })
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
-  activeCollection: "",
-  setActiveCollection: (id) => set({ activeCollection: id }),
+  activeCollection: loadPersisted<string>("activeCollection", ""),
+  setActiveCollection: (id) => {
+    try {
+      localStorage.setItem("rag_activeCollection", JSON.stringify(id))
+    } catch { /* ignore */ }
+    set({ activeCollection: id })
+  },
   collections: [],
   setCollections: (collections) => set({ collections }),
   fetchCollections: async () => {
@@ -252,6 +260,15 @@ export const useAppStore = create<AppState>((set) => ({
       const cleaned = current.filter((id) => validIds.has(id))
       if (cleaned.length !== current.length) {
         localStorage.setItem("rag_selectedCollections", JSON.stringify(cleaned))
+      }
+      // Drop activeCollection if it no longer exists
+      const active = useAppStore.getState().activeCollection
+      if (active && !validIds.has(active)) {
+        try {
+          localStorage.setItem("rag_activeCollection", JSON.stringify(""))
+        } catch { /* ignore */ }
+        set({ collections: items, selectedCollections: cleaned, activeCollection: "" })
+        return
       }
       set({ collections: items, selectedCollections: cleaned })
     } catch {
@@ -282,10 +299,18 @@ export const useAppStore = create<AppState>((set) => ({
       return { selectedCollections: next }
     }),
   removeDeletedCollection: (id) =>
-    set((s) => ({
-      selectedCollections: s.selectedCollections.filter((c) => c !== id),
-      activeCollection: s.activeCollection === id ? "" : s.activeCollection,
-    })),
+    set((s) => {
+      const nextActive = s.activeCollection === id ? "" : s.activeCollection
+      const nextSelected = s.selectedCollections.filter((c) => c !== id)
+      try {
+        localStorage.setItem("rag_activeCollection", JSON.stringify(nextActive))
+        localStorage.setItem("rag_selectedCollections", JSON.stringify(nextSelected))
+      } catch { /* ignore */ }
+      return {
+        selectedCollections: nextSelected,
+        activeCollection: nextActive,
+      }
+    }),
 
   recallCollections: [],
   setRecallCollections: (ids) => set({ recallCollections: ids }),

@@ -244,7 +244,7 @@ def test_group_create_new():
 
 
 def test_group_delete():
-    """Delete group -> folder also deleted."""
+    """Delete group -> nodes unassigned, folder kept as plain."""
     from src.main import app
 
     _setup_collection("p2-6")
@@ -252,18 +252,20 @@ def test_group_delete():
 
     resp = client.post(
         "/api/file-mgmt/p2-6/groups",
-        json={"name": "ToDelete"},
+        json={"name": "ToDelete", "icon_type": "lucide", "icon_value": "star", "icon_color": "#3DAF73"},
     )
     assert resp.status_code == 201
     group = resp.json()
     folder_id = group["folder_id"]
+    assert group.get("icon_value") == "star"
 
     resp = client.delete(f"/api/file-mgmt/p2-6/groups/{group['group_id']}")
     assert resp.status_code == 204
 
-    # folder should be gone
+    # folder kept, demoted to plain
     resp = client.get(f"/api/file-mgmt/p2-6/folders/{folder_id}")
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert resp.json()["kind"] == "plain"
 
 
 # ── 7. Chain create ──────────────────────────────────────────────

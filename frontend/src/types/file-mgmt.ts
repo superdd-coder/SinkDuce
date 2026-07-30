@@ -25,6 +25,10 @@ export interface NodeGroup {
   description: string | null
   created_by: string
   node_count: number
+  icon_type?: string | null
+  icon_value?: string | null
+  icon_color?: string | null
+  is_system?: boolean
 }
 
 export interface Chain {
@@ -37,6 +41,8 @@ export interface Chain {
   is_main: boolean
   has_end_node: boolean
   node_count: number
+  /** Merge rejoin node on the parent chain (closed-loop end). */
+  merge_node_id?: string | null
 }
 
 export interface Node {
@@ -128,11 +134,19 @@ export interface GroupCreateRequest {
   name: string
   description?: string | null
   bind_existing_folder_id?: string | null
+  icon_type?: string | null
+  icon_value?: string | null
+  icon_color?: string | null
 }
 
 export interface GroupUpdateRequest {
   name?: string | null
   description?: string | null
+  icon_type?: string | null
+  icon_value?: string | null
+  icon_color?: string | null
+  /** Rebind to another plain unbound folder (F-b move attachment paths). */
+  rebind_folder_id?: string | null
 }
 
 export interface MessageCreateRequest {
@@ -146,4 +160,75 @@ export interface MessageCreateRequest {
 export interface MessageUpdateRequest {
   body: string
   version: number
+}
+
+// ── Timeline View Types ──
+
+export interface NodeDetail extends Node {
+  attachments: NodeAttachment[]
+  messages: Message[]
+}
+
+export interface NodeAttachment {
+  file_id: string
+  greyed: boolean
+  is_definitive: boolean
+  archived: boolean
+  filename: string
+  /** File row version for optimistic locking (definitive toggle, etc.). */
+  version?: number
+}
+
+export interface EndChainResult {
+  greyed_files: string[]
+  archive_candidates: string[]
+  inherited_files: string[]
+  /** Merge node created on the parent chain (closed-loop rejoin). */
+  merged_node_id?: string | null
+  path_archived_files?: string[]
+  path_archived_path_ids?: string[]
+  file_archived?: string[]
+}
+
+// ── Request bodies (additional) ──
+
+export interface ChainCreateRequest {
+  parent_chain_id: string
+  parent_node_id: string
+  title: string
+  bind_existing_folder_id?: string | null
+}
+
+export interface ChainUpdateRequest {
+  title?: string | null
+}
+
+export interface NodeCreateRequest {
+  group_id?: string | null
+  node_type: string
+  title?: string | null
+  order: number
+  event_time?: string | null
+}
+
+export interface NodeUpdateRequest {
+  chain_id?: string | null
+  title?: string | null
+  group_id?: string | null
+  order?: number | null
+  node_type?: string | null
+  event_time?: string | null
+  version: number
+}
+
+export interface EndChainRequest {
+  /** Files to keep active on the branch (path not archived). */
+  inherit_file_ids?: string[]
+  /** Legacy: inherit all files on these nodes. */
+  inherit_node_ids?: string[]
+  title?: string | null
+  group_id?: string | null
+  event_time?: string | null
+  message_body?: string | null
+  attachment_file_ids?: string[]
 }

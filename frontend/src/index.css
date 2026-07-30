@@ -1204,6 +1204,36 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   animation: slide-in-right 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* Timeline group focus — Chat-style green breathing glow on node cards */
+@keyframes node-group-focus-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--ze-green) 55%, transparent),
+      0 0 8px 0 color-mix(in srgb, var(--ze-green) 35%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--ze-green) 80%, transparent),
+      0 0 16px 2px color-mix(in srgb, var(--ze-green) 55%, transparent);
+  }
+}
+.node-group-focus {
+  border-color: var(--ze-green) !important;
+  animation: node-group-focus-glow 2.2s ease-in-out infinite;
+}
+/* Dim non-target cards without CSS opacity on the root —
+   root opacity makes the fill translucent so connector lines "leak" through. */
+.node-group-dim {
+  background-color: var(--background) !important;
+  border-color: color-mix(in srgb, var(--border) 45%, transparent) !important;
+  box-shadow: none !important;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.node-group-dim > * {
+  opacity: 0.4;
+  transition: opacity 0.2s ease;
+}
+
 /* ── Quick Chat floating button · diamond hover rotation ── */
 .quick-chat-btn:hover .diamond-outer {
   transform: rotate(180deg);
