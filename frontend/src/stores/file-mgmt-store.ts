@@ -427,10 +427,18 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   unarchiveFiles: async (collectionId: string, fileIds: string[], files: FileSummary[]) => {
     try {
+      // Pass current folder so path-level greys (branch merge) can be cleared here
+      const folderId = get().currentFolderId
       await Promise.all(
         fileIds.map((fid) => {
           const f = files.find((x) => x.file_id === fid)
-          return toggleFileArchive(collectionId, fid, false, f?.version ?? 1)
+          return toggleFileArchive(
+            collectionId,
+            fid,
+            false,
+            f?.version ?? 1,
+            folderId
+          )
         })
       )
       await get().refreshFiles(collectionId)

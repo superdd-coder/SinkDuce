@@ -1561,8 +1561,13 @@ function showSlashMenu(
   onDistill?: () => void,
   onImageUpload?: (file: File) => Promise<string>
 ) {
-  const existingMenu = document.getElementById("slash-menu")
-  if (existingMenu) existingMenu.remove()
+  const existingMenu = document.getElementById("slash-menu") as HTMLElement & {
+    __close?: () => void
+  } | null
+  if (existingMenu) {
+    existingMenu.__close?.()
+    existingMenu.remove()
+  }
 
   const commandGroups = [
     {
@@ -1635,27 +1640,32 @@ function showSlashMenu(
 
   const menu = document.createElement("div")
   menu.id = "slash-menu"
+  // Compact single-line rows; fixed height with internal scroll
   menu.style.cssText = `
     position: fixed;
     background: white;
     border: 1px solid #e0e0e0;
-    border-radius: 12px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-    padding: 8px 0;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    padding: 0;
     z-index: 1000;
-    min-width: 280px;
-    max-height: 400px;
-    overflow-y: auto;
+    width: 220px;
+    height: 220px;
+    max-height: min(220px, 50vh);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   `
 
   const searchContainer = document.createElement("div")
-  searchContainer.style.cssText = `padding: 8px 14px; border-bottom: 1px solid #e0e0e0;`
+  searchContainer.style.cssText = `padding: 4px 8px; border-bottom: 1px solid #e0e0e0; flex-shrink: 0;`
   const searchInput = document.createElement("input")
   searchInput.placeholder = "Filter..."
-  searchInput.style.cssText = `width: 100%; border: none; outline: none; font-size: 14px;`
+  searchInput.style.cssText = `width: 100%; border: none; outline: none; font-size: 12px; line-height: 20px; height: 24px; background: transparent;`
   searchContainer.appendChild(searchInput)
 
   const commandList = document.createElement("div")
+  commandList.style.cssText = `flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0;`
   menu.append(searchContainer, commandList)
 
   let allCommands: any[] = []
@@ -1679,7 +1689,7 @@ function showSlashMenu(
     })
 
     if (filteredCommands.length === 0) {
-      commandList.innerHTML = '<div style="padding: 16px; text-align: center; color: #999;">No commands</div>'
+      commandList.innerHTML = '<div style="padding: 8px; text-align: center; color: #999; font-size: 12px;">No commands</div>'
       return
     }
 
@@ -1693,20 +1703,27 @@ function showSlashMenu(
     Object.entries(grouped).forEach(([, commands]) => {
       ;(commands as any[]).forEach((cmd) => {
         const item = document.createElement("div")
-        item.style.cssText = `display: flex; align-items: center; padding: 8px 14px; cursor: pointer;`
+        // Single-line row (~24px): small icon + label only
+        item.style.cssText = `
+          display: flex; align-items: center; gap: 6px;
+          height: 24px; padding: 0 8px; cursor: pointer;
+          box-sizing: border-box;
+        `
         item.dataset.index = String(itemIndex++)
 
         item.innerHTML = `
-          <div style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border-radius: 6px; margin-right: 10px; font-size: 16px;">${cmd.icon}</div>
-          <div style="flex: 1;">
-            <div style="font-size: 13px; font-weight: 500;">${cmd.label}</div>
-            <div style="font-size: 11px; color: #666;">${cmd.desc}</div>
-          </div>
+          <div style="width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border-radius: 3px; font-size: 10px; line-height: 1;">${cmd.icon}</div>
+          <div style="flex: 1; min-width: 0; font-size: 12px; font-weight: 500; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cmd.label}</div>
         `
 
         item.addEventListener("mouseenter", () => { item.style.background = "#f0f7ff" })
         item.addEventListener("mouseleave", () => { item.style.background = "white" })
-        item.addEventListener("click", () => { menu.remove(); cmd.action() })
+        item.addEventListener("click", (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()
+          closeMenu()
+          cmd.action()
+        })
 
         commandList.appendChild(item)
       })
@@ -1724,6 +1741,38 @@ function showSlashMenu(
     if (selectedItem) selectedItem.scrollIntoView({ block: "nearest" })
   }
 
+  const onPointerDownOutside = (e: Event) => {
+    // Use DOM Node (globalThis) — TipTap/ProseMirror also exports `Node`
+    const t = e.target
+    if (t instanceof globalThis.Node && menu.contains(t)) return
+    closeMenu()
+  }
+
+  const onDocKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault()
+      e.stopPropagation()
+      closeMenu()
+      try {
+        editor.chain().focus().run()
+      } catch {
+        /* editor may be gone */
+      }
+    }
+  }
+
+  const closeMenu = () => {
+    if (!menu.isConnected) {
+      document.removeEventListener("pointerdown", onPointerDownOutside, true)
+      document.removeEventListener("keydown", onDocKeyDown, true)
+      return
+    }
+    menu.remove()
+    document.removeEventListener("pointerdown", onPointerDownOutside, true)
+    document.removeEventListener("keydown", onDocKeyDown, true)
+  }
+  ;(menu as HTMLElement & { __close?: () => void }).__close = closeMenu
+
   searchInput.addEventListener("keydown", (e) => {
     switch (e.key) {
       case "ArrowDown":
@@ -1739,11 +1788,19 @@ function showSlashMenu(
       case "Enter":
         e.preventDefault()
         const cmd = filteredCommands[selectedIndex]
-        if (cmd) { menu.remove(); cmd.action() }
+        if (cmd) {
+          closeMenu()
+          cmd.action()
+        }
         break
       case "Escape":
         e.preventDefault()
-        menu.remove()
+        closeMenu()
+        try {
+          editor.chain().focus().run()
+        } catch {
+          /* ignore */
+        }
         break
     }
   })
@@ -1780,14 +1837,13 @@ function showSlashMenu(
 
   searchInput.focus()
 
-  setTimeout(() => {
-    document.addEventListener("click", function closeMenu(e) {
-      if (!menu.contains(e.target as HTMLElement)) {
-        menu.remove()
-        document.removeEventListener("click", closeMenu)
-      }
-    })
-  }, 10)
+  // Capture-phase pointerdown so clicks on editor / sidebar still dismiss
+  // (bubble-phase click was often swallowed by ProseMirror / React).
+  // Defer one frame so the opening keystroke doesn't immediately close.
+  requestAnimationFrame(() => {
+    document.addEventListener("pointerdown", onPointerDownOutside, true)
+    document.addEventListener("keydown", onDocKeyDown, true)
+  })
 }
 
 // ──────────────────────────────────────────────

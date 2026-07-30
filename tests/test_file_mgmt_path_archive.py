@@ -164,3 +164,182 @@ def test_file_paths_archived_column_migrates(collection_id):
         cols = {r[1] for r in conn.execute("PRAGMA table_info(file_paths)").fetchall()}
         assert "archived" in cols
         conn.close()
+
+
+def test_folder_unarchive_clears_path_archive(collection_id):
+    """Folder-view unarchive with folder_id clears path-level archive greys."""
+    from src.file_mgmt.models import ArchiveToggle
+
+    with patch.object(service, "_validate_collection", lambda _x: None):
+        g, ch, fid, pid_group, pid_branch, end_id = _seed_branch_with_file(
+            collection_id
+        )
+        service.end_chain(
+            collection_id,
+            end_id,
+            EndChainRequest(
+                inherit_file_ids=[],
+                title="Merge",
+                group_id=g.group_id,
+            ),
+        )
+        listed = service.list_files_in_folder(collection_id, ch.folder_id)
+        grey = next(f for f in listed if f.file_id == fid)
+        assert grey.is_greyed is True
+        assert grey.archived is False
+
+        out = service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(
+                archived=False,
+                version=grey.version,
+                folder_id=ch.folder_id,
+            ),
+        )
+        assert out.archived is False
+
+        conn = store.get_db(collection_id)
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_branch,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        # Group path was never path-archived
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_group,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        conn.close()
+
+        listed2 = service.list_files_in_folder(collection_id, ch.folder_id)
+        again = next(f for f in listed2 if f.file_id == fid)
+        assert again.is_greyed is False
+
+
+def test_reopen_restores_merge_path_archive_only(collection_id):
+    """Reopen undoes end_chain path archives; leaves manual file archive alone."""
+    with patch.object(service, "_validate_collection", lambda _x: None):
+        g, ch, fid, pid_group, pid_branch, end_id = _seed_branch_with_file(
+            collection_id
+        )
+        # Second file: only on branch path, will be file-promoted on merge
+        conn = store.get_db(collection_id)
+        store._ensure_file_paths_archived(conn)
+        conn.execute("PRAGMA foreign_keys=OFF")
+        fid2, vid2, pid2 = uuid.uuid4().hex, uuid.uuid4().hex, uuid.uuid4().hex
+        now = "2026-01-01T00:00:00"
+        bn = conn.execute(
+            "SELECT node_id FROM nodes WHERE chain_id=? AND node_type='event' LIMIT 1",
+            (ch.chain_id,),
+        ).fetchone()["node_id"]
+        conn.execute(
+            "INSERT INTO files (file_id, current_version_id, is_definitive, archived, "
+            "unsupported, created_by, version) VALUES (?,?,0,0,0,'local',1)",
+            (fid2, vid2),
+        )
+        conn.execute(
+            "INSERT INTO file_versions (version_id, file_id, version_no, storage_file_id, "
+            "archived, commit_message, created_by, created_at) "
+            "VALUES (?,?,1,'b.txt',0,NULL,'local',?)",
+            (vid2, fid2, now),
+        )
+        conn.execute(
+            "INSERT INTO file_nodes (file_id, node_id, version_id, greyed, added_by) "
+            "VALUES (?,?,?,0,'local')",
+            (fid2, bn, vid2),
+        )
+        conn.execute(
+            "INSERT INTO file_paths (path_id, file_id, folder_id, is_primary, "
+            "source_node_id, created_by, archived) VALUES (?,?,?,1,?,?,0)",
+            (pid2, fid2, ch.folder_id, bn, "local"),
+        )
+        # Manual file-level archive (must NOT be restored on reopen)
+        fid_manual, vid_m = uuid.uuid4().hex, uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO files (file_id, current_version_id, is_definitive, archived, "
+            "unsupported, created_by, version) VALUES (?,?,0,1,0,'local',1)",
+            (fid_manual, vid_m),
+        )
+        conn.execute(
+            "INSERT INTO file_versions (version_id, file_id, version_no, storage_file_id, "
+            "archived, commit_message, created_by, created_at) "
+            "VALUES (?,?,1,'manual.txt',0,NULL,'local',?)",
+            (vid_m, fid_manual, now),
+        )
+        conn.commit()
+        conn.close()
+
+        service.end_chain(
+            collection_id,
+            end_id,
+            EndChainRequest(
+                inherit_file_ids=[],
+                title="Merge",
+                group_id=g.group_id,
+            ),
+        )
+
+        conn = store.get_db(collection_id)
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_branch,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        # fid has group path still active → not file-archived
+        assert (
+            conn.execute(
+                "SELECT archived FROM files WHERE file_id=?", (fid,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        # fid2 only branch path → promoted to file archive by merge
+        assert (
+            conn.execute(
+                "SELECT archived FROM files WHERE file_id=?", (fid2,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT archived FROM files WHERE file_id=?", (fid_manual,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        conn.close()
+
+        service.reopen_chain(collection_id, ch.chain_id)
+
+        conn = store.get_db(collection_id)
+        # Merge path archive restored
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_branch,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        # Merge-promoted file archive restored
+        assert (
+            conn.execute(
+                "SELECT archived FROM files WHERE file_id=?", (fid2,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        # Manual file archive untouched
+        assert (
+            conn.execute(
+                "SELECT archived FROM files WHERE file_id=?", (fid_manual,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        # Snapshot cleared
+        raw = conn.execute(
+            "SELECT merge_archive_json FROM chains WHERE chain_id=?",
+            (ch.chain_id,),
+        ).fetchone()["merge_archive_json"]
+        assert raw is None
+        conn.close()

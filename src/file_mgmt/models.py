@@ -255,8 +255,17 @@ class EndChainRequest(BaseModel):
 
 
 class ArchiveToggle(BaseModel):
+    """Archive toggle request.
+
+    - ``archived=True``: file-level archive (``files.archived=1``).
+    - ``archived=False``: restore file-level archive when set; if ``folder_id``
+      is provided, also clear path-level archives for this file in that folder
+      (branch merge greys that only set ``file_paths.archived``).
+    """
+
     archived: bool
     version: int
+    folder_id: str | None = None
 
 
 class NodeFileAttach(BaseModel):

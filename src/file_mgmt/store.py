@@ -63,7 +63,8 @@ _CREATE_TABLES = [
       folder_id       TEXT UNIQUE REFERENCES folders(folder_id),
       title           TEXT,
       created_by      TEXT NOT NULL DEFAULT 'local',
-      merge_node_id   TEXT REFERENCES nodes(node_id)
+      merge_node_id   TEXT REFERENCES nodes(node_id),
+      merge_archive_json TEXT
     )''',
     # nodes (chain_id -> chains; group_id -> node_groups)
     '''CREATE TABLE nodes (
@@ -260,6 +261,23 @@ def _ensure_chains_merge_node_id(conn: sqlite3.Connection) -> None:
         logger.info("Added chains.merge_node_id column")
     except sqlite3.OperationalError as e:
         # Concurrent backfill on another connection may have won the race
+        if not _is_duplicate_column_error(e):
+            raise
+
+
+def _ensure_chains_merge_archive_json(conn: sqlite3.Connection) -> None:
+    """Add chains.merge_archive_json if missing (idempotent).
+
+    Stores path/file ids archived by end_chain so reopen can reverse only
+    merge-time archives (not user manual archives).
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(chains)").fetchall()}
+    if "merge_archive_json" in cols:
+        return
+    try:
+        conn.execute("ALTER TABLE chains ADD COLUMN merge_archive_json TEXT")
+        logger.info("Added chains.merge_archive_json column")
+    except sqlite3.OperationalError as e:
         if not _is_duplicate_column_error(e):
             raise
 
@@ -585,6 +603,7 @@ def init_collection_db(collection_id: str) -> None:
         try:
             with conn_backfill:
                 _ensure_chains_merge_node_id(conn_backfill)
+                _ensure_chains_merge_archive_json(conn_backfill)
                 _ensure_node_groups_icon_columns(conn_backfill)
                 _ensure_file_paths_archived(conn_backfill)
                 _backfill_system_folders(conn_backfill)

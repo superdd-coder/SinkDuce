@@ -60,8 +60,8 @@ export function MessageEditorDialog({
               value={content}
               onChange={setContent}
               minHeight="280px"
-              placeholder="Write a message in Markdown..."
-              showToolbar
+              placeholder="Write a message… type / for commands"
+              showToolbar={false}
             />
           )}
         </div>

@@ -1048,13 +1048,22 @@ def reopen_chain(collection_id: str, chain_id: str) -> ChainOut:
     - Remove branch-local ``end`` marker nodes (dialog end placeholders)
     - **Keep** the main-chain merge node: move it onto this branch as the last
       ``event`` node (preserves title, files, messages)
+    - Undo **only** path/file archives recorded at end_chain (merge time);
+      user manual archives are left untouched
     """
-    from src.file_mgmt.store import _ensure_chains_merge_node_id
+    import json
+
+    from src.file_mgmt.store import (
+        _ensure_chains_merge_archive_json,
+        _ensure_chains_merge_node_id,
+    )
 
     conn = _open_db(collection_id)
     try:
         with conn:
             _ensure_chains_merge_node_id(conn)
+            _ensure_chains_merge_archive_json(conn)
+            _ensure_path_archive_column(conn)
             ch = conn.execute(
                 "SELECT * FROM chains WHERE chain_id=?", (chain_id,)
             ).fetchone()
@@ -1063,6 +1072,38 @@ def reopen_chain(collection_id: str, chain_id: str) -> ChainOut:
 
             if ch["parent_chain_id"] is None:
                 raise HTTPException(400, "Main chain cannot be reopened")
+
+            # Reverse merge-time archives only (from end_chain snapshot)
+            merge_archive = {"path_ids": [], "file_ids": []}
+            try:
+                raw = ch["merge_archive_json"]
+            except (KeyError, IndexError):
+                raw = None
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        merge_archive["path_ids"] = list(parsed.get("path_ids") or [])
+                        merge_archive["file_ids"] = list(parsed.get("file_ids") or [])
+                except (TypeError, json.JSONDecodeError):
+                    logger.warning(
+                        "Invalid merge_archive_json on chain %s; skip restore",
+                        chain_id,
+                    )
+
+            restored_paths = _unarchive_paths_by_ids(
+                conn, merge_archive["path_ids"]
+            )
+            restored_files = 0
+            for fid in merge_archive["file_ids"]:
+                if _unarchive_file_if_archived(conn, collection_id, fid):
+                    restored_files += 1
+
+            # Clear snapshot so a later re-merge starts clean
+            conn.execute(
+                "UPDATE chains SET merge_archive_json=NULL WHERE chain_id=?",
+                (chain_id,),
+            )
 
             # Remove branch-local end markers only (not the merge node on main)
             end_rows = conn.execute(
@@ -1121,7 +1162,15 @@ def reopen_chain(collection_id: str, chain_id: str) -> ChainOut:
                 (chain_id,),
             ).fetchone()
 
-        emit_event("chain.reopened", collection_id, {"chain_id": chain_id})
+        emit_event(
+            "chain.reopened",
+            collection_id,
+            {
+                "chain_id": chain_id,
+                "restored_path_archives": restored_paths,
+                "restored_file_archives": restored_files,
+            },
+        )
         return _row_to_chain(row, has_end_node=end is not None, node_count=count["c"])
     finally:
         conn.close()
@@ -1666,20 +1715,71 @@ def _archive_paths_on_folder(
 
 
 def _promote_file_archive_if_needed(conn, collection_id: str, file_id: str) -> bool:
-    """If no active paths remain, set files.archived=1 and mark Qdrant. Returns True if promoted."""
+    """If no active paths remain, set files.archived=1 and mark Qdrant.
+
+    Returns True only when this call newly promotes the file (not already archived).
+    """
     if _path_has_active_mount(conn, file_id):
         return False
     fr = conn.execute(
         "SELECT archived FROM files WHERE file_id=?", (file_id,)
     ).fetchone()
     if not fr or fr["archived"]:
-        return bool(fr and fr["archived"])
+        # Already file-archived (e.g. user manual) — do not claim as merge promote
+        return False
     conn.execute(
         "UPDATE files SET archived=1, version=version+1 WHERE file_id=?",
         (file_id,),
     )
     try:
         _mark_qdrant_chunks_archived(collection_id, file_id)
+    except Exception:
+        pass
+    return True
+
+
+def _unarchive_paths_by_ids(conn, path_ids: list[str]) -> int:
+    """Clear path-level archive for given path_ids (only if still archived). Returns count."""
+    n = 0
+    for pid in path_ids:
+        cur = conn.execute(
+            "UPDATE file_paths SET archived=0 WHERE path_id=? AND COALESCE(archived, 0)=1",
+            (pid,),
+        )
+        n += cur.rowcount
+    return n
+
+
+def _unarchive_paths_on_folder(conn, file_id: str, folder_id: str) -> list[str]:
+    """Clear path-level archive for file_id in folder_id. Returns path_ids cleared."""
+    rows = conn.execute(
+        """SELECT path_id FROM file_paths
+           WHERE file_id=? AND folder_id=? AND COALESCE(archived, 0)=1""",
+        (file_id, folder_id),
+    ).fetchall()
+    path_ids = [r["path_id"] for r in rows]
+    if path_ids:
+        conn.execute(
+            """UPDATE file_paths SET archived=0
+               WHERE file_id=? AND folder_id=? AND COALESCE(archived, 0)=1""",
+            (file_id, folder_id),
+        )
+    return path_ids
+
+
+def _unarchive_file_if_archived(conn, collection_id: str, file_id: str) -> bool:
+    """Undo file-level archive when still archived. Returns True if changed."""
+    fr = conn.execute(
+        "SELECT archived FROM files WHERE file_id=?", (file_id,)
+    ).fetchone()
+    if not fr or not fr["archived"]:
+        return False
+    conn.execute(
+        "UPDATE files SET archived=0, version=version+1 WHERE file_id=?",
+        (file_id,),
+    )
+    try:
+        _restore_qdrant_chunks_for_file(collection_id, file_id)
     except Exception:
         pass
     return True
@@ -1798,10 +1898,10 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
 
     Deduplicates: same file with multiple paths in this folder shows once.
 
-    Path-level archive (``file_paths.archived=1``, e.g. end_chain on a branch
-    folder) still **lists** the file here with ``is_greyed=True`` so branch
-    folders remain inspectable. File-level archive (``files.archived=1``) is
-    excluded (shown under the Archived virtual view instead).
+    Both path-level archive (``file_paths.archived=1``, e.g. branch merge) and
+    file-level archive (``files.archived=1``) **remain listed** here with
+    ``is_greyed=True`` — they are not removed from the folder. The virtual
+    ``/Archived`` view still lists all file-level archives globally.
     """
     conn = _open_db(collection_id)
     try:
@@ -1821,7 +1921,6 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
                FROM files f
                JOIN file_paths fp ON fp.file_id = f.file_id
                WHERE fp.folder_id=?
-                 AND f.archived=0
                GROUP BY f.file_id
                ORDER BY f.file_id""",
             (folder_id,),
@@ -1829,12 +1928,12 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
         result: list = []
         for r in rows:
             fs = _row_to_file_out(r, conn)
-            # Path-archived only (no active mount in this folder) → greyed in UI
             try:
                 has_active = int(r["has_active_path"] or 0) == 1
             except (KeyError, IndexError, TypeError):
                 has_active = True
-            if not has_active:
+            # File-level or path-level archive → stay in place, show greyed
+            if bool(r["archived"]) or not has_active:
                 fs.is_greyed = True
             result.append(fs)
         return result
@@ -2755,13 +2854,20 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
     3. Promote to file-level archive when no active paths remain
     4. Create merge node on parent with form fields; attach files + message
     5. Link chains.merge_node_id → merge node
+    6. Persist merge archive snapshot on the chain (for reopen undo)
     """
-    from src.file_mgmt.store import _ensure_chains_merge_node_id
+    import json
+
+    from src.file_mgmt.store import (
+        _ensure_chains_merge_archive_json,
+        _ensure_chains_merge_node_id,
+    )
 
     conn = _open_db(collection_id)
     try:
         with conn:
             _ensure_chains_merge_node_id(conn)
+            _ensure_chains_merge_archive_json(conn)
             _ensure_path_archive_column(conn)
 
             # 1. Validate node
@@ -2848,6 +2954,15 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                 if _promote_file_archive_if_needed(conn, collection_id, fid):
                     file_archived.append(fid)
 
+            # Snapshot for reopen — only what this merge archived
+            merge_archive_payload = json.dumps(
+                {
+                    "path_ids": list(path_ids_archived),
+                    "file_ids": list(file_archived),
+                },
+                separators=(",", ":"),
+            )
+
             # 3. Create merge node on parent chain — title is required
             if not req.title or not str(req.title).strip():
                 raise HTTPException(400, "Merge node title is required")
@@ -2884,8 +2999,10 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                 ),
             )
             conn.execute(
-                "UPDATE chains SET merge_node_id=? WHERE chain_id=?",
-                (merge_node_id, chain_id),
+                """UPDATE chains
+                   SET merge_node_id=?, merge_archive_json=?
+                   WHERE chain_id=?""",
+                (merge_node_id, merge_archive_payload, chain_id),
             )
 
             # Attach files to merge node (reuse attach helper pieces)
@@ -2945,55 +3062,123 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
 def toggle_archive(
     collection_id: str, file_id: str, req: ArchiveToggle
 ) -> FileSummary:
-    """Archive or unarchive a file (file-level).
+    """Archive or unarchive a file.
 
-    - archived=True:  set files.archived=1, Qdrant chunks archived=true, files removed from folder views
-    - archived=False: set files.archived=0, current version Qdrant chunks restored, files back in folders
-    - Optimistic locking via version
+    - archived=True: file-level archive (``files.archived=1``) + Qdrant
+    - archived=False:
+        * if file-level archived → restore file + Qdrant
+        * if ``folder_id`` set → clear path-level archives in that folder
+          (branch merge greys that only set ``file_paths.archived``)
+    - Optimistic locking via version (always bumps version on success)
     """
     conn = _open_db(collection_id)
     try:
         with conn:
+            _ensure_path_archive_column(conn)
             file_row = conn.execute(
                 "SELECT * FROM files WHERE file_id=?", (file_id,)
             ).fetchone()
             if not file_row:
                 raise HTTPException(404, f"File '{file_id}' not found")
 
-            new_archived = 1 if req.archived else 0
-            cursor = conn.execute(
-                "UPDATE files SET archived=?, version=version+1 "
-                "WHERE file_id=? AND version=?",
-                (new_archived, file_id, req.version),
-            )
-            if cursor.rowcount == 0:
-                raise HTTPException(
-                    409, "File was modified by another user (version conflict)"
-                )
+            was_file_archived = bool(file_row["archived"])
+            path_cleared: list[str] = []
+            did_file_change = False
 
             if req.archived:
-                # Mark all Qdrant chunks as archived
+                # File-level archive
+                cursor = conn.execute(
+                    "UPDATE files SET archived=1, version=version+1 "
+                    "WHERE file_id=? AND version=?",
+                    (file_id, req.version),
+                )
+                if cursor.rowcount == 0:
+                    raise HTTPException(
+                        409, "File was modified by another user (version conflict)"
+                    )
+                did_file_change = True
                 _mark_qdrant_chunks_archived(collection_id, file_id)
-
-                # Also mark file_nodes.greyed=1 for all attachments
-                # (so derived paths reflect archive status)
                 conn.execute(
                     "UPDATE file_nodes SET greyed=1 WHERE file_id=?", (file_id,)
                 )
             else:
-                # Restore current version Qdrant chunks
-                _restore_qdrant_chunks_for_file(collection_id, file_id)
+                # Unarchive: file-level and/or path-level in folder
+                folder_id = (req.folder_id or "").strip() or None
+                if folder_id == "__archived__":
+                    folder_id = None
+
+                if folder_id:
+                    fld = conn.execute(
+                        "SELECT folder_id FROM folders WHERE folder_id=?",
+                        (folder_id,),
+                    ).fetchone()
+                    if not fld:
+                        raise HTTPException(404, f"Folder '{folder_id}' not found")
+                    path_cleared = _unarchive_paths_on_folder(
+                        conn, file_id, folder_id
+                    )
+
+                if was_file_archived:
+                    cursor = conn.execute(
+                        "UPDATE files SET archived=0, version=version+1 "
+                        "WHERE file_id=? AND version=?",
+                        (file_id, req.version),
+                    )
+                    if cursor.rowcount == 0:
+                        raise HTTPException(
+                            409,
+                            "File was modified by another user (version conflict)",
+                        )
+                    did_file_change = True
+                    _restore_qdrant_chunks_for_file(collection_id, file_id)
+                elif path_cleared:
+                    # Path-only unarchive still bumps version for optimistic lock
+                    cursor = conn.execute(
+                        "UPDATE files SET version=version+1 "
+                        "WHERE file_id=? AND version=?",
+                        (file_id, req.version),
+                    )
+                    if cursor.rowcount == 0:
+                        raise HTTPException(
+                            409,
+                            "File was modified by another user (version conflict)",
+                        )
+                    did_file_change = True
+                else:
+                    # Nothing to unarchive
+                    raise HTTPException(
+                        400,
+                        "Nothing to unarchive: file is not archived"
+                        + (
+                            " and has no path archives in this folder"
+                            if folder_id
+                            else " (pass folder_id to clear path-level archives)"
+                        ),
+                    )
 
             row = conn.execute(
                 "SELECT * FROM files WHERE file_id=?", (file_id,)
             ).fetchone()
+            out = _row_to_file_out(row, conn)
+            # Reflect path state when unarchiving in a folder context
+            if not req.archived and req.folder_id and path_cleared:
+                out.is_greyed = False
 
         if req.archived:
             emit_event("file.archived", collection_id, {"file_id": file_id})
         else:
-            emit_event("file.unarchived", collection_id, {"file_id": file_id})
+            emit_event(
+                "file.unarchived",
+                collection_id,
+                {
+                    "file_id": file_id,
+                    "folder_id": req.folder_id,
+                    "path_ids_cleared": path_cleared if not req.archived else [],
+                    "file_level": did_file_change and was_file_archived,
+                },
+            )
 
-        return _row_to_file_out(row, conn)
+        return out
     finally:
         conn.close()
 

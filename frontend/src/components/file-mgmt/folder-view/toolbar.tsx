@@ -157,8 +157,13 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               Unlink
             </Button>
           )}
-          {selectedFiles.some((f) => f.archived) ? (
-            <Button variant="ghost" size="xs" onClick={() => setConfirmAction("unarchive")} title="Unarchive">
+          {selectedFiles.some((f) => f.archived || f.is_greyed) ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setConfirmAction("unarchive")}
+              title="Unarchive (file or path-level)"
+            >
               <ArchiveRestore className="h-3 w-3" />
               Unarchive
             </Button>
@@ -168,7 +173,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               Archive
             </Button>
           )}
-          {selectedFiles.length === 1 && !selectedFiles[0].archived && (
+          {selectedFiles.length === 1 && !selectedFiles[0].archived && !selectedFiles[0].is_greyed && (
             <Button
               variant="ghost"
               size="xs"
@@ -277,7 +282,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
             {confirmAction === "delete" && "This will delete all file data, versions, and Qdrant chunks. This cannot be undone."}
             {confirmAction === "deleteFolder" && "This will delete the folder(s) and all their contents. Files will lose this path but are not deleted from storage."}
             {confirmAction === "archive" && "Files will be archived and excluded from search. They can be restored from the Archived folder."}
-            {confirmAction === "unarchive" && "Files will be restored and included in search again."}
+            {confirmAction === "unarchive" &&
+              "Restore selected files. Path-archived branch files are re-activated in this folder; fully archived files return to normal search."}
             {confirmAction === "unlink" && "Files will be unlinked from this folder (path only). The file itself is not deleted."}
             {confirmAction === "definitive" && "Definitive files are included in the collection summary consolidation."}
           </p>

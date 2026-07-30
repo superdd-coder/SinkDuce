@@ -165,10 +165,21 @@ export const addFilePath = (collectionId: string, fileId: string, folderId: stri
 export const removeFilePath = (collectionId: string, fileId: string, pathId: string) =>
   req<void>(`/${collectionId}/files/${fileId}/paths/${pathId}`, { method: "DELETE" })
 
-export const toggleFileArchive = (collectionId: string, fileId: string, archived: boolean, version: number) =>
+export const toggleFileArchive = (
+  collectionId: string,
+  fileId: string,
+  archived: boolean,
+  version: number,
+  /** When unarchiving path-level greys (branch merge), pass current folder id */
+  folderId?: string | null
+) =>
   req<FileSummary>(`/${collectionId}/files/${fileId}/archive`, {
     method: "PATCH",
-    body: JSON.stringify({ archived, version }),
+    body: JSON.stringify({
+      archived,
+      version,
+      ...(folderId && folderId !== "__archived__" ? { folder_id: folderId } : {}),
+    }),
   })
 
 export const deleteFile = (collectionId: string, fileId: string) =>

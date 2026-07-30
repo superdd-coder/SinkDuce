@@ -38,6 +38,7 @@ import {
   MessageStreamSidebar,
   collectChainSubtree,
   type MessageFocus,
+  type MessageDetailState,
 } from './message-stream-sidebar'
 
 /** Droppable id for "append at end of chain" zone. */
@@ -372,6 +373,63 @@ export function TimelineView({collectionId}:TVP){
   scaleRef.current = scale
   txRef.current = tx
   tyRef.current = ty
+  /** Active camera ease rAF (message/node focus fit). */
+  const camAnimRef = useRef<number | null>(null)
+
+  const cancelCamAnim = useCallback(() => {
+    if (camAnimRef.current != null) {
+      cancelAnimationFrame(camAnimRef.current)
+      camAnimRef.current = null
+    }
+  }, [])
+
+  /** Ease pan/zoom to a target camera (no hard jump). */
+  const animateToView = useCallback(
+    (nextScale: number, nextTx: number, nextTy: number, durationMs = 380) => {
+      cancelCamAnim()
+      const s0 = scaleRef.current
+      const x0 = txRef.current
+      const y0 = tyRef.current
+      if (
+        Math.abs(s0 - nextScale) < 0.005 &&
+        Math.abs(x0 - nextTx) < 0.5 &&
+        Math.abs(y0 - nextTy) < 0.5
+      ) {
+        return
+      }
+      const t0 = performance.now()
+      // easeOutCubic — snappy settle without overshoot
+      const ease = (t: number) => 1 - (1 - t) ** 3
+      const step = (now: number) => {
+        const u = Math.min(1, (now - t0) / durationMs)
+        const e = ease(u)
+        const s = s0 + (nextScale - s0) * e
+        const x = x0 + (nextTx - x0) * e
+        const y = y0 + (nextTy - y0) * e
+        scaleRef.current = s
+        txRef.current = x
+        tyRef.current = y
+        setScale(s)
+        setTx(Math.round(x))
+        setTy(Math.round(y))
+        if (u < 1) {
+          camAnimRef.current = requestAnimationFrame(step)
+        } else {
+          camAnimRef.current = null
+          scaleRef.current = nextScale
+          txRef.current = nextTx
+          tyRef.current = nextTy
+          setScale(nextScale)
+          setTx(nextTx)
+          setTy(nextTy)
+        }
+      }
+      camAnimRef.current = requestAnimationFrame(step)
+    },
+    [cancelCamAnim]
+  )
+
+  useEffect(() => () => cancelCamAnim(), [cancelCamAnim])
   const [addOpen,setAddOpen]=useState(false)
   const [addTgt,setAddTgt]=useState<{chainId:string;afterOrder:number}|null>(null)
   const [ccOpen,setCcOpen]=useState(false)
@@ -384,6 +442,12 @@ export function TimelineView({collectionId}:TVP){
   const [dragN,setDragN]=useState<Node|null>(null)
   const [msgMode, setMsgMode] = useState(false)
   const [msgFocus, setMsgFocus] = useState<MessageFocus>({ kind: 'main' })
+  /** Message detail panel open (equal-width column left of stream). */
+  const [msgDetail, setMsgDetail] = useState<MessageDetailState>({
+    open: false,
+    sourceNodeIds: [],
+    messageId: null,
+  })
 
   /** @param silent — skip full-page Loading (use after drag/reorder so connectors are not unmounted). */
   const fetch=useCallback(async(opts?:{silent?:boolean})=>{
@@ -410,6 +474,8 @@ export function TimelineView({collectionId}:TVP){
         }
       }
       setMsgFocus({ kind: 'node', nodeId: id, chainId })
+      // Drop message detail so stream scope + highlight follow the clicked node
+      setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
       setSelId(null)
       return
     }
@@ -425,15 +491,22 @@ export function TimelineView({collectionId}:TVP){
         setSelId(null)
         setPanelNodeId(null)
         setMsgFocus({ kind: 'main' })
+        setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
         return true
       }
       setMsgFocus({ kind: 'main' })
+      setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
       return false
     })
   }, [])
 
   const msgScopeNodeIds = useMemo(() => {
     if (!msgMode) return null as Set<string> | null
+    // Message detail takes priority over stream focus (including empty while resolving).
+    // Never fall back to a previous node focus — that blocked re-fit when switching messages.
+    if (msgDetail.open) {
+      return new Set(msgDetail.sourceNodeIds)
+    }
     if (msgFocus.kind === 'main') return null
     if (msgFocus.kind === 'node') return new Set([msgFocus.nodeId])
     // Branch focus: all nodes on the branch (+ nested) AND main-chain
@@ -448,7 +521,7 @@ export function TimelineView({collectionId}:TVP){
       }
     }
     return ids
-  }, [msgMode, msgFocus, chains, chainData])
+  }, [msgMode, msgFocus, msgDetail, chains, chainData])
 
   // Drive enter/exit slide: mount panel, then flip anim flag next frame
   useEffect(() => {
@@ -519,11 +592,28 @@ export function TimelineView({collectionId}:TVP){
     return out
   }, [chainData])
 
-  const fitAllNodes = useCallback(() => {
+  /**
+   * Fit viewport to a set of node cards (or all cards when ids omitted).
+   * @param maxScale Cap zoom-in (message highlight uses 1 so a single card is not huge).
+   * @param animate Smooth camera ease (default true).
+   */
+  const fitNodeCards = useCallback((
+    nodeIds?: string[] | null,
+    opts?: { maxScale?: number; pad?: number; animate?: boolean; durationMs?: number }
+  ) => {
     const vp = viewportRef.current
     const layout = layoutRef.current
     if (!vp || !layout) return
-    const cards = layout.querySelectorAll<HTMLElement>('[data-node-card]')
+    let cards: HTMLElement[]
+    if (nodeIds && nodeIds.length > 0) {
+      cards = nodeIds
+        .map((id) =>
+          layout.querySelector<HTMLElement>(`[data-node-id="${id}"]`)
+        )
+        .filter((el): el is HTMLElement => !!el)
+    } else {
+      cards = [...layout.querySelectorAll<HTMLElement>('[data-node-card]')]
+    }
     if (cards.length === 0) return
     // Cards are inside transformed world; getBoundingClientRect is screen space.
     // Convert back to world-local by dividing by current scale.
@@ -544,25 +634,43 @@ export function TimelineView({collectionId}:TVP){
       maxY = Math.max(maxY, by)
     }
     if (!Number.isFinite(minX)) return
-    const pad = 48
-    const bw = Math.max(maxX - minX, 1)
-    const bh = Math.max(maxY - minY, 1)
+    // Extra world-space margin so a lone card is not stretched to fill the viewport.
+    const worldPad = opts?.pad ?? 48
+    const bw = Math.max(maxX - minX + worldPad * 2, 1)
+    const bh = Math.max(maxY - minY + worldPad * 2, 1)
+    // Shift bbox center by the pad we added around the content
+    const cx = (minX + maxX) / 2
+    const cy = (minY + maxY) / 2
     const vw = vp.clientWidth
     const vh = vp.clientHeight
+    const cap = opts?.maxScale ?? MAX_SCALE
     // Round scale to 2 decimals — fewer fractional scales = less blurry text
     const nextScale =
       Math.round(
         Math.min(
-          MAX_SCALE,
-          Math.max(MIN_SCALE, Math.min((vw - pad * 2) / bw, (vh - pad * 2) / bh))
+          cap,
+          Math.max(MIN_SCALE, Math.min(vw / bw, vh / bh))
         ) * 100
       ) / 100
-    const nextTx = Math.round((vw - bw * nextScale) / 2 - minX * nextScale)
-    const nextTy = Math.round((vh - bh * nextScale) / 2 - minY * nextScale)
-    setScale(nextScale)
-    setTx(nextTx)
-    setTy(nextTy)
-  }, [])
+    const nextTx = Math.round(vw / 2 - cx * nextScale)
+    const nextTy = Math.round(vh / 2 - cy * nextScale)
+    const animate = opts?.animate !== false
+    if (animate) {
+      animateToView(nextScale, nextTx, nextTy, opts?.durationMs ?? 380)
+    } else {
+      cancelCamAnim()
+      scaleRef.current = nextScale
+      txRef.current = nextTx
+      tyRef.current = nextTy
+      setScale(nextScale)
+      setTx(nextTx)
+      setTy(nextTy)
+    }
+  }, [animateToView, cancelCamAnim])
+
+  const fitAllNodes = useCallback(() => {
+    fitNodeCards(null, { animate: true, durationMs: 420 })
+  }, [fitNodeCards])
 
   const handleFocusGroup = useCallback(
     (id: FocusGroupId | null) => {
@@ -1396,6 +1504,52 @@ export function TimelineView({collectionId}:TVP){
     }
   }, [selId, vpSize?.w, focusGroupId])
 
+  // Message detail / node focus: smooth camera to highlighted source node(s).
+  // Key includes messageId so two messages on the same node still re-fit.
+  const msgHighlightKey = msgDetail.open
+    ? `${msgDetail.messageId ?? ''}:${msgDetail.sourceNodeIds.slice().sort().join(',')}`
+    : msgFocus.kind === 'node'
+      ? `focus:${msgFocus.nodeId}`
+      : ''
+  useLayoutEffect(() => {
+    if (!msgMode || !msgHighlightKey) return
+    const ids =
+      msgDetail.open && msgDetail.sourceNodeIds.length > 0
+        ? msgDetail.sourceNodeIds
+        : msgFocus.kind === 'node'
+          ? [msgFocus.nodeId]
+          : []
+    if (ids.length === 0) return
+    // Never zoom past 1× for message/node focus — a single card used to fill the viewport.
+    const fitOpts = { maxScale: 1, pad: 120, animate: true, durationMs: 400 }
+    let raf2 = 0
+    let t: ReturnType<typeof setTimeout> | undefined
+    const raf1 = requestAnimationFrame(() => {
+      // Wait one frame for highlight / layout paint
+      raf2 = requestAnimationFrame(() => {
+        fitNodeCards(ids, fitOpts)
+        // Re-fit after shell width transition when detail first opens / resizes
+        t = setTimeout(
+          () => fitNodeCards(ids, { ...fitOpts, durationMs: 320 }),
+          320
+        )
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+      if (t) clearTimeout(t)
+    }
+  }, [
+    msgMode,
+    msgHighlightKey,
+    fitNodeCards,
+    vpSize?.w,
+    msgDetail.open,
+    msgDetail.sourceNodeIds,
+    msgFocus,
+  ])
+
   // Connector remeasure key — while dragging we hide SVG (stale paths look broken);
   // after drop, include full geometry so paths reattach.
   const layoutKey = dragN
@@ -1528,6 +1682,7 @@ export function TimelineView({collectionId}:TVP){
   const zoomAt = useCallback((clientX: number, clientY: number, factor: number) => {
     const vp = viewportRef.current
     if (!vp) return
+    cancelCamAnim()
     const rect = vp.getBoundingClientRect()
     const px = clientX - rect.left
     const py = clientY - rect.top
@@ -1543,7 +1698,7 @@ export function TimelineView({collectionId}:TVP){
     setScale(s1)
     setTx(Math.round(px - wx * s1))
     setTy(Math.round(py - wy * s1))
-  }, [])
+  }, [cancelCamAnim])
 
   // Non-passive wheel — must run unconditionally (before any early return)
   useEffect(() => {
@@ -1551,6 +1706,8 @@ export function TimelineView({collectionId}:TVP){
     if (!el) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
+      // User scroll/zoom cancels auto camera ease
+      cancelCamAnim()
       const zoomGesture =
         e.ctrlKey || e.metaKey || e.deltaMode === 1 || e.deltaMode === 2
       if (zoomGesture) {
@@ -1563,7 +1720,7 @@ export function TimelineView({collectionId}:TVP){
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [zoomAt, loading, mc])
+  }, [zoomAt, loading, mc, cancelCamAnim])
 
   // Must stay before any early return (hooks order)
   const chainNodesMap = useMemo(() => {
@@ -1754,9 +1911,15 @@ export function TimelineView({collectionId}:TVP){
   const SIDEBAR_GAP_LEFT = 12
   const SIDEBAR_INSET_RIGHT = 4
   const SIDEBAR_INSET_BOTTOM = 12
+  /** Gap between message detail column and stream column (equal widths). */
+  const MSG_DETAIL_GAP = 12
   const rightPanelOpen = msgMode || panelOpen
+  // Message detail expands an equal-width column left of the stream, squeezing the canvas.
+  const msgColumns = msgMode && msgDetail.open ? 2 : 1
+  const sidebarContentW =
+    SIDEBAR_W * msgColumns + (msgColumns > 1 ? MSG_DETAIL_GAP : 0)
   const shellW = rightPanelOpen
-    ? SIDEBAR_W + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT
+    ? sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT
     : 0
 
   return (
@@ -1770,8 +1933,14 @@ export function TimelineView({collectionId}:TVP){
           if (t.closest('button')) return
           if (t.closest('[data-groups-menu]')) return
           if (t.closest('[data-message-stream-sidebar]')) return
+          if (t.closest('[data-message-detail-panel]')) return
           if (panDrag.current?.moved) return
           if (msgMode) {
+            // Close message detail first; second empty click resets focus to main
+            if (msgDetail.open) {
+              setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
+              return
+            }
             setMsgFocus({ kind: 'main' })
             return
           }
@@ -1835,7 +2004,8 @@ export function TimelineView({collectionId}:TVP){
                 t.closest('[data-sw-dragging]') ||
                 t.closest('button') ||
                 t.closest('[data-groups-menu]') ||
-                t.closest('[data-message-stream-sidebar]')
+                t.closest('[data-message-stream-sidebar]') ||
+                t.closest('[data-message-detail-panel]')
               ) {
                 return
               }
@@ -1860,6 +2030,8 @@ export function TimelineView({collectionId}:TVP){
               if (d.moved) {
                 e.preventDefault()
                 window.getSelection()?.removeAllRanges()
+                // User takeover — stop any auto camera ease
+                cancelCamAnim()
                 setTx(Math.round(d.tx0 + dx))
                 setTy(Math.round(d.ty0 + dy))
               }
@@ -1991,7 +2163,7 @@ export function TimelineView({collectionId}:TVP){
           <div
             className="h-full box-border flex justify-end"
             style={{
-              width: SIDEBAR_W + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT,
+              width: sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT,
               paddingLeft: SIDEBAR_GAP_LEFT,
               paddingRight: SIDEBAR_INSET_RIGHT,
               paddingBottom: SIDEBAR_INSET_BOTTOM,
@@ -2002,7 +2174,7 @@ export function TimelineView({collectionId}:TVP){
                 'h-full shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
                 msgMode || panelAnimOpen ? 'translate-x-0' : 'translate-x-[110%]',
               )}
-              style={{ width: SIDEBAR_W }}
+              style={{ width: sidebarContentW }}
               onClick={(e) => e.stopPropagation()}
             >
               {msgMode ? (
@@ -2011,8 +2183,13 @@ export function TimelineView({collectionId}:TVP){
                   chains={chains}
                   chainNodes={chainNodesMap}
                   focus={msgFocus}
-                  onClose={() => setMsgMode(false)}
+                  onClose={() => {
+                    setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
+                    setMsgMode(false)
+                  }}
                   onFocusChange={setMsgFocus}
+                  onDetailChange={setMsgDetail}
+                  detailOpen={msgDetail.open}
                 />
               ) : (
                 <NodeDetailSidebar

@@ -11,7 +11,7 @@ import type { Message } from "@/types/file-mgmt"
  * markdown. Default ReactMarkdown escapes those tags as text — enable
  * rehype-raw so stream + hover previews match the editor.
  */
-function MessageBody({
+export function MessageBody({
   body,
   className,
 }: {
@@ -43,6 +43,49 @@ function MessagePreview({ body }: { body: string }) {
   )
 }
 
+/** Resolve primary timeline source node for a message (owner node or source_node_id). */
+export function resolveMessageSourceNodeId(msg: Message): string | null {
+  if (msg.owner_type === "node") return msg.owner_id
+  if (msg.source_node_id) return msg.source_node_id
+  return null
+}
+
+/**
+ * Resolve all timeline nodes to highlight for a message.
+ * - node message → that node
+ * - file message → every node that mounts the file (file_nodes)
+ * - otherwise → source_node_id if present
+ */
+export async function resolveMessageHighlightNodeIds(
+  collectionId: string,
+  msg: Message
+): Promise<string[]> {
+  if (msg.owner_type === "node" && msg.owner_id) {
+    return [msg.owner_id]
+  }
+  if (msg.owner_type === "file" && msg.owner_id) {
+    try {
+      const { getFileDetail } = await import("@/api/file-mgmt")
+      const detail = await getFileDetail(collectionId, msg.owner_id)
+      const ids: string[] = []
+      for (const n of detail.nodes ?? []) {
+        if (n && typeof n === "object" && "node_id" in n) {
+          const id = (n as { node_id?: unknown }).node_id
+          if (typeof id === "string" && id) ids.push(id)
+        }
+      }
+      if (ids.length > 0) return [...new Set(ids)]
+    } catch {
+      /* fall through */
+    }
+    // Fallback: single source_node_id if file detail unavailable
+    if (msg.source_node_id) return [msg.source_node_id]
+    return []
+  }
+  if (msg.source_node_id) return [msg.source_node_id]
+  return []
+}
+
 export function MessageCard({
   msg,
   onView,
@@ -54,6 +97,8 @@ export function MessageCard({
   onSourceNodeClick,
   /** Force show from-node badge even when source_node_id empty (owner_type=node). */
   showFromNode,
+  /** Selected / open in detail panel */
+  isActive = false,
 }: {
   msg: Message
   onView: (msg: Message) => void
@@ -62,6 +107,7 @@ export function MessageCard({
   previewSide?: "left" | "right"
   onSourceNodeClick?: (nodeId: string) => void
   showFromNode?: boolean
+  isActive?: boolean
 }) {
   const isSystem = msg.author_type === "system"
   const time = msg.created_at
@@ -72,8 +118,7 @@ export function MessageCard({
         minute: "2-digit",
       })
     : ""
-  const sourceNodeId =
-    msg.source_node_id || (msg.owner_type === "node" ? msg.owner_id : null)
+  const sourceNodeId = resolveMessageSourceNodeId(msg)
   const fromNode = showFromNode || !!sourceNodeId
 
   return (
@@ -81,25 +126,28 @@ export function MessageCard({
       className={cn(
         "rounded-md p-2 text-xs group cursor-pointer hover:bg-accent/60 transition-colors relative",
         isSystem ? "bg-muted/30 border border-border/30" : "bg-background",
+        isActive && "bg-primary/10 ring-1 ring-primary/40 hover:bg-primary/15",
       )}
       onClick={() => onView(msg)}
     >
-      {/* Hover preview card — shows full rendered markdown */}
-      <div
-        className={cn(
-          "absolute bottom-0 z-[9999] hidden group-hover:block pointer-events-none",
-          previewSide === "right"
-            ? "left-[calc(100%+6px)]"
-            : "right-[calc(100%+6px)]"
-        )}
-      >
-        <div className="w-[320px] max-h-[360px] overflow-y-auto rounded-lg border border-border bg-popover shadow-2xl p-3">
-          <MessageBody
-            body={msg.body || ""}
-            className="prose prose-xs dark:prose-invert max-w-none text-xs leading-relaxed break-words"
-          />
+      {/* Hover preview — hidden while this card is open in the detail panel */}
+      {!isActive && (
+        <div
+          className={cn(
+            "absolute bottom-0 z-[9999] hidden group-hover:block pointer-events-none",
+            previewSide === "right"
+              ? "left-[calc(100%+6px)]"
+              : "right-[calc(100%+6px)]"
+          )}
+        >
+          <div className="w-[320px] max-h-[360px] overflow-y-auto rounded-lg border border-border bg-popover shadow-2xl p-3">
+            <MessageBody
+              body={msg.body || ""}
+              className="prose prose-xs dark:prose-invert max-w-none text-xs leading-relaxed break-words"
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="flex items-center gap-1 mb-0.5">
         {isSystem ? (
