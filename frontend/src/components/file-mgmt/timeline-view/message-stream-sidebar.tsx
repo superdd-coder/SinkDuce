@@ -20,6 +20,7 @@ import {
 import {
   MessageBody,
   MessageCard,
+  enrichMessageSourceNames,
   resolveMessageHighlightNodeIds,
 } from "../message-card"
 import { MessageEditorDialog } from "../folder-view/message-editor-dialog"
@@ -385,12 +386,30 @@ export function MessageStreamSidebar({
       const sorted = [...map.values()].sort((a, b) =>
         (b.created_at || "").localeCompare(a.created_at || "")
       )
-      setMessages(sorted)
+      // Resolve Folder/File/Node names from ids (never show raw ids in tags)
+      const nodeNameById = new Map<string, string>()
+      for (const nodes of chainNodes.values()) {
+        for (const n of nodes) {
+          if (n.title) nodeNameById.set(n.node_id, n.title)
+        }
+      }
+      const prefilled = sorted.map((m) => {
+        if (m.source_name?.trim()) return m
+        const ot = (m.owner_type || "").toLowerCase()
+        if (ot === "node" && nodeNameById.has(m.owner_id)) {
+          return { ...m, source_name: nodeNameById.get(m.owner_id)! }
+        }
+        return m
+      })
+      const enriched = await enrichMessageSourceNames(collectionId, prefilled)
+      setMessages(enriched)
 
       // Keep detail in sync if still present; refresh multi-node highlight
       const cur = detailMsgRef.current
       if (cur) {
-        const next = map.get(cur.message_id)
+        const next =
+          enriched.find((x) => x.message_id === cur.message_id) ??
+          map.get(cur.message_id)
         if (!next) {
           setDetailMsg(null)
           onDetailChange?.({ open: false, sourceNodeIds: [], messageId: null })
@@ -710,9 +729,9 @@ export function MessageStreamSidebar({
                   }}
                   onEdit={(m) => void openDetail(m, true)}
                   onDelete={() => void handleDelete(msg.message_id)}
-                  onSourceNodeClick={() => {
-                    // Open detail + highlight all mounts of the source file/node
-                    void openDetail(msg, false)
+                  onSourceTagClick={(m) => {
+                    // Same as view: detail panel + canvas highlight
+                    void openDetail(m, false)
                   }}
                 />
               ))}

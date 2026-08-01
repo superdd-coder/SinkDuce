@@ -2,9 +2,37 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react"
 import type { FolderTreeNode, FileSummary, NodeGroup } from "@/types/file-mgmt"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { listGroups } from "@/api/file-mgmt"
-import { Loader2, FolderIcon, Users, GitBranch, Video, FileText, Archive, FileIcon, FileWarning, Star, Check } from "lucide-react"
+import { Loader2, Star, Check, Pencil } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { GroupIconView } from "@/components/file-mgmt/timeline-view/group-icons"
+import { FileTypeIcon } from "@/components/file-mgmt/file-type-icon"
+import { FolderIconView } from "@/components/file-mgmt/timeline-view/group-icons"
+import {
+  DEFAULT_ICON_COLOR,
+  GroupIconView,
+  IconPickerPanel,
+  buildIconPayload,
+} from "@/components/file-mgmt/timeline-view/group-icons"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+
+/** Open delay (ms) — avoid flicker while sweeping the icon grid */
+const TIP_OPEN_MS = 450
+/** Close delay (ms) — keep open long enough to reach the edit pencil */
+const TIP_CLOSE_MS = 200
+/** Compact tooltip width */
+const TIP_MAX = "max-w-[11rem]"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 
 export function IconGrid({ collectionId }: { collectionId: string }) {
   const {
@@ -14,19 +42,148 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
     filesLoading,
     selectedFileIds,
     selectedFolderIds,
+    multiSelectMode,
     selectFolder,
     toggleSelection,
+    selectSingleFile,
+    selectSingleFolder,
     toggleFolderSelection,
     clearSelection,
     clearFolderSelection,
+    exitMultiSelectMode,
     uploadFile,
     uploadFolder,
+    updateFolderDetails,
+    renameFile,
   } = useFileMgmtStore()
 
   const [dragOver, setDragOver] = useState(false)
   const [groups, setGroups] = useState<NodeGroup[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
+
+  // Edit dialog (opened from hover-tooltip pencil)
+  type EditTarget =
+    | { kind: "folder"; folder: FolderTreeNode }
+    | { kind: "file"; file: FileSummary }
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editIconMode, setEditIconMode] = useState<"lucide" | "emoji">("lucide")
+  const [editIconKey, setEditIconKey] = useState("folder")
+  const [editIconColor, setEditIconColor] = useState(DEFAULT_ICON_COLOR)
+  const [editSymbol, setEditSymbol] = useState("")
+  const [editSaving, setEditSaving] = useState(false)
+
+  const editFileExt = useMemo(() => {
+    if (!editTarget || editTarget.kind !== "file") return ""
+    const fn = editTarget.file.filename || ""
+    const fromMeta = (editTarget.file.original_ext || "").replace(/^\./, "")
+    if (fromMeta) {
+      const suf = `.${fromMeta}`
+      if (fn.toLowerCase().endsWith(suf.toLowerCase())) return fn.slice(-suf.length)
+      return suf
+    }
+    const i = fn.lastIndexOf(".")
+    return i > 0 ? fn.slice(i) : ""
+  }, [editTarget])
+
+  const openEditFolder = useCallback((folder: FolderTreeNode) => {
+    if (folder.is_system) return
+    setEditTarget({ kind: "folder", folder })
+    setEditName(folder.name || "")
+    if (folder.icon_type === "emoji" && folder.icon_value) {
+      setEditIconMode("emoji")
+      setEditSymbol(folder.icon_value)
+      setEditIconKey("folder")
+      setEditIconColor(DEFAULT_ICON_COLOR)
+    } else {
+      setEditIconMode("lucide")
+      setEditIconKey(folder.icon_value || "folder")
+      setEditIconColor(folder.icon_color || DEFAULT_ICON_COLOR)
+      setEditSymbol("")
+    }
+  }, [])
+
+  const openEditFile = useCallback((file: FileSummary) => {
+    setEditTarget({ kind: "file", file })
+    const fn = file.filename || ""
+    const fromMeta = (file.original_ext || "").replace(/^\./, "")
+    if (fromMeta) {
+      const suf = `.${fromMeta}`
+      setEditName(
+        fn.toLowerCase().endsWith(suf.toLowerCase())
+          ? fn.slice(0, -suf.length)
+          : fn
+      )
+    } else {
+      const i = fn.lastIndexOf(".")
+      setEditName(i > 0 ? fn.slice(0, i) : fn)
+    }
+  }, [])
+
+  const editFolderPreview = useMemo(
+    () =>
+      editIconMode === "emoji" && editSymbol
+        ? {
+            name: editName,
+            icon_type: "emoji" as const,
+            icon_value: editSymbol,
+          }
+        : {
+            name: editName,
+            icon_type: "lucide" as const,
+            icon_value: editIconKey,
+            icon_color: editIconColor,
+          },
+    [editIconMode, editName, editSymbol, editIconKey, editIconColor]
+  )
+
+  const handleSaveEdit = async () => {
+    const name = editName.trim()
+    if (!name || !editTarget) return
+    setEditSaving(true)
+    try {
+      if (editTarget.kind === "folder") {
+        if (editIconMode === "emoji" && !editSymbol.trim()) return
+        const icon = buildIconPayload({
+          iconMode: editIconMode,
+          iconKey: editIconKey,
+          iconColor: editIconColor,
+          symbol: editSymbol,
+        })
+        await updateFolderDetails(
+          collectionId,
+          editTarget.folder.folder_id,
+          editTarget.folder.version,
+          {
+            name,
+            icon_type: icon.icon_type,
+            icon_value: icon.icon_value,
+            icon_color: icon.icon_color,
+          }
+        )
+      } else {
+        let stem = name
+        if (editFileExt) {
+          const low = editFileExt.toLowerCase()
+          if (stem.toLowerCase().endsWith(low)) {
+            stem = stem.slice(0, -editFileExt.length)
+          }
+        }
+        stem = stem.replace(/[/\\]/g, "").trim() || "unnamed"
+        const finalName = editFileExt ? `${stem}${editFileExt}` : stem
+        await renameFile(
+          collectionId,
+          editTarget.file.file_id,
+          finalName,
+          editTarget.file.version
+        )
+      }
+      setEditTarget(null)
+    } finally {
+      setEditSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (!collectionId) return
@@ -61,10 +218,10 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
 
   const handleDragLeave = useCallback(() => setDragOver(false), [])
 
- const handleDrop = useCallback(
-   (e: React.DragEvent) => {
-     e.preventDefault()
-     setDragOver(false)
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      setDragOver(false)
       if (currentFolderId === "__archived__") return
 
       const items = e.dataTransfer.items
@@ -72,7 +229,11 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
 
       // Synchronously collect entries (must be done before any await)
       const entries: FileSystemEntry[] = []
-      if (items && items.length > 0 && typeof items[0].webkitGetAsEntry === "function") {
+      if (
+        items &&
+        items.length > 0 &&
+        typeof items[0].webkitGetAsEntry === "function"
+      ) {
         for (let i = 0; i < items.length; i++) {
           const entry = items[i].webkitGetAsEntry()
           if (entry) entries.push(entry)
@@ -80,35 +241,53 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
       }
 
       if (entries.length > 0) {
-        // Process entries asynchronously
         ;(async () => {
-          const collected: File[] = []
+          const looseFiles: File[] = []
+          const structuredFiles: File[] = []
+          let hasDirectory = false
+
           for (const entry of entries) {
             if (entry.isDirectory) {
-              const dirFiles = await traverseDirectory(entry as FileSystemDirectoryEntry)
-              collected.push(...dirFiles)
+              hasDirectory = true
+              // Prefix with top-level dir name so structure is preserved at root
+              const dirFiles = await traverseDirectory(
+                entry as FileSystemDirectoryEntry,
+                entry.name
+              )
+              structuredFiles.push(...dirFiles)
             } else if (entry.isFile) {
               const file = await entryToFile(entry as FileSystemFileEntry)
-              if (file) collected.push(file)
+              if (file) looseFiles.push(file)
             }
           }
-          if (collected.length > 0) {
-            uploadFolder(collectionId, collected)
-          } else if (fallbackFiles.length > 0) {
+
+          // Folder(s) dropped → upload-folder API (creates subfolders)
+          if (hasDirectory && structuredFiles.length > 0) {
+            await uploadFolder(collectionId, structuredFiles)
+          }
+          // Only loose files → single-file upload (root = orphan ok)
+          for (const file of looseFiles) {
+            await uploadFile(collectionId, file)
+          }
+
+          if (
+            !hasDirectory &&
+            looseFiles.length === 0 &&
+            fallbackFiles.length > 0
+          ) {
             for (const file of fallbackFiles) {
-              uploadFile(collectionId, file)
+              await uploadFile(collectionId, file)
             }
           }
         })()
       } else if (fallbackFiles.length > 0) {
-        // Fallback: plain file drop
         for (const file of fallbackFiles) {
           uploadFile(collectionId, file)
         }
       }
-   },
-   [collectionId, currentFolderId, uploadFile, uploadFolder]
- )
+    },
+    [collectionId, currentFolderId, uploadFile, uploadFolder]
+  )
 
   return (
     <div
@@ -120,13 +299,18 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onMouseDown={(e) => {
-        // Click on empty area (not on a button) → deselect
+        // Click on empty area (not on a file/folder button) → exit select mode / clear selection
         const target = e.target as HTMLElement
         if (target.tagName !== "BUTTON" && !target.closest("button")) {
-          clearSelection()
-          clearFolderSelection()
+          if (multiSelectMode) {
+            exitMultiSelectMode()
+          } else {
+            clearSelection()
+            clearFolderSelection()
+          }
         }
       }}
+      data-multi-select={multiSelectMode ? "true" : undefined}
     >
       {/* Hidden file inputs */}
       <input
@@ -163,33 +347,160 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="flex flex-wrap gap-1 p-3">
-            {orderedFolders.map((folder) => (
-              <FolderIconItem
-                key={folder.folder_id}
-                folder={folder}
-                selected={selectedFolderIds.has(folder.folder_id)}
-                onOpen={() => selectFolder(collectionId, folder.folder_id)}
-                onToggle={() => toggleFolderSelection(folder.folder_id)}
-                boundGroup={groupByFolderId.get(folder.folder_id) ?? null}
-              />
-            ))}
-            {currentFolderFiles.map((file) => (
-              <FileIconItem
-                key={file.file_id}
-                file={file}
-                selected={selectedFileIds.has(file.file_id)}
-                onToggle={() => toggleSelection(file.file_id)}
-              />
-            ))}
-            {orderedFolders.length === 0 && currentFolderFiles.length === 0 && (
-              <div className="w-full text-center text-muted-foreground text-sm py-8">
-                This folder is empty. Drag files here to upload.
+          <TooltipProvider delay={TIP_OPEN_MS} closeDelay={TIP_CLOSE_MS}>
+            <div className="flex flex-wrap gap-1 p-3">
+              {orderedFolders.map((folder) => (
+                <FolderIconItem
+                  key={folder.folder_id}
+                  folder={folder}
+                  selected={selectedFolderIds.has(folder.folder_id)}
+                  multiSelectMode={multiSelectMode}
+                  onOpen={() => selectFolder(collectionId, folder.folder_id)}
+                  onSelect={() => {
+                    if (multiSelectMode) toggleFolderSelection(folder.folder_id)
+                    else selectSingleFolder(folder.folder_id)
+                  }}
+                  boundGroup={groupByFolderId.get(folder.folder_id) ?? null}
+                  onEdit={
+                    folder.is_system ? undefined : () => openEditFolder(folder)
+                  }
+                />
+              ))}
+              {currentFolderFiles.map((file) => (
+                <FileIconItem
+                  key={file.file_id}
+                  file={file}
+                  selected={selectedFileIds.has(file.file_id)}
+                  multiSelectMode={multiSelectMode}
+                  onSelect={() => {
+                    if (multiSelectMode) toggleSelection(file.file_id)
+                    else selectSingleFile(file.file_id)
+                  }}
+                  onEdit={() => openEditFile(file)}
+                />
+              ))}
+              {orderedFolders.length === 0 &&
+                currentFolderFiles.length === 0 && (
+                  <div className="w-full text-center text-muted-foreground text-sm py-8">
+                    This folder is empty. Drag files here to upload.
+                  </div>
+                )}
+            </div>
+          </TooltipProvider>
+        )}
+      </div>
+
+      <Dialog
+        open={!!editTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditTarget(null)
+            setEditSaving(false)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">
+              {editTarget?.kind === "folder" ? "Edit Folder" : "Rename File"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-1">
+            {editTarget?.kind === "folder" ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <div
+                    key={`${editIconMode}-${editIconKey}-${editIconColor}-${editSymbol}`}
+                    className="h-10 w-10 rounded-lg border border-border flex items-center justify-center bg-muted/30 shrink-0"
+                  >
+                    <GroupIconView
+                      source={editFolderPreview}
+                      className="h-5 w-5"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
+                      Name
+                    </label>
+                    <Input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder="Folder name"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleSaveEdit()
+                      }}
+                      autoFocus
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                </div>
+                <IconPickerPanel
+                  iconMode={editIconMode}
+                  iconKey={editIconKey}
+                  iconColor={editIconColor}
+                  symbol={editSymbol}
+                  onIconMode={setEditIconMode}
+                  onIconKey={setEditIconKey}
+                  onIconColor={setEditIconColor}
+                  onSymbol={setEditSymbol}
+                />
+              </>
+            ) : (
+              <div>
+                <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
+                  File name
+                </label>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="filename"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleSaveEdit()
+                    }}
+                    autoFocus
+                    className="h-8 text-xs flex-1 min-w-0 font-mono"
+                  />
+                  {editFileExt && (
+                    <span
+                      className="shrink-0 text-xs font-mono text-muted-foreground bg-muted/50 border border-border/50 rounded-md px-2 h-8 inline-flex items-center"
+                      title="Extension cannot be changed"
+                    >
+                      {editFileExt}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1.5">
+                  Extension is fixed and cannot be changed.
+                </p>
               </div>
             )}
           </div>
-        )}
-      </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setEditTarget(null)}
+              disabled={editSaving}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              onClick={() => void handleSaveEdit()}
+              disabled={
+                editSaving ||
+                !editName.trim() ||
+                (editTarget?.kind === "folder" &&
+                  editIconMode === "emoji" &&
+                  !editSymbol.trim())
+              }
+            >
+              {editSaving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -197,110 +508,217 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
 function FolderIconItem({
   folder,
   selected,
+  multiSelectMode,
   onOpen,
-  onToggle,
+  onSelect,
   boundGroup,
+  onEdit,
 }: {
   folder: FolderTreeNode
   selected: boolean
+  multiSelectMode: boolean
+  /** Double-click: enter folder */
   onOpen: () => void
-  onToggle: () => void
+  /** Single-click: select (or toggle in multi-select) */
+  onSelect: () => void
   boundGroup?: NodeGroup | null
+  onEdit?: () => void
 }) {
-  const Icon = getFolderIcon(folder)
-  const color = getFolderColor(folder.kind, folder.name)
-  const useGroupIcon =
-    !!boundGroup &&
-    (folder.kind === "user_group" || folder.kind === "system_group")
-
+  const fullName = folder.name || "Untitled"
   return (
-    <button
-      className={cn(
-        "group flex flex-col items-center gap-1 p-2 rounded-lg transition-colors w-[88px] shrink-0",
-        selected ? "bg-primary/10 ring-1 ring-primary/30" : "hover:bg-muted/50"
-      )}
-      onClick={onToggle}
-      onDoubleClick={onOpen}
-      title={folder.name}
-    >
-      <div className="relative">
-        {useGroupIcon ? (
-          <span className="inline-flex h-10 w-10 items-center justify-center">
-            <GroupIconView source={boundGroup} className="h-10 w-10" />
+    <Tooltip>
+      <TooltipTrigger
+        delay={TIP_OPEN_MS}
+        closeDelay={TIP_CLOSE_MS}
+        render={
+          <button
+            type="button"
+            className={cn(
+              "group flex flex-col items-center gap-1 p-2 rounded-lg transition-colors w-[88px] shrink-0",
+              selected
+                ? "bg-primary/10 ring-1 ring-primary/30"
+                : "hover:bg-muted/50"
+            )}
+            onClick={onSelect}
+            onDoubleClick={(e) => {
+              e.preventDefault()
+              onOpen()
+            }}
+          >
+            <div className="relative">
+              <span className="inline-flex h-10 w-10 items-center justify-center">
+                <FolderIconView
+                  folder={folder}
+                  boundGroup={boundGroup}
+                  className="h-10 w-10"
+                />
+              </span>
+              {folder.file_count > 0 && (
+                <span className="absolute -bottom-0.5 -right-0.5 text-[9px] font-medium bg-muted text-muted-foreground rounded-full px-1 min-w-[14px] text-center">
+                  {folder.file_count}
+                </span>
+              )}
+              {selected && multiSelectMode && (
+                <div className="absolute -top-1 -right-1 bg-primary rounded-full p-0.5">
+                  <Check className="h-2.5 w-2.5 text-primary-foreground" />
+                </div>
+              )}
+            </div>
+            <span className="text-[11px] text-center text-muted-foreground truncate w-full leading-tight">
+              {fullName}
+            </span>
+          </button>
+        }
+      />
+      <TooltipContent
+        side="bottom"
+        sideOffset={6}
+        className={cn(TIP_MAX, "p-0 overflow-hidden")}
+      >
+        <div className={cn("flex items-start gap-1 px-2 py-1.5", TIP_MAX)}>
+          <span
+            className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2 break-all"
+            title={fullName}
+          >
+            {fullName}
           </span>
-        ) : (
-          <Icon className={cn("h-10 w-10", color)} />
-        )}
-        {folder.file_count > 0 && (
-          <span className="absolute -bottom-0.5 -right-0.5 text-[9px] font-medium bg-muted text-muted-foreground rounded-full px-1 min-w-[14px] text-center">
-            {folder.file_count}
-          </span>
-        )}
-        {selected && (
-          <div className="absolute -top-1 -right-1 bg-primary rounded-full p-0.5">
-            <Check className="h-2.5 w-2.5 text-primary-foreground" />
-          </div>
-        )}
-      </div>
-      <span className="text-[11px] text-center text-muted-foreground truncate w-full leading-tight">
-        {folder.name}
-      </span>
-    </button>
+          {onEdit && (
+            <button
+              type="button"
+              className="shrink-0 p-0.5 rounded hover:bg-background/20 text-background/90 hover:text-background transition-colors"
+              title="Edit"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onEdit()
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
 function FileIconItem({
   file,
   selected,
-  onToggle,
+  multiSelectMode,
+  onSelect,
+  onEdit,
 }: {
   file: FileSummary
   selected: boolean
-  onToggle: () => void
+  multiSelectMode: boolean
+  onSelect: () => void
+  onEdit?: () => void
 }) {
   const ext = file.original_ext || ""
-  const isGreyed = file.is_greyed || file.archived
-
-  const Icon = file.unsupported ? FileWarning : FileIcon
+  // Unified: file-level or path-level archive both look "archived"
+  const isArchived = file.is_greyed || file.archived
+  const fullName = file.filename || "Untitled"
 
   return (
-    <button
-      className={cn(
-        "group flex flex-col items-center gap-1 p-2 rounded-lg transition-colors w-[88px] shrink-0",
-        selected ? "bg-primary/10 ring-1 ring-primary/30" : "hover:bg-muted/50",
-        isGreyed && "opacity-40"
-      )}
-      onClick={onToggle}
-      title={file.filename}
-    >
-      <div className="relative">
-        <Icon className={cn("h-10 w-10", file.unsupported ? "text-amber-500" : "text-muted-foreground")} />
-        {file.is_definitive && (
-          <Star className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 text-amber-400 fill-amber-400" />
-        )}
-        {selected && (
-          <div className="absolute -top-1 -right-1 bg-primary rounded-full p-0.5">
-            <Check className="h-2.5 w-2.5 text-primary-foreground" />
-          </div>
-        )}
-      </div>
-      <span className={cn("text-[11px] text-center truncate w-full leading-tight", isGreyed ? "text-muted-foreground/60" : "text-muted-foreground")}>
-        {file.filename}
-      </span>
-      {(file.archived || file.is_greyed) && (
-        <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">
-          {file.archived ? "archived" : "path archived"}
-        </span>
-      )}
-      {ext && !file.archived && !file.is_greyed && (
-        <span className="text-[9px] text-muted-foreground/40 uppercase">{ext}</span>
-      )}
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        delay={TIP_OPEN_MS}
+        closeDelay={TIP_CLOSE_MS}
+        render={
+          <button
+            type="button"
+            className={cn(
+              "group flex flex-col items-center gap-1 p-2 rounded-lg transition-colors w-[88px] shrink-0",
+              selected
+                ? "bg-primary/10 ring-1 ring-primary/30"
+                : "hover:bg-muted/50",
+              isArchived && "opacity-40"
+            )}
+            onClick={onSelect}
+          >
+            <div className="relative">
+              <span className="inline-flex h-10 w-10 items-center justify-center">
+                <FileTypeIcon
+                  source={{
+                    filename: file.filename,
+                    original_ext: file.original_ext,
+                    unsupported: file.unsupported,
+                  }}
+                  className="h-10 w-10"
+                />
+              </span>
+              {file.is_definitive && (
+                <Star className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
+              )}
+              {selected && multiSelectMode && (
+                <div className="absolute -top-1 -right-1 bg-primary rounded-full p-0.5">
+                  <Check className="h-2.5 w-2.5 text-primary-foreground" />
+                </div>
+              )}
+            </div>
+            <span
+              className={cn(
+                "text-[11px] text-center truncate w-full leading-tight",
+                isArchived
+                  ? "text-muted-foreground/60"
+                  : "text-muted-foreground"
+              )}
+            >
+              {fullName}
+            </span>
+            {isArchived && (
+              <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">
+                archived
+              </span>
+            )}
+            {ext && !isArchived && (
+              <span className="text-[9px] text-muted-foreground/40 uppercase">
+                {ext}
+              </span>
+            )}
+          </button>
+        }
+      />
+      <TooltipContent
+        side="bottom"
+        sideOffset={6}
+        className={cn(TIP_MAX, "p-0 overflow-hidden")}
+      >
+        <div className={cn("flex items-start gap-1 px-2 py-1.5", TIP_MAX)}>
+          <span
+            className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2 break-all"
+            title={fullName}
+          >
+            {fullName}
+          </span>
+          {onEdit && (
+            <button
+              type="button"
+              className="shrink-0 p-0.5 rounded hover:bg-background/20 text-background/90 hover:text-background transition-colors"
+              title="Rename"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onEdit()
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
-// Helper: traverse a FileSystemDirectoryEntry and collect all files
-async function traverseDirectory(dirEntry: FileSystemDirectoryEntry): Promise<File[]> {
+// Helper: traverse a FileSystemDirectoryEntry and collect all files with relative paths
+async function traverseDirectory(
+  dirEntry: FileSystemDirectoryEntry,
+  pathPrefix = ""
+): Promise<File[]> {
   const reader = dirEntry.createReader()
   const files: File[] = []
   // readEntries may not return all entries in one call — read until empty
@@ -313,12 +731,21 @@ async function traverseDirectory(dirEntry: FileSystemDirectoryEntry): Promise<Fi
   do {
     batch = await readBatch()
     for (const entry of batch) {
+      const childPath = pathPrefix
+        ? `${pathPrefix}/${entry.name}`
+        : entry.name
       if (entry.isDirectory) {
-        const subFiles = await traverseDirectory(entry as FileSystemDirectoryEntry)
+        const subFiles = await traverseDirectory(
+          entry as FileSystemDirectoryEntry,
+          childPath
+        )
         files.push(...subFiles)
       } else if (entry.isFile) {
         const file = await entryToFile(entry as FileSystemFileEntry)
-        if (file) files.push(file)
+        if (file) {
+          // Encode relative path as filename so upload-folder can rebuild tree
+          files.push(new File([file], childPath, { type: file.type }))
+        }
       }
     }
   } while (batch.length > 0)
@@ -351,24 +778,4 @@ function getSubfolders(tree: FolderTreeNode[], parentId: string | null): FolderT
   return search(tree) ?? []
 }
 
-function getFolderIcon(folder: FolderTreeNode): React.FC<{ className?: string }> {
-  if (folder.kind === "system_group") {
-    if (folder.name === "Meeting") return Video
-    if (folder.name === "Notes") return FileText
-    if (folder.name === "Archived") return Archive
-    return FolderIcon
-  }
-  if (folder.kind === "user_group") return Users
-  if (folder.kind === "branch") return GitBranch
-  return FolderIcon
-}
 
-function getFolderColor(kind: string, name: string): string {
-  if (kind === "system_group") {
-    if (name === "Archived") return "text-muted-foreground/50"
-    return "text-blue-400"
-  }
-  if (kind === "user_group") return "text-purple-400"
-  if (kind === "branch") return "text-emerald-400"
-  return "text-amber-400"
-}

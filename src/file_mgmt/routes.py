@@ -71,19 +71,43 @@ def get_folder_messages(
     folder_id: str,
     include_node_msgs: bool = Query(True),
     include_file_msgs: bool = Query(True),
+    recursive: bool = Query(False),
 ):
-    """Aggregated message stream for a folder."""
+    """Aggregated message stream for a folder.
+
+    - Default aggregation still includes node/file when those flags are true.
+    - ``recursive=true`` expands to all descendant folders (and their files
+      when ``include_file_msgs`` is true).
+    """
     return service.list_folder_messages(
-        collection_id, folder_id,
+        collection_id,
+        folder_id,
         include_node_msgs=include_node_msgs,
         include_file_msgs=include_file_msgs,
+        recursive=recursive,
     )
 
 
 @router.get("/{collection_id}/messages")
-def get_collection_messages(collection_id: str):
-    """List messages at the collection (root) level."""
-    return service.list_messages(collection_id, "collection", collection_id)
+def get_collection_messages(
+    collection_id: str,
+    include_node_msgs: bool = Query(False),
+    include_file_msgs: bool = Query(False),
+    recursive: bool = Query(False),
+):
+    """List messages at the collection (root) level.
+
+    Without flags: collection-owned messages only (backward compatible).
+    With ``include_file_msgs`` / ``recursive``: same scope rules as folder view.
+    """
+    if not include_node_msgs and not include_file_msgs and not recursive:
+        return service.list_messages(collection_id, "collection", collection_id)
+    return service.list_root_messages(
+        collection_id,
+        include_node_msgs=include_node_msgs,
+        include_file_msgs=include_file_msgs,
+        recursive=recursive,
+    )
 
 
 @router.post("/{collection_id}/messages", status_code=201)
@@ -308,16 +332,20 @@ def delete_message(collection_id: str, message_id: str):
 async def upload_file_to_folder(
     collection_id: str,
     file: UploadFile = File(...),
-    folder_id: str = Form(...),
+    folder_id: Optional[str] = Form(None),
     source_node_id: Optional[str] = Form(None),
 ):
     """Upload a file to a folder (creates persistent path).
 
+    Empty / omitted ``folder_id`` uploads to collection root (orphan file).
     If source_node_id is provided, creates a derived path instead.
     """
     file_bytes = await file.read()
     return service.upload_file_to_folder(
-        collection_id, folder_id, file_bytes, file.filename or "unnamed",
+        collection_id,
+        folder_id,
+        file_bytes,
+        file.filename or "unnamed",
         source_node_id=source_node_id,
     )
 
@@ -326,13 +354,18 @@ async def upload_file_to_folder(
 async def upload_entire_folder(
     collection_id: str,
     files: list[UploadFile] = File(...),
-    parent_folder_id: str = Form(...),
+    parent_folder_id: Optional[str] = Form(None),
 ):
-    """Upload an entire folder preserving relative paths."""
+    """Upload an entire folder preserving relative paths.
+
+    Empty / omitted ``parent_folder_id`` uses collection root.
+    """
     files_data: list[tuple[bytes, str]] = []
     for f in files:
         content = await f.read()
-        files_data.append((content, f.filename or "unnamed"))
+        # Prefer webkitRelativePath when present (browser folder pick)
+        name = getattr(f, "filename", None) or "unnamed"
+        files_data.append((content, name))
     return service.upload_folder(collection_id, parent_folder_id, files_data)
 
 
@@ -353,7 +386,7 @@ async def upload_new_version(
 
 @router.patch("/{collection_id}/files/{file_id}")
 def update_file(collection_id: str, file_id: str, req: dict):
-    """Update file metadata (is_definitive, archived). Requires version for optimistic locking."""
+    """Update file metadata (is_definitive, filename). Archive via PATCH .../archive."""
     return service.update_file(collection_id, file_id, req)
 
 
@@ -389,10 +422,13 @@ def end_chain_endpoint(collection_id: str, node_id: str, req: EndChainRequest):
 
 @router.patch("/{collection_id}/files/{file_id}/archive")
 def toggle_file_archive(collection_id: str, file_id: str, req: ArchiveToggle):
-    """Manually archive or unarchive a file (file-level).
+    """Archive or unarchive a file (path-level and/or file-level).
 
-    - archived=True:  set files.archived=1, Qdrant chunks archived
-    - archived=False: restore file, Qdrant current version chunks active
+    - archived=True, scope=file: exclude from search (global)
+    - archived=True, scope=path + folder_id: archive for this folder only
+      (auto file-level if no active paths remain)
+    - archived=False: clear file-level; also clear paths in folder_id if set
+      (no folder_id = file-level only, e.g. /Archived view)
     Requires version for optimistic locking.
     """
     return service.toggle_archive(collection_id, file_id, req)

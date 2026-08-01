@@ -607,17 +607,32 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             config = services.db.get_collection_config(collection)
 
             # Decide: cloud parsing (MinerU) or local parsing
-            cloud_parsing = config.get("cloud_parsing", False)
+            # Default True to match Collection Config UI + _DEFAULT_COLLECTION_CONFIG
+            # (previously default False while UI showed ON → silent local parse).
+            cloud_parsing = bool(config.get("cloud_parsing", True))
             mineru_cfg = services.config.mineru if hasattr(services.config, "mineru") else None
             file_ext = path.suffix.lower()
 
-            mineru_ready = cloud_parsing and mineru_cfg and mineru_cfg.enabled and mineru_cfg.api_token and file_ext in MINERU_SUPPORTED_EXTENSIONS
-            logger.info("[%s] Parsing path: cloud_parsing=%s, mineru_enabled=%s, has_token=%s, ext=%s, supported=%s → %s",
-                        filename_param, cloud_parsing,
-                        mineru_cfg.enabled if mineru_cfg else "N/A",
-                        bool(mineru_cfg and mineru_cfg.api_token),
-                        file_ext, file_ext in MINERU_SUPPORTED_EXTENSIONS,
-                        "MinerU" if mineru_ready else "local")
+            mineru_ready = (
+                cloud_parsing
+                and mineru_cfg
+                and mineru_cfg.enabled
+                and bool(mineru_cfg.api_token)
+                and file_ext in MINERU_SUPPORTED_EXTENSIONS
+            )
+            logger.info(
+                "[%s] Parsing path: collection=%s, cloud_parsing=%s (raw=%r), "
+                "mineru_enabled=%s, has_token=%s, ext=%s, supported=%s → %s",
+                filename_param,
+                collection,
+                cloud_parsing,
+                config.get("cloud_parsing", "<missing>"),
+                mineru_cfg.enabled if mineru_cfg else "N/A",
+                bool(mineru_cfg and mineru_cfg.api_token),
+                file_ext,
+                file_ext in MINERU_SUPPORTED_EXTENSIONS,
+                "MinerU" if mineru_ready else "local",
+            )
 
             if mineru_ready:
                 update(20, "Parsing file via MinerU cloud...")

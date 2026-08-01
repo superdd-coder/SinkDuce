@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
-  Archive,
   ChevronDown,
   ChevronRight,
-  FileIcon,
-  FolderIcon,
-  GitBranch,
   Loader2,
-  Users,
-  type LucideIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { FileSummary, FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
@@ -18,7 +12,8 @@ import {
   getRootFiles,
   listGroups,
 } from "@/api/file-mgmt"
-import { GroupIconView, resolveGroupIcon } from "./group-icons"
+import { FileTypeIcon } from "@/components/file-mgmt/file-type-icon"
+import { FolderIconView } from "./group-icons"
 
 export type PickerFolderNode = {
   folder_id: string
@@ -28,6 +23,9 @@ export type PickerFolderNode = {
   files: FileSummary[]
   /** Direct file count from API (fallback if files not yet loaded). */
   file_count: number
+  icon_type?: string | null
+  icon_value?: string | null
+  icon_color?: string | null
 }
 
 function FolderRowIcon({
@@ -37,30 +35,9 @@ function FolderRowIcon({
   node: PickerFolderNode
   boundGroup?: NodeGroup | null
 }) {
-  if (boundGroup) {
-    return <GroupIconView source={boundGroup} className="h-3 w-3" />
-  }
-  if (node.kind === "system_group") {
-    const r = resolveGroupIcon({ name: node.name })
-    if (r.kind === "lucide" && r.Icon) {
-      return <r.Icon className="h-3 w-3 shrink-0" style={{ color: r.color }} />
-    }
-    if (node.name === "Archived") {
-      return <Archive className="h-3 w-3 shrink-0 text-muted-foreground/50" />
-    }
-  }
-  let Icon: LucideIcon = FolderIcon
-  let color = "#F59E0B"
-  if (node.kind === "user_group") {
-    Icon = Users
-    color = "#A855F7"
-  } else if (node.kind === "branch") {
-    Icon = GitBranch
-    color = "#34D399"
-  } else if (node.kind === "system_group") {
-    color = "#3B82F6"
-  }
-  return <Icon className="h-3 w-3 shrink-0" style={{ color }} />
+  return (
+    <FolderIconView folder={node} boundGroup={boundGroup} className="h-3 w-3" />
+  )
 }
 
 interface FileTreePickerProps {
@@ -109,6 +86,9 @@ function buildPickerTree(
     children: buildPickerTree(n.children ?? [], filesByFolder),
     files: filesByFolder.get(n.folder_id) ?? [],
     file_count: n.file_count ?? 0,
+    icon_type: n.icon_type,
+    icon_value: n.icon_value,
+    icon_color: n.icon_color,
   }))
 }
 
@@ -166,6 +146,9 @@ function filterTree(
           children: matchedChildren,
           files: matchedFiles,
           file_count: folder.file_count,
+          icon_type: folder.icon_type,
+          icon_value: folder.icon_value,
+          icon_color: folder.icon_color,
         })
       }
     }
@@ -310,10 +293,17 @@ function FileRow({
         onSelect(file)
       }}
     >
-      <FileIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
+      <FileTypeIcon
+        source={{
+          filename: file.filename,
+          original_ext: file.original_ext,
+          unsupported: file.unsupported,
+        }}
+        className="h-3 w-3"
+      />
       <span className="truncate">{file.filename}</span>
-      {file.archived && (
-        <span className="text-[9px] text-amber-500 shrink-0">ARCHIVED</span>
+      {(file.archived || file.is_greyed) && (
+        <span className="text-[9px] text-amber-500 shrink-0">archived</span>
       )}
     </button>
   )

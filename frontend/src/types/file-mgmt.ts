@@ -11,6 +11,9 @@ export interface Folder {
   created_at: string
   updated_at: string
   version: number
+  icon_type?: string | null
+  icon_value?: string | null
+  icon_color?: string | null
 }
 
 export interface FolderTreeNode extends Folder {
@@ -105,7 +108,7 @@ export interface FileDetail extends FileSummary {
 
 export interface Message {
   message_id: string
-  owner_type: "folder" | "file" | "node" | "system_version"
+  owner_type: "folder" | "file" | "node" | "system_version" | "collection" | string
   owner_id: string
   source_node_id: string | null
   body: string | null
@@ -115,6 +118,8 @@ export interface Message {
   edited_at: string | null
   edited_by: string | null
   version: number
+  /** Backend-resolved owner display name (folder/file/node title). */
+  source_name?: string | null
 }
 
 // Request bodies
@@ -122,11 +127,17 @@ export interface FolderCreateRequest {
   name: string
   parent_folder_id?: string | null
   kind?: string
+  icon_type?: string | null
+  icon_value?: string | null
+  icon_color?: string | null
 }
 
 export interface FolderUpdateRequest {
   name?: string | null
   parent_folder_id?: string | null
+  icon_type?: string | null
+  icon_value?: string | null
+  icon_color?: string | null
   version: number
 }
 
@@ -171,8 +182,8 @@ export interface NodeDetail extends Node {
 
 export interface NodeAttachment {
   file_id: string
-  greyed: boolean
   is_definitive: boolean
+  /** True if file-level or path-level archived (unified UI). */
   archived: boolean
   filename: string
   /** File row version for optimistic locking (definitive toggle, etc.). */
@@ -180,8 +191,9 @@ export interface NodeAttachment {
 }
 
 export interface EndChainResult {
-  greyed_files: string[]
-  archive_candidates: string[]
+  /** @deprecated alias of path_archived_files */
+  greyed_files?: string[]
+  archive_candidates?: string[]
   inherited_files: string[]
   /** Merge node created on the parent chain (closed-loop rejoin). */
   merged_node_id?: string | null

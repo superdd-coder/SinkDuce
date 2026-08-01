@@ -3,6 +3,7 @@ import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { Breadcrumb } from "./breadcrumb"
 import { IconGrid } from "./icon-grid"
 import { MessageSidebar } from "./message-sidebar"
+import { NameConflictDialog } from "./name-conflict-dialog"
 import { Toolbar } from "./toolbar"
 
 export function FolderView({ collectionId }: { collectionId: string }) {
@@ -30,19 +31,26 @@ export function FolderView({ collectionId }: { collectionId: string }) {
  }, [collectionId])
 
 
- return (
-    <div className="flex flex-col h-full min-h-0 gap-1">
+  return (
+    <div className="flex flex-col h-full min-h-0 gap-0">
       <Toolbar collectionId={collectionId} />
-      <Breadcrumb collectionId={collectionId} />
 
-      <div className="flex-1 flex min-h-0 gap-2 overflow-hidden">
-        <div className="flex-1 min-w-0 min-h-0 overflow-hidden rounded-lg border border-border/40 bg-background/50">
-          <IconGrid collectionId={collectionId} />
+      {/*
+        overflow-visible so message-panel shadow is not clipped.
+        Scroll containment stays on the left grid only (overflow-hidden there).
+      */}
+      <div className="flex-1 flex min-h-0 gap-1.5 overflow-visible pt-0.5">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden transition-[flex-basis] duration-300">
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <IconGrid collectionId={collectionId} />
+          </div>
+          <div className="shrink-0 border-t border-border/30">
+            <Breadcrumb collectionId={collectionId} />
+          </div>
         </div>
-        <div className="min-h-0">
-          <MessageSidebar collectionId={collectionId} />
-        </div>
+        <MessageSidebar collectionId={collectionId} />
       </div>
+      <NameConflictDialog />
     </div>
   )
 }

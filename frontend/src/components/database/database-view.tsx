@@ -2,11 +2,10 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Loader2, FolderTreeIcon, GitBranchPlus } from "lucide-react"
+import { FolderTreeIcon, GitBranchPlus, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/stores/app-store"
-import { getCollectionConfig, getFiles, getFileChunks, deleteDocument, uploadFiles, getTasks, clearCompletedTasks, cancelTask, retryTask, getDocSummary, setDocSummaryInclude, generateDocSummary, type FileListItem, type ChunkDetail, type TaskInfo } from "@/api/client"
-import { toast } from "sonner"
+import { getFiles, getFileChunks, deleteDocument, getTasks, type FileListItem, type ChunkDetail } from "@/api/client"
 import { CollectionList } from "./collection-list"
 import { CreateCollectionDialog } from "./create-collection-dialog"
 import { DeleteCollectionDialog } from "./delete-collection-dialog"
@@ -14,10 +13,11 @@ import { RenameCollectionDialog } from "./rename-collection-dialog"
 import { CollectionConfig } from "./collection-config"
 import { InfoPanel } from "./info-panel"
 import { FileDetailDialog } from "./file-detail-dialog"
-import { UploadUI, TaskQueueList } from "./upload-section"
 import { QuickChat } from "./quick-chat"
 import { FolderView } from "@/components/file-mgmt/folder-view"
 import { TimelineView } from "@/components/file-mgmt/timeline-view"
+import { useFileMgmtStore } from "@/stores/file-mgmt-store"
+import { cn } from "@/lib/utils"
 
 // Module-level: allows note-editor-dialog to trigger files refresh after ingestion
 let _refreshFilesCallback: (() => void) | null = null
@@ -53,13 +53,11 @@ export function DatabaseView() {
     return t === "info" || t === "files" || t === "config" ? t : "info"
   })
   const [files, setFiles] = useState<FileListItem[]>([])
-  const [loading, setLoading] = useState(false)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [dialogKey, setDialogKey] = useState(0)
   const [chunks, setChunks] = useState<ChunkDetail[]>([])
   const [chunksTotal, setChunksTotal] = useState(0)
   const [chunksLoading, setChunksLoading] = useState(false)
-  const [tasks, setTasks] = useState<TaskInfo[]>([])
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fetchFilesRef = useRef<() => void>(() => {})
   // Per-fetch stale-response tokens. fetchFiles and fetchTasks each own their
@@ -71,15 +69,13 @@ export function DatabaseView() {
   const tasksTokenRef = useRef(0)
   const [deleteFileTarget, setDeleteFileTarget] = useState<string | null>(null)
   const deleteFileDisplay = files.find(f => f.source === deleteFileTarget)?.display_name || deleteFileTarget
-  const [allowedFileTypes, setAllowedFileTypes] = useState<string[]>([])
-  const [coverage, setCoverage] = useState<string>("")
-  const [generatingSummaries, setGeneratingSummaries] = useState<Set<string>>(new Set())
   const [quickChatOpen, setQuickChatOpen] = useState(false)
   const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | undefined>(undefined)
   // Phase 6: view mode for folder view vs timeline view
   const [dbViewMode, setDbViewMode] = useState<DbViewMode>(() => {
-    const m = loadDbUi<string>("dbViewMode", "classic")
-    return m === "classic" || m === "folders" || m === "timeline" ? m : "classic"
+    const m = loadDbUi<string>("dbViewMode", "folders")
+    // UI toggle is Folders | Timeline only (legacy "classic" → folders)
+    return m === "timeline" ? "timeline" : "folders"
   })
 
   const handleTabChange = useCallback((tab: string) => {
@@ -89,9 +85,19 @@ export function DatabaseView() {
   }, [])
 
   const handleDbViewMode = useCallback((mode: DbViewMode) => {
-    setDbViewMode(mode)
-    saveDbUi("dbViewMode", mode)
+    // UI only offers folders | timeline; classic kept for type compat
+    const next = mode === "timeline" ? "timeline" : "folders"
+    setDbViewMode(next)
+    saveDbUi("dbViewMode", next)
   }, [])
+
+  // In-app jump from message mini-graph → Timeline (same SPA route, no new window)
+  const timelineNavRequest = useFileMgmtStore((s) => s.timelineNavRequest)
+  useEffect(() => {
+    if (!timelineNavRequest) return
+    handleTabChange("files")
+    handleDbViewMode("timeline")
+  }, [timelineNavRequest, handleDbViewMode, handleTabChange])
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -130,7 +136,6 @@ export function DatabaseView() {
   const fetchFiles = useCallback(async () => {
     if (!activeCollection) return
     const token = ++filesTokenRef.current
-    setLoading(true)
     try {
       const res = await getFiles(activeCollection)
       if (token !== filesTokenRef.current) return  // stale, a newer fetch has started
@@ -138,8 +143,6 @@ export function DatabaseView() {
     } catch {
       if (token !== filesTokenRef.current) return
       setFiles([])
-    } finally {
-      if (token === filesTokenRef.current) setLoading(false)
     }
   }, [activeCollection])
 
@@ -157,7 +160,6 @@ export function DatabaseView() {
     try {
       const res = await getTasks(activeCollection)
       if (token !== tasksTokenRef.current) return  // stale, a newer fetch has started
-      setTasks(res.tasks)
       if (res.processing > 0 || res.pending > 0) {
         if (!pollingRef.current) {
           pollingRef.current = setInterval(fetchTasks, 1000)
@@ -181,16 +183,6 @@ export function DatabaseView() {
   useEffect(() => {
     fetchFiles()
     fetchTasks()
-    // Fetch allowed file types for this collection
-    if (activeCollection) {
-      getCollectionConfig(activeCollection).then((cfg) => {
-        const types = cfg.allowed_file_types as string[] | undefined
-        setAllowedFileTypes(types && types.length > 0 ? types : [])
-        setCoverage((cfg.coverage as string) || "")
-      }).catch(() => { setAllowedFileTypes([]); setCoverage("") })
-    } else {
-      setAllowedFileTypes([])
-    }
     return () => {
       if (pollingRef.current) {
         clearInterval(pollingRef.current)
@@ -198,31 +190,6 @@ export function DatabaseView() {
       }
     }
   }, [fetchFiles, fetchTasks, activeCollection])
-
-  const handleUpload = async (fileList: FileList | null) => {
-    if (!fileList?.length) return
-    try {
-      await uploadFiles(fileList, activeCollection)
-      fetchTasks()
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg || "Upload failed")
-    }
-  }
-
-  const handleCancelTask = async (taskId: string) => {
-    try {
-      await cancelTask(taskId)
-      fetchTasks()
-    } catch { /* ignore */ }
-  }
-
-  const handleRetryTask = async (taskId: string) => {
-    try {
-      await retryTask(taskId)
-      fetchTasks()
-    } catch { /* ignore */ }
-  }
 
   const handleDeleteFile = async () => {
     if (!deleteFileTarget) return
@@ -251,63 +218,6 @@ export function DatabaseView() {
     }
   }
 
-  const handleToggleDefinitive = async (file: FileListItem, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!activeCollection) return
-
-    const src = file.source
-    const currentInclude = file.include_in_summary !== false
-
-    if (!file.has_summary) {
-      // No summary yet — generate one (auto-checks include_in_summary)
-      setGeneratingSummaries(prev => new Set(prev).add(src))
-      try {
-        await generateDocSummary(activeCollection, src)
-        // Poll for completion
-        const start = Date.now()
-        while (Date.now() - start < 300_000) {
-          await new Promise(r => setTimeout(r, 2000))
-          try {
-            const ds = await getDocSummary(activeCollection, src)
-            if (ds) {
-              // Update local file state
-              setFiles(prev => prev.map(f =>
-                f.source === src
-                  ? { ...f, has_summary: true, include_in_summary: true }
-                  : f
-              ))
-              break
-            }
-          } catch { /* still generating */ }
-        }
-      } catch (err) {
-        toast.error(`Summary generation failed: ${err instanceof Error ? err.message : String(err)}`)
-      } finally {
-        setGeneratingSummaries(prev => {
-          const next = new Set(prev)
-          next.delete(src)
-          return next
-        })
-      }
-    } else {
-      // Summary exists — toggle include_in_summary
-      const newInclude = !currentInclude
-      // Optimistic update
-      setFiles(prev => prev.map(f =>
-        f.source === src ? { ...f, include_in_summary: newInclude } : f
-      ))
-      try {
-        await setDocSummaryInclude(activeCollection, src, newInclude)
-      } catch (err) {
-        // Revert on error
-        setFiles(prev => prev.map(f =>
-          f.source === src ? { ...f, include_in_summary: currentInclude } : f
-        ))
-        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-  }
-
   return (
     <div className="h-full flex">
       <CollectionList
@@ -323,9 +233,9 @@ export function DatabaseView() {
         {activeCollection ? (
           <div className="h-full flex flex-col px-10 py-8 animate-tab-in">
             {/* Collection name header — AI-COMP-001 Heading LG */}
-            <div className="flex items-baseline justify-between mb-5">
+            <div className="flex items-center justify-between gap-3 mb-5">
               <span
-                className="truncate t-body-family"
+                className="truncate t-body-family min-w-0"
                 style={{
                   fontSize: "24px",
                   fontWeight: 300,
@@ -336,204 +246,170 @@ export function DatabaseView() {
               >
                 {collections.find(c => c.id === activeCollection)?.name || activeCollection}
               </span>
-              <span className="text-[10px] text-muted-foreground">
-                {files.length > 0 && `${files.length} files · `}{collections.find(c => c.id === activeCollection)?.points_count ?? 0} chunks
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  {files.length > 0 && `${files.length} files · `}
+                  {collections.find(c => c.id === activeCollection)?.points_count ?? 0} chunks
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange("config")}
+                  title="Collection settings"
+                  className={cn(
+                    "p-1.5 rounded-md transition-colors",
+                    activeTab === "config"
+                      ? "text-primary bg-primary/10"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  )}
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col min-h-0">
-              <TabsList className="w-fit bg-transparent p-0 gap-5 border-b rounded-none border-border relative">
-                <TabsIndicator renderBeforeHydration />
-                <TabsTrigger
-                  value="info"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
-                  style={{ borderColor: "transparent" }}
-                >
-                  Info
-                </TabsTrigger>
-                <TabsTrigger
-                  value="files"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
-                  style={{ borderColor: "transparent" }}
-                >
-                  Files
-                </TabsTrigger>
-                <TabsTrigger
-                  value="config"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
-                  style={{ borderColor: "transparent" }}
-                >
-                  Config
-                </TabsTrigger>
-              </TabsList>
+              {/*
+                Shared row height: text vertically centered (字对齐);
+                underline sits at bottom-0 of the row = toggle bottom edge.
+              */}
+              <div className="flex items-stretch gap-0 min-w-0 h-7">
+                <TabsList className="!h-7 w-fit bg-transparent p-0 gap-5 border-0 rounded-none relative shrink-0 items-center">
+                  <TabsIndicator
+                    renderBeforeHydration
+                    className="!bottom-0 h-0.5"
+                  />
+                  <TabsTrigger
+                    value="info"
+                    className={cn(
+                      "!h-7 min-h-0 px-0 py-0 rounded-none bg-transparent",
+                      "data-[state=active]:shadow-none data-active:bg-transparent",
+                      "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                      "text-muted-foreground data-active:text-primary",
+                      "after:!opacity-0 after:!content-none",
+                      "inline-flex items-center justify-center"
+                    )}
+                    style={{ borderColor: "transparent" }}
+                  >
+                    Info
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="files"
+                    className={cn(
+                      "!h-7 min-h-0 px-0 py-0 rounded-none bg-transparent",
+                      "data-[state=active]:shadow-none data-active:bg-transparent",
+                      "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                      "text-muted-foreground data-active:text-primary",
+                      "after:!opacity-0 after:!content-none",
+                      "inline-flex items-center justify-center"
+                    )}
+                    style={{ borderColor: "transparent" }}
+                  >
+                    Files
+                  </TabsTrigger>
+                </TabsList>
 
-              <TabsContent key={`info-${activeTab}`} value="info" className="flex-1 mt-2 overflow-hidden min-h-0 animate-tab-in">
+                <div
+                  className={cn(
+                    "overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+                    "flex items-stretch h-7",
+                    activeTab === "files"
+                      ? "max-w-[300px] opacity-100 ml-3"
+                      : "max-w-0 opacity-0 ml-0 pointer-events-none"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "flex items-center gap-2.5 whitespace-nowrap h-7",
+                      "transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+                      activeTab === "files" ? "translate-x-0" : "-translate-x-2"
+                    )}
+                  >
+                    <span
+                      className="w-px h-3.5 bg-border/60 shrink-0 self-center"
+                      aria-hidden
+                    />
+                    {/* Full row height so bottom edge lines up with tab underline */}
+                    <div
+                      role="group"
+                      aria-label="Files view mode"
+                      className="relative grid grid-cols-2 h-full rounded-md bg-muted/50 p-0.5"
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[5px]",
+                          "bg-primary shadow-sm",
+                          "transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+                        )}
+                        style={{
+                          transform:
+                            dbViewMode === "timeline"
+                              ? "translateX(100%)"
+                              : "translateX(0)",
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className={cn(
+                          "relative z-10 h-full px-2.5 inline-flex items-center justify-center gap-1",
+                          "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                          "transition-colors duration-200",
+                          dbViewMode === "folders"
+                            ? "text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                        onClick={() => handleDbViewMode("folders")}
+                        aria-pressed={dbViewMode === "folders"}
+                      >
+                        <FolderTreeIcon className="size-3 shrink-0 opacity-90" />
+                        Folders
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          "relative z-10 h-full px-2.5 inline-flex items-center justify-center gap-1",
+                          "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                          "transition-colors duration-200",
+                          dbViewMode === "timeline"
+                            ? "text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                        onClick={() => handleDbViewMode("timeline")}
+                        aria-pressed={dbViewMode === "timeline"}
+                      >
+                        <GitBranchPlus className="size-3 shrink-0 opacity-90" />
+                        Timeline
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <TabsContent key={`info-${activeTab}`} value="info" className="flex-1 mt-1 overflow-hidden min-h-0 animate-tab-in">
                 <ScrollArea className="h-full">
                   <InfoPanel collection={activeCollection} />
                 </ScrollArea>
               </TabsContent>
 
-              <TabsContent key={`files-${activeTab}`} value="files" className="flex-1 flex flex-col mt-2 overflow-hidden min-h-0 animate-tab-in">
-                {/* Phase 6: View mode switcher inside Files tab */}
-                <div className="flex items-center gap-0.5 mb-3">
-                  <div className="flex items-center gap-0.5 bg-muted/50 rounded-md p-0.5">
-                    <button
-                      className={`text-[10px] font-medium uppercase tracking-[0.08em] px-2 py-0.5 rounded ${
-                        dbViewMode === "classic"
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                      onClick={() => handleDbViewMode("classic")}
-                    >
-                      Classic
-                    </button>
-                    <button
-                      className={`text-[10px] font-medium uppercase tracking-[0.08em] px-2 py-0.5 rounded flex items-center gap-1 ${
-                        dbViewMode === "folders"
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                      onClick={() => handleDbViewMode("folders")}
-                    >
-                      <FolderTreeIcon className="h-3 w-3" />
-                      Folders
-                    </button>
-                  </div>
-                    <button
-                      className={`text-[10px] font-medium uppercase tracking-[0.08em] px-2 py-0.5 rounded flex items-center gap-1 ${
-                        dbViewMode === "timeline"
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                      onClick={() => handleDbViewMode("timeline")}
-                    >
-                      <GitBranchPlus className="h-3 w-3" />
-                      Timeline
-                    </button>
-                </div>
-                {coverage && (
-                  <div className="text-[11px] leading-relaxed px-3 py-1.5 border border-dashed border-border bg-muted/30">
-                    <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground/70">Coverage · </span>
-                    <span className="text-muted-foreground">{coverage}</span>
-                  </div>
-                )}
-                {dbViewMode === "folders" ? (
-                  <div className="flex-1 flex flex-col min-h-0">
-                    <FolderView collectionId={activeCollection} />
-                  </div>
-                ) : dbViewMode === "timeline" ? (
-                  <div className="flex-1 flex flex-col min-h-0">
+              <TabsContent
+                key={`files-${activeTab}`}
+                value="files"
+                // overflow-visible: folder message sidebar shadow must paint outside its box.
+                // Timeline / grid keep their own overflow-hidden scroll roots.
+                className="flex-1 flex flex-col mt-1 overflow-visible min-h-0 animate-tab-in"
+              >
+                {dbViewMode === "timeline" ? (
+                  <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
                     <TimelineView collectionId={activeCollection} />
                   </div>
                 ) : (
-                <div className="h-full flex flex-col gap-4">
-                  {/* Upload UI stays at top, always accessible (not in scroll). */}
-                  <UploadUI
-                    hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
-                    allowedFileTypes={allowedFileTypes}
-                    onUpload={handleUpload}
-                  />
-                  {/* One shared scroll area: Upload Queue + File List scroll together
-                      so a long task queue can never push the file list out of view. */}
-                  <div className="flex-1 overflow-auto">
-                    <TaskQueueList
-                      hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
-                      tasks={tasks}
-                      onClearCompleted={clearCompletedTasks}
-                      onRefreshTasks={fetchTasks}
-                      onCancelTask={handleCancelTask}
-                      onRetryTask={handleRetryTask}
-                    />
-                    {loading ? (
-                      <p className="text-sm text-muted-foreground">Loading...</p>
-                    ) : files.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No files yet</p>
-                    ) : (
-                      <div className="space-y-0">
-                        {files.map((file) => (
-                          <div
-                            key={file.source}
-                            className="flex items-center gap-3 py-2.5 cursor-pointer text-sm border-b transition-colors group border-b border-dashed border-border text-foreground"
-                            onClick={() => openFileDetail(file.source)}
-                          >
-                            <div className="flex-1 min-w-0 flex items-center gap-3">
-                              {/* Fixed-width tag — equal width, text centered */}
-                              <span className="shrink-0 flex items-center" style={{ width: "72px" }}>
-                                {file.file_type === "note" && (
-                                  <span
-                                    className="text-[10px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
-                                    style={{
-                                      background: "rgba(37,99,235,0.08)",
-                                      color: "hsl(217.2 91.2% 59.8%)",
-                                      borderRadius: "2px",
-                                    }}
-                                  >
-                                    Note
-                                  </span>
-                                )}
-                                {file.has_meeting && (
-                                  <span
-                                    className="text-[10px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
-                                    style={{
-                                      background: "rgba(217,119,6,0.08)",
-                                      color: "hsl(32.2 94.6% 43.7%)",
-                                      borderRadius: "2px",
-                                    }}
-                                  >
-                                    Meeting
-                                  </span>
-                                )}
-                              </span>
-                              <span className="truncate text-xs">{file.display_name || file.source}</span>
-                            </div>
-                            <span className="text-[10px] font-medium text-muted-foreground">{file.chunk_count} chunks</span>
-                            {/* Definitive toggle */}
-                            {file.has_summary !== null && (
-                              <button
-                                className="shrink-0 flex items-center gap-1.5 cursor-pointer"
-                                style={{ background: "none", border: "none" }}
-                                onClick={(e) => handleToggleDefinitive(file, e)}
-                                title={file.include_in_summary !== false ? "Included in collection summary — click to exclude" : "Not included in collection summary — click to include"}
-                              >
-                                {generatingSummaries.has(file.source) ? (
-                                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-                                ) : (
-                                  <span className={`flex items-center justify-center w-3.5 h-3.5 rounded-sm border transition-colors ${
-                                    file.include_in_summary !== false
-                                      ? "border-primary bg-primary text-primary-foreground"
-                                      : "border-muted-foreground/30 bg-transparent"
-                                  }`}>
-                                    {file.include_in_summary !== false && (
-                                      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                      </svg>
-                                    )}
-                                  </span>
-                                )}
-                                <span className={`text-[10px] font-medium uppercase tracking-[0.1em] ${
-                                  file.include_in_summary !== false ? "text-foreground" : "text-muted-foreground"
-                                }`}>
-                                  Definitive
-                                </span>
-                              </button>
-                            )}
-                            <button
-                              className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
-                              style={{ background: "none", border: "none" }}
-                              onClick={(e) => { e.stopPropagation(); setDeleteFileTarget(file.source) }}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                  <div className="flex-1 flex flex-col min-h-0 overflow-visible">
+                    <FolderView collectionId={activeCollection} />
                   </div>
-                </div>
                 )}
               </TabsContent>
 
-              <TabsContent key={`config-${activeTab}`} value="config" className="flex-1 mt-2 overflow-hidden min-h-0 animate-tab-in">
+              <TabsContent key={`config-${activeTab}`} value="config" className="flex-1 mt-1 overflow-hidden min-h-0 animate-tab-in">
                 <ScrollArea className="h-full">
                   <CollectionConfig collection={activeCollection} />
                 </ScrollArea>

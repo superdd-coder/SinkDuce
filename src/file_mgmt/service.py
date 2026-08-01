@@ -69,6 +69,150 @@ def _validate_collection(collection_id: str) -> None:
         )
 
 
+# ── Name uniqueness (same parent folder / same directory) ──────
+
+
+def _split_display_name(name: str) -> tuple[str, str]:
+    """Split 'report.pdf' → ('report', '.pdf'); 'notes' → ('notes', '')."""
+    p = Path(name)
+    suffix = p.suffix  # includes leading dot, or ""
+    if not suffix:
+        return name, ""
+    stem = name[: -len(suffix)]
+    return stem, suffix
+
+
+def suggest_unique_name(desired: str, existing: set[str]) -> str:
+    """Return desired if free, else 'stem (1).ext', 'stem (2).ext', … (case-insensitive)."""
+    desired = (desired or "").strip() or "untitled"
+    taken = {n.casefold() for n in existing if n}
+    if desired.casefold() not in taken:
+        return desired
+    stem, ext = _split_display_name(desired)
+    # If already ends with " (N)", strip before numbering
+    base = stem
+    n = 1
+    while True:
+        candidate = f"{base} ({n}){ext}"
+        if candidate.casefold() not in taken:
+            return candidate
+        n += 1
+        if n > 9999:
+            return f"{base} ({uuid.uuid4().hex[:6]}){ext}"
+
+
+def _raise_name_conflict(resource: str, name: str, suggested: str) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "name_conflict",
+            "resource": resource,
+            "name": name,
+            "suggested_name": suggested,
+            "message": f"A {resource} named '{name}' already exists here.",
+        },
+    )
+
+
+def _sibling_folder_names(
+    conn,
+    parent_folder_id: str | None,
+    *,
+    exclude_folder_id: str | None = None,
+) -> set[str]:
+    if parent_folder_id is None:
+        rows = conn.execute(
+            "SELECT folder_id, name FROM folders WHERE parent_folder_id IS NULL"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT folder_id, name FROM folders WHERE parent_folder_id=?",
+            (parent_folder_id,),
+        ).fetchall()
+    names: set[str] = set()
+    for r in rows:
+        if exclude_folder_id and r["folder_id"] == exclude_folder_id:
+            continue
+        if r["name"]:
+            names.add(r["name"])
+    return names
+
+
+def _assert_folder_name_free(
+    conn,
+    parent_folder_id: str | None,
+    name: str,
+    *,
+    exclude_folder_id: str | None = None,
+) -> None:
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(400, "Folder name is required")
+    existing = _sibling_folder_names(
+        conn, parent_folder_id, exclude_folder_id=exclude_folder_id
+    )
+    if name.casefold() in {n.casefold() for n in existing}:
+        _raise_name_conflict(
+            "folder", name, suggest_unique_name(name, existing)
+        )
+
+
+def _file_display_names_in_folder(
+    conn,
+    folder_id: str | None,
+    *,
+    exclude_file_id: str | None = None,
+) -> set[str]:
+    """Current-version filenames of files mounted in this folder.
+
+    ``folder_id=None`` → root orphans (files with no file_paths rows).
+    """
+    if folder_id is None:
+        rows = conn.execute(
+            """SELECT f.file_id, fv.storage_file_id AS filename
+               FROM files f
+               LEFT JOIN file_versions fv ON fv.version_id = f.current_version_id
+               WHERE f.file_id NOT IN (SELECT file_id FROM file_paths)"""
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT f.file_id, fv.storage_file_id AS filename
+               FROM file_paths fp
+               JOIN files f ON f.file_id = fp.file_id
+               LEFT JOIN file_versions fv ON fv.version_id = f.current_version_id
+               WHERE fp.folder_id=?""",
+            (folder_id,),
+        ).fetchall()
+    names: set[str] = set()
+    for r in rows:
+        if exclude_file_id and r["file_id"] == exclude_file_id:
+            continue
+        fn = r["filename"]
+        if fn:
+            # basename only (upload-folder may store relative paths)
+            names.add(Path(fn).name)
+    return names
+
+
+def _assert_file_name_free(
+    conn,
+    folder_id: str | None,
+    filename: str,
+    *,
+    exclude_file_id: str | None = None,
+) -> str:
+    """Return basename; raise name_conflict if taken in folder (or root)."""
+    base = Path((filename or "").strip() or "unnamed").name
+    existing = _file_display_names_in_folder(
+        conn, folder_id, exclude_file_id=exclude_file_id
+    )
+    if base.casefold() in {n.casefold() for n in existing}:
+        _raise_name_conflict(
+            "file", base, suggest_unique_name(base, existing)
+        )
+    return base
+
+
 def _open_db(collection_id: str):
     _validate_collection(collection_id)
     from src.file_mgmt.store import init_collection_db
@@ -87,6 +231,9 @@ def _row_to_folder(row) -> FolderOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         version=row["version"],
+        icon_type=_row_icon(row, "icon_type"),
+        icon_value=_row_icon(row, "icon_value"),
+        icon_color=_row_icon(row, "icon_color"),
     )
 
 
@@ -199,6 +346,14 @@ def _delete_folder_subtree(conn, folder_id: str) -> None:
         )
         conn.execute(
             "DELETE FROM node_groups WHERE folder_id=?", (folder_id,)
+        )
+        # Same residual cleanup as plain folders — previously missing, left
+        # orphan folder messages that only showed under Nested at root with
+        # blank source tags (no folder row to resolve the name).
+        conn.execute("DELETE FROM file_paths WHERE folder_id=?", (folder_id,))
+        conn.execute(
+            "DELETE FROM messages WHERE owner_type='folder' AND owner_id=?",
+            (folder_id,),
         )
         conn.execute(
             "DELETE FROM folders WHERE folder_id=?", (folder_id,)
@@ -385,8 +540,12 @@ def create_folder(collection_id: str, req: FolderCreate) -> FolderOut:
     conn = _open_db(collection_id)
     try:
         with conn:
+            from src.file_mgmt.store import _ensure_folders_icon_columns
+
+            _ensure_folders_icon_columns(conn)
             now = _now_iso()
             parent_id = req.parent_folder_id
+            name = (req.name or "").strip()
             if parent_id:
                 parent = conn.execute(
                     "SELECT kind, is_system FROM folders WHERE folder_id=?",
@@ -400,13 +559,25 @@ def create_folder(collection_id: str, req: FolderCreate) -> FolderOut:
                         "Group folders are flat - cannot contain sub-folders",
                     )
 
+            _assert_folder_name_free(conn, parent_id, name)
+
             folder_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO folders
                    (folder_id, parent_folder_id, name, kind, is_system,
-                    created_by, created_at, updated_at, version)
-                   VALUES (?, ?, ?, 'plain', 0, 'local', ?, ?, 1)""",
-                (folder_id, parent_id, req.name, now, now),
+                    created_by, created_at, updated_at, version,
+                    icon_type, icon_value, icon_color)
+                   VALUES (?, ?, ?, 'plain', 0, 'local', ?, ?, 1, ?, ?, ?)""",
+                (
+                    folder_id,
+                    parent_id,
+                    name,
+                    now,
+                    now,
+                    req.icon_type,
+                    req.icon_value,
+                    req.icon_color,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
@@ -426,6 +597,9 @@ def update_folder(
     conn = _open_db(collection_id)
     try:
         with conn:
+            from src.file_mgmt.store import _ensure_folders_icon_columns
+
+            _ensure_folders_icon_columns(conn)
             folder = conn.execute(
                 "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
             ).fetchone()
@@ -437,6 +611,11 @@ def update_folder(
                     raise HTTPException(403, "System folders cannot be renamed")
                 if "parent_folder_id" in updates:
                     raise HTTPException(403, "System folders cannot be moved")
+                for ik in ("icon_type", "icon_value", "icon_color"):
+                    if ik in updates:
+                        raise HTTPException(
+                            403, "System folders cannot change icons"
+                        )
 
             if "parent_folder_id" in updates:
                 new_parent = updates["parent_folder_id"]
@@ -463,13 +642,39 @@ def update_folder(
             set_clauses: list[str] = []
             params: list = []
 
+            # Effective parent after this update (for name uniqueness)
+            effective_parent = folder["parent_folder_id"]
+            if "parent_folder_id" in updates:
+                effective_parent = updates["parent_folder_id"]
+
             if "name" in updates and updates["name"] is not None:
+                new_name = (updates["name"] or "").strip()
+                _assert_folder_name_free(
+                    conn,
+                    effective_parent,
+                    new_name,
+                    exclude_folder_id=folder_id,
+                )
                 set_clauses.append("name = ?")
-                params.append(updates["name"])
+                params.append(new_name)
+                updates["name"] = new_name
 
             if "parent_folder_id" in updates:
+                # Moving without rename: still check name free under new parent
+                if "name" not in updates or updates.get("name") is None:
+                    _assert_folder_name_free(
+                        conn,
+                        updates["parent_folder_id"],
+                        folder["name"],
+                        exclude_folder_id=folder_id,
+                    )
                 set_clauses.append("parent_folder_id = ?")
                 params.append(updates["parent_folder_id"])
+
+            for field in ("icon_type", "icon_value", "icon_color"):
+                if field in updates:
+                    set_clauses.append(f"{field} = ?")
+                    params.append(updates[field])
 
             set_clauses.append("updated_at = ?")
             params.append(_now_iso())
@@ -490,16 +695,26 @@ def update_folder(
                 "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
             ).fetchone()
 
-            # Sync group name if this folder is bound to a node_group
-            if "name" in updates and updates["name"] is not None:
-                grp = conn.execute(
-                    "SELECT group_id FROM node_groups WHERE folder_id=?",
-                    (folder_id,),
-                ).fetchone()
-                if grp:
+            # Sync bound node_group name + icons (folder grid prefers group icon)
+            grp = conn.execute(
+                "SELECT group_id FROM node_groups WHERE folder_id=?",
+                (folder_id,),
+            ).fetchone()
+            if grp:
+                g_sets: list[str] = []
+                g_params: list = []
+                if "name" in updates and updates["name"] is not None:
+                    g_sets.append("name = ?")
+                    g_params.append(updates["name"])
+                for field in ("icon_type", "icon_value", "icon_color"):
+                    if field in updates:
+                        g_sets.append(f"{field} = ?")
+                        g_params.append(updates[field])
+                if g_sets:
+                    g_params.append(grp["group_id"])
                     conn.execute(
-                        "UPDATE node_groups SET name=? WHERE group_id=?",
-                        (updates["name"], grp["group_id"]),
+                        f"UPDATE node_groups SET {', '.join(g_sets)} WHERE group_id=?",
+                        g_params,
                     )
 
         if "name" in updates and updates["name"] is not None:
@@ -608,13 +823,15 @@ def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
                 )
                 folder_id = req.bind_existing_folder_id
             else:
+                group_folder_name = (req.name or "").strip()
+                _assert_folder_name_free(conn, None, group_folder_name)
                 folder_id = uuid.uuid4().hex
                 conn.execute(
                     """INSERT INTO folders
                        (folder_id, parent_folder_id, name, kind, is_system,
                         created_by, created_at, updated_at, version)
                        VALUES (?, NULL, ?, 'user_group', 0, 'local', ?, ?, 1)""",
-                    (folder_id, req.name, now, now),
+                    (folder_id, group_folder_name, now, now),
                 )
 
             group_id = uuid.uuid4().hex
@@ -1520,8 +1737,9 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
         out = _row_to_node(node)
 
         # Attachments: file_nodes JOIN files JOIN file_versions
+        _ensure_path_archive_column(conn)
         att_rows = conn.execute(
-            """SELECT fn.file_id, fn.greyed, f.is_definitive, f.archived, f.version,
+            """SELECT fn.file_id, f.is_definitive, f.archived, f.version,
                       fv.storage_file_id
                FROM file_nodes fn
                JOIN files f ON f.file_id = fn.file_id
@@ -1532,11 +1750,20 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
         attachments = []
         has_definitive = False
         for a in att_rows:
+            # archived for UI = file-level OR any path-level archive on this file
+            file_archived = bool(a["archived"])
+            path_archived = False
+            if not file_archived:
+                pr = conn.execute(
+                    """SELECT 1 FROM file_paths
+                       WHERE file_id=? AND COALESCE(archived, 0)=1 LIMIT 1""",
+                    (a["file_id"],),
+                ).fetchone()
+                path_archived = pr is not None
             attachments.append({
                 "file_id": a["file_id"],
-                "greyed": bool(a["greyed"]),
                 "is_definitive": bool(a["is_definitive"]),
-                "archived": bool(a["archived"]),
+                "archived": file_archived or path_archived,
                 "filename": a["storage_file_id"] or "",
                 "version": int(a["version"] or 1),
             })
@@ -1550,7 +1777,7 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
                ORDER BY created_at DESC""",
             (node_id,),
         ).fetchall()
-        node_msgs = [_row_to_message(r) for r in msg_rows]
+        node_msgs = [_row_to_message(r, conn) for r in msg_rows]
 
         return {
             **out.model_dump(),
@@ -1569,8 +1796,56 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
 # --- Helpers ---
 
 
-def _row_to_message(row) -> MessageOut:
+def _message_source_name(conn, owner_type: str, owner_id: str) -> str | None:
+    """Resolve a short display name for a message owner (folder/file/node/…)."""
+    ot = (owner_type or "").strip().lower()
+    if not owner_id:
+        return None
+    try:
+        if ot == "folder":
+            r = conn.execute(
+                "SELECT name FROM folders WHERE folder_id=?", (owner_id,)
+            ).fetchone()
+            return (r["name"] if r else None) or None
+        if ot == "file":
+            r = conn.execute(
+                """SELECT fv.storage_file_id AS filename
+                   FROM files f
+                   LEFT JOIN file_versions fv ON fv.version_id = f.current_version_id
+                   WHERE f.file_id=?""",
+                (owner_id,),
+            ).fetchone()
+            if not r or not r["filename"]:
+                return None
+            return Path(r["filename"]).name
+        if ot == "node":
+            r = conn.execute(
+                "SELECT title FROM nodes WHERE node_id=?", (owner_id,)
+            ).fetchone()
+            if not r:
+                return None
+            t = (r["title"] or "").strip()
+            return t or "Untitled"
+        if ot == "collection":
+            return "Root"
+        if ot == "system_version":
+            return "System"
+    except Exception:
+        return None
+    return None
+
+
+def _row_to_message(row, conn=None) -> MessageOut:
     from src.file_mgmt.models import MessageOut
+
+    source_name = None
+    if conn is not None:
+        try:
+            source_name = _message_source_name(
+                conn, row["owner_type"], row["owner_id"]
+            )
+        except Exception:
+            source_name = None
 
     return MessageOut(
         message_id=row["message_id"],
@@ -1584,6 +1859,7 @@ def _row_to_message(row) -> MessageOut:
         edited_at=row["edited_at"],
         edited_by=row["edited_by"],
         version=row["version"],
+        source_name=source_name,
     )
 
 
@@ -1657,11 +1933,9 @@ def _compute_folder_path(conn, folder_id: str | None) -> str:
 def _compute_is_greyed(conn, file_row, path_row) -> bool:
     """Compute is_greyed for a path entry.
 
-    Rules:
-    - files.archived=1 -> True
-    - file_paths.archived=1 -> True (path-level archive)
-    - 派生路径 (source_node_id != NULL): 查 file_nodes.greyed
-    - 持久路径 (source_node_id=NULL) + files.archived=0 -> False
+    Only two archive layers (no attachment greyed):
+    - files.archived=1 → True (global exclude-from-search)
+    - file_paths.archived=1 → True (this folder mount)
     """
     if file_row["archived"]:
         return True
@@ -1670,13 +1944,6 @@ def _compute_is_greyed(conn, file_row, path_row) -> bool:
             return True
     except (KeyError, IndexError):
         pass
-    if path_row["source_node_id"] is not None:
-        fn = conn.execute(
-            "SELECT greyed FROM file_nodes WHERE file_id=? AND node_id=?",
-            (file_row["file_id"], path_row["source_node_id"]),
-        ).fetchone()
-        if fn and fn["greyed"]:
-            return True
     return False
 
 
@@ -1843,7 +2110,7 @@ def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
                ORDER BY created_at DESC""",
             (file_id,),
         ).fetchall()
-        messages = [MessageOut(**_row_to_message(r).model_dump()) for r in msg_rows]
+        messages = [MessageOut(**_row_to_message(r, conn).model_dump()) for r in msg_rows]
 
         return FileDetail(
             **base.model_dump(),
@@ -1941,6 +2208,26 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
         conn.close()
 
 
+def list_archived_files(collection_id: str) -> list[FileSummary]:
+    """Virtual /Archived view — all files with file-level archive (files.archived=1).
+
+    Path-only archives stay in their folders (greyed) and do not appear here.
+    """
+    conn = _open_db(collection_id)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM files WHERE archived=1 ORDER BY file_id"
+        ).fetchall()
+        results: list[FileSummary] = []
+        for r in rows:
+            fs = _row_to_file_out(r, conn)
+            fs.is_greyed = True
+            results.append(fs)
+        return results
+    finally:
+        conn.close()
+
+
 # --- File Paths ---
 
 
@@ -1975,6 +2262,18 @@ def add_file_path(
                     409,
                     f"File already has a persistent path in folder '{folder_id}'",
                 )
+
+            # Display-name uniqueness in destination folder
+            ver = None
+            if file_row["current_version_id"]:
+                ver = conn.execute(
+                    "SELECT storage_file_id FROM file_versions WHERE version_id=?",
+                    (file_row["current_version_id"],),
+                ).fetchone()
+            display = Path(ver["storage_file_id"]).name if ver and ver["storage_file_id"] else file_id
+            _assert_file_name_free(
+                conn, folder_id, display, exclude_file_id=file_id
+            )
 
             path_id = uuid.uuid4().hex
             conn.execute(
@@ -2354,42 +2653,64 @@ def _delete_qdrant_chunks_by_file_id(collection_id: str, file_id: str) -> int:
 
 def upload_file_to_folder(
     collection_id: str,
-    folder_id: str,
+    folder_id: str | None,
     file_bytes: bytes,
     filename: str,
     source_node_id: str | None = None,
+    *,
+    on_name_conflict: str = "error",
 ) -> FileSummary:
-    """Upload a file to a folder. Creates file record + version + path + optional ingest.
+    """Upload a file to a folder (or root when ``folder_id`` is empty/None).
 
-    Steps:
-    1. Validate folder exists
-    2. Generate file_id, store to disk
-    3. Parse, check supported types
-    4. Create file_versions (version_no=1)
-    5. Create files record
-    6. Write file_paths (persistent or derived)
-    7. If supported: ingest to Qdrant
-    8. Create system version message
-    9. emit_event
+    Empty ``folder_id`` creates a root orphan (no ``file_paths`` row).
+
+    ``on_name_conflict``: ``"error"`` (default, 409 + suggested_name) or
+    ``"auto_rename"`` (use ``report (1).pdf`` style without failing).
     """
+    if on_name_conflict not in ("error", "auto_rename"):
+        raise HTTPException(400, "on_name_conflict must be 'error' or 'auto_rename'")
+
+    # Normalize empty / whitespace folder id → root (orphan)
+    if isinstance(folder_id, str):
+        folder_id = folder_id.strip() or None
+
+    file_id_for_cleanup: str | None = None
     conn = _open_db(collection_id)
     try:
         # PRAGMA must be set before BEGIN
         conn.execute("PRAGMA defer_foreign_keys=ON")
         with conn:
-            # 1. Validate folder
-            fld = conn.execute(
-                "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
-            ).fetchone()
-            if not fld:
-                raise HTTPException(404, f"Folder '{folder_id}' not found")
+            # 1. Validate folder when not root
+            if folder_id is not None:
+                fld = conn.execute(
+                    "SELECT * FROM folders WHERE folder_id=?", (folder_id,)
+                ).fetchone()
+                if not fld:
+                    raise HTTPException(404, f"Folder '{folder_id}' not found")
+
+            # Display-name uniqueness in this folder / root
+            base_name = Path((filename or "unnamed").strip() or "unnamed").name
+            existing_names = _file_display_names_in_folder(conn, folder_id)
+            if base_name.casefold() in {n.casefold() for n in existing_names}:
+                suggested = suggest_unique_name(base_name, existing_names)
+                if on_name_conflict == "auto_rename":
+                    # Keep relative dir prefix if bulk-upload path style
+                    parent_rel = str(Path(filename).parent)
+                    if parent_rel and parent_rel != ".":
+                        filename = str(Path(parent_rel) / suggested)
+                    else:
+                        filename = suggested
+                else:
+                    _raise_name_conflict("file", base_name, suggested)
 
             # 2. Generate IDs and store file
             file_id = uuid.uuid4().hex
             file_id_for_cleanup = file_id
             version_id = uuid.uuid4().hex
 
-            save_path, safe_name = _write_upload_file(collection_id, file_id, file_bytes, filename)
+            save_path, safe_name = _write_upload_file(
+                collection_id, file_id, file_bytes, filename
+            )
             now = _now_iso()
 
             # 3. Check supported
@@ -2420,15 +2741,16 @@ def upload_file_to_folder(
                 (version_id, file_id),
             )
 
-            # 6. Write file_paths
-            path_id = uuid.uuid4().hex
-            is_primary = 1 if source_node_id is None else 0
-            conn.execute(
-                """INSERT INTO file_paths
-                   (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
-                   VALUES (?, ?, ?, ?, ?, 'local')""",
-                (path_id, file_id, folder_id, is_primary, source_node_id),
-            )
+            # 6. Write file_paths only when mounted in a folder
+            if folder_id is not None:
+                path_id = uuid.uuid4().hex
+                is_primary = 1 if source_node_id is None else 0
+                conn.execute(
+                    """INSERT INTO file_paths
+                       (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
+                       VALUES (?, ?, ?, ?, ?, 'local')""",
+                    (path_id, file_id, folder_id, is_primary, source_node_id),
+                )
 
             # 7. Queue async ingest task via the existing upload pipeline
             chunk_count = 0
@@ -2506,39 +2828,46 @@ def upload_file_to_folder(
 
 def upload_folder(
     collection_id: str,
-    parent_folder_id: str,
+    parent_folder_id: str | None,
     files_data: list[tuple[bytes, str]],
 ) -> list[FileSummary]:
     """Upload an entire folder preserving relative paths.
 
     Args:
+        parent_folder_id: destination folder, or empty/None for collection root
         files_data: list of (bytes_content, relative_filename) tuples
     """
-    conn = _open_db(collection_id)
+    if isinstance(parent_folder_id, str):
+        parent_folder_id = parent_folder_id.strip() or None
+
     now = _now_iso()
 
-    # Validate parent folder
-    try:
-        parent = conn.execute(
-            "SELECT * FROM folders WHERE folder_id=?", (parent_folder_id,)
-        ).fetchone()
-        if not parent:
-            raise HTTPException(404, f"Folder '{parent_folder_id}' not found")
-    finally:
-        conn.close()
+    # Validate parent folder when not root
+    if parent_folder_id is not None:
+        conn = _open_db(collection_id)
+        try:
+            parent = conn.execute(
+                "SELECT * FROM folders WHERE folder_id=?", (parent_folder_id,)
+            ).fetchone()
+            if not parent:
+                raise HTTPException(
+                    404, f"Folder '{parent_folder_id}' not found"
+                )
+        finally:
+            conn.close()
 
     # 1. Group files by relative path, create folders
     folder_cache: dict[str, str] = {}  # relative_dir -> folder_id
 
-    def _ensure_folder(rel_dir: str) -> str:
-        """Ensure a virtual folder exists for the given relative directory path."""
+    def _ensure_folder(rel_dir: str) -> str | None:
+        """Ensure folder chain exists; returns folder_id or None for root."""
         if not rel_dir or rel_dir == ".":
             return parent_folder_id
         if rel_dir in folder_cache:
             return folder_cache[rel_dir]
 
         parts = Path(rel_dir).parts
-        current_parent = parent_folder_id
+        current_parent: str | None = parent_folder_id
         accumulated = ""
         for part in parts:
             accumulated = str(Path(accumulated) / part) if accumulated else part
@@ -2549,14 +2878,34 @@ def upload_folder(
             conn2 = _open_db(collection_id)
             try:
                 with conn2:
-                    fid = uuid.uuid4().hex
-                    conn2.execute(
-                        """INSERT INTO folders
-                           (folder_id, parent_folder_id, name, kind, is_system,
-                            created_by, created_at, updated_at, version)
-                           VALUES (?, ?, ?, 'plain', 0, 'local', ?, ?, 1)""",
-                        (fid, current_parent, part, now, now),
-                    )
+                    # Reuse existing sibling with same name (case-insensitive)
+                    if current_parent is None:
+                        found = conn2.execute(
+                            """SELECT folder_id FROM folders
+                               WHERE parent_folder_id IS NULL
+                                 AND lower(name) = lower(?)
+                               LIMIT 1""",
+                            (part,),
+                        ).fetchone()
+                    else:
+                        found = conn2.execute(
+                            """SELECT folder_id FROM folders
+                               WHERE parent_folder_id=?
+                                 AND lower(name) = lower(?)
+                               LIMIT 1""",
+                            (current_parent, part),
+                        ).fetchone()
+                    if found:
+                        fid = found["folder_id"]
+                    else:
+                        fid = uuid.uuid4().hex
+                        conn2.execute(
+                            """INSERT INTO folders
+                               (folder_id, parent_folder_id, name, kind, is_system,
+                                created_by, created_at, updated_at, version)
+                               VALUES (?, ?, ?, 'plain', 0, 'local', ?, ?, 1)""",
+                            (fid, current_parent, part, now, now),
+                        )
             finally:
                 conn2.close()
             folder_cache[accumulated] = fid
@@ -2570,7 +2919,12 @@ def upload_folder(
         target_folder_id = _ensure_folder(rel_dir)
 
         result = upload_file_to_folder(
-            collection_id, target_folder_id, file_bytes, relative_path, source_node_id=None
+            collection_id,
+            target_folder_id,
+            file_bytes,
+            relative_path,
+            source_node_id=None,
+            on_name_conflict="auto_rename",
         )
         results.append(result)
 
@@ -2775,10 +3129,18 @@ def delete_file(collection_id: str, file_id: str) -> None:
 def update_file(
     collection_id: str, file_id: str, req: dict
 ) -> FileSummary:
-    """Update file metadata: is_definitive toggle, archived toggle (Phase 5).
+    """Update file metadata (is_definitive and/or display filename).
 
-    Uses optimistic locking: version field must match.
+    Archive operations must use ``toggle_archive`` / PATCH .../archive
+    so path-level and file-level stay consistent across views.
     """
+    if "archived" in req:
+        raise HTTPException(
+            400,
+            "Use PATCH /files/{file_id}/archive for archive operations "
+            "(scope=file|path). update_file no longer accepts archived.",
+        )
+
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -2792,33 +3154,59 @@ def update_file(
             if version is None:
                 raise HTTPException(400, "version is required for optimistic locking")
 
-            set_clauses: list[str] = []
-            params: list = []
+            has_def = "is_definitive" in req
+            has_name = "filename" in req and req["filename"] is not None
+            if not has_def and not has_name:
+                raise HTTPException(400, "No updatable fields provided")
 
-            if "is_definitive" in req:
-                set_clauses.append("is_definitive = ?")
-                params.append(1 if req["is_definitive"] else 0)
+            if has_name:
+                if not file_row["current_version_id"]:
+                    raise HTTPException(400, "File has no current version to rename")
+                ver_row = conn.execute(
+                    "SELECT storage_file_id FROM file_versions WHERE version_id=?",
+                    (file_row["current_version_id"],),
+                ).fetchone()
+                old_name = (ver_row["storage_file_id"] if ver_row else "") or "unnamed"
+                old_suffix = Path(old_name).suffix  # e.g. ".pdf" (last suffix)
+                new_base = Path(str(req["filename"]).strip() or "unnamed").name
+                # Extension is immutable — always keep the current version's suffix
+                if old_suffix:
+                    if new_base.lower().endswith(old_suffix.lower()):
+                        stem = new_base[: -len(old_suffix)]
+                    else:
+                        # Drop any other last suffix the client may have sent
+                        stem = Path(new_base).stem if Path(new_base).suffix else new_base
+                    stem = (stem or "").strip() or "unnamed"
+                    new_base = stem + old_suffix
+                # Must be free in every folder this file is mounted in
+                mounts = conn.execute(
+                    "SELECT DISTINCT folder_id FROM file_paths WHERE file_id=?",
+                    (file_id,),
+                ).fetchall()
+                for m in mounts:
+                    _assert_file_name_free(
+                        conn,
+                        m["folder_id"],
+                        new_base,
+                        exclude_file_id=file_id,
+                    )
+                conn.execute(
+                    "UPDATE file_versions SET storage_file_id=? WHERE version_id=?",
+                    (new_base, file_row["current_version_id"]),
+                )
 
-            if "archived" in req:
-                new_archived = 1 if req["archived"] else 0
-                set_clauses.append("archived = ?")
-                params.append(new_archived)
-                # If archiving, also mark Qdrant chunks
-                if new_archived:
-                    _mark_qdrant_chunks_archived(collection_id, file_id)
-                else:
-                    # Unarchiving — mark Qdrant chunks as not archived
-                    # (restore current version chunks only)
-                    pass
-
-            set_clauses.append("version = version + 1")
-            params.extend([file_id, version])
-
-            cursor = conn.execute(
-                f"UPDATE files SET {', '.join(set_clauses)} "
-                "WHERE file_id = ? AND version = ?",
-                params,
-            )
+            if has_def:
+                cursor = conn.execute(
+                    "UPDATE files SET is_definitive=?, version=version+1 "
+                    "WHERE file_id=? AND version=?",
+                    (1 if req["is_definitive"] else 0, file_id, version),
+                )
+            else:
+                cursor = conn.execute(
+                    "UPDATE files SET version=version+1 "
+                    "WHERE file_id=? AND version=?",
+                    (file_id, version),
+                )
             if cursor.rowcount == 0:
                 raise HTTPException(
                     409, "File was modified by another user (version conflict)"
@@ -2828,13 +3216,7 @@ def update_file(
                 "SELECT * FROM files WHERE file_id=?", (file_id,)
             ).fetchone()
 
-        if "archived" in req and req["archived"]:
-            emit_event("file.archived", collection_id, {"file_id": file_id})
-        elif "archived" in req:
-            emit_event("file.unarchived", collection_id, {"file_id": file_id})
-        if "is_definitive" in req:
-            emit_event("file.updated", collection_id, {"file_id": file_id})
-
+        emit_event("file.updated", collection_id, {"file_id": file_id})
         return _row_to_file_out(row, conn)
     finally:
         conn.close()
@@ -2889,15 +3271,33 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
             if parent_chain_id is None:
                 raise HTTPException(400, "Cannot end the main chain")
 
-            existing_end = conn.execute(
-                'SELECT node_id FROM nodes WHERE chain_id=? AND node_type="end" AND node_id != ?',
-                (chain_id, node_id),
-            ).fetchone()
-            if existing_end:
+            # Already closed (merge pointer set) → must reopen first
+            try:
+                existing_merge = chain["merge_node_id"]
+            except (KeyError, IndexError):
+                existing_merge = None
+            if existing_merge:
                 raise HTTPException(
                     409,
-                    "This chain already has an end node. "
+                    "This chain is already closed. "
                     "Use reopen_chain first to re-open it.",
+                )
+
+            # Branch may have leftover end markers (cancel-after-prepare, or
+            # stale double-create). Keep the end node used for this call;
+            # purge any other end-type placeholders on this branch.
+            other_ends = conn.execute(
+                'SELECT node_id FROM nodes WHERE chain_id=? AND node_type="end" '
+                "AND node_id != ?",
+                (chain_id, node_id),
+            ).fetchall()
+            for er in other_ends:
+                _purge_node_owned_rows(conn, er["node_id"])
+            if other_ends:
+                conn.execute(
+                    'DELETE FROM nodes WHERE chain_id=? AND node_type="end" '
+                    "AND node_id != ?",
+                    (chain_id, node_id),
                 )
 
             all_nodes = conn.execute(
@@ -3039,8 +3439,24 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                     (msg_id, merge_node_id, req.message_body.strip(), now),
                 )
 
+            # Branch end marker is only a dialog placeholder — the real close
+            # lives on the parent as merge_node. Remove all branch end-type
+            # nodes so reopen/re-merge never sees stale duplicates.
+            branch_ends = conn.execute(
+                'SELECT node_id FROM nodes WHERE chain_id=? AND node_type="end"',
+                (chain_id,),
+            ).fetchall()
+            for er in branch_ends:
+                _purge_node_owned_rows(conn, er["node_id"])
+            if branch_ends:
+                conn.execute(
+                    'DELETE FROM nodes WHERE chain_id=? AND node_type="end"',
+                    (chain_id,),
+                )
+
             result = {
-                "greyed_files": list(path_archived),  # legacy field name
+                # greyed_files kept as alias of path_archived for older clients
+                "greyed_files": list(path_archived),
                 "archive_candidates": [],
                 "path_archived_files": path_archived,
                 "path_archived_path_ids": path_ids_archived,
@@ -3062,15 +3478,19 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
 def toggle_archive(
     collection_id: str, file_id: str, req: ArchiveToggle
 ) -> FileSummary:
-    """Archive or unarchive a file.
+    """Archive or unarchive — two layers only: path + file (no attachment greyed).
 
-    - archived=True: file-level archive (``files.archived=1``) + Qdrant
-    - archived=False:
-        * if file-level archived → restore file + Qdrant
-        * if ``folder_id`` set → clear path-level archives in that folder
-          (branch merge greys that only set ``file_paths.archived``)
-    - Optimistic locking via version (always bumps version on success)
+    Archive (archived=True):
+      scope=file → exclude from search (files.archived=1)
+      scope=path → path-archive in folder_id; auto file-level if no active paths
+
+    Unarchive (archived=False):
+      Always clear file-level when set + clear paths in folder_id when given.
     """
+    scope = (req.scope or "file").strip().lower()
+    if scope not in ("file", "path"):
+        raise HTTPException(400, "scope must be 'file' or 'path'")
+
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -3082,31 +3502,85 @@ def toggle_archive(
                 raise HTTPException(404, f"File '{file_id}' not found")
 
             was_file_archived = bool(file_row["archived"])
-            path_cleared: list[str] = []
-            did_file_change = False
+            path_ids_touched: list[str] = []
+            promoted = False
+            file_level_cleared = False
+            file_level_set = False
+
+            folder_id = (req.folder_id or "").strip() or None
+            if folder_id == "__archived__":
+                folder_id = None
+
+            def _lock_and_bump(set_archived: int | None = None) -> None:
+                """Bump version (and optionally set files.archived) under lock."""
+                if set_archived is None:
+                    cur = conn.execute(
+                        "UPDATE files SET version=version+1 "
+                        "WHERE file_id=? AND version=?",
+                        (file_id, req.version),
+                    )
+                else:
+                    cur = conn.execute(
+                        "UPDATE files SET archived=?, version=version+1 "
+                        "WHERE file_id=? AND version=?",
+                        (set_archived, file_id, req.version),
+                    )
+                if cur.rowcount == 0:
+                    raise HTTPException(
+                        409,
+                        "File was modified by another user (version conflict)",
+                    )
 
             if req.archived:
-                # File-level archive
-                cursor = conn.execute(
-                    "UPDATE files SET archived=1, version=version+1 "
-                    "WHERE file_id=? AND version=?",
-                    (file_id, req.version),
-                )
-                if cursor.rowcount == 0:
-                    raise HTTPException(
-                        409, "File was modified by another user (version conflict)"
+                if scope == "path":
+                    if not folder_id:
+                        raise HTTPException(
+                            400, "folder_id is required for path-level archive"
+                        )
+                    fld = conn.execute(
+                        "SELECT folder_id FROM folders WHERE folder_id=?",
+                        (folder_id,),
+                    ).fetchone()
+                    if not fld:
+                        raise HTTPException(404, f"Folder '{folder_id}' not found")
+                    path_ids_touched = _archive_paths_on_folder(
+                        conn, file_id, folder_id
                     )
-                did_file_change = True
-                _mark_qdrant_chunks_archived(collection_id, file_id)
-                conn.execute(
-                    "UPDATE file_nodes SET greyed=1 WHERE file_id=?", (file_id,)
-                )
+                    need_promote = (
+                        not was_file_archived
+                        and not _path_has_active_mount(conn, file_id)
+                    )
+                    if need_promote:
+                        _lock_and_bump(set_archived=1)
+                        file_level_set = True
+                        promoted = True
+                        try:
+                            _mark_qdrant_chunks_archived(collection_id, file_id)
+                        except Exception:
+                            pass
+                    elif path_ids_touched:
+                        _lock_and_bump(set_archived=None)
+                    else:
+                        raise HTTPException(
+                            400, "Already archived for this folder"
+                        )
+                else:
+                    # scope=file: exclude from search
+                    if was_file_archived:
+                        raise HTTPException(
+                            400, "File is already excluded from search"
+                        )
+                    _lock_and_bump(set_archived=1)
+                    file_level_set = True
+                    try:
+                        _mark_qdrant_chunks_archived(collection_id, file_id)
+                    except Exception:
+                        pass
             else:
-                # Unarchive: file-level and/or path-level in folder
-                folder_id = (req.folder_id or "").strip() or None
-                if folder_id == "__archived__":
-                    folder_id = None
-
+                # Unarchive:
+                # - with folder_id: clear file-level + this folder's path archives
+                # - without folder_id (e.g. /Archived): clear file-level ONLY
+                #   (path archives stay; restore those in each folder)
                 if folder_id:
                     fld = conn.execute(
                         "SELECT folder_id FROM folders WHERE folder_id=?",
@@ -3114,45 +3588,27 @@ def toggle_archive(
                     ).fetchone()
                     if not fld:
                         raise HTTPException(404, f"Folder '{folder_id}' not found")
-                    path_cleared = _unarchive_paths_on_folder(
+                    path_ids_touched = _unarchive_paths_on_folder(
                         conn, file_id, folder_id
                     )
 
                 if was_file_archived:
-                    cursor = conn.execute(
-                        "UPDATE files SET archived=0, version=version+1 "
-                        "WHERE file_id=? AND version=?",
-                        (file_id, req.version),
-                    )
-                    if cursor.rowcount == 0:
-                        raise HTTPException(
-                            409,
-                            "File was modified by another user (version conflict)",
-                        )
-                    did_file_change = True
-                    _restore_qdrant_chunks_for_file(collection_id, file_id)
-                elif path_cleared:
-                    # Path-only unarchive still bumps version for optimistic lock
-                    cursor = conn.execute(
-                        "UPDATE files SET version=version+1 "
-                        "WHERE file_id=? AND version=?",
-                        (file_id, req.version),
-                    )
-                    if cursor.rowcount == 0:
-                        raise HTTPException(
-                            409,
-                            "File was modified by another user (version conflict)",
-                        )
-                    did_file_change = True
+                    _lock_and_bump(set_archived=0)
+                    file_level_cleared = True
+                    try:
+                        _restore_qdrant_chunks_for_file(collection_id, file_id)
+                    except Exception:
+                        pass
+                elif path_ids_touched:
+                    _lock_and_bump(set_archived=None)
                 else:
-                    # Nothing to unarchive
                     raise HTTPException(
                         400,
-                        "Nothing to unarchive: file is not archived"
+                        "Nothing to unarchive: file is not excluded from search"
                         + (
                             " and has no path archives in this folder"
                             if folder_id
-                            else " (pass folder_id to clear path-level archives)"
+                            else " (open a folder to clear path-level archives)"
                         ),
                     )
 
@@ -3160,21 +3616,32 @@ def toggle_archive(
                 "SELECT * FROM files WHERE file_id=?", (file_id,)
             ).fetchone()
             out = _row_to_file_out(row, conn)
-            # Reflect path state when unarchiving in a folder context
-            if not req.archived and req.folder_id and path_cleared:
+            # Unified display: not archived after successful unarchive
+            if not req.archived and not bool(row["archived"]):
                 out.is_greyed = False
 
         if req.archived:
-            emit_event("file.archived", collection_id, {"file_id": file_id})
+            emit_event(
+                "file.archived",
+                collection_id,
+                {
+                    "file_id": file_id,
+                    "scope": scope,
+                    "folder_id": folder_id,
+                    "path_ids": path_ids_touched,
+                    "promoted_to_file": promoted,
+                    "file_level": file_level_set,
+                },
+            )
         else:
             emit_event(
                 "file.unarchived",
                 collection_id,
                 {
                     "file_id": file_id,
-                    "folder_id": req.folder_id,
-                    "path_ids_cleared": path_cleared if not req.archived else [],
-                    "file_level": did_file_change and was_file_archived,
+                    "folder_id": folder_id,
+                    "path_ids_cleared": path_ids_touched,
+                    "file_level_cleared": file_level_cleared,
                 },
             )
 
@@ -3516,7 +3983,7 @@ def create_message(collection_id: str, req: MessageCreate) -> MessageOut:
             collection_id,
             {"message_id": message_id, "owner_type": req.owner_type, "owner_id": req.owner_id},
         )
-        return _row_to_message(row)
+        return _row_to_message(row, conn)
     finally:
         conn.close()
 
@@ -3557,7 +4024,7 @@ def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> M
             collection_id,
             {"message_id": message_id},
         )
-        return _row_to_message(row)
+        return _row_to_message(row, conn)
     finally:
         conn.close()
 
@@ -3599,9 +4066,113 @@ def list_messages(
                ORDER BY created_at DESC""",
             (owner_type, owner_id),
         ).fetchall()
-        return [_row_to_message(r) for r in rows]
+        return [_row_to_message(r, conn) for r in rows]
     finally:
         conn.close()
+
+
+def _purge_orphan_messages(conn) -> None:
+    """Drop messages whose owner row no longer exists (self-heal old bugs)."""
+    conn.execute(
+        """DELETE FROM messages
+           WHERE owner_type='folder'
+             AND owner_id NOT IN (SELECT folder_id FROM folders)"""
+    )
+    conn.execute(
+        """DELETE FROM messages
+           WHERE owner_type='file'
+             AND owner_id NOT IN (SELECT file_id FROM files)"""
+    )
+    conn.execute(
+        """DELETE FROM messages
+           WHERE owner_type='node'
+             AND owner_id NOT IN (SELECT node_id FROM nodes)"""
+    )
+
+
+def list_root_messages(
+    collection_id: str,
+    include_node_msgs: bool = False,
+    include_file_msgs: bool = False,
+    recursive: bool = False,
+) -> list[MessageOut]:
+    """Message stream for collection root (folder view).
+
+    Always includes collection-level messages.
+
+    - ``include_file_msgs`` only: + orphan file messages (no file_paths)
+    - ``recursive`` only: + every folder's own messages
+    - both: + all folder messages + all file messages in the collection
+    """
+    from src.file_mgmt.models import MessageOut
+
+    conn = _open_db(collection_id)
+    try:
+        # Heal pre-fix leftovers (e.g. user_group folder delete left messages).
+        _purge_orphan_messages(conn)
+        conn.commit()
+
+        queries: list[str] = [
+            """SELECT m.* FROM messages m
+               WHERE m.owner_type='collection' AND m.owner_id=?"""
+        ]
+        params: list = [collection_id]
+
+        if recursive:
+            # Only folders that still exist — never show dangling owner_ids.
+            queries.append(
+                """SELECT m.* FROM messages m
+                   WHERE m.owner_type='folder'
+                     AND m.owner_id IN (SELECT folder_id FROM folders)"""
+            )
+            if include_file_msgs:
+                queries.append(
+                    """SELECT m.* FROM messages m
+                       WHERE m.owner_type='file'
+                         AND m.owner_id IN (SELECT file_id FROM files)"""
+                )
+            if include_node_msgs:
+                queries.append(
+                    """SELECT m.* FROM messages m
+                       WHERE m.owner_type='node'
+                         AND m.owner_id IN (SELECT node_id FROM nodes)"""
+                )
+        else:
+            if include_file_msgs:
+                # Root layer only: orphan files (not mounted in any folder)
+                queries.append(
+                    """SELECT m.* FROM messages m
+                       WHERE m.owner_type='file'
+                         AND m.owner_id IN (SELECT file_id FROM files)
+                         AND m.owner_id NOT IN (SELECT file_id FROM file_paths)"""
+                )
+            # Nodes without Nested at root: no-op.
+            # Root has no bound group/chain; branch/group nodes live on child
+            # folders and require Nested (recursive) to appear.
+
+        sql = " UNION ".join(queries) + " ORDER BY created_at DESC"
+        rows = conn.execute(sql, params).fetchall()
+        return [_row_to_message(r, conn) for r in rows]
+    finally:
+        conn.close()
+
+
+def _descendant_folder_ids(conn, folder_id: str) -> list[str]:
+    """Return ``folder_id`` plus every nested folder under it (recursive)."""
+    rows = conn.execute(
+        """
+        WITH RECURSIVE descendants AS (
+          SELECT folder_id FROM folders WHERE folder_id=?
+          UNION ALL
+          SELECT f.folder_id
+          FROM folders f
+          JOIN descendants d ON f.parent_folder_id = d.folder_id
+        )
+        SELECT folder_id FROM descendants
+        """,
+        (folder_id,),
+    ).fetchall()
+    return [r["folder_id"] for r in rows]
 
 
 def list_folder_messages(
@@ -3609,13 +4180,22 @@ def list_folder_messages(
     folder_id: str,
     include_node_msgs: bool = True,
     include_file_msgs: bool = True,
+    recursive: bool = False,
 ) -> list[MessageOut]:
     """Aggregated message stream for a folder.
 
-    Includes:
-    - folder's own messages
-    - file messages (files in this folder via file_paths)
-    - node messages (nodes in groups bound to this folder)
+    Always includes the folder's own messages.
+
+    - ``include_file_msgs``: file messages for files mounted in the scope
+    - ``include_node_msgs``: node messages linked to folders in scope via:
+        * groups bound to those folders (group.folder_id), or
+        * chains bound to those folders (chain.folder_id, e.g. branch folders)
+    - ``recursive=False``: scope = this folder only
+    - ``recursive=True``: scope = this folder + all descendant folders
+
+    When only ``include_file_msgs`` is on (no recursive): files in the current
+    folder layer only. When both recursive and file msgs: every file under the
+    whole subtree.
     """
     from src.file_mgmt.models import MessageOut
 
@@ -3628,41 +4208,57 @@ def list_folder_messages(
         if not fld:
             raise HTTPException(404, f"Folder '{folder_id}' not found")
 
+        if recursive:
+            scope_ids = _descendant_folder_ids(conn, folder_id)
+        else:
+            scope_ids = [folder_id]
+
+        if not scope_ids:
+            return []
+
+        placeholders = ",".join("?" * len(scope_ids))
         queries: list[str] = []
         params: list = []
 
-        # 1. Folder's own messages
+        # 1. Folder messages in scope
         queries.append(
-            "SELECT m.* FROM messages m WHERE m.owner_type='folder' AND m.owner_id=?"
+            f"""SELECT m.* FROM messages m
+                WHERE m.owner_type='folder' AND m.owner_id IN ({placeholders})"""
         )
-        params.append(folder_id)
+        params.extend(scope_ids)
 
-        # 2. File messages for files in this folder
+        # 2. File messages for files mounted in scope folders
         if include_file_msgs:
             queries.append(
-                """SELECT m.* FROM messages m
-                   WHERE m.owner_type='file'
-                     AND m.owner_id IN (
-                       SELECT DISTINCT file_id FROM file_paths WHERE folder_id=?
-                     )"""
+                f"""SELECT m.* FROM messages m
+                    WHERE m.owner_type='file'
+                      AND m.owner_id IN (
+                        SELECT DISTINCT file_id FROM file_paths
+                        WHERE folder_id IN ({placeholders})
+                      )"""
             )
-            params.append(folder_id)
+            params.extend(scope_ids)
 
-        # 3. Node messages for nodes in groups bound to this folder
+        # 3. Node messages linked via group binding or branch/chain folder
         if include_node_msgs:
             queries.append(
-                """SELECT m.* FROM messages m
-                   WHERE m.owner_type='node'
-                     AND m.owner_id IN (
-                       SELECT n.node_id FROM nodes n
-                       JOIN node_groups g ON g.group_id = n.group_id
-                       WHERE g.folder_id=?
-                     )"""
+                f"""SELECT m.* FROM messages m
+                    WHERE m.owner_type='node'
+                      AND m.owner_id IN (
+                        SELECT n.node_id FROM nodes n
+                        JOIN node_groups g ON g.group_id = n.group_id
+                        WHERE g.folder_id IN ({placeholders})
+                        UNION
+                        SELECT n.node_id FROM nodes n
+                        JOIN chains c ON c.chain_id = n.chain_id
+                        WHERE c.folder_id IN ({placeholders})
+                      )"""
             )
-            params.append(folder_id)
+            params.extend(scope_ids)
+            params.extend(scope_ids)
 
         sql = " UNION ".join(queries) + " ORDER BY created_at DESC"
         rows = conn.execute(sql, params).fetchall()
-        return [_row_to_message(r) for r in rows]
+        return [_row_to_message(r, conn) for r in rows]
     finally:
         conn.close()

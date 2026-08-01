@@ -1,13 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import {
-  Archive,
-  ChevronDown,
-  ChevronRight,
-  FolderIcon,
-  GitBranch,
-  Users,
-  type LucideIcon,
-} from "lucide-react"
+import { ChevronDown, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -18,26 +10,21 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
-import { createGroup, getFolderTree, listGroups, updateGroup } from "@/api/file-mgmt"
 import {
-  ICON_COLORS,
-  LUCIDE_PRESETS,
+  createGroup,
+  getFolderTree,
+  getNameConflict,
+  listGroups,
+  updateGroup,
+} from "@/api/file-mgmt"
+import {
+  DEFAULT_ICON_COLOR,
+  FolderIconView,
   GroupIconView,
-  limitSymbolInput,
-  resolveGroupIcon,
+  IconPickerPanel,
+  buildIconPayload,
 } from "./group-icons"
 import { cn } from "@/lib/utils"
-
-function folderKindIcon(folder: FolderTreeNode): { Icon: LucideIcon; color: string } {
-  if (folder.kind === "system_group") {
-    if (folder.name === "Archived") return { Icon: Archive, color: "#94A3B8" }
-    // Meeting / Notes fall through to bound group icon when available
-    return { Icon: FolderIcon, color: "#3B82F6" }
-  }
-  if (folder.kind === "user_group") return { Icon: Users, color: "#A855F7" }
-  if (folder.kind === "branch") return { Icon: GitBranch, color: "#34D399" }
-  return { Icon: FolderIcon, color: "#F59E0B" }
-}
 
 function FolderRowIcon({
   folder,
@@ -46,18 +33,9 @@ function FolderRowIcon({
   folder: FolderTreeNode
   boundGroup?: NodeGroup | null
 }) {
-  if (boundGroup) {
-    return <GroupIconView source={boundGroup} className="h-3 w-3" />
-  }
-  // System Meeting/Notes without bound group payload still use name heuristics
-  if (folder.kind === "system_group") {
-    const r = resolveGroupIcon({ name: folder.name })
-    if (r.kind === "lucide" && r.Icon) {
-      return <r.Icon className="h-3 w-3 shrink-0" style={{ color: r.color }} />
-    }
-  }
-  const { Icon, color } = folderKindIcon(folder)
-  return <Icon className="h-3 w-3 shrink-0" style={{ color }} />
+  return (
+    <FolderIconView folder={folder} boundGroup={boundGroup} className="h-3 w-3" />
+  )
 }
 
 interface GroupFormDialogProps {
@@ -214,7 +192,7 @@ export function GroupFormDialog({
   /** lucide when picking line icon; emoji when using symbol field */
   const [iconMode, setIconMode] = useState<"lucide" | "emoji">("lucide")
   const [iconKey, setIconKey] = useState("folder")
-  const [iconColor, setIconColor] = useState(ICON_COLORS[0])
+  const [iconColor, setIconColor] = useState(DEFAULT_ICON_COLOR)
   const [symbol, setSymbol] = useState("")
   const [folderMode, setFolderMode] = useState<"new" | "existing">("new")
   const [folderId, setFolderId] = useState("")
@@ -242,7 +220,7 @@ export function GroupFormDialog({
       } else {
         setIconMode("lucide")
         setIconKey(editing.icon_value || "users")
-        setIconColor(editing.icon_color || ICON_COLORS[2])
+        setIconColor(editing.icon_color || DEFAULT_ICON_COLOR)
         setSymbol("")
       }
       setFolderMode("new")
@@ -250,7 +228,7 @@ export function GroupFormDialog({
       setName("")
       setIconMode("lucide")
       setIconKey("folder")
-      setIconColor(ICON_COLORS[0])
+      setIconColor(DEFAULT_ICON_COLOR)
       setSymbol("")
       setFolderMode("new")
       setFolderId("")
@@ -300,10 +278,12 @@ export function GroupFormDialog({
     }
     setSubmitting(true)
     try {
-      const iconPayload =
-        iconMode === "emoji"
-          ? { icon_type: "emoji", icon_value: symbol, icon_color: null as string | null }
-          : { icon_type: "lucide", icon_value: iconKey, icon_color: iconColor }
+      const iconPayload = buildIconPayload({
+        iconMode,
+        iconKey,
+        iconColor,
+        symbol,
+      })
 
       if (isEdit && editing) {
         await updateGroup(collectionId, editing.group_id, {
@@ -325,7 +305,15 @@ export function GroupFormDialog({
       onSaved()
       onOpenChange(false)
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      const conflict = getNameConflict(err)
+      if (conflict) {
+        setName(conflict.suggested_name)
+        toast.error(
+          `${conflict.message} Suggested: ${conflict.suggested_name}`
+        )
+      } else {
+        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -372,79 +360,16 @@ export function GroupFormDialog({
             </div>
           </div>
 
-          {/* Unified icon: line icons + color + optional short symbol (no tabs) */}
-          <div>
-            <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1.5">
-              Icon
-            </label>
-            <div className="space-y-2">
-              <div className="grid grid-cols-8 gap-1">
-                {LUCIDE_PRESETS.map((p) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    title={p.label}
-                    className={cn(
-                      "h-8 w-8 rounded border flex items-center justify-center transition-colors",
-                      iconMode === "lucide" && iconKey === p.key
-                        ? "border-primary bg-primary/10 ring-1 ring-primary/30"
-                        : "border-border hover:bg-muted/40"
-                    )}
-                    onClick={() => {
-                      setIconMode("lucide")
-                      setIconKey(p.key)
-                      setSymbol("")
-                    }}
-                  >
-                    <p.Icon
-                      className="h-3.5 w-3.5 transition-colors"
-                      style={{ color: iconColor }}
-                    />
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-1.5 flex-wrap items-center">
-                <span className="text-[10px] text-muted-foreground/60 mr-0.5">Color</span>
-                {ICON_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={cn(
-                      "h-5 w-5 rounded-full border-2 transition-transform",
-                      iconColor === c
-                        ? "border-foreground scale-110"
-                        : "border-transparent hover:scale-105"
-                    )}
-                    style={{ background: c }}
-                    onClick={() => {
-                      setIconColor(c)
-                      if (iconMode === "emoji") {
-                        // color applies to line icons; switch back if only symbol was set
-                      }
-                      setIconMode((m) => (m === "emoji" && !symbol ? "lucide" : m))
-                    }}
-                    title={c}
-                  />
-                ))}
-              </div>
-              <div>
-                <label className="text-[10px] text-muted-foreground/60 block mb-1">
-                  Custom
-                </label>
-                <input
-                  className="w-full text-sm border rounded px-2 py-1.5 bg-background"
-                  value={symbol}
-                  onChange={(e) => {
-                    const next = limitSymbolInput(e.target.value)
-                    setSymbol(next)
-                    if (next) setIconMode("emoji")
-                    else setIconMode("lucide")
-                  }}
-                  placeholder="Custom icon"
-                />
-              </div>
-            </div>
-          </div>
+          <IconPickerPanel
+            iconMode={iconMode}
+            iconKey={iconKey}
+            iconColor={iconColor}
+            symbol={symbol}
+            onIconMode={setIconMode}
+            onIconKey={setIconKey}
+            onIconColor={setIconColor}
+            onSymbol={setSymbol}
+          />
 
           <div>
             <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1.5">

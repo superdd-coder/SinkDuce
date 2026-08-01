@@ -220,6 +220,171 @@ def test_folder_unarchive_clears_path_archive(collection_id):
         assert again.is_greyed is False
 
 
+def test_path_and_file_scope_and_unarchive_recovers_all(collection_id):
+    """path scope archives folder; file scope greys everywhere; unarchive recovers."""
+    from src.file_mgmt.models import ArchiveToggle
+
+    with patch.object(service, "_validate_collection", lambda _x: None):
+        g, ch, fid, pid_group, pid_branch, end_id = _seed_branch_with_file(
+            collection_id
+        )
+        # Path archive branch folder only
+        r1 = service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(
+                archived=True,
+                version=1,
+                folder_id=ch.folder_id,
+                scope="path",
+            ),
+        )
+        assert r1.archived is False  # group path still active → no promote
+        conn = store.get_db(collection_id)
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_branch,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_group,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        ver = conn.execute(
+            "SELECT version FROM files WHERE file_id=?", (fid,)
+        ).fetchone()["version"]
+        conn.close()
+
+        # File-level exclude
+        r2 = service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(archived=True, version=ver, scope="file"),
+        )
+        assert r2.archived is True
+        # Both folders list as greyed
+        in_branch = service.list_files_in_folder(collection_id, ch.folder_id)
+        in_group = service.list_files_in_folder(collection_id, g.folder_id)
+        assert next(f for f in in_branch if f.file_id == fid).is_greyed
+        assert next(f for f in in_group if f.file_id == fid).is_greyed
+
+        ver2 = next(f for f in in_group if f.file_id == fid).version
+        # Unarchive from group: clears file-level; group path never path-archived
+        service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(
+                archived=False,
+                version=ver2,
+                folder_id=g.folder_id,
+            ),
+        )
+        in_group2 = service.list_files_in_folder(collection_id, g.folder_id)
+        gfile = next(f for f in in_group2 if f.file_id == fid)
+        assert gfile.archived is False
+        assert gfile.is_greyed is False
+        # Branch path still path-archived until unarchive there
+        in_branch2 = service.list_files_in_folder(collection_id, ch.folder_id)
+        bfile = next(f for f in in_branch2 if f.file_id == fid)
+        assert bfile.is_greyed is True
+
+        # Unarchive without folder_id = file-level only; path archives stay
+        ver3 = bfile.version
+        # re-exclude so we can unarchive file-level
+        service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(archived=True, version=ver3, scope="file"),
+        )
+        ver4 = service.list_files_in_folder(collection_id, g.folder_id)
+        ver4n = next(f for f in ver4 if f.file_id == fid).version
+        service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(archived=False, version=ver4n, folder_id=None),
+        )
+        # Branch path still path-archived
+        in_branch3 = service.list_files_in_folder(collection_id, ch.folder_id)
+        assert next(f for f in in_branch3 if f.file_id == fid).is_greyed is True
+        # Group path was never path-archived → not grey
+        in_group3 = service.list_files_in_folder(collection_id, g.folder_id)
+        assert next(f for f in in_group3 if f.file_id == fid).is_greyed is False
+
+
+def test_reopen_then_remerge_succeeds(collection_id):
+    """After reopen, creating a new end marker and end_chain again must work.
+
+    Regression: leftover/duplicate branch end nodes caused
+    'This chain already has an end node. Use reopen_chain first'.
+    """
+    with patch.object(service, "_validate_collection", lambda _x: None):
+        g, ch, fid, _pid_g, _pid_b, end_id = _seed_branch_with_file(collection_id)
+        r1 = service.end_chain(
+            collection_id,
+            end_id,
+            EndChainRequest(
+                inherit_file_ids=[],
+                title="Merge 1",
+                group_id=g.group_id,
+            ),
+        )
+        assert r1.get("merged_node_id")
+        # Branch end placeholder must be gone after merge
+        nodes_closed = service.list_nodes(collection_id, ch.chain_id)
+        assert all(n.node_type != "end" for n in nodes_closed)
+
+        reopened = service.reopen_chain(collection_id, ch.chain_id)
+        assert reopened.merge_node_id is None
+        assert reopened.has_end_node is False
+
+        # Simulate UI: prepare a fresh end marker (and a stale extra end)
+        end2 = service.create_node(
+            collection_id,
+            ch.chain_id,
+            NodeCreate(
+                group_id=g.group_id,
+                node_type="end",
+                title=None,
+                order=50,
+            ),
+        )
+        end_stale = service.create_node(
+            collection_id,
+            ch.chain_id,
+            NodeCreate(
+                group_id=g.group_id,
+                node_type="end",
+                title=None,
+                order=51,
+            ),
+        )
+        # Re-merge using end2; backend must purge the extra end and succeed
+        r2 = service.end_chain(
+            collection_id,
+            end2.node_id,
+            EndChainRequest(
+                inherit_file_ids=[],
+                title="Merge 2",
+                group_id=g.group_id,
+            ),
+        )
+        assert r2.get("merged_node_id")
+        assert r2["merged_node_id"] != r1["merged_node_id"]
+        chains = service.list_chains(collection_id)
+        branch = next(c for c in chains if c.chain_id == ch.chain_id)
+        assert branch.merge_node_id == r2["merged_node_id"]
+        assert branch.has_end_node is True
+        # Both end markers removed from branch
+        nodes_after = service.list_nodes(collection_id, ch.chain_id)
+        assert all(n.node_type != "end" for n in nodes_after)
+        assert all(
+            n.node_id not in (end2.node_id, end_stale.node_id) for n in nodes_after
+        )
+
+
 def test_reopen_restores_merge_path_archive_only(collection_id):
     """Reopen undoes end_chain path archives; leaves manual file archive alone."""
     with patch.object(service, "_validate_collection", lambda _x: None):

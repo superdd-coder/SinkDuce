@@ -52,6 +52,9 @@ _DEFAULT_COLLECTION_CONFIG = {
     "sparse_recalc_threshold": 5000,
     "sparse_recalc_counter": 0,
     "sparse_lock": False,
+    # Must match Collection Config UI default (frontend uses true when key missing).
+    # Missing key used to read as False in upload_handler → MinerU never ran.
+    "cloud_parsing": True,
 }
 
 # Fields that cannot be changed after collection creation
@@ -246,7 +249,12 @@ class QdrantManager:
         return results, next_offset
 
     def get_collection_config(self, collection: str) -> dict:
-        """Read collection config. Returns default if not set (backward compat)."""
+        """Read collection config. Returns default if not set (backward compat).
+
+        Always merge with ``_DEFAULT_COLLECTION_CONFIG`` so newly added keys
+        (e.g. cloud_parsing) are present even for collections created before
+        those fields existed.
+        """
         try:
             points = self.client.retrieve(
                 collection_name=collection,
@@ -256,10 +264,14 @@ class QdrantManager:
             if points and points[0].payload:
                 # New format: collection_config
                 if "collection_config" in points[0].payload:
-                    return points[0].payload["collection_config"]
+                    stored = points[0].payload["collection_config"] or {}
+                    return {**_DEFAULT_COLLECTION_CONFIG, **stored}
                 # Old format: chunk_config (backward compat)
                 if "chunk_config" in points[0].payload:
-                    return {**_DEFAULT_COLLECTION_CONFIG, **points[0].payload["chunk_config"]}
+                    return {
+                        **_DEFAULT_COLLECTION_CONFIG,
+                        **(points[0].payload["chunk_config"] or {}),
+                    }
         except Exception:
             pass
         return dict(_DEFAULT_COLLECTION_CONFIG)

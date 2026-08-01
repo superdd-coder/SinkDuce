@@ -621,7 +621,7 @@ def test_folder_messages_aggregation():
     bodies = {m["body"] for m in messages}
     assert bodies == {"folder-msg", "file-msg", "node-msg"}
 
-   # Verify chronological order
+    # Verify chronological order
     timestamps = [m["created_at"] for m in messages]
     assert timestamps == sorted(timestamps, reverse=True), "Messages should be sorted by created_at DESC (newest first)"
 
@@ -630,7 +630,7 @@ def test_folder_messages_aggregation():
 
 
 def test_is_greyed_calculation():
-    """archived=1 -> all paths greyed; archived=0 + derived greyed=1 -> only that path greyed."""
+    """file-level archive greys all paths; path-level archive greys only that path."""
     from src.main import app
 
     _setup_collection("p3-10")
@@ -660,7 +660,7 @@ def test_is_greyed_calculation():
     )
     nid = node["node_id"]
 
-    # TEST A: archived=1 file -> all paths greyed
+    # TEST A: files.archived=1 -> all paths is_greyed
     fid_archived = uuid.uuid4().hex
     _create_file_record("p3-10", fid_archived, archived=1)
 
@@ -673,9 +673,9 @@ def test_is_greyed_calculation():
     resp = client.get(f"/api/file-mgmt/p3-10/files/{fid_archived}")
     detail = resp.json()
     for p in detail["paths"]:
-        assert p["is_greyed"] is True, f"Archived file path should be greyed: {p}"
+        assert p["is_greyed"] is True, f"File-archived path should be greyed: {p}"
 
-    # TEST B: archived=0 file with greyed=1 derived path -> only that path greyed
+    # TEST B: path-level archive greys only that path (not attachment greyed)
     fid_normal = uuid.uuid4().hex
     _create_file_record("p3-10", fid_normal, archived=0)
 
@@ -686,37 +686,33 @@ def test_is_greyed_calculation():
     )
     assert resp.status_code == 201
 
-    # Attach to node
+    # Attach to node (derived paths)
     resp = client.post(
         f"/api/file-mgmt/p3-10/nodes/{nid}/files",
         json={"file_id": fid_normal},
     )
     assert resp.status_code == 201
 
-    # Verify derived path is NOT greyed (greyed=0 by default)
-    resp = client.get(f"/api/file-mgmt/p3-10/files/{fid_normal}")
-    detail = resp.json()
-    for p in detail["paths"]:
-        if p["source_node_id"] is not None:
-            assert p["is_greyed"] is False, "Active derived path should not be greyed"
-
-    # Now manually grey the file_node
-    conn = get_db("p3-10")
-    conn.execute(
-        "UPDATE file_nodes SET greyed=1 WHERE file_id=? AND node_id=?",
-        (fid_normal, nid),
+    # Path-archive the plain folder mount only
+    resp = client.patch(
+        f"/api/file-mgmt/p3-10/files/{fid_normal}/archive",
+        json={
+            "archived": True,
+            "version": 1,
+            "scope": "path",
+            "folder_id": plain_folder_id,
+        },
     )
-    conn.commit()
-    conn.close()
+    assert resp.status_code == 200, resp.text
 
-    # Verify derived path is now greyed, persistent path is not
     resp = client.get(f"/api/file-mgmt/p3-10/files/{fid_normal}")
     detail = resp.json()
     for p in detail["paths"]:
-        if p["source_node_id"] is not None:
-            assert p["is_greyed"] is True, "Derived path should be greyed after greyed=1"
-        else:
-            assert p["is_greyed"] is False, "Persistent path should never be greyed"
+        if p["folder_id"] == plain_folder_id and p.get("source_node_id") is None:
+            assert p["is_greyed"] is True, "Path-archived mount should be greyed"
+        elif p["source_node_id"] is not None:
+            # derived paths not path-archived remain active unless file-level
+            assert p["is_greyed"] is False or p.get("archived") is True
 
 
 # ── 11. End-to-end ──────────────────────────────────────────────

@@ -516,12 +516,7 @@ export function NodeDetailSidebar({
                       <span className="flex-1 truncate">{att.filename}</span>
                       {att.archived && (
                         <span className="text-[9px] text-amber-500 font-medium">
-                          ARCHIVED
-                        </span>
-                      )}
-                      {att.greyed && !att.archived && (
-                        <span className="text-[9px] text-muted-foreground">
-                          greyed
+                          archived
                         </span>
                       )}
                       <button
@@ -636,6 +631,7 @@ export function NodeDetailSidebar({
                           onView={handleOpenForView}
                           onEdit={handleStartEdit}
                           onDelete={() => handleDeleteMessage(msg.message_id)}
+                          onSourceTagClick={handleOpenForView}
                         />
                       ))}
                     </div>

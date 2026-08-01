@@ -40,6 +40,7 @@ import {
   type MessageFocus,
   type MessageDetailState,
 } from './message-stream-sidebar'
+import { useFileMgmtStore } from '@/stores/file-mgmt-store'
 
 /** Droppable id for "append at end of chain" zone. */
 const endDropId = (chainId: string) => `__end__:${chainId}`
@@ -355,6 +356,8 @@ export function TimelineView({collectionId}:TVP){
   const [groups,setGroups]=useState<NodeGroup[]>([])
   const [loading,setLoading]=useState(true)
   const [selId,setSelId]=useState<string|null>(null)
+  const timelineNavRequest = useFileMgmtStore((s) => s.timelineNavRequest)
+  const clearTimelineNavRequest = useFileMgmtStore((s) => s.clearTimelineNavRequest)
   /** Keeps sidebar content mounted during close slide animation. */
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null)
   /** Visual open state (one frame behind mount so enter slide plays). */
@@ -463,6 +466,37 @@ export function TimelineView({collectionId}:TVP){
   useEffect(()=>{fetch()},[fetch])
   useEffect(()=>{if(drk>0)fetch({silent:true})},[drk,fetch])
 
+  /**
+   * Pending node id from folder mini-graph jump.
+   * Cleared after camera has centered (selId only keeps card in-view; we need true center).
+   */
+  const navFocusRef = useRef<string | null>(null)
+
+  // In-app nav from folder message mini-graph (same tab; no window.open / no new route)
+  useEffect(() => {
+    if (!timelineNavRequest || loading || chainData.size === 0) return
+    const { nodeId } = timelineNavRequest
+    // Ensure node exists in loaded data before selecting
+    let found = false
+    for (const cwn of chainData.values()) {
+      if (cwn.nodes.some((n) => n.node_id === nodeId)) {
+        found = true
+        break
+      }
+    }
+    if (!found) {
+      clearTimelineNavRequest()
+      return
+    }
+    setMsgMode(false)
+    setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
+    setFocusGroupId(null)
+    setPanelNodeId(nodeId)
+    setSelId(nodeId)
+    navFocusRef.current = nodeId
+    clearTimelineNavRequest()
+  }, [timelineNavRequest, loading, chainData, clearTimelineNavRequest])
+
   const clk = useCallback((id: string) => {
     if (msgMode) {
       // Message mode: node click focuses message stream only
@@ -545,20 +579,23 @@ export function TimelineView({collectionId}:TVP){
   }, [confirmDeleteBranchId, chains])
   /**
    * Merge / end branch:
-   * 1) Ensure an end-type node exists (API requires it)
-   * 2) Open dialog → end_chain promotes last event onto parent chain
+   * 1) Fresh-load nodes; reuse a single end marker (never double-create)
+   * 2) Open dialog → end_chain promotes merge onto parent chain
    */
   const mergeBranch = useCallback(async (cid: string) => {
     const cd = chainData.get(cid)
     if (!cd) return
-    const events = cd.nodes.filter(n => n.node_type === 'event')
-    if (events.length === 0) {
-      toast.error('Branch has no event nodes to merge')
-      return
-    }
     try {
-      let endId = cd.nodes.find(n => n.node_type === 'end')?.node_id
-      let nodes = cd.nodes
+      // Always reload — stale chainData after cancel/reopen can miss end markers
+      // and cause a second createNode('end'), which used to 409 on end_chain.
+      let nodes = await listNodes(collectionId, cid)
+      const events = nodes.filter(n => n.node_type === 'event')
+      if (events.length === 0) {
+        toast.error('Branch has no event nodes to merge')
+        return
+      }
+      const ends = nodes.filter(n => n.node_type === 'end')
+      let endId = ends[0]?.node_id
       if (!endId) {
         const maxO = nodes.reduce((m, n) => Math.max(m, n.order), 0)
         const end = await createNode(collectionId, cid, {
@@ -569,9 +606,7 @@ export function TimelineView({collectionId}:TVP){
           event_time: null,
         })
         endId = end.node_id
-        // Reload nodes so dialog / subsequent ops see the end node
-        const fresh = await listNodes(collectionId, cid)
-        nodes = fresh
+        nodes = await listNodes(collectionId, cid)
       }
       if (!endId) {
         toast.error('Failed to create end node for branch')
@@ -1455,13 +1490,22 @@ export function TimelineView({collectionId}:TVP){
     setTy(nextTy)
   }, [contentW, canvasPadX, canvasPadY])
 
-  // Center once data is ready — keep scale at 1, only pan to center
+  // Center once data is ready — keep scale at 1, only pan to center.
+  // Skip when a folder→timeline jump is pending (that path centers the target node).
   useLayoutEffect(() => {
     if (loading || !mc || !vpSize || didCenterRef.current) return
     if (vpSize.w < 40 || vpSize.h < 40) return
+    if (navFocusRef.current || timelineNavRequest) {
+      didCenterRef.current = true
+      return
+    }
     let raf2 = 0
     const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
+        if (navFocusRef.current) {
+          didCenterRef.current = true
+          return
+        }
         centerAtDefaultScale()
         didCenterRef.current = true
       })
@@ -1470,11 +1514,12 @@ export function TimelineView({collectionId}:TVP){
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-  }, [loading, mc, contentW, canvasPadX, canvasPadY, vpSize, centerAtDefaultScale])
+  }, [loading, mc, contentW, canvasPadX, canvasPadY, vpSize, centerAtDefaultScale, timelineNavRequest])
 
   // When selection changes (sidebar opens / switches node), pan so card stays in view
+  // Skip when a nav-focus is pending — that path centers with fitNodeCards instead.
   useLayoutEffect(() => {
-    if (!selId || focusGroupId) return
+    if (!selId || focusGroupId || navFocusRef.current) return
     let raf2 = 0
     const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
@@ -1503,6 +1548,50 @@ export function TimelineView({collectionId}:TVP){
       cancelAnimationFrame(raf2)
     }
   }, [selId, vpSize?.w, focusGroupId])
+
+  // Folder → Timeline jump: center the target node in the canvas (not just in-view)
+  useLayoutEffect(() => {
+    const nid = navFocusRef.current
+    if (!nid || loading || !selId || selId !== nid || focusGroupId) return
+    let cancelled = false
+    let t1: ReturnType<typeof setTimeout> | undefined
+    let t2: ReturnType<typeof setTimeout> | undefined
+    let raf2 = 0
+    const fit = (durationMs: number) => {
+      if (cancelled || navFocusRef.current !== nid) return
+      const layout = layoutRef.current
+      if (!layout?.querySelector(`[data-node-id="${nid}"]`)) return false
+      fitNodeCards([nid], {
+        maxScale: 1,
+        pad: 100,
+        animate: true,
+        durationMs,
+      })
+      return true
+    }
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        if (!fit(480)) {
+          // Card may not be painted yet — retry shortly
+          t1 = setTimeout(() => {
+            fit(420)
+          }, 80)
+        }
+        // Re-center after right detail sidebar width transition (~300ms)
+        t2 = setTimeout(() => {
+          fit(360)
+          if (navFocusRef.current === nid) navFocusRef.current = null
+        }, 340)
+      })
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+      if (t1) clearTimeout(t1)
+      if (t2) clearTimeout(t2)
+    }
+  }, [selId, loading, chainData, vpSize?.w, focusGroupId, fitNodeCards])
 
   // Message detail / node focus: smooth camera to highlighted source node(s).
   // Key includes messageId so two messages on the same node still re-fit.

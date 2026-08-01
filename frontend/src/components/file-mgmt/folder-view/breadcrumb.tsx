@@ -69,10 +69,12 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
   }, [currentFolderId, collectionId, folderTree])
 
   return (
-    <div className="flex items-center gap-0.5 text-sm py-1.5 px-2 min-h-[32px]">
+    <div className="flex items-center gap-0.5 text-xs py-1.5 px-2.5 min-h-[32px] overflow-x-auto overscroll-x-contain">
       <button
+        type="button"
         className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors shrink-0 px-1 rounded hover:bg-muted/50"
         onClick={() => navigateToRoot(collectionId)}
+        title="Root"
       >
         <Home className="h-3.5 w-3.5" />
       </button>
@@ -80,8 +82,9 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
         <div key={folder.folder_id} className="flex items-center gap-0.5 shrink-0">
           <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
           <button
+            type="button"
             className={cn(
-              "px-1.5 py-0.5 rounded transition-colors truncate max-w-[180px]",
+              "px-1.5 py-0.5 rounded transition-colors truncate max-w-[160px]",
               i === path.length - 1
                 ? "text-foreground font-medium cursor-default"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50"

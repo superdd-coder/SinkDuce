@@ -17,11 +17,18 @@ class FolderCreate(BaseModel):
     name: str
     parent_folder_id: str | None = None
     kind: str | None = None  # system_group|user_group|branch|plain; defaults to "plain"
+    # lucide | emoji; optional (plain folders only)
+    icon_type: str | None = None
+    icon_value: str | None = None
+    icon_color: str | None = None
 
 
 class FolderUpdate(BaseModel):
     name: str | None = None
     parent_folder_id: str | None = None
+    icon_type: str | None = None
+    icon_value: str | None = None
+    icon_color: str | None = None
     version: int
 
 
@@ -35,6 +42,9 @@ class FolderOut(BaseModel):
     created_at: str
     updated_at: str
     version: int = 1
+    icon_type: str | None = None
+    icon_value: str | None = None
+    icon_color: str | None = None
 
 
 class FolderTree(FolderOut):
@@ -161,7 +171,7 @@ class FilePathOut(BaseModel):
     created_by: str = "local"
     archived: bool = False  # path-level archive
     folder_path: str = ""   # derived: breadcrumb path of the folder
-    is_greyed: bool = False  # derived: file/path archived or greyed attachment
+    is_greyed: bool = False  # UI: file- or path-level archived in this context
 
 
 class FileVersionOut(BaseModel):
@@ -186,7 +196,7 @@ class FileOut(BaseModel):
     filename: str = ""      # derived: current version original filename
     original_ext: str = ""  # derived: extension from filename (e.g. "pdf", "md", "" for none)
     created_at: str = ""    # derived: first version creation timestamp
-    is_greyed: bool = False  # derived: greyed status in current folder context
+    is_greyed: bool = False  # True if file- or path-level archived (folder view grey)
     task_id: str | None = None  # upload task ID for async ingest polling
 
 
@@ -230,6 +240,8 @@ class MessageOut(BaseModel):
     edited_at: str | None = None
     edited_by: str | None = None
     version: int = 1
+    # Display name of owner (folder/file/node); filled by service layer
+    source_name: str | None = None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -255,17 +267,28 @@ class EndChainRequest(BaseModel):
 
 
 class ArchiveToggle(BaseModel):
-    """Archive toggle request.
+    """Archive / unarchive request.
 
-    - ``archived=True``: file-level archive (``files.archived=1``).
-    - ``archived=False``: restore file-level archive when set; if ``folder_id``
-      is provided, also clear path-level archives for this file in that folder
-      (branch merge greys that only set ``file_paths.archived``).
+    **Archive** (``archived=True``):
+    - ``scope="file"``: exclude from search (``files.archived=1``). All folder
+      views show the file greyed; no per-path writes required.
+    - ``scope="path"``: archive for this folder only (``file_paths.archived``).
+      Requires ``folder_id``. If every mount path is then archived, auto-promotes
+      to file-level.
+
+    **Unarchive** (``archived=False``):
+    - Always clears file-level archive when set.
+    - If ``folder_id`` is set: also clears path archives in that folder only.
+    - If ``folder_id`` is omitted (e.g. /Archived view): file-level only;
+      path archives are left for per-folder Unarchive.
+    - Paths that were never path-archived recover automatically once file-level
+      is cleared (they were only grey via global file archive).
     """
 
     archived: bool
     version: int
     folder_id: str | None = None
+    scope: str = "file"  # "file" | "path" (only used when archived=True)
 
 
 class NodeFileAttach(BaseModel):

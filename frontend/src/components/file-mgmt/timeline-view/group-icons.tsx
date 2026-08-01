@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
+  Archive,
   Bookmark,
   Briefcase,
   Building2,
@@ -7,9 +8,11 @@ import {
   FileText,
   Flag,
   FolderIcon,
+  GitBranch,
   Hash,
   Heart,
   Layers,
+  Pencil,
   Star,
   Tag,
   Users,
@@ -17,7 +20,13 @@ import {
   Wrench,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { NodeGroup } from "@/types/file-mgmt"
+import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
+
+/** System UI ink green (#1A5E3D / --ze-green). */
+export const ZE_GREEN = "#1A5E3D"
+
+/** Archived system folder — muted slate gray. */
+export const ARCHIVE_GRAY = "#94A3B8"
 
 /** Virtual focus id for nodes with no group. */
 export const UNCATEGORIZED_ID = "__uncategorized__"
@@ -47,16 +56,23 @@ export const LUCIDE_PRESETS: { key: string; Icon: LucideIcon; label: string }[] 
   { key: "heart", Icon: Heart, label: "Heart" },
 ]
 
+/**
+ * Morandi low-saturation palette — pairs with ink green (#1A5E3D)
+ * while staying distinguishable from each other.
+ */
 export const ICON_COLORS = [
-  "#3DAF73",
-  "#3B82F6",
-  "#A855F7",
-  "#F59E0B",
-  "#EF4444",
-  "#06B6D4",
-  "#EC4899",
-  "#94A3B8",
+  "#7A9A88", // sage green (near brand, softer)
+  "#7D93A8", // dusty blue-slate
+  "#9A8BA8", // muted mauve
+  "#B5A48A", // warm sand / taupe
+  "#B08A88", // dusty rose
+  "#7E9B98", // muted teal-gray
+  "#A39B90", // warm stone
+  "#8E9AAB", // cool slate
 ]
+
+/** Default Morandi color for new lucide icons. */
+export const DEFAULT_ICON_COLOR = ICON_COLORS[0]
 
 const LUCIDE_MAP: Record<string, LucideIcon> = Object.fromEntries(
   LUCIDE_PRESETS.map((p) => [p.key, p.Icon])
@@ -98,13 +114,11 @@ export function limitSymbolInput(raw: string): string {
     }
     if (isLatin) {
       if (cjk > 0 || latin >= 2) break
-      // can't mix with emoji already taken
       if (result.length > 0 && !/^[a-zA-Z]+$/.test(result)) break
       latin++
       result += g
       continue
     }
-    // emoji / symbol — single grapheme only
     if (result.length > 0) break
     result += g
     break
@@ -119,12 +133,11 @@ export function resolveGroupIcon(source: GroupIconSource): {
   emoji?: string
   color: string
 } {
-  // Explicit icon fields first — create/edit preview updates even when name is empty
   if (source?.icon_type === "emoji" && source.icon_value) {
     return {
       kind: "emoji",
       emoji: source.icon_value,
-      color: source.icon_color || "#94A3B8",
+      color: source.icon_color || ARCHIVE_GRAY,
     }
   }
   if (source?.icon_type === "lucide" && source.icon_value) {
@@ -132,26 +145,83 @@ export function resolveGroupIcon(source: GroupIconSource): {
     return {
       kind: "lucide",
       Icon,
-      color: source.icon_color || "#A855F7",
+      color: source.icon_color || DEFAULT_ICON_COLOR,
     }
   }
 
   if (!source || !source.name) {
-    return { kind: "lucide", Icon: FolderIcon, color: "#F59E0B" }
+    return { kind: "lucide", Icon: FolderIcon, color: DEFAULT_ICON_COLOR }
   }
   const name = source.name.trim().toLowerCase()
 
-  if (name === "meeting") return { kind: "lucide", Icon: Video, color: "#3B82F6" }
-  if (name === "notes" || name === "note") return { kind: "lucide", Icon: FileText, color: "#3B82F6" }
+  // System groups / folders — ink green
+  if (name === "meeting") return { kind: "lucide", Icon: Video, color: ZE_GREEN }
+  if (name === "notes" || name === "note")
+    return { kind: "lucide", Icon: Pencil, color: ZE_GREEN }
+  if (name === "archived" || name === "archive")
+    return { kind: "lucide", Icon: Archive, color: ARCHIVE_GRAY }
+
   if (
     name === "未分类" ||
     name === "uncategorized" ||
     name === "no group"
   ) {
-    return { kind: "lucide", Icon: FolderIcon, color: "#F59E0B" }
+    return { kind: "lucide", Icon: FolderIcon, color: DEFAULT_ICON_COLOR }
   }
 
-  return { kind: "lucide", Icon: Users, color: "#A855F7" }
+  return { kind: "lucide", Icon: Users, color: DEFAULT_ICON_COLOR }
+}
+
+/**
+ * Kind-based folder icon when no custom / bound group icon applies.
+ * System + branch → ink green; Archived → gray; plain → Morandi default.
+ */
+export function resolveFolderKindIcon(folder: {
+  kind: string
+  name: string
+}): { Icon: LucideIcon; color: string } {
+  if (folder.kind === "system_group") {
+    if (folder.name === "Archived" || folder.name === "Archive") {
+      return { Icon: Archive, color: ARCHIVE_GRAY }
+    }
+    if (folder.name === "Meeting") return { Icon: Video, color: ZE_GREEN }
+    if (folder.name === "Notes") return { Icon: Pencil, color: ZE_GREEN }
+    return { Icon: FolderIcon, color: ZE_GREEN }
+  }
+  if (folder.kind === "user_group") return { Icon: Users, color: DEFAULT_ICON_COLOR }
+  if (folder.kind === "branch") return { Icon: GitBranch, color: ZE_GREEN }
+  return { Icon: FolderIcon, color: DEFAULT_ICON_COLOR }
+}
+
+/** Prefer bound group icon, then folder custom icon, then kind defaults. */
+export function resolveFolderDisplayIcon(
+  folder: Pick<
+    FolderTreeNode,
+    "kind" | "name" | "icon_type" | "icon_value" | "icon_color"
+  >,
+  boundGroup?: GroupIconSource
+): {
+  kind: "lucide" | "emoji"
+  Icon?: LucideIcon
+  emoji?: string
+  color: string
+} {
+  if (
+    boundGroup &&
+    (folder.kind === "user_group" || folder.kind === "system_group")
+  ) {
+    return resolveGroupIcon(boundGroup)
+  }
+  if (folder.icon_type && folder.icon_value) {
+    return resolveGroupIcon({
+      name: folder.name,
+      icon_type: folder.icon_type,
+      icon_value: folder.icon_value,
+      icon_color: folder.icon_color,
+    })
+  }
+  const { Icon, color } = resolveFolderKindIcon(folder)
+  return { kind: "lucide", Icon, color }
 }
 
 export function GroupIconView({
@@ -180,6 +250,38 @@ export function GroupIconView({
   return <Icon className={`${className} shrink-0`} style={{ color: r.color }} />
 }
 
+/** Render folder icon (custom / bound group / kind). */
+export function FolderIconView({
+  folder,
+  boundGroup,
+  className = "h-3.5 w-3.5",
+}: {
+  folder: Pick<
+    FolderTreeNode,
+    "kind" | "name" | "icon_type" | "icon_value" | "icon_color"
+  >
+  boundGroup?: GroupIconSource
+  className?: string
+}) {
+  const r = resolveFolderDisplayIcon(folder, boundGroup)
+  if (r.kind === "emoji") {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center justify-center leading-none shrink-0 select-none",
+          className
+        )}
+        style={{ fontSize: "1.1em" }}
+        aria-hidden
+      >
+        {r.emoji}
+      </span>
+    )
+  }
+  const Icon = r.Icon!
+  return <Icon className={`${className} shrink-0`} style={{ color: r.color }} />
+}
+
 export function groupFromList(
   groups: NodeGroup[],
   groupId: string | null
@@ -187,4 +289,123 @@ export function groupFromList(
   if (!groupId) return { name: "Uncategorized" }
   const g = groups.find((x) => x.group_id === groupId)
   return g ?? { name: null }
+}
+
+export type IconPickerState = {
+  iconMode: "lucide" | "emoji"
+  iconKey: string
+  iconColor: string
+  symbol: string
+}
+
+export function buildIconPayload(state: IconPickerState): {
+  icon_type: string
+  icon_value: string
+  icon_color: string | null
+} {
+  if (state.iconMode === "emoji" && state.symbol.trim()) {
+    return {
+      icon_type: "emoji",
+      icon_value: state.symbol.trim(),
+      icon_color: null,
+    }
+  }
+  return {
+    icon_type: "lucide",
+    icon_value: state.iconKey,
+    icon_color: state.iconColor,
+  }
+}
+
+/** Shared icon picker UI (groups + plain folders). */
+export function IconPickerPanel({
+  iconMode,
+  iconKey,
+  iconColor,
+  symbol,
+  onIconMode,
+  onIconKey,
+  onIconColor,
+  onSymbol,
+}: {
+  iconMode: "lucide" | "emoji"
+  iconKey: string
+  iconColor: string
+  symbol: string
+  onIconMode: (m: "lucide" | "emoji") => void
+  onIconKey: (k: string) => void
+  onIconColor: (c: string) => void
+  onSymbol: (s: string) => void
+}) {
+  return (
+    <div>
+      <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1.5">
+        Icon
+      </label>
+      <div className="space-y-2">
+        <div className="grid grid-cols-8 gap-1">
+          {LUCIDE_PRESETS.map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              title={p.label}
+              className={cn(
+                "h-8 w-8 rounded border flex items-center justify-center transition-colors",
+                iconMode === "lucide" && iconKey === p.key
+                  ? "border-primary bg-primary/10 ring-1 ring-primary/30"
+                  : "border-border hover:bg-muted/40"
+              )}
+              onClick={() => {
+                onIconMode("lucide")
+                onIconKey(p.key)
+                onSymbol("")
+              }}
+            >
+              <p.Icon
+                className="h-3.5 w-3.5 transition-colors"
+                style={{ color: iconColor }}
+              />
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1.5 flex-wrap items-center">
+          <span className="text-[10px] text-muted-foreground/60 mr-0.5">Color</span>
+          {ICON_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={cn(
+                "h-5 w-5 rounded-full border-2 transition-transform",
+                iconColor === c
+                  ? "border-foreground scale-110"
+                  : "border-transparent hover:scale-105"
+              )}
+              style={{ background: c }}
+              onClick={() => {
+                onIconColor(c)
+                onIconMode(iconMode === "emoji" && !symbol ? "lucide" : iconMode)
+              }}
+              title={c}
+            />
+          ))}
+        </div>
+        <div>
+          <label className="text-[10px] text-muted-foreground/60 block mb-1">
+            Custom
+          </label>
+          <input
+            className="w-full text-sm border rounded px-2 py-1.5 bg-background"
+            value={symbol}
+            onChange={(e) => {
+              const next = limitSymbolInput(e.target.value)
+              onSymbol(next)
+              if (next) onIconMode("emoji")
+              else onIconMode("lucide")
+            }}
+            placeholder="Custom icon"
+          />
+        </div>
+      </div>
+    </div>
+  )
 }

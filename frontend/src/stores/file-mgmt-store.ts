@@ -15,6 +15,8 @@ import {
   getFolderTree,
   getFolderFiles,
   getFolderMessages,
+  getFileMessages,
+  createFileMessage,
   createFolder,
   updateFolder,
   deleteFolder,
@@ -29,9 +31,33 @@ import {
   updateMessage,
   deleteMessage,
   getFolder,
+  getNameConflict,
+  updateFile,
 } from "@/api/file-mgmt"
+import { enrichMessageSourceNames } from "@/components/file-mgmt/message-card"
 import { toast } from "sonner"
 import { getTasks } from "@/api/client"
+
+/** Build folder_id → name map from tree for message source tags. */
+function collectFolderNames(
+  nodes: FolderTreeNode[],
+  into: Map<string, string> = new Map()
+): Map<string, string> {
+  for (const n of nodes) {
+    into.set(n.folder_id, n.name)
+    if (n.children?.length) collectFolderNames(n.children, into)
+  }
+  return into
+}
+
+export type NameConflictState = {
+  resource: "folder" | "file"
+  name: string
+  suggestedName: string
+  message: string
+  /** Called with the user-chosen name; should perform the original action. */
+  retry: (newName: string) => Promise<void>
+}
 
 // Check if a folder is the Archived virtual view (by folder_id or name)
 function isArchivedFolder(folderId: string | null, folder?: Folder | null): boolean {
@@ -53,8 +79,20 @@ interface FileMgmtState {
 
   selectedFileIds: Set<string>
   selectedFolderIds: Set<string>
+  /** When false: click file/folder = single-select; double-click folder = open. When true: click toggles multi-select. */
+  multiSelectMode: boolean
 
   messageSidebarOpen: boolean
+  /**
+   * Folder message scope toggles (folder view sidebar).
+   * Default: current folder messages only.
+   * - messageIncludeFiles: files in current folder (or whole subtree if recursive)
+   * - messageRecursive: every nested folder's own messages (+ files/nodes if on)
+   * - messageIncludeNodes: nodes via bound group or branch chain folder
+   */
+  messageIncludeFiles: boolean
+  messageRecursive: boolean
+  messageIncludeNodes: boolean
   viewMode: "folder" | "timeline"
   uploadingTasks: Set<string>  // task IDs being polled
 
@@ -65,11 +103,40 @@ interface FileMgmtState {
   fetchFolderTree: (collectionId: string) => Promise<void>
   selectFolder: (collectionId: string, folderId: string) => Promise<void>
   navigateToRoot: (collectionId: string) => void
-  createSubFolder: (collectionId: string, name: string) => Promise<void>
+  createSubFolder: (
+    collectionId: string,
+    name: string,
+    icon?: {
+      icon_type?: string | null
+      icon_value?: string | null
+      icon_color?: string | null
+    }
+  ) => Promise<void>
   renameFolder: (collectionId: string, folderId: string, name: string, version: number) => Promise<void>
+  /** Rename and/or update folder icon (plain / user_group / branch). */
+  updateFolderDetails: (
+    collectionId: string,
+    folderId: string,
+    version: number,
+    patch: {
+      name?: string
+      icon_type?: string | null
+      icon_value?: string | null
+      icon_color?: string | null
+    }
+  ) => Promise<void>
+  /** Rename display filename of a file (current version). */
+  renameFile: (
+    collectionId: string,
+    fileId: string,
+    filename: string,
+    version: number
+  ) => Promise<void>
   moveFolder: (collectionId: string, folderId: string, newParentId: string | null, version: number) => Promise<void>
   removeFolder: (collectionId: string, folderId: string) => Promise<void>
   toggleFolderSelection: (folderId: string) => void
+  /** Replace selection with a single folder (normal / non-multi mode). */
+  selectSingleFolder: (folderId: string) => void
   clearFolderSelection: () => void
 
   // Files
@@ -79,16 +146,29 @@ interface FileMgmtState {
   moveFilesToFolder: (collectionId: string, fileIds: string[], targetFolderId: string) => Promise<void>
   copyFilesToFolder: (collectionId: string, fileIds: string[], targetFolderId: string) => Promise<void>
   removeFilesFromCurrentFolder: (collectionId: string, fileIds: string[]) => Promise<void>
-  archiveFiles: (collectionId: string, fileIds: string[], files: FileSummary[]) => Promise<void>
+  /** Path-level: archive for current folder only */
+  archiveFilesForFolder: (collectionId: string, fileIds: string[], files: FileSummary[]) => Promise<void>
+  /** File-level: exclude from search */
+  excludeFilesFromSearch: (collectionId: string, fileIds: string[], files: FileSummary[]) => Promise<void>
   permanentlyDeleteFiles: (collectionId: string, fileIds: string[]) => Promise<void>
+  /** Clear file-level; with folder also clear that folder's path archives */
   unarchiveFiles: (collectionId: string, fileIds: string[], files: FileSummary[]) => Promise<void>
   toggleDefinitive: (collectionId: string, fileId: string, definitive: boolean, version: number) => Promise<void>
   toggleSelection: (fileId: string) => void
+  /** Replace selection with a single file (normal / non-multi mode). */
+  selectSingleFile: (fileId: string) => void
   selectAllFiles: () => void
   clearSelection: () => void
+  setMultiSelectMode: (on: boolean) => void
+  enterMultiSelectMode: () => void
+  exitMultiSelectMode: () => void
 
   // Messages
-  refreshMessages: (collectionId: string) => Promise<void>
+  /** @param opts.silent Keep previous list visible (no spinner flash) while refetching. */
+  refreshMessages: (
+    collectionId: string,
+    opts?: { silent?: boolean }
+  ) => Promise<void>
   addMessage: (collectionId: string, body: string) => Promise<void>
   editMessage: (collectionId: string, messageId: string, body: string, version: number) => Promise<void>
   removeMessage: (collectionId: string, messageId: string) => Promise<void>
@@ -96,6 +176,21 @@ interface FileMgmtState {
   // UI
   setViewMode: (mode: "folder" | "timeline") => void
   toggleMessageSidebar: () => void
+  setMessageIncludeFiles: (on: boolean) => void
+  setMessageRecursive: (on: boolean) => void
+  setMessageIncludeNodes: (on: boolean) => void
+  /**
+   * In-app jump: switch Database view to Timeline and focus a node.
+   * Consumed by DatabaseView + TimelineView (never opens a new browser tab).
+   */
+  timelineNavRequest: { nodeId: string; chainId?: string } | null
+  requestTimelineFocus: (nodeId: string, chainId?: string) => void
+  clearTimelineNavRequest: () => void
+
+  /** Same-folder / sibling name conflict — rename dialog */
+  nameConflict: NameConflictState | null
+  resolveNameConflict: (newName: string) => Promise<void>
+  cancelNameConflict: () => void
 
   // Internal: task polling
   _startTaskPolling: (collectionId: string, taskId: string) => void
@@ -114,10 +209,48 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   selectedFileIds: new Set<string>(),
   selectedFolderIds: new Set<string>(),
+  multiSelectMode: false,
   messageSidebarOpen: true,
+  messageIncludeFiles: false,
+  messageRecursive: false,
+  messageIncludeNodes: false,
   viewMode: "folder",
+  timelineNavRequest: null,
   uploadingTasks: new Set<string>(),
   perCollectionFolderCache: {},
+  nameConflict: null,
+
+  resolveNameConflict: async (newName: string) => {
+    const pending = get().nameConflict
+    if (!pending) return
+    const name = newName.trim()
+    if (!name) {
+      toast.error("Name is required")
+      return
+    }
+    try {
+      await pending.retry(name)
+      set({ nameConflict: null })
+    } catch (err) {
+      const again = getNameConflict(err)
+      if (again) {
+        set({
+          nameConflict: {
+            resource: again.resource,
+            name: again.name,
+            suggestedName: again.suggested_name,
+            message: again.message,
+            retry: pending.retry,
+          },
+        })
+        return
+      }
+      set({ nameConflict: null })
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+
+  cancelNameConflict: () => set({ nameConflict: null }),
 
   // ── Folder navigation ──
 
@@ -142,6 +275,8 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       filesLoading: true,
       messagesLoading: true,
       selectedFileIds: new Set<string>(),
+      selectedFolderIds: new Set<string>(),
+      multiSelectMode: false,
       perCollectionFolderCache: { ...get().perCollectionFolderCache, [collectionId]: folderId },
     })
 
@@ -168,8 +303,35 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         set({ filesLoading: false })
       }
       try {
-        const msgs = await getFolderMessages(collectionId, folderId)
-        set({ currentFolderMessages: msgs })
+        const {
+          messageIncludeFiles,
+          messageRecursive,
+          messageIncludeNodes,
+        } = get()
+        const msgs = await getFolderMessages(
+          collectionId,
+          folderId,
+          messageIncludeNodes,
+          messageIncludeFiles,
+          messageRecursive
+        )
+        const folderNameById = collectFolderNames(get().folderTree)
+        // Always include the folder we just opened (tree may still be loading)
+        const cf = get().currentFolder
+        if (cf?.folder_id && cf.name) {
+          folderNameById.set(cf.folder_id, cf.name)
+        }
+        if (folder?.folder_id && folder.name) {
+          folderNameById.set(folder.folder_id, folder.name)
+        }
+        const fileNameById = new Map(
+          get().currentFolderFiles.map((f) => [f.file_id, f.filename])
+        )
+        const enriched = await enrichMessageSourceNames(collectionId, msgs, {
+          folderNameById,
+          fileNameById,
+        })
+        set({ currentFolderMessages: enriched })
       } catch {
         // non-critical
       } finally {
@@ -196,47 +358,158 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       currentFolderFiles: [],
       currentFolderMessages: [],
       selectedFileIds: new Set(),
+      selectedFolderIds: new Set(),
+      multiSelectMode: false,
       folderTree: [],
       perCollectionFolderCache: { ...get().perCollectionFolderCache, [collectionId]: null },
     })
     get().fetchFolderTree(collectionId)
     get().refreshFiles(collectionId)
+    // Load root / collection messages (was previously cleared and never re-fetched)
+    void get().refreshMessages(collectionId)
   },
 
-  createSubFolder: async (collectionId: string, name: string) => {
+  createSubFolder: async (collectionId, name, icon) => {
     const { currentFolderId } = get()
-    try {
+    const doCreate = async (folderName: string) => {
       await createFolder(collectionId, {
-        name,
+        name: folderName,
         parent_folder_id: currentFolderId,
         kind: "plain",
+        ...(icon ?? {}),
       })
       await get().fetchFolderTree(collectionId)
-      toast.success(`Folder "${name}" created`)
+      toast.success(`Folder "${folderName}" created`)
+    }
+    try {
+      await doCreate(name)
     } catch (err) {
+      const conflict = getNameConflict(err)
+      if (conflict) {
+        set({
+          nameConflict: {
+            resource: "folder",
+            name: conflict.name,
+            suggestedName: conflict.suggested_name,
+            message: conflict.message,
+            retry: doCreate,
+          },
+        })
+        return
+      }
       toast.error(`Failed to create folder: ${err instanceof Error ? err.message : String(err)}`)
     }
   },
 
   renameFolder: async (collectionId: string, folderId: string, name: string, version: number) => {
-    try {
-      await updateFolder(collectionId, folderId, { name, version })
+    await get().updateFolderDetails(collectionId, folderId, version, { name })
+  },
+
+  updateFolderDetails: async (collectionId, folderId, version, patch) => {
+    const doUpdate = async (nameOverride?: string) => {
+      const name = nameOverride ?? patch.name
+      await updateFolder(collectionId, folderId, {
+        version,
+        ...(name !== undefined ? { name } : {}),
+        ...(patch.icon_type !== undefined ? { icon_type: patch.icon_type } : {}),
+        ...(patch.icon_value !== undefined ? { icon_value: patch.icon_value } : {}),
+        ...(patch.icon_color !== undefined ? { icon_color: patch.icon_color } : {}),
+      })
       await get().fetchFolderTree(collectionId)
-      if (get().currentFolderId === folderId) {
-        set({ currentFolder: get().currentFolder ? { ...get().currentFolder!, name } : null })
+      if (get().currentFolderId === folderId && name) {
+        set({
+          currentFolder: get().currentFolder
+            ? { ...get().currentFolder!, name }
+            : null,
+        })
       }
-      toast.success("Folder renamed")
+      toast.success("Folder updated")
+    }
+    try {
+      await doUpdate()
     } catch (err) {
-      toast.error(`Failed to rename: ${err instanceof Error ? err.message : String(err)}`)
+      const conflict = getNameConflict(err)
+      if (conflict && patch.name !== undefined) {
+        set({
+          nameConflict: {
+            resource: "folder",
+            name: conflict.name,
+            suggestedName: conflict.suggested_name,
+            message: conflict.message,
+            retry: doUpdate,
+          },
+        })
+        return
+      }
+      toast.error(
+        `Failed to update folder: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  },
+
+  renameFile: async (collectionId, fileId, filename, version) => {
+    const doRename = async (newName: string) => {
+      await updateFile(collectionId, fileId, { filename: newName, version })
+      await get().refreshFiles(collectionId)
+      toast.success("File renamed")
+    }
+    try {
+      await doRename(filename)
+    } catch (err) {
+      const conflict = getNameConflict(err)
+      if (conflict) {
+        set({
+          nameConflict: {
+            resource: "file",
+            name: conflict.name,
+            suggestedName: conflict.suggested_name,
+            message: conflict.message,
+            retry: doRename,
+          },
+        })
+        return
+      }
+      toast.error(
+        `Failed to rename file: ${err instanceof Error ? err.message : String(err)}`
+      )
     }
   },
 
   moveFolder: async (collectionId: string, folderId: string, newParentId: string | null, version: number) => {
-    try {
-      await updateFolder(collectionId, folderId, { parent_folder_id: newParentId, version })
+    const doMove = async (_ignoredName?: string) => {
+      // Name conflict on move uses suggested folder name via rename+move;
+      // if only parent changes, retry same version after user renames first.
+      await updateFolder(collectionId, folderId, {
+        parent_folder_id: newParentId,
+        version,
+      })
       await get().fetchFolderTree(collectionId)
       toast.success("Folder moved")
+    }
+    try {
+      await doMove()
     } catch (err) {
+      const conflict = getNameConflict(err)
+      if (conflict) {
+        set({
+          nameConflict: {
+            resource: "folder",
+            name: conflict.name,
+            suggestedName: conflict.suggested_name,
+            message: conflict.message,
+            retry: async (newName) => {
+              await updateFolder(collectionId, folderId, {
+                name: newName,
+                parent_folder_id: newParentId,
+                version,
+              })
+              await get().fetchFolderTree(collectionId)
+              toast.success("Folder moved")
+            },
+          },
+        })
+        return
+      }
       toast.error(`Failed to move: ${err instanceof Error ? err.message : String(err)}`)
     }
   },
@@ -258,17 +531,15 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   refreshFiles: async (collectionId: string) => {
     const { currentFolderId, currentFolder } = get()
-    if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) return
     set({ filesLoading: true })
     try {
-      if (currentFolderId) {
-        if (isArchivedFolder(currentFolderId, currentFolder)) {
-          const files = await getArchivedFiles(collectionId)
-          set({ currentFolderFiles: files })
-        } else {
-          const files = await getFolderFiles(collectionId, currentFolderId)
-          set({ currentFolderFiles: files })
-        }
+      if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) {
+        // Virtual /Archived: all file-level archives
+        const files = await getArchivedFiles(collectionId)
+        set({ currentFolderFiles: files })
+      } else if (currentFolderId) {
+        const files = await getFolderFiles(collectionId, currentFolderId)
+        set({ currentFolderFiles: files })
       } else {
         // Root level: orphan files
         const files = await getRootFiles(collectionId)
@@ -287,20 +558,41 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       toast.error("Cannot upload to Archived")
       return
     }
-    try {
-      const result = currentFolderId
-        ? await uploadFileToFolder(collectionId, currentFolderId, file)
-        : await uploadFileToFolder(collectionId, "", file)  // root: upload without path
+    const folderId = currentFolderId || ""
+    const doUpload = async (displayName: string) => {
+      const payload =
+        displayName === file.name
+          ? file
+          : new File([file], displayName, { type: file.type })
+      const result = await uploadFileToFolder(collectionId, folderId, payload)
       await get().refreshFiles(collectionId)
       if (result.unsupported) {
-        toast.warning(`"${file.name}" uploaded — file type not supported for ingest`)
+        toast.warning(
+          `"${displayName}" uploaded — file type not supported for ingest`
+        )
       } else if (result.task_id) {
-        toast.info(`"${file.name}" uploaded, ingesting...`)
+        toast.info(`"${displayName}" uploaded, ingesting...`)
         get()._startTaskPolling(collectionId, result.task_id)
       } else {
-        toast.success(`"${file.name}" uploaded`)
+        toast.success(`"${displayName}" uploaded`)
       }
+    }
+    try {
+      await doUpload(file.name)
     } catch (err) {
+      const conflict = getNameConflict(err)
+      if (conflict) {
+        set({
+          nameConflict: {
+            resource: "file",
+            name: conflict.name,
+            suggestedName: conflict.suggested_name,
+            message: conflict.message,
+            retry: doUpload,
+          },
+        })
+        return
+      }
       toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   },
@@ -330,27 +622,64 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   },
 
   moveFilesToFolder: async (collectionId: string, fileIds: string[], targetFolderId: string) => {
-    const { currentFolderId } = get()
-    try {
-      await Promise.all(
-        fileIds.map(async (fid) => {
-          // Add to target folder
-          await addFilePath(collectionId, fid, targetFolderId)
-          // Remove from current folder (if different)
-          if (currentFolderId && currentFolderId !== targetFolderId) {
-            try {
-              const { getFileDetail } = await import("@/api/file-mgmt")
-              const detail = await getFileDetail(collectionId, fid)
-              const pathInFolder = detail.paths?.find((p) => p.folder_id === currentFolderId)
-              if (pathInFolder) {
-                await removeFilePath(collectionId, fid, pathInFolder.path_id)
-              }
-            } catch {
-              // skip if path removal fails
-            }
-          }
+    const { currentFolderId, currentFolderFiles } = get()
+
+    const moveOne = async (fid: string, renameTo?: string) => {
+      if (renameTo) {
+        const f = currentFolderFiles.find((x) => x.file_id === fid)
+        await updateFile(collectionId, fid, {
+          filename: renameTo,
+          version: f?.version ?? 1,
         })
-      )
+      }
+      await addFilePath(collectionId, fid, targetFolderId)
+      if (currentFolderId && currentFolderId !== targetFolderId) {
+        try {
+          const { getFileDetail } = await import("@/api/file-mgmt")
+          const detail = await getFileDetail(collectionId, fid)
+          const pathInFolder = detail.paths?.find(
+            (p) => p.folder_id === currentFolderId
+          )
+          if (pathInFolder) {
+            await removeFilePath(collectionId, fid, pathInFolder.path_id)
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    }
+
+    try {
+      for (const fid of fileIds) {
+        try {
+          await moveOne(fid)
+        } catch (err) {
+          const conflict = getNameConflict(err)
+          if (conflict) {
+            // Pause remaining; user renames this file then we retry only this one
+            await new Promise<void>((resolve, reject) => {
+              set({
+                nameConflict: {
+                  resource: "file",
+                  name: conflict.name,
+                  suggestedName: conflict.suggested_name,
+                  message: conflict.message,
+                  retry: async (newName) => {
+                    try {
+                      await moveOne(fid, newName)
+                      resolve()
+                    } catch (e) {
+                      reject(e)
+                    }
+                  },
+                },
+              })
+            })
+            continue
+          }
+          throw err
+        }
+      }
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
       toast.success(`${fileIds.length} file(s) moved`)
@@ -360,10 +689,49 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   },
 
   copyFilesToFolder: async (collectionId: string, fileIds: string[], targetFolderId: string) => {
+    const { currentFolderFiles } = get()
+
+    const linkOne = async (fid: string, renameTo?: string) => {
+      if (renameTo) {
+        const f = currentFolderFiles.find((x) => x.file_id === fid)
+        await updateFile(collectionId, fid, {
+          filename: renameTo,
+          version: f?.version ?? 1,
+        })
+      }
+      await addFilePath(collectionId, fid, targetFolderId)
+    }
+
     try {
-      await Promise.all(
-        fileIds.map((fid) => addFilePath(collectionId, fid, targetFolderId))
-      )
+      for (const fid of fileIds) {
+        try {
+          await linkOne(fid)
+        } catch (err) {
+          const conflict = getNameConflict(err)
+          if (conflict) {
+            await new Promise<void>((resolve, reject) => {
+              set({
+                nameConflict: {
+                  resource: "file",
+                  name: conflict.name,
+                  suggestedName: conflict.suggested_name,
+                  message: conflict.message,
+                  retry: async (newName) => {
+                    try {
+                      await linkOne(fid, newName)
+                      resolve()
+                    } catch (e) {
+                      reject(e)
+                    }
+                  },
+                },
+              })
+            })
+            continue
+          }
+          throw err
+        }
+      }
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
       toast.success(`${fileIds.length} file(s) linked to folder`)
@@ -398,19 +766,45 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     }
   },
 
-  archiveFiles: async (collectionId: string, fileIds: string[], files: FileSummary[]) => {
+  archiveFilesForFolder: async (collectionId: string, fileIds: string[], files: FileSummary[]) => {
+    const folderId = get().currentFolderId
+    if (!folderId || folderId === "__archived__") {
+      toast.error("Open a folder to archive for this folder")
+      return
+    }
     try {
       await Promise.all(
         fileIds.map((fid) => {
           const f = files.find((x) => x.file_id === fid)
-          return toggleFileArchive(collectionId, fid, true, f?.version ?? 1)
+          return toggleFileArchive(collectionId, fid, true, f?.version ?? 1, {
+            folderId,
+            scope: "path",
+          })
         })
       )
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) archived`)
+      toast.success(`${fileIds.length} file(s) archived for this folder`)
     } catch (err) {
       toast.error(`Archive failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  },
+
+  excludeFilesFromSearch: async (collectionId: string, fileIds: string[], files: FileSummary[]) => {
+    try {
+      await Promise.all(
+        fileIds.map((fid) => {
+          const f = files.find((x) => x.file_id === fid)
+          return toggleFileArchive(collectionId, fid, true, f?.version ?? 1, {
+            scope: "file",
+          })
+        })
+      )
+      await get().refreshFiles(collectionId)
+      set({ selectedFileIds: new Set() })
+      toast.success(`${fileIds.length} file(s) excluded from search`)
+    } catch (err) {
+      toast.error(`Exclude failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   },
 
@@ -427,23 +821,28 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   unarchiveFiles: async (collectionId: string, fileIds: string[], files: FileSummary[]) => {
     try {
-      // Pass current folder so path-level greys (branch merge) can be cleared here
+      // Folder: file-level + this folder's paths
+      // /Archived: file-level only (path archives left for per-folder Unarchive)
       const folderId = get().currentFolderId
+      const inArchivedView =
+        !folderId ||
+        folderId === "__archived__" ||
+        isArchivedFolder(folderId, get().currentFolder)
       await Promise.all(
         fileIds.map((fid) => {
           const f = files.find((x) => x.file_id === fid)
-          return toggleFileArchive(
-            collectionId,
-            fid,
-            false,
-            f?.version ?? 1,
-            folderId
-          )
+          return toggleFileArchive(collectionId, fid, false, f?.version ?? 1, {
+            folderId: inArchivedView ? null : folderId,
+          })
         })
       )
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) unarchived`)
+      toast.success(
+        inArchivedView
+          ? `${fileIds.length} file(s) restored to search (folder archives unchanged)`
+          : `${fileIds.length} file(s) restored`
+      )
     } catch (err) {
       toast.error(`Unarchive failed: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -451,11 +850,17 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   toggleDefinitive: async (collectionId: string, fileId: string, definitive: boolean, version: number) => {
     try {
-      // 1. Update SQLite is_definitive
+      const ver = Number(version)
+      if (!Number.isFinite(ver) || ver < 1) {
+        toast.error("Cannot update definitive: missing file version")
+        return
+      }
+
+      // 1. Update SQLite is_definitive immediately (must not block on summary gen)
       const resp = await fetch(`/api/file-mgmt/${collectionId}/files/${fileId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_definitive: definitive, version }),
+        body: JSON.stringify({ is_definitive: definitive, version: ver }),
       })
       if (!resp.ok) {
         const body = await resp.text()
@@ -463,72 +868,125 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         return
       }
 
-      // 2. Sync to doc_summary system for consolidate pipeline
-      const source = `__file__:${fileId}`
-      try {
-        const { setDocSummaryInclude, generateDocSummary, getDocSummary } = await import("@/api/client")
-        if (definitive) {
-          // Try to set include_in_summary — if no summary exists, generate one first
-          try {
-            await setDocSummaryInclude(collectionId, source, true)
-          } catch {
-            // No summary exists — generate one, poll, then set include
-            toast.info("Generating summary for definitive file...")
-            await generateDocSummary(collectionId, source)
-            // Poll for completion (max 5 minutes)
-            const start = Date.now()
-            while (Date.now() - start < 300_000) {
-              await new Promise((r) => setTimeout(r, 2000))
-              try {
-                const ds = await getDocSummary(collectionId, source)
-                if (ds) {
-                  await setDocSummaryInclude(collectionId, source, true)
-                  break
-                }
-              } catch { /* still generating */ }
-            }
-          }
-        } else {
-          // Setting to false — just update include_in_summary if summary exists
-          try {
-            await setDocSummaryInclude(collectionId, source, false)
-          } catch { /* no summary — nothing to do */ }
-        }
-      } catch {
-        // Summary sync failed — SQLite flag is still set, not critical
-      }
-
       await get().refreshFiles(collectionId)
       toast.success(definitive ? "Marked as definitive" : "Removed definitive")
+
+      // 2. Background: sync doc_summary include for consolidate (non-blocking)
+      const source = `__file__:${fileId}`
+      void (async () => {
+        try {
+          const { setDocSummaryInclude, generateDocSummary, getDocSummary } =
+            await import("@/api/client")
+          if (definitive) {
+            try {
+              await setDocSummaryInclude(collectionId, source, true)
+            } catch {
+              toast.info("Generating summary for definitive file…")
+              await generateDocSummary(collectionId, source)
+              const start = Date.now()
+              while (Date.now() - start < 300_000) {
+                await new Promise((r) => setTimeout(r, 2000))
+                try {
+                  const ds = await getDocSummary(collectionId, source)
+                  if (ds) {
+                    await setDocSummaryInclude(collectionId, source, true)
+                    break
+                  }
+                } catch {
+                  /* still generating */
+                }
+              }
+            }
+          } else {
+            try {
+              await setDocSummaryInclude(collectionId, source, false)
+            } catch {
+              /* no summary */
+            }
+          }
+        } catch {
+          /* summary sync optional */
+        }
+      })()
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   },
 
   toggleSelection: (fileId: string) => {
+    if (!get().multiSelectMode) {
+      get().selectSingleFile(fileId)
+      return
+    }
     set((s) => {
       const next = new Set(s.selectedFileIds)
       if (next.has(fileId)) next.delete(fileId)
       else next.add(fileId)
-      return { selectedFileIds: next }
+      return { selectedFileIds: next, selectedFolderIds: new Set() }
+    })
+  },
+
+  selectSingleFile: (fileId: string) => {
+    set({
+      selectedFileIds: new Set([fileId]),
+      selectedFolderIds: new Set(),
     })
   },
 
   selectAllFiles: () => {
+    if (!get().multiSelectMode) return
     const { currentFolderFiles } = get()
-    set({ selectedFileIds: new Set(currentFolderFiles.map((f) => f.file_id)) })
+    set({
+      selectedFileIds: new Set(currentFolderFiles.map((f) => f.file_id)),
+      selectedFolderIds: new Set(),
+    })
   },
 
   clearSelection: () => {
     set({ selectedFileIds: new Set() })
   },
 
+  setMultiSelectMode: (on: boolean) => {
+    if (on) {
+      set({ multiSelectMode: true })
+    } else {
+      set({
+        multiSelectMode: false,
+        selectedFileIds: new Set(),
+        selectedFolderIds: new Set(),
+      })
+    }
+  },
+
+  enterMultiSelectMode: () => {
+    set({ multiSelectMode: true })
+  },
+
+  exitMultiSelectMode: () => {
+    set({
+      multiSelectMode: false,
+      selectedFileIds: new Set(),
+      selectedFolderIds: new Set(),
+    })
+  },
+
   toggleFolderSelection: (folderId: string) => {
+    if (!get().multiSelectMode) {
+      get().selectSingleFolder(folderId)
+      return
+    }
     set((s) => {
       const next = new Set(s.selectedFolderIds)
       if (next.has(folderId)) next.delete(folderId)
       else next.add(folderId)
-      return { selectedFolderIds: next }
+      return { selectedFolderIds: next, selectedFileIds: new Set() }
+    })
+  },
+
+  selectSingleFolder: (folderId: string) => {
+    set({
+      selectedFolderIds: new Set([folderId]),
+      selectedFileIds: new Set(),
     })
   },
 
@@ -538,42 +996,127 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   // ── Messages ──
 
-  refreshMessages: async (collectionId: string) => {
-    const { currentFolderId, currentFolder } = get()
-    if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) return
-    set({ messagesLoading: true })
+  refreshMessages: async (collectionId: string, opts?: { silent?: boolean }) => {
+    const {
+      currentFolderId,
+      currentFolder,
+      messageIncludeFiles,
+      messageRecursive,
+      messageIncludeNodes,
+      selectedFileIds,
+      selectedFolderIds,
+    } = get()
+    const selFiles = Array.from(selectedFileIds)
+    const selFolders = Array.from(selectedFolderIds)
+
+    // Selection-driven scope:
+    // - exactly 1 file → that file's messages
+    // - exactly 1 folder → that folder (with Nested/Files/Nodes flags)
+    // - else → current navigated folder / collection root
+    const focusFileId =
+      selFiles.length === 1 && selFolders.length === 0 ? selFiles[0] : null
+    const focusFolderId =
+      selFolders.length === 1 && selFiles.length === 0 ? selFolders[0] : null
+
+    const navArchived =
+      currentFolderId && isArchivedFolder(currentFolderId, currentFolder)
+    if (!focusFileId && !focusFolderId && navArchived) {
+      if (!opts?.silent) set({ messagesLoading: false, currentFolderMessages: [] })
+      return
+    }
+    if (focusFolderId === "__archived__") {
+      if (!opts?.silent) set({ messagesLoading: false, currentFolderMessages: [] })
+      else set({ currentFolderMessages: [] })
+      return
+    }
+
+    if (!opts?.silent) set({ messagesLoading: true })
     try {
-      const msgs = currentFolderId
-        ? await getFolderMessages(collectionId, currentFolderId)
-        : await getCollectionMessages(collectionId)
-      set({ currentFolderMessages: msgs })
+      let msgs: Message[]
+      if (focusFileId) {
+        msgs = await getFileMessages(collectionId, focusFileId)
+      } else {
+        const folderScope = focusFolderId ?? currentFolderId
+        msgs = folderScope
+          ? await getFolderMessages(
+              collectionId,
+              folderScope,
+              messageIncludeNodes,
+              messageIncludeFiles,
+              messageRecursive
+            )
+          : await getCollectionMessages(collectionId, {
+              includeNodeMsgs: messageIncludeNodes,
+              includeFileMsgs: messageIncludeFiles,
+              recursive: messageRecursive,
+            })
+      }
+      const folderNameById = collectFolderNames(get().folderTree)
+      const cf = get().currentFolder
+      if (cf?.folder_id && cf.name) {
+        folderNameById.set(cf.folder_id, cf.name)
+      }
+      const fileNameById = new Map(
+        get().currentFolderFiles.map((f) => [f.file_id, f.filename])
+      )
+      const enriched = await enrichMessageSourceNames(collectionId, msgs, {
+        folderNameById,
+        fileNameById,
+      })
+      set({ currentFolderMessages: enriched })
     } catch {
       // ignore
     } finally {
-      set({ messagesLoading: false })
+      if (!opts?.silent) set({ messagesLoading: false })
     }
   },
 
   addMessage: async (collectionId: string, body: string) => {
-    const { currentFolderId } = get()
+    const { currentFolderId, selectedFileIds, selectedFolderIds } = get()
+    const selFiles = Array.from(selectedFileIds)
+    const selFolders = Array.from(selectedFolderIds)
+    const focusFileId =
+      selFiles.length === 1 && selFolders.length === 0 ? selFiles[0] : null
+    const focusFolderId =
+      selFolders.length === 1 && selFiles.length === 0 ? selFolders[0] : null
     try {
       let msg: Message
-      if (currentFolderId) {
-        msg = await createFolderMessage(collectionId, currentFolderId, {
-          owner_type: "folder",
-          owner_id: currentFolderId,
+      if (focusFileId) {
+        msg = await createFileMessage(collectionId, focusFileId, {
+          owner_type: "file",
+          owner_id: focusFileId,
           body,
           author_type: "user",
         })
       } else {
-        msg = await createCollectionMessage(collectionId, {
-          owner_type: "collection",
-          owner_id: collectionId,
-          body,
-          author_type: "user",
-        })
+        const folderOwner = focusFolderId ?? currentFolderId
+        if (folderOwner && folderOwner !== "__archived__") {
+          msg = await createFolderMessage(collectionId, folderOwner, {
+            owner_type: "folder",
+            owner_id: folderOwner,
+            body,
+            author_type: "user",
+          })
+        } else {
+          msg = await createCollectionMessage(collectionId, {
+            owner_type: "collection",
+            owner_id: collectionId,
+            body,
+            author_type: "user",
+          })
+        }
       }
-      set((s) => ({ currentFolderMessages: [msg, ...s.currentFolderMessages] }))
+      const folderNameById = collectFolderNames(get().folderTree)
+      const fileNameById = new Map(
+        get().currentFolderFiles.map((f) => [f.file_id, f.filename])
+      )
+      const [enriched] = await enrichMessageSourceNames(collectionId, [msg], {
+        folderNameById,
+        fileNameById,
+      })
+      set((s) => ({
+        currentFolderMessages: [enriched, ...s.currentFolderMessages],
+      }))
       toast.success("Message added")
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -583,9 +1126,13 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   editMessage: async (collectionId: string, messageId: string, body: string, version: number) => {
     try {
       const updated = await updateMessage(collectionId, messageId, { body, version })
+      const folderNameById = collectFolderNames(get().folderTree)
+      const [enriched] = await enrichMessageSourceNames(collectionId, [updated], {
+        folderNameById,
+      })
       set((s) => ({
         currentFolderMessages: s.currentFolderMessages.map((m) =>
-          m.message_id === messageId ? updated : m
+          m.message_id === messageId ? enriched : m
         ),
       }))
       toast.success("Message updated")
@@ -612,6 +1159,29 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   toggleMessageSidebar: () => {
     set((s) => ({ messageSidebarOpen: !s.messageSidebarOpen }))
+  },
+
+  setMessageIncludeFiles: (on: boolean) => {
+    set({ messageIncludeFiles: on })
+  },
+
+  setMessageRecursive: (on: boolean) => {
+    set({ messageRecursive: on })
+  },
+
+  setMessageIncludeNodes: (on: boolean) => {
+    set({ messageIncludeNodes: on })
+  },
+
+  requestTimelineFocus: (nodeId, chainId) => {
+    set({
+      timelineNavRequest: { nodeId, chainId },
+      viewMode: "timeline",
+    })
+  },
+
+  clearTimelineNavRequest: () => {
+    set({ timelineNavRequest: null })
   },
 
   _startTaskPolling: (collectionId: string, taskId: string) => {

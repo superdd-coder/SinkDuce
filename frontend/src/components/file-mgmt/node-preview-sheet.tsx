@@ -140,7 +140,7 @@ export function NodePreviewSheet({
                       <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
                       <span className="truncate">{a.filename || a.file_id}</span>
                       {a.archived && (
-                        <span className="text-[9px] text-amber-500">ARCHIVED</span>
+                        <span className="text-[9px] text-amber-500">archived</span>
                       )}
                     </li>
                   ))}

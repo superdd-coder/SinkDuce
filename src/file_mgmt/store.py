@@ -42,7 +42,10 @@ _CREATE_TABLES = [
       created_by       TEXT NOT NULL DEFAULT 'local',
       created_at       TEXT NOT NULL,
       updated_at       TEXT NOT NULL,
-      version          INTEGER NOT NULL DEFAULT 1
+      version          INTEGER NOT NULL DEFAULT 1,
+      icon_type        TEXT,
+      icon_value       TEXT,
+      icon_color       TEXT
     )''',
     # node_groups (1:1 folder)
     '''CREATE TABLE node_groups (
@@ -294,6 +297,22 @@ def _ensure_node_groups_icon_columns(conn: sqlite3.Connection) -> None:
             cols.add(col)
         except sqlite3.OperationalError as e:
             # Two requests both saw missing column and both ran ALTER
+            if not _is_duplicate_column_error(e):
+                raise
+            cols.add(col)
+
+
+def _ensure_folders_icon_columns(conn: sqlite3.Connection) -> None:
+    """Add folders icon_* columns if missing (idempotent, race-safe)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(folders)").fetchall()}
+    for col in ("icon_type", "icon_value", "icon_color"):
+        if col in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE folders ADD COLUMN {col} TEXT")
+            logger.info("Added folders.%s column", col)
+            cols.add(col)
+        except sqlite3.OperationalError as e:
             if not _is_duplicate_column_error(e):
                 raise
             cols.add(col)
@@ -605,6 +624,7 @@ def init_collection_db(collection_id: str) -> None:
                 _ensure_chains_merge_node_id(conn_backfill)
                 _ensure_chains_merge_archive_json(conn_backfill)
                 _ensure_node_groups_icon_columns(conn_backfill)
+                _ensure_folders_icon_columns(conn_backfill)
                 _ensure_file_paths_archived(conn_backfill)
                 _backfill_system_folders(conn_backfill)
                 _cleanup_uncategorized_folder(conn_backfill)

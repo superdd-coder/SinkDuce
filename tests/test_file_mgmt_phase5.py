@@ -881,3 +881,21 @@ def test_end_to_end():
         merged = next(n for n in chain_nodes if n["node_id"] == merge_id)
         assert merged["node_type"] == "event"
         assert merged["chain_id"] == branch_id
+
+    # 10. Re-merge after reopen must succeed (no stale end-node 409)
+    end2 = _create_node(
+        client, coll, branch_id, "End Again", order=99, group_id=group_id, node_type="end"
+    )
+    resp_remerge = client.post(
+        f"/api/file-mgmt/{coll}/nodes/{end2['node_id']}/end-chain",
+        json={"inherit_node_ids": [], "title": "Merged Again", "group_id": group_id},
+    )
+    assert resp_remerge.status_code == 200, resp_remerge.text
+    remerge = resp_remerge.json()
+    assert remerge.get("merged_node_id")
+    # Branch must not keep end markers after successful merge
+    resp_nodes2 = client.get(f"/api/file-mgmt/{coll}/chains/{branch_id}/nodes")
+    assert all(n["node_type"] != "end" for n in resp_nodes2.json())
+    resp_ch = client.get(f"/api/file-mgmt/{coll}/chains")
+    branch_after = next(c for c in resp_ch.json() if c["chain_id"] == branch_id)
+    assert branch_after.get("merge_node_id") == remerge["merged_node_id"]

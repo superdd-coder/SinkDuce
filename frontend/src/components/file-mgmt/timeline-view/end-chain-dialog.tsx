@@ -252,8 +252,8 @@ export function EndChainDialog({
       const pathN = result.path_archived_files?.length ?? result.greyed_files?.length ?? 0
       const fileN = result.file_archived?.length ?? 0
       toast.success(
-        `Chain ended. ${pathN} path-archived` +
-          (fileN ? `, ${fileN} fully archived` : "") +
+        `Chain ended. ${pathN} archived on branch` +
+          (fileN ? `, ${fileN} excluded from search` : "") +
           (result.merged_node_id ? ". Merge node created." : ".")
       )
       onComplete()
@@ -429,7 +429,7 @@ export function EndChainDialog({
                   Inherit files
                 </p>
                 <p className="text-[9px] text-muted-foreground mt-0.5">
-                  Expand a node to select its files (auto-checked). Checked files keep their branch path; unchecked are archived on this branch.
+                  Expand a node to select its files (auto-checked). Checked files keep their branch path; unchecked get path-archived on this branch.
                 </p>
               </div>
               <div className="flex-1 overflow-y-auto p-1.5 space-y-1 max-h-48">

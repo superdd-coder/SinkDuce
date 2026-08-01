@@ -28,6 +28,65 @@ import type {
 
 const BASE = "/api/file-mgmt"
 
+/** Structured 409 body when a same-folder/sibling name already exists. */
+export type NameConflictDetail = {
+  code: "name_conflict"
+  resource: "folder" | "file"
+  name: string
+  suggested_name: string
+  message: string
+}
+
+export class FileMgmtApiError extends Error {
+  status: number
+  detail: unknown
+  rawBody: string
+
+  constructor(status: number, rawBody: string) {
+    let detail: unknown = rawBody
+    try {
+      detail = JSON.parse(rawBody)
+    } catch {
+      /* keep raw string */
+    }
+    // FastAPI wraps as { detail: ... }
+    if (
+      detail &&
+      typeof detail === "object" &&
+      "detail" in (detail as Record<string, unknown>)
+    ) {
+      detail = (detail as { detail: unknown }).detail
+    }
+    const msg =
+      typeof detail === "string"
+        ? detail
+        : detail &&
+            typeof detail === "object" &&
+            "message" in (detail as object)
+          ? String((detail as { message: unknown }).message)
+          : `API ${status}: ${rawBody}`
+    super(msg)
+    this.name = "FileMgmtApiError"
+    this.status = status
+    this.detail = detail
+    this.rawBody = rawBody
+  }
+}
+
+export function getNameConflict(err: unknown): NameConflictDetail | null {
+  if (!(err instanceof FileMgmtApiError) || err.status !== 409) return null
+  const d = err.detail
+  if (
+    d &&
+    typeof d === "object" &&
+    (d as NameConflictDetail).code === "name_conflict" &&
+    typeof (d as NameConflictDetail).suggested_name === "string"
+  ) {
+    return d as NameConflictDetail
+  }
+  return null
+}
+
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
@@ -35,7 +94,7 @@ async function req<T>(path: string, options?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`API ${res.status}: ${body}`)
+    throw new FileMgmtApiError(res.status, body)
   }
   // 204 No Content
   if (res.status === 204) return undefined as unknown as T
@@ -72,10 +131,11 @@ export const getFolderMessages = (
   collectionId: string,
   folderId: string,
   includeNodeMsgs = true,
-  includeFileMsgs = true
+  includeFileMsgs = true,
+  recursive = false
 ) =>
   req<Message[]>(
-    `/${collectionId}/folders/${folderId}/messages?include_node_msgs=${includeNodeMsgs}&include_file_msgs=${includeFileMsgs}`
+    `/${collectionId}/folders/${folderId}/messages?include_node_msgs=${includeNodeMsgs}&include_file_msgs=${includeFileMsgs}&recursive=${recursive}`
   )
 
 export const createFolderMessage = (collectionId: string, folderId: string, body: MessageCreateRequest) =>
@@ -122,7 +182,8 @@ export const uploadFileToFolder = async (
 ): Promise<FileSummary> => {
   const formData = new FormData()
   formData.append("file", file)
-  formData.append("folder_id", folderId)
+  // Omit empty folder_id so root upload is accepted (orphan file)
+  if (folderId) formData.append("folder_id", folderId)
   if (sourceNodeId) formData.append("source_node_id", sourceNodeId)
   const res = await fetch(`${BASE}/${collectionId}/files/upload`, {
     method: "POST",
@@ -130,7 +191,7 @@ export const uploadFileToFolder = async (
   })
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`API ${res.status}: ${body}`)
+    throw new FileMgmtApiError(res.status, body)
   }
   return res.json()
 }
@@ -142,16 +203,21 @@ export const uploadFolderToCollection = async (
 ): Promise<FileSummary[]> => {
   const formData = new FormData()
   for (const f of files) {
-    formData.append("files", f)
+    // Preserve relative path for nested folder structure when available
+    const rel =
+      (f as File & { webkitRelativePath?: string }).webkitRelativePath ||
+      f.name
+    formData.append("files", f, rel)
   }
-  formData.append("parent_folder_id", parentFolderId)
+  // Empty parent = collection root (optional on API)
+  if (parentFolderId) formData.append("parent_folder_id", parentFolderId)
   const res = await fetch(`${BASE}/${collectionId}/files/upload-folder`, {
     method: "POST",
     body: formData,
   })
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`API ${res.status}: ${body}`)
+    throw new FileMgmtApiError(res.status, body)
   }
   return res.json()
 }
@@ -165,20 +231,23 @@ export const addFilePath = (collectionId: string, fileId: string, folderId: stri
 export const removeFilePath = (collectionId: string, fileId: string, pathId: string) =>
   req<void>(`/${collectionId}/files/${fileId}/paths/${pathId}`, { method: "DELETE" })
 
+/** scope: "file" = exclude from search; "path" = archive for folder only */
 export const toggleFileArchive = (
   collectionId: string,
   fileId: string,
   archived: boolean,
   version: number,
-  /** When unarchiving path-level greys (branch merge), pass current folder id */
-  folderId?: string | null
+  opts?: { folderId?: string | null; scope?: "file" | "path" }
 ) =>
   req<FileSummary>(`/${collectionId}/files/${fileId}/archive`, {
     method: "PATCH",
     body: JSON.stringify({
       archived,
       version,
-      ...(folderId && folderId !== "__archived__" ? { folder_id: folderId } : {}),
+      scope: opts?.scope ?? "file",
+      ...(opts?.folderId && opts.folderId !== "__archived__"
+        ? { folder_id: opts.folderId }
+        : {}),
     }),
   })
 
@@ -191,12 +260,38 @@ export const getFileDetail = (collectionId: string, fileId: string) =>
 export const getFileMessages = (collectionId: string, fileId: string) =>
   req<Message[]>(`/${collectionId}/files/${fileId}/messages`)
 
+export const createFileMessage = (
+  collectionId: string,
+  fileId: string,
+  body: MessageCreateRequest
+) =>
+  req<Message>(`/${collectionId}/files/${fileId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ ...body, owner_type: "file", owner_id: fileId }),
+  })
+
 // ── Message (shared) ──
 
 // ── Collection-level (root) messages ──
 
-export const getCollectionMessages = (collectionId: string) =>
-  req<Message[]>(`/${collectionId}/messages`)
+export const getCollectionMessages = (
+  collectionId: string,
+  opts?: {
+    includeNodeMsgs?: boolean
+    includeFileMsgs?: boolean
+    recursive?: boolean
+  }
+) => {
+  const includeNodeMsgs = opts?.includeNodeMsgs ?? false
+  const includeFileMsgs = opts?.includeFileMsgs ?? false
+  const recursive = opts?.recursive ?? false
+  if (!includeNodeMsgs && !includeFileMsgs && !recursive) {
+    return req<Message[]>(`/${collectionId}/messages`)
+  }
+  return req<Message[]>(
+    `/${collectionId}/messages?include_node_msgs=${includeNodeMsgs}&include_file_msgs=${includeFileMsgs}&recursive=${recursive}`
+  )
+}
 
 export const createCollectionMessage = (collectionId: string, body: MessageCreateRequest) =>
   req<Message>(`/${collectionId}/messages`, {
@@ -316,10 +411,11 @@ export const endChain = (collectionId: string, nodeId: string, body: EndChainReq
 
 // ── File (additional) ──
 
+/** Metadata only (is_definitive). Use toggleFileArchive for archive. */
 export const updateFile = (
   collectionId: string,
   fileId: string,
-  body: { is_definitive?: boolean; archived?: boolean; version: number }
+  body: { is_definitive?: boolean; filename?: string; version: number }
 ) =>
   req<FileSummary>(`/${collectionId}/files/${fileId}`, {
     method: "PATCH",
