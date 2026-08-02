@@ -533,12 +533,21 @@ export const getProjectDescription = (collectionId: string) =>
 export const getCollectionConflicts = (collectionId: string) =>
   request<{ conflicts: ConflictItem[] }>(`/collections/${collectionId}/info/conflicts`)
 
-export const getDocSummary = (collectionId: string, source: string) =>
-  request<DocSummary>(`/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}`)
-    .catch((err) => {
-      if (err instanceof Error && err.message.includes("404")) return null
-      throw err
-    })
+export const getDocSummary = (
+  collectionId: string,
+  source: string,
+  opts?: { versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return request<DocSummary>(
+    `/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}${qs ? `?${qs}` : ""}`
+  ).catch((err) => {
+    if (err instanceof Error && err.message.includes("404")) return null
+    throw err
+  })
+}
 
 export const setDocSummaryInclude = (collectionId: string, source: string, include: boolean) =>
   request<{ source: string; include_in_summary: boolean }>(

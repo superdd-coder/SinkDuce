@@ -68,6 +68,60 @@ def source_is_definitive(collection_id: str, source: str) -> bool:
     return ds.get("include_in_summary", True) is not False
 
 
+def current_version_id_for_source(collection_id: str, source: str) -> str | None:
+    """Return files.current_version_id for ``__file__:{id}`` sources, else None."""
+    if not (source or "").startswith("__file__:"):
+        return None
+    file_id = source[len("__file__:") :]
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection_id)
+        try:
+            row = conn.execute(
+                "SELECT current_version_id FROM files WHERE file_id=?",
+                (file_id,),
+            ).fetchone()
+            return (row["current_version_id"] if row else None) or None
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug(
+            "current_version_id_for_source failed for %s/%s",
+            collection_id,
+            source,
+            exc_info=True,
+        )
+        return None
+
+
+def pick_current_doc_summaries(
+    collection_id: str, summaries: list[dict]
+) -> list[dict]:
+    """One summary per source — prefer payload matching current_version_id."""
+    by_source: dict[str, list[dict]] = {}
+    for s in summaries:
+        src = s.get("source") or ""
+        if not src:
+            continue
+        by_source.setdefault(src, []).append(s)
+
+    out: list[dict] = []
+    for src, items in by_source.items():
+        cur = current_version_id_for_source(collection_id, src)
+        if cur:
+            matched = [i for i in items if i.get("version_id") == cur]
+            if matched:
+                out.append(matched[0])
+                continue
+            legacy = [i for i in items if not (i.get("version_id") or "").strip()]
+            if legacy:
+                out.append(legacy[0])
+                continue
+        out.append(items[0])
+    return out
+
+
 def _snapshot_includes(collection_id: str) -> dict[str, bool]:
     """Snapshot of which doc-summary sources are definitive (consolidate set).
 
@@ -76,10 +130,10 @@ def _snapshot_includes(collection_id: str) -> dict[str, bool]:
     """
     sm = _get_summary_manager()
     summaries = sm.get_doc_summaries(collection_id, included_only=False)
+    # Deduplicate by source (multiple version points may exist)
     return {
-        s["source"]: source_is_definitive(collection_id, s["source"])
-        for s in summaries
-        if s.get("source")
+        src: source_is_definitive(collection_id, src)
+        for src in {s["source"] for s in summaries if s.get("source")}
     }
 
 
@@ -95,15 +149,23 @@ def _do_consolidate(collection_id: str) -> None:
         logger.info("[DEBOUNCE] Consolidation already running for '%s', skipping", collection_id)
         return
 
-    try:
-        current = _snapshot_includes(collection_id)
-    except Exception:
-        logger.warning("[DEBOUNCE] Failed to snapshot current state for '%s', bailing out", collection_id, exc_info=True)
-        return
+    force = bool(state.get("force_content_change"))
+    if force:
+        has_change = True
+    else:
+        try:
+            current = _snapshot_includes(collection_id)
+        except Exception:
+            logger.warning(
+                "[DEBOUNCE] Failed to snapshot current state for '%s', bailing out",
+                collection_id,
+                exc_info=True,
+            )
+            return
 
-    snapshot = state["snapshot"]
-    all_sources = set(snapshot.keys()) | set(current.keys())
-    has_change = any(snapshot.get(src) != current.get(src) for src in all_sources)
+        snapshot = state["snapshot"]
+        all_sources = set(snapshot.keys()) | set(current.keys())
+        has_change = any(snapshot.get(src) != current.get(src) for src in all_sources)
 
     if not has_change:
         logger.info("[DEBOUNCE] No net change for collection='%s', skipping consolidation", collection_id)
@@ -116,8 +178,12 @@ def _do_consolidate(collection_id: str) -> None:
         collection=collection_id,
     )
 
-
-def schedule_debounced_consolidate(collection_id: str, pre_change_snapshot: dict[str, bool] | None = None) -> None:
+def schedule_debounced_consolidate(
+    collection_id: str,
+    pre_change_snapshot: dict[str, bool] | None = None,
+    *,
+    force_content_change: bool = False,
+) -> None:
     """Schedule a debounced consolidation check after definitive-set changes.
 
     Must be called with a snapshot taken BEFORE the change was applied.
@@ -127,14 +193,23 @@ def schedule_debounced_consolidate(collection_id: str, pre_change_snapshot: dict
     If *pre_change_snapshot* is not provided, a snapshot is taken now
     (which reflects the post-change state, only safe when the change is
     additive, e.g. a new summary that didn't exist before).
+
+    *force_content_change*: definitive membership may be unchanged but current
+    doc summary text changed (e.g. re-summarize / new version) — still run.
     """
     if collection_id not in _debounce:
         snap = pre_change_snapshot if pre_change_snapshot is not None else _snapshot_includes(collection_id)
-        _debounce[collection_id] = {"timer": None, "snapshot": snap}
+        _debounce[collection_id] = {
+            "timer": None,
+            "snapshot": snap,
+            "force_content_change": force_content_change,
+        }
         logger.info("[DEBOUNCE] First change for collection='%s', snapshot has %d sources",
                     collection_id, len(snap))
 
     state = _debounce[collection_id]
+    if force_content_change:
+        state["force_content_change"] = True
 
     # Cancel existing timer
     if state["timer"] is not None:
@@ -258,12 +333,25 @@ def get_collection_conflicts(collection: str):
 
 
 @router.get("/collections/{collection}/info/doc-summaries/{source:path}")
-def get_doc_summary(collection: str, source: str):
-    """Get structured summary for a specific document."""
+def get_doc_summary(
+    collection: str,
+    source: str,
+    version_id: str | None = None,
+):
+    """Get structured summary for a specific document (optional *version_id*)."""
     collection_id = _resolve_collection_id(collection)
-    logger.info("[INFO] GET doc-summary for collection='%s' source='%s'", collection_id, source)
+    # Default managed files to current version when version_id omitted
+    vid = (version_id or "").strip() or None
+    if vid is None and (source or "").startswith("__file__:"):
+        vid = current_version_id_for_source(collection_id, source)
+    logger.info(
+        "[INFO] GET doc-summary collection='%s' source='%s' version_id=%r",
+        collection_id,
+        source,
+        vid,
+    )
     sm = _get_summary_manager()
-    doc_summary = sm.get_doc_summary(collection_id, source)
+    doc_summary = sm.get_doc_summary(collection_id, source, version_id=vid)
     if doc_summary is None:
         logger.info("[INFO] No doc-summary found for source='%s' in collection='%s'", source, collection_id)
         raise HTTPException(status_code=404, detail=f"No summary found for document '{source}' in collection '{collection}'")

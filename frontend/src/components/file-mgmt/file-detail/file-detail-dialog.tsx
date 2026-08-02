@@ -755,7 +755,8 @@ export function FileMgmtDetailDialog({
     focusVersionId,
   ])
 
-  // Summary: only for current version. Historical opens do not load / re-summarize.
+  // Summary: load by focus version_id (current or historical read-only).
+  // Re-summarize is UI-blocked for historical; generate API only accepts current.
   useEffect(() => {
     if (!open || !docSource || !collectionId) {
       setDocSummary(null)
@@ -763,14 +764,16 @@ export function FileMgmtDetailDialog({
       return
     }
     if (fileId && !detail) return
-    if (isUnsupported || isHistoricalFocus) {
+    if (isUnsupported) {
       setDocSummary(null)
       setSummaryLoading(false)
       return
     }
     let cancelled = false
     setSummaryLoading(true)
-    getDocSummary(collectionId, docSource)
+    getDocSummary(collectionId, docSource, {
+      versionId: focusVersionId || undefined,
+    })
       .then((res) => {
         if (!cancelled) setDocSummary(res)
       })
@@ -792,8 +795,8 @@ export function FileMgmtDetailDialog({
     detail?.unsupported,
     isUnsupported,
     isHistoricalFocus,
+    focusVersionId,
   ])
-
   // Poll while generating summary
   useEffect(() => {
     if (!isGenerating || !collectionId || !source || !genKey) return
@@ -1401,59 +1404,60 @@ export function FileMgmtDetailDialog({
                             <Loader2 className="h-5 w-5 animate-spin mr-2" />
                             Loading summary…
                           </div>
-                        ) : isHistoricalFocus ? (
-                          <div className="flex flex-col items-center justify-center py-8 gap-2 px-4 text-center">
-                            <p className="text-sm text-muted-foreground">
-                              Summarize / Re-summarize is only available for the
-                              current version.
-                            </p>
-                            <p className="text-xs text-muted-foreground max-w-sm">
-                              Open the latest version of this file to generate or
-                              refresh the document summary.
-                            </p>
-                          </div>
                         ) : docSummary ? (
                           <div className="space-y-4">
-                            {detail?.is_definitive && (
+                            {isHistoricalFocus && (
+                              <p className="text-[11px] text-muted-foreground px-0.5">
+                                Summary for this version (read-only). Re-summarize
+                                is only available on the current version.
+                              </p>
+                            )}
+                            {detail?.is_definitive && !isHistoricalFocus && (
                               <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 px-0.5">
                                 <Star className="h-3 w-3 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
                                 Definitive — included in Collection Summary
                               </p>
                             )}
-                            <div className="flex justify-end">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="font-light uppercase tracking-wider text-primary"
-                                disabled={isGenerating}
-                                onClick={async () => {
-                                  if (!source || !collectionId) return
-                                  const key = _genKey(collectionId, source)
-                                  _markGenerating(key)
-                                  setRenderTick((k) => k + 1)
-                                  setActiveTab("summary")
-                                  try {
-                                    await generateDocSummary(
-                                      collectionId,
-                                      source
-                                    )
-                                  } catch (err) {
-                                    _unmarkGenerating(key)
+                            {!isHistoricalFocus && (
+                              <div className="flex justify-end">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="font-light uppercase tracking-wider text-primary"
+                                  disabled={isGenerating}
+                                  onClick={async () => {
+                                    if (!source || !collectionId) return
+                                    const key = _genKey(collectionId, source)
+                                    _markGenerating(key)
                                     setRenderTick((k) => k + 1)
-                                    toast.error(
-                                      `Failed: ${err instanceof Error ? err.message : String(err)}`
-                                    )
-                                  }
-                                }}
-                              >
-                                {isGenerating ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                                ) : (
-                                  <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                                )}
-                                Re-summarize
-                              </Button>
-                            </div>
+                                    setActiveTab("summary")
+                                    try {
+                                      await generateDocSummary(
+                                        collectionId,
+                                        source,
+                                        {
+                                          versionId:
+                                            focusVersionId || undefined,
+                                        }
+                                      )
+                                    } catch (err) {
+                                      _unmarkGenerating(key)
+                                      setRenderTick((k) => k + 1)
+                                      toast.error(
+                                        `Failed: ${err instanceof Error ? err.message : String(err)}`
+                                      )
+                                    }
+                                  }}
+                                >
+                                  {isGenerating ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                                  ) : (
+                                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                                  )}
+                                  Re-summarize
+                                </Button>
+                              </div>
+                            )}
                             {docSummary.data.length > 0 && (
                               <SummarySection
                                 title="Data Points"
@@ -1480,6 +1484,16 @@ export function FileMgmtDetailDialog({
                                 </p>
                               )}
                           </div>
+                        ) : isHistoricalFocus ? (
+                          <div className="flex flex-col items-center justify-center py-8 gap-2 px-4 text-center">
+                            <p className="text-sm text-muted-foreground">
+                              No summary stored for this version.
+                            </p>
+                            <p className="text-xs text-muted-foreground max-w-sm">
+                              Summarize / Re-summarize is only available for the
+                              current version.
+                            </p>
+                          </div>
                         ) : (
                           <div className="flex flex-col items-center justify-center py-8 gap-3">
                             <p className="text-sm text-muted-foreground">
@@ -1505,7 +1519,10 @@ export function FileMgmtDetailDialog({
                                 try {
                                   await generateDocSummary(
                                     collectionId,
-                                    source
+                                    source,
+                                    {
+                                      versionId: focusVersionId || undefined,
+                                    }
                                   )
                                 } catch (err) {
                                   _unmarkGenerating(key)

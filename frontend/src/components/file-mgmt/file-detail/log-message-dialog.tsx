@@ -530,28 +530,25 @@ function VersionFileTabs({
         if (!cancelled) setChunksLoading(false)
       })
 
-    // Summary only for current version (not versioned in store)
-    if (!isCurrentVersion) {
-      setDocSummary(null)
-      setSummaryLoading(false)
-    } else {
-      setSummaryLoading(true)
-      getDocSummary(collectionId, docSource)
-        .then((res) => {
-          if (!cancelled) setDocSummary(res)
-        })
-        .catch(() => {
-          if (!cancelled) setDocSummary(null)
-        })
-        .finally(() => {
-          if (!cancelled) setSummaryLoading(false)
-        })
-    }
+    // Summary for this version_id (historical = read-only; no generate here)
+    setSummaryLoading(true)
+    getDocSummary(collectionId, docSource, {
+      versionId: versionId || version?.version_id || undefined,
+    })
+      .then((res) => {
+        if (!cancelled) setDocSummary(res)
+      })
+      .catch(() => {
+        if (!cancelled) setDocSummary(null)
+      })
+      .finally(() => {
+        if (!cancelled) setSummaryLoading(false)
+      })
 
     return () => {
       cancelled = true
     }
-  }, [docSource, collectionId, isCurrentVersion, versionId])
+  }, [docSource, collectionId, isCurrentVersion, versionId, version?.version_id])
 
   return (
     <Tabs
@@ -660,22 +657,19 @@ function VersionFileTabs({
       >
         <ScrollArea className="h-full rounded-lg border border-border">
           <div className="p-3">
-            {!isCurrentVersion ? (
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <p>No per-version summary.</p>
-                <p className="text-xs">
-                  Document summary is generated for the current ingested version
-                  only (one summary per file, not per history entry). Open the
-                  current version update to view it.
-                </p>
-              </div>
-            ) : summaryLoading ? (
+            {summaryLoading ? (
               <div className="flex items-center justify-center py-8 text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
                 Loading…
               </div>
             ) : docSummary ? (
               <div className="space-y-3 text-sm">
+                {!isCurrentVersion && (
+                  <p className="text-xs text-muted-foreground">
+                    Read-only summary for this version. Re-summarize only on the
+                    current version.
+                  </p>
+                )}
                 {(
                   [
                     ["Data", docSummary.data],
@@ -703,7 +697,14 @@ function VersionFileTabs({
                   )}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No summary yet.</p>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>No summary for this version.</p>
+                {!isCurrentVersion && (
+                  <p className="text-xs">
+                    Summaries are only generated for the current version.
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </ScrollArea>

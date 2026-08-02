@@ -317,9 +317,36 @@ def _store_structured_summary(enriched_chunks, doc, config, collection_id: str):
 
         sm = _get_summary_manager()
         sm.ensure_collection()
-        sm.store_doc_summary(collection_id, source, data, facts, insights, include_in_summary=False)
-        logger.info("[ENRICH] Stored structured summary col=%r src=%r (data=%d, facts=%d, insights=%d)",
-                    collection_id, source, len(data), len(facts), len(insights))
+        version_id = None
+        file_id = None
+        if (source or "").startswith("__file__:"):
+            file_id = source[len("__file__:") :]
+            try:
+                from src.api.routes.info import current_version_id_for_source
+
+                version_id = current_version_id_for_source(collection_id, source)
+            except Exception:
+                version_id = None
+        sm.store_doc_summary(
+            collection_id,
+            source,
+            data,
+            facts,
+            insights,
+            include_in_summary=False,
+            version_id=version_id,
+            file_id=file_id,
+        )
+        logger.info(
+            "[ENRICH] Stored structured summary col=%r src=%r version_id=%r "
+            "(data=%d, facts=%d, insights=%d)",
+            collection_id,
+            source,
+            version_id,
+            len(data),
+            len(facts),
+            len(insights),
+        )
     except Exception:
         logger.exception("[ENRICH] Failed to store structured summary")
 
@@ -524,19 +551,26 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     summary_mgr.ensure_collection()
     logger.info("[CONSOLIDATE] __summaries__ collection ensured")
 
-    # 1. Doc summaries for definitive files only (files.is_definitive)
-    from src.api.routes.info import source_is_definitive
+    # 1. Doc summaries for definitive files only (files.is_definitive),
+    #    one row per source at *current* version_id.
+    from src.api.routes.info import (
+        pick_current_doc_summaries,
+        source_is_definitive,
+    )
 
     all_summaries = summary_mgr.get_doc_summaries(collection, included_only=False)
+    current_only = pick_current_doc_summaries(collection, all_summaries)
     doc_summaries = [
         s
-        for s in all_summaries
+        for s in current_only
         if s.get("source") and source_is_definitive(collection, s["source"])
     ]
     logger.info(
-        "[CONSOLIDATE] Found %d definitive doc_summaries (of %d total) for collection='%s'",
+        "[CONSOLIDATE] Found %d definitive current doc_summaries "
+        "(of %d points / %d sources) for collection='%s'",
         len(doc_summaries),
         len(all_summaries),
+        len(current_only),
         collection,
     )
     if not doc_summaries:
@@ -1231,19 +1265,35 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     pre_snapshot = _snapshot_includes(collection)
     is_def = source_is_definitive(collection, source)
 
+    version_id = None
+    file_id = None
+    if (source or "").startswith("__file__:"):
+        file_id = source[len("__file__:") :]
+        try:
+            from src.api.routes.info import current_version_id_for_source
+
+            version_id = current_version_id_for_source(collection, source)
+        except Exception:
+            version_id = None
+
     sm = _get_summary_manager()
     sm.ensure_collection()
     sm.store_doc_summary(
-        collection, source,
+        collection,
+        source,
         doc_summary.get("data", []),
         doc_summary.get("facts", []),
         doc_summary.get("insights", []),
         include_in_summary=is_def,
+        version_id=version_id,
+        file_id=file_id,
     )
 
-    # Only consolidate when this file is definitive (mark definitive / re-summarize definitive)
+    # Definitive: membership or *content* of current summary may have changed
     if is_def:
-        schedule_debounced_consolidate(collection, pre_snapshot)
+        schedule_debounced_consolidate(
+            collection, pre_snapshot, force_content_change=True
+        )
     else:
         logger.info(
             "[DOC_SUMMARY] source=%s not definitive — skip consolidate",
