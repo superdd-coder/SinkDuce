@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import {
   CheckSquare,
@@ -170,20 +171,24 @@ export function EndChainDialog({
     setAttachMode(null)
   }
 
-  const addExistingFile = (file: FileSummary) => {
+  /** Click once to select, again to deselect (toggle). */
+  const toggleExistingFile = (file: FileSummary) => {
     setPending((prev) => {
-      if (prev.some((p) => p.kind === "existing" && p.file_id === file.file_id)) return prev
+      if (prev.some((p) => p.kind === "existing" && p.file_id === file.file_id)) {
+        return prev.filter(
+          (p) => !(p.kind === "existing" && p.file_id === file.file_id)
+        )
+      }
       return [
         ...prev,
         {
           kind: "existing" as const,
           key: `existing-${file.file_id}`,
           file_id: file.file_id,
-          filename: file.filename,
+          filename: file.display_name || file.filename,
         },
       ]
     })
-    setAttachMode(null)
   }
 
   const openDatePicker = () => {
@@ -416,7 +421,7 @@ export function EndChainDialog({
                           .map((p) => (p as { file_id: string }).file_id)
                       )
                     }
-                    onSelectFile={addExistingFile}
+                    onSelectFile={toggleExistingFile}
                   />
                 </div>
               )}
@@ -520,7 +525,7 @@ export function EndChainDialog({
                 value={messageBody}
                 onChange={setMessageBody}
                 minHeight="100%"
-                placeholder="End / merge note (optional)..."
+                placeholder={MESSAGE_EDITOR_PLACEHOLDER}
                 showToolbar
               />
             </div>

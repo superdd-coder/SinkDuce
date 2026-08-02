@@ -418,7 +418,8 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
           </ScrollArea>
 
           <MessageEditorDialog
-            key={dialogOpen ? (editingMsg?.message_id ?? "new") : "closed"}
+            // Key by message only — do not remount on close (keeps exit motion)
+            key={editingMsg?.message_id ?? "new"}
             open={dialogOpen}
             onOpenChange={handleCloseDialog}
             title={editingMsg ? "Message" : "Add Message"}

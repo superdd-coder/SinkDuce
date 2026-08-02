@@ -168,6 +168,8 @@ export const deleteDocument = (collection: string, source: string) =>
 
 export interface FileListItem {
   source: string
+  /** Managed file-mgmt id (files.json key) when available */
+  file_id?: string
   chunk_count: number
   file_type?: string
   original_ext?: string
@@ -203,16 +205,52 @@ export interface ChunkDetail {
   meeting_id?: string
 }
 
-export const getFileChunks = (collection: string, source: string, limit = 100) =>
-  request<{ collection: string; source: string; chunks: ChunkDetail[]; total: number }>(
-    `/documents/${collection}/files/${encodeURIComponent(source)}/chunks?limit=${limit}`
+export const getFileChunks = (
+  collection: string,
+  source: string,
+  limit = 100,
+  opts?: { versionId?: string; includeArchived?: boolean }
+) => {
+  const q = new URLSearchParams()
+  q.set("limit", String(limit))
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  if (opts?.includeArchived) q.set("include_archived", "true")
+  return request<{
+    collection: string
+    source: string
+    chunks: ChunkDetail[]
+    total: number
+  }>(
+    `/documents/${collection}/files/${encodeURIComponent(source)}/chunks?${q.toString()}`
   )
+}
 
-export const getFilePreviewUrl = (source: string) =>
-  `/api/documents/preview/${encodeURIComponent(source)}`
+export const getFilePreviewUrl = (
+  source: string,
+  opts?: { collection?: string; storageFile?: string; versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (opts?.collection) q.set("collection", opts.collection)
+  if (opts?.storageFile) q.set("storage_file", opts.storageFile)
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return `/api/documents/preview/${encodeURIComponent(source)}${qs ? `?${qs}` : ""}`
+}
 
-export const getExtractedText = (source: string, collection?: string) =>
-  request<{ text: string; format: string }>(`/documents/extracted/${encodeURIComponent(source)}${collection ? `?collection=${encodeURIComponent(collection)}` : ""}`)
+export const getExtractedText = (
+  source: string,
+  collection?: string,
+  opts?: { storageFile?: string; versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (collection) q.set("collection", collection)
+  if (opts?.storageFile) q.set("storage_file", opts.storageFile)
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return request<{ text: string; format: string }>(
+    `/documents/extracted/${encodeURIComponent(source)}${qs ? `?${qs}` : ""}`
+  )
+}
 
 export const isPreviewable = (filename: string) => {
   const ext = filename.split(".").pop()?.toLowerCase() ?? ""
@@ -508,11 +546,20 @@ export const setDocSummaryInclude = (collectionId: string, source: string, inclu
     { method: "PUT", body: JSON.stringify({ include }) }
   )
 
-export const generateDocSummary = (collectionId: string, source: string) =>
-  request<DocSummary>(
-    `/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}/generate`,
+/** Always targets current version. Optional versionId must be current or API returns 400. */
+export const generateDocSummary = (
+  collectionId: string,
+  source: string,
+  opts?: { versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return request<{ message: string; task?: TaskInfo; source?: string } & Partial<DocSummary>>(
+    `/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}/generate${qs ? `?${qs}` : ""}`,
     { method: "POST" }
   )
+}
 
 export const triggerConsolidation = (collectionId: string) =>
   request<{ message: string; task: TaskInfo }>(`/collections/${collectionId}/info/consolidate`, {

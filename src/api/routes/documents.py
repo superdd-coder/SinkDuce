@@ -200,35 +200,29 @@ def get_document_image(collection: str, file_id: str, image_id: str):
     """Serve a document image from disk.
 
     URL pattern: /api/documents/{collection}/{file_id}/images/{image_id}
-    Images are stored at data/collections/{collection}/files/{file_id}/images/.
+    Images live under ``files/{file_id}/{version_id}/images/`` (or legacy
+    ``files/{file_id}/images/``).
     """
-    from pathlib import Path as _Path
+    from src.file_mgmt.storage_paths import find_image_file
 
-    COLLECT_FILES_DIR = _Path("data").resolve() / "collections"
+    img_path = find_image_file(collection, file_id, image_id)
+    if img_path is None:
+        raise HTTPException(status_code=404, detail=f"Image {image_id} not found")
 
-    img_dir = COLLECT_FILES_DIR / collection / "files" / file_id / "images"
-    if not img_dir.is_dir():
-        raise HTTPException(status_code=404, detail=f"Collection {collection} or file {file_id} not found")
+    content = img_path.read_bytes()
+    import mimetypes
 
-    for ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp"):
-        img_path = img_dir / f"{image_id}.{ext}"
-        if img_path.is_file():
-            content = img_path.read_bytes()
-            import mimetypes
-            mime, _ = mimetypes.guess_type(str(img_path))
-            mime = mime or f"image/{ext}"
-            return Response(
-                content=content,
-                media_type=mime,
-                headers={
-                    "Content-Disposition": f'inline; filename="{image_id}.{ext}"',
-                    "Content-Length": str(len(content)),
-                    "Cache-Control": "public, max-age=86400",
-                },
-            )
-
-    raise HTTPException(status_code=404, detail=f"Image {image_id} not found")
-
+    mime, _ = mimetypes.guess_type(str(img_path))
+    mime = mime or f"image/{img_path.suffix.lstrip('.') or 'png'}"
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'inline; filename="{img_path.name}"',
+            "Content-Length": str(len(content)),
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
 
 @router.delete("/documents/{collection}/{doc_source:path}")
 async def delete_document(collection: str, doc_source: str):
@@ -381,43 +375,309 @@ async def delete_document(collection: str, doc_source: str):
     return {"message": f"Deleted chunks from {doc_source} in {collection_id}"}
 
 
-def _find_file_path(source: str, collection_id: str | None = None) -> Path | None:
-    """Find the preview file for a source identifier."""
-    from src.collections.file_index import load as load_file_index
-    from pathlib import Path as _Path
+def _current_version_meta(
+    collection_id: str, file_id: str
+) -> tuple[Path | None, bool]:
+    """Return (current version path, files.unsupported) for a managed file.
 
-    def _first_file(d: Path) -> Path | None:
-        """Return the best preview file: PDFs → original, others → parsed.txt."""
-        # If original is PDF, return it for iframe rendering
+    *unsupported* is **current-version only** (ingest eligibility). Historical
+    version blobs under the same file_id must still be previewable via
+    ``storage_file`` regardless of this flag.
+    """
+    try:
+        from src.file_mgmt.store import get_db
+        from src.file_mgmt.storage_paths import (
+            ensure_layout_migrated,
+            resolve_version_blob,
+        )
+
+        ensure_layout_migrated(collection_id)
+        conn = get_db(collection_id)
+        try:
+            row = conn.execute(
+                """SELECT fv.storage_file_id, fv.version_id, f.unsupported
+                   FROM files f
+                   JOIN file_versions fv ON fv.version_id = f.current_version_id
+                   WHERE f.file_id=?""",
+                (file_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None, False
+        p = resolve_version_blob(
+            collection_id,
+            file_id,
+            row["version_id"],
+            row["storage_file_id"],
+        )
+        return p, bool(row["unsupported"])
+    except Exception:
+        logger.debug(
+            "Could not resolve current version for %s/%s",
+            collection_id,
+            file_id,
+            exc_info=True,
+        )
+        return None, False
+
+
+def _current_version_file(collection_id: str, file_id: str) -> Path | None:
+    """Resolve the on-disk path of the file's *current* version (file-mgmt).
+
+    Multiple version blobs may coexist under ``files/{file_id}/``; always prefer
+    the ``storage_file_id`` of ``files.current_version_id`` so preview matches
+    the latest upload (including unsupported types that never rewrite parsed.txt).
+    """
+    path, _ = _current_version_meta(collection_id, file_id)
+    return path
+
+
+def _is_current_storage_file(
+    collection_id: str, file_id: str, storage_file: str | None
+) -> bool:
+    """True when *storage_file* is the file's current version blob name.
+
+    Compares DB ``storage_file_id`` even when the on-disk blob is missing
+    (e.g. unsupported image never written / deleted) so preview flags stay correct.
+    """
+    if not storage_file:
+        return False
+    want = Path(storage_file).name
+    cur = _current_version_file(collection_id, file_id)
+    if cur is not None:
+        return cur.name == want
+    # Disk missing — still resolve name from current version row
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection_id)
+        try:
+            row = conn.execute(
+                """SELECT fv.storage_file_id FROM files f
+                   JOIN file_versions fv ON fv.version_id = f.current_version_id
+                   WHERE f.file_id=?""",
+                (file_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row and row["storage_file_id"]:
+            return Path(row["storage_file_id"]).name == want
+    except Exception:
+        pass
+    return False
+
+
+def _file_id_from_source(source: str) -> str | None:
+    if source.startswith("__file__:"):
+        return source[len("__file__:") :]
+    return None
+
+
+def _find_file_path(
+    source: str,
+    collection_id: str | None = None,
+    *,
+    storage_file: str | None = None,
+    version_id: str | None = None,
+    prefer_original: bool = False,
+) -> Path | None:
+    """Find the on-disk path for a document source.
+
+    Optional *storage_file* / *version_id* force a specific version blob under
+    the managed file directory (e.g. a non-current version from the Log).
+
+    When *prefer_original* is True (Raw preview), never substitute ``parsed.txt``
+    for Office binaries — File Viewer needs the real ``.docx`` / ``.xlsx`` / etc.
+    """
+    from src.collections.file_index import load as load_file_index
+
+    # Explicit version pin — never fall through to current if missing.
+    if (
+        (storage_file or version_id)
+        and collection_id
+        and source.startswith("__file__:")
+    ):
+        from src.file_mgmt.storage_paths import (
+            ensure_layout_migrated,
+            resolve_version_blob,
+            storage_basename,
+        )
+
+        ensure_layout_migrated(collection_id)
+        fid = source[len("__file__:") :]
+        safe = storage_basename(storage_file) if storage_file else ""
+
+        # 1) Pin by version_id (preferred — unique)
+        if version_id:
+            try:
+                from src.file_mgmt.store import get_db
+
+                conn = get_db(collection_id)
+                try:
+                    vr = conn.execute(
+                        """SELECT version_id, storage_file_id FROM file_versions
+                           WHERE file_id=? AND version_id=?""",
+                        (fid, version_id),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if vr:
+                    p = resolve_version_blob(
+                        collection_id,
+                        fid,
+                        vr["version_id"],
+                        vr["storage_file_id"] or safe or None,
+                    )
+                    if p is not None:
+                        return p
+                # version dir may hold blob even if DB name drifted
+                p = resolve_version_blob(
+                    collection_id, fid, version_id, safe or None
+                )
+                if p is not None:
+                    return p
+            except Exception:
+                logger.debug(
+                    "version_id resolve failed for %s/%s/%s",
+                    collection_id,
+                    fid,
+                    version_id,
+                    exc_info=True,
+                )
+            if storage_file is None and not safe:
+                return None
+
+        # 2) Pin by storage basename (ambiguous if legacy shared names)
+        if safe and safe != "parsed.txt":
+            try:
+                from src.file_mgmt.store import get_db
+
+                conn = get_db(collection_id)
+                try:
+                    vrows = conn.execute(
+                        """SELECT version_id, storage_file_id FROM file_versions
+                           WHERE file_id=? ORDER BY version_no ASC""",
+                        (fid,),
+                    ).fetchall()
+                finally:
+                    conn.close()
+                matches = [
+                    vr
+                    for vr in vrows
+                    if storage_basename(vr["storage_file_id"]) == safe
+                    or (vr["storage_file_id"] or "") == storage_file
+                ]
+                # Prefer exact version_id if already known; else only return if
+                # a single match has a blob (avoid wrong-version for shared names).
+                found: list[Path] = []
+                for vr in matches:
+                    p = resolve_version_blob(
+                        collection_id,
+                        fid,
+                        vr["version_id"],
+                        vr["storage_file_id"],
+                    )
+                    if p is not None:
+                        found.append(p)
+                if len(found) == 1:
+                    return found[0]
+                if version_id:
+                    for vr in matches:
+                        if vr["version_id"] == version_id:
+                            p = resolve_version_blob(
+                                collection_id,
+                                fid,
+                                vr["version_id"],
+                                vr["storage_file_id"],
+                            )
+                            if p is not None:
+                                return p
+            except Exception:
+                logger.debug(
+                    "storage_file resolve failed for %s/%s", collection_id, fid,
+                    exc_info=True,
+                )
+            # Legacy flat last chance for this basename only
+            p_flat = _files_dir(collection_id) / fid / safe
+            if p_flat.is_file():
+                return p_flat
+            return None
+        if version_id:
+            return None
+
+    def _preview_for_file_dir(
+        d: Path, *, current_name: str | None = None
+    ) -> Path | None:
+        """Best path inside a version dir (or legacy flat managed file dir)."""
+        if not d.is_dir():
+            return None
+        if current_name:
+            cur = d / Path(current_name).name
+            if cur.is_file() and cur.name != "parsed.txt":
+                if prefer_original:
+                    # Raw: always the real blob (docx/xlsx/pptx/pdf/md/…)
+                    return cur
+                # Source-oriented: prefer parsed.txt for Office when fresher
+                # (legacy callers that want text without re-parse).
+                suffix = cur.suffix.lower()
+                parsed = d / "parsed.txt"
+                if (
+                    suffix not in {".pdf", ".txt", ".md", ".csv", ".tsv"}
+                    and parsed.is_file()
+                    and parsed.stat().st_mtime >= cur.stat().st_mtime
+                ):
+                    return parsed
+                return cur
+        # Legacy: PDF first for iframe
         for f in sorted(d.iterdir()):
             if f.is_file() and f.suffix.lower() == ".pdf":
                 return f
-        # Prefer parsed.txt for text-based preview
-        parsed = d / "parsed.txt"
-        if parsed.is_file():
-            return parsed
-        # Fallback: any file
+        if not prefer_original:
+            parsed = d / "parsed.txt"
+            if parsed.is_file():
+                return parsed
         for f in sorted(d.iterdir()):
-            if f.is_file() and f.name != "parsed.txt":
+            if (
+                f.is_file()
+                and f.name != "parsed.txt"
+                and not f.name.endswith(".extracted.txt")
+            ):
                 return f
+        return None
+
+    def _resolve_in_collection(col: str, src: str) -> Path | None:
+        # Managed file source: __file__:{file_id}
+        if src.startswith("__file__:"):
+            fid = src[len("__file__:") :]
+            cur = _current_version_file(col, fid)
+            if cur is not None:
+                return _preview_for_file_dir(cur.parent, current_name=cur.name)
+            return _preview_for_file_dir(_files_dir(col) / fid)
+
+        idx = load_file_index(col)
+        for fid, entry in idx.items():
+            if entry.get("source") == src:
+                cur = _current_version_file(col, fid)
+                if cur is not None:
+                    return _preview_for_file_dir(cur.parent, current_name=cur.name)
+                return _preview_for_file_dir(_files_dir(col) / fid)
         return None
 
     # If we know the collection, look up directly
     if collection_id:
-        idx = load_file_index(collection_id)
-        for fid, entry in idx.items():
-            if entry.get("source") == source:
-                return _first_file(_files_dir(collection_id) / fid)
+        found = _resolve_in_collection(collection_id, source)
+        if found is not None:
+            return found
 
     # Fallback: search all collections
     if COLLECTIONS_DIR.is_dir():
         for col_dir in COLLECTIONS_DIR.iterdir():
             if not col_dir.is_dir():
                 continue
-            idx = load_file_index(col_dir.name)
-            for fid, entry in idx.items():
-                if entry.get("source") == source:
-                    return _first_file(_files_dir(col_dir.name) / fid)
+            found = _resolve_in_collection(col_dir.name, source)
+            if found is not None:
+                return found
 
     return None
 
@@ -443,10 +703,37 @@ def _read_legacy_text(source: str, collection_id: str) -> str | None:
 
 
 @router.get("/documents/preview/{filename:path}")
-def preview_file(filename: str, collection: str | None = None):
+def preview_file(
+    filename: str,
+    collection: str | None = None,
+    storage_file: str | None = None,
+    version_id: str | None = None,
+):
     # Handle full paths - extract just the name part
-    filename = Path(filename).name
-    file_path = _find_file_path(filename, collection)
+    # Note: __file__:{id} uses colon — do not Path().name-strip the source key
+    source_key = filename
+    if not filename.startswith("__") and "/" in filename:
+        source_key = Path(filename).name
+    # Raw preview: always prefer the original blob (never parsed.txt for Office).
+    file_path = _find_file_path(
+        source_key,
+        collection,
+        storage_file=storage_file,
+        version_id=version_id,
+        prefer_original=True,
+    )
+
+    # When a specific history blob was requested, do not substitute legacy text
+    # or scan other collections — that would silently show the wrong version.
+    if not file_path and storage_file:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Version blob not found: {Path(storage_file).name}. "
+                "This old version may have been overwritten before unique "
+                "storage names were introduced, or the file was never kept on disk."
+            ),
+        )
 
     # Legacy fallback: source not in files.json
     if not file_path and collection:
@@ -477,88 +764,125 @@ def preview_file(filename: str, collection: str | None = None):
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
+    # Never serve shared parse cache as "original" even if path resolution fails open
+    if file_path.name == "parsed.txt":
+        raise HTTPException(
+            status_code=404,
+            detail="Original file blob not found (only parsed text cache exists)",
+        )
+
     suffix = file_path.suffix.lower()
+    content = file_path.read_bytes()
 
-    # PDF: return raw bytes for iframe rendering
-    if suffix == ".pdf":
-        content = file_path.read_bytes()
-        return Response(
-            content=content,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f'inline; filename="{file_path.name}"',
-                "Content-Length": str(len(content)),
-                "Accept-Ranges": "bytes",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+    media_map = {
+        ".pdf": "application/pdf",
+        ".txt": "text/plain; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".markdown": "text/markdown; charset=utf-8",
+        ".csv": "text/csv; charset=utf-8",
+        ".tsv": "text/tab-separated-values; charset=utf-8",
+        ".json": "application/json",
+        ".jsonl": "application/x-ndjson",
+        ".html": "text/html; charset=utf-8",
+        ".htm": "text/html; charset=utf-8",
+        ".log": "text/plain; charset=utf-8",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".doc": "application/msword",
+        ".docm": "application/vnd.ms-word.document.macroEnabled.12",
+        ".dotx": "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptm": "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
+    }
+    media = media_map.get(suffix, "application/octet-stream")
 
-    # Text-based formats: return raw text directly
-    text_types = {".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".tsv": "text/csv"}
-    if suffix in text_types:
-        content = file_path.read_bytes()
-        return Response(
-            content=content,
-            media_type=text_types[suffix],
-            headers={
-                "Content-Disposition": f'inline; filename="{file_path.name}"',
-                "Content-Length": str(len(content)),
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
-
-    # All other supported formats: serve stored parsed text (matches chunker offsets)
-    parsed_path = file_path.parent / "parsed.txt"
-    if parsed_path.is_file():
-        content = parsed_path.read_bytes()
-        return Response(
-            content=content,
-            media_type="text/plain; charset=utf-8",
-            headers={
-                "Content-Disposition": f'inline; filename="{file_path.stem}.txt"',
-                "Content-Length": str(len(content)),
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
-
-    # Fallback: re-parse (for files uploaded before parsed-text storage was added)
-    from src.parsers import PARSERS
-
-    parser = PARSERS.get(suffix)
-    if parser is None:
-        raise HTTPException(status_code=400, detail=f"Unsupported file format: {suffix}")
-
-    try:
-        doc = parser.parse(file_path)
-        text = doc.content or "(No text content extracted)"
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse file: {e}")
-
-    # Cache for future requests
-    try:
-        parsed_path.write_text(text, encoding="utf-8")
-    except Exception:
-        pass
-
+    safe_ascii_name = _ascii_filename(file_path.name)
     return Response(
-        content=text.encode("utf-8"),
-        media_type="text/plain; charset=utf-8",
+        content=content,
+        media_type=media,
         headers={
-            "Content-Disposition": f'inline; filename="{file_path.stem}.txt"',
-            "Content-Length": str(len(text.encode("utf-8"))),
+            # Latin-1 only in raw header values — Chinese/CJK names must use
+            # RFC 5987 filename* or an ASCII fallback (Starlette encodes headers
+            # as latin-1 and raises 400 on non-ASCII header bytes).
+            "Content-Disposition": _content_disposition_inline(file_path.name),
+            "Content-Length": str(len(content)),
+            "Accept-Ranges": "bytes",
             "X-Content-Type-Options": "nosniff",
+            # ASCII-only: File Viewer uses this for extension routing when present
+            "X-File-Name": safe_ascii_name,
         },
     )
 
 
+def _ascii_filename(filename: str) -> str:
+    """ASCII-safe basename for HTTP headers (latin-1 constraint)."""
+    name = Path(filename).name or "file"
+    ascii_name = (
+        name.encode("ascii", "replace")
+        .decode("ascii")
+        .replace('"', "_")
+        .replace("\\", "_")
+        .replace("?", "_")
+    )
+    # Prefer keeping extension for File Viewer routing
+    if not ascii_name or ascii_name in {".", ".."} or all(c in "._?" for c in ascii_name):
+        suf = Path(name).suffix
+        ascii_name = f"file{suf}" if suf else "file.bin"
+    return ascii_name
+
+
+def _content_disposition_inline(filename: str) -> str:
+    """Build a Content-Disposition value safe for HTTP headers (latin-1)."""
+    from urllib.parse import quote
+
+    name = Path(filename).name or "file"
+    ascii_name = _ascii_filename(name)
+    # RFC 5987 UTF-8 filename*
+    utf8_star = quote(name, safe="")
+    return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_star}"
+
+
 @router.get("/documents/extracted/{filename:path}")
-def get_extracted_text(filename: str, collection: str | None = None):
+def get_extracted_text(
+    filename: str,
+    collection: str | None = None,
+    storage_file: str | None = None,
+    version_id: str | None = None,
+):
     """Return parsed/extracted text as JSON with format metadata.
 
     Response: { "text": "...", "format": "markdown" | "text" }
+
+    Optional *storage_file* selects a specific version blob for preview
+    (Log → version-update message detail / All Files → Old versions).
+
+    Optional *version_id* pins Qdrant stitch to that version when multiple
+    history rows share the same storage basename (legacy overwrite case).
     """
-    filename = Path(filename).name
-    file_path = _find_file_path(filename, collection)
+    source_key = filename
+    if not filename.startswith("__") and "/" in filename:
+        source_key = Path(filename).name
+    file_path = _find_file_path(
+        source_key,
+        collection,
+        storage_file=storage_file,
+        version_id=version_id,
+    )
+
+    # Pinned history blob missing → never substitute Qdrant/legacy text from
+    # another version (that is how unsupported old .png showed random Source).
+    if not file_path and (storage_file or version_id):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Version blob not found: "
+                f"{Path(storage_file).name if storage_file else (version_id or '')}. "
+                "No Source text is available for this version."
+            ),
+        )
 
     # Legacy fallback: source not in files.json → read from Qdrant
     if not file_path and collection:
@@ -590,29 +914,166 @@ def get_extracted_text(filename: str, collection: str | None = None):
     # Get file_type from files.json index
     from src.collections.file_index import load as load_file_index
     fmt = "text"
+    lookup_src = source_key
     if COLLECTIONS_DIR.is_dir():
         for col_dir in COLLECTIONS_DIR.iterdir():
             if not col_dir.is_dir():
                 continue
             idx = load_file_index(col_dir.name)
             for fid, entry in idx.items():
-                if entry.get("source") == filename:
+                if entry.get("source") == lookup_src:
                     fmt = entry.get("file_type", "text")
                     break
 
-    # Try parsed text first
-    parsed_path = file_path.parent / "parsed.txt"
-    if parsed_path.is_file():
-        text = parsed_path.read_text(encoding="utf-8")
-        return {"text": text, "format": fmt}
-
-    # Fallback: re-parse
     suffix = file_path.suffix.lower()
+    text_suffixes = {".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".html", ".htm", ".log"}
+    # PDF re-parse is slow; Office (docx/xlsx/pptx) parse is usually acceptable
+    # for Source when cache is missing.
+    heavy_pdf = {".pdf"}
+    office_parse = {".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls"}
+
+    # Shared parsed.txt for *supported current* version only.
+    # Historical storage_file / version_id must never fall through to the
+    # current parsed.txt or a shared ".extracted.txt" from a later overwrite.
+    use_shared_parsed = True
+    fid = _file_id_from_source(source_key) if collection else None
+    is_historical = False
+    if collection and fid:
+        _, cur_unsupported = _current_version_meta(collection, fid)
+        cur_vid: str | None = None
+        try:
+            from src.file_mgmt.store import get_db as _get_db
+
+            _conn = _get_db(collection)
+            try:
+                _crow = _conn.execute(
+                    "SELECT current_version_id FROM files WHERE file_id=?",
+                    (fid,),
+                ).fetchone()
+                if _crow:
+                    cur_vid = _crow["current_version_id"]
+            finally:
+                _conn.close()
+        except Exception:
+            cur_vid = None
+
+        if version_id and cur_vid and version_id != cur_vid:
+            is_historical = True
+            use_shared_parsed = False
+        elif version_id and not cur_vid:
+            is_historical = True
+            use_shared_parsed = False
+        elif storage_file and not _is_current_storage_file(
+            collection, fid, storage_file
+        ):
+            # Non-current blob name → historical even when *current* is unsupported
+            # (otherwise we would serve the latest shared .extracted.txt).
+            is_historical = True
+            use_shared_parsed = False
+        elif cur_unsupported:
+            use_shared_parsed = False
+    elif storage_file or version_id:
+        use_shared_parsed = False
+        is_historical = True
+
+    def _respond(
+        body: str,
+        body_fmt: str,
+        *,
+        preview_hint: str | None = None,
+    ) -> dict:
+        """Fill blank image file_ids then build the extract response."""
+        out_text = body
+        if fid and out_text:
+            out_text = _fill_empty_image_file_ids(out_text, fid)
+        payload: dict = {"text": out_text, "format": body_fmt}
+        if preview_hint:
+            payload["preview_hint"] = preview_hint
+        return payload
+
+    if use_shared_parsed:
+        parsed_path = file_path.parent / "parsed.txt"
+        if parsed_path.is_file():
+            return _respond(parsed_path.read_text(encoding="utf-8"), fmt)
+
+    # Per-blob extract cache (written after successful parse).
+    # For historical versions that share a storage basename (legacy overwrite),
+    # prefer version_id-scoped cache so v3/v4/v5 do not share one text file.
+    if is_historical and version_id:
+        blob_cache = file_path.parent / f"{file_path.name}.{version_id[:12]}.extracted.txt"
+    else:
+        blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
+    if blob_cache.is_file():
+        try:
+            return _respond(
+                blob_cache.read_text(encoding="utf-8"),
+                "markdown" if suffix in {".md", ".docx", ".pdf"} else "text",
+            )
+        except Exception:
+            pass
+    # Legacy unscoped cache only for non-colliding historical / current
+    legacy_blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
+    if (
+        not is_historical
+        and legacy_blob_cache.is_file()
+        and legacy_blob_cache != blob_cache
+    ):
+        try:
+            return _respond(
+                legacy_blob_cache.read_text(encoding="utf-8"),
+                "markdown" if suffix in {".md", ".docx", ".pdf"} else "text",
+            )
+        except Exception:
+            pass
+
+    if suffix in text_suffixes:
+        try:
+            return _respond(
+                file_path.read_text(encoding="utf-8", errors="replace"),
+                "markdown" if suffix == ".md" else "text",
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+
+    # Historical: always try version_id stitch first (unique per version even when
+    # multiple rows share one on-disk basename after legacy overwrite).
+    if is_historical and collection:
+        stitched = _stitch_version_text_from_chunks(
+            collection,
+            source_key,
+            storage_file or file_path.name,
+            version_id=version_id,
+        )
+        if stitched:
+            try:
+                blob_cache.write_text(stitched, encoding="utf-8")
+            except Exception:
+                pass
+            fmt_out = (
+                "pdf"
+                if suffix in heavy_pdf
+                else ("markdown" if suffix in {".docx", ".doc", ".md"} else "text")
+            )
+            return _respond(stitched, fmt_out)
+        # Historical PDF with no version chunks: re-parse the on-disk blob when
+        # it is *not* the current version's basename (unique old blob). Shared
+        # names would only re-show latest content — prefer empty + Raw instead.
+        if suffix in heavy_pdf:
+            if storage_file and not _is_current_storage_file(
+                collection, fid or "", storage_file
+            ):
+                pass  # fall through to full re-parse of this unique blob
+            else:
+                return _respond("", "pdf", preview_hint="raw")
+
     from src.parsers import PARSERS
 
     parser = PARSERS.get(suffix)
     if parser is None:
-        raise HTTPException(status_code=400, detail=f"Unsupported file format: {suffix}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format for text extract: {suffix}",
+        )
 
     try:
         doc = parser.parse(file_path)
@@ -621,7 +1082,120 @@ def get_extracted_text(filename: str, collection: str | None = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse file: {e}")
 
-    return {"text": text, "format": fmt}
+    if fid and text:
+        text = _fill_empty_image_file_ids(text, fid)
+
+    try:
+        blob_cache.write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    if use_shared_parsed:
+        try:
+            (file_path.parent / "parsed.txt").write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+
+    return _respond(text, fmt)
+
+
+def _fill_empty_image_file_ids(text: str, file_id: str) -> str:
+    """Rewrite ``file_id:`` (empty) inside :::image fences to the managed file id.
+
+    Parsers leave ``file_id:`` blank; ingest usually fills it. Historical re-parse
+    and older caches often still have blanks, which break Source image URLs.
+    """
+    if not text or not file_id or ":::image" not in text:
+        return text
+    import re
+
+    return re.sub(
+        r"(:::image[ \t]*\nimage_id:[ \t]*[a-f0-9]+[ \t]*\nfile_id:)[ \t]*\n",
+        rf"\1 {file_id}\n",
+        text,
+    )
+
+
+def _stitch_version_text_from_chunks(
+    collection_id: str,
+    source: str,
+    storage_file: str,
+    version_id: str | None = None,
+) -> str | None:
+    """Rebuild Source text from Qdrant chunks for a historical version blob.
+
+    Prefers explicit *version_id* (unique). Falls back to lookup via
+    ``file_versions.storage_file_id`` (ambiguous when several versions share
+    one basename after a legacy overwrite).
+    """
+    try:
+        from src.file_mgmt.store import get_db
+        from src.services import services
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        fid = _file_id_from_source(source)
+        if not fid or services.db is None:
+            return None
+        resolved_vid = (version_id or "").strip() or None
+        if not resolved_vid:
+            safe = Path(storage_file).name
+            conn = get_db(collection_id)
+            try:
+                # Prefer non-current row when multiple share storage basename
+                row = conn.execute(
+                    """SELECT fv.version_id FROM file_versions fv
+                       JOIN files f ON f.file_id = fv.file_id
+                       WHERE fv.file_id=? AND fv.storage_file_id=?
+                       ORDER BY CASE WHEN fv.version_id = f.current_version_id
+                                     THEN 1 ELSE 0 END,
+                                fv.version_no DESC
+                       LIMIT 1""",
+                    (fid, safe),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                return None
+            resolved_vid = row["version_id"]
+        filt = Filter(
+            must=[
+                FieldCondition(key="source", match=MatchValue(value=source)),
+                FieldCondition(
+                    key="version_id", match=MatchValue(value=resolved_vid)
+                ),
+            ]
+        )
+        total = services.db.count_by_filter(collection_id, filt)
+        if total <= 0:
+            return None
+        pts, _ = services.db.scroll_points(
+            collection=collection_id,
+            limit=min(total, 10000),
+            offset=None,
+            scroll_filter=filt,
+            with_payload=True,
+            with_vectors=False,
+        )
+        items = []
+        for p in pts:
+            pl = p.get("payload") or {}
+            if pl.get("chunk_type") == "parent":
+                continue  # prefer leaf / normal text
+            text = (pl.get("text") or "").strip()
+            if not text:
+                continue
+            items.append((int(pl.get("chunk_index") or 0), text))
+        if not items:
+            return None
+        items.sort(key=lambda x: x[0])
+        return "\n\n".join(t for _, t in items)
+    except Exception:
+        logger.debug(
+            "stitch version text failed for %s %s",
+            source,
+            storage_file,
+            exc_info=True,
+        )
+        return None
 
 @router.get("/documents/{collection}")
 def list_documents(collection: str):
@@ -656,6 +1230,8 @@ async def list_files(collection: str):
             src = entry.get("source", fid)
             files.append({
                 "source": src,
+                # Index key is the managed file_id (needed to open FileMgmt detail)
+                "file_id": fid,
                 "chunk_count": entry.get("chunks", 0),
                 "file_type": entry.get("file_type", ""),
                 "original_ext": entry.get("original_ext", ""),
@@ -724,18 +1300,100 @@ async def list_files(collection: str):
     return await loop.run_in_executor(None, _fetch)
 
 
+def _resolve_current_version_id(collection: str, source: str) -> str | None:
+    """Best-effort current version_id for a managed ``__file__:{id}`` source."""
+    if not source.startswith("__file__:"):
+        return None
+    fid = source[len("__file__:") :].strip()
+    if not fid:
+        return None
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection)
+        try:
+            row = conn.execute(
+                "SELECT current_version_id FROM files WHERE file_id=?", (fid,)
+            ).fetchone()
+            return (row["current_version_id"] if row else None) or None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 @router.get("/documents/{collection}/files/{source:path}/chunks")
-def get_file_chunks(collection: str, source: str, limit: int = 100, offset: int = 0):
+def get_file_chunks(
+    collection: str,
+    source: str,
+    limit: int = 100,
+    offset: int = 0,
+    include_archived: bool = False,
+    version_id: str | None = None,
+):
+    """List chunks for a document source.
+
+    By default returns the **current** version only:
+    - Prefer points with ``version_id == files.current_version_id``
+    - Else non-archived points (legacy rows without version_id)
+
+    When *version_id* is set (old version open), return only that version's
+    points and include archived ones (history rows are archived after upload).
+    """
     if not services.db.collection_exists(collection):
         return {"collection": collection, "source": source, "chunks": [], "total": 0}
 
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-    filter_cond = Filter(
-        must=[FieldCondition(key="source", match=MatchValue(value=source))]
-    )
+    must = [FieldCondition(key="source", match=MatchValue(value=source))]
+    must_not: list = []
+    resolved_version = (version_id or "").strip() or None
+    # Current version pin (only when not asking for a specific historical version)
+    cur_vid: str | None = None
+    pinned_to_current_version = False
+
+    if resolved_version:
+        must.append(
+            FieldCondition(key="version_id", match=MatchValue(value=resolved_version))
+        )
+        # Historical versions are archived=true after a newer upload
+        include_archived = True
+    else:
+        # Current open: pin to current_version_id when known so leftover
+        # non-archived points from older uploads do not pollute Chunks.
+        cur_vid = _resolve_current_version_id(collection, source)
+        if cur_vid:
+            must.append(
+                FieldCondition(key="version_id", match=MatchValue(value=cur_vid))
+            )
+            pinned_to_current_version = True
+        if not include_archived:
+            must_not.append(
+                FieldCondition(key="archived", match=MatchValue(value=True))
+            )
+
+    filter_cond = Filter(must=must, must_not=must_not or None)
 
     total = services.db.count_by_filter(collection, filter_cond)
+
+    # Fallback ONLY for legacy docs with no version_id on the file row.
+    # If we pinned to current_version_id and got 0 (e.g. unsupported latest
+    # with no ingest), do NOT fall back to older non-archived leftovers —
+    # that is the "shows wrong version's chunks" bug.
+    if (
+        total == 0
+        and not resolved_version
+        and not include_archived
+        and not pinned_to_current_version
+    ):
+        fallback_must = [
+            FieldCondition(key="source", match=MatchValue(value=source))
+        ]
+        fallback_not = [
+            FieldCondition(key="archived", match=MatchValue(value=True))
+        ]
+        filter_cond = Filter(must=fallback_must, must_not=fallback_not)
+        total = services.db.count_by_filter(collection, filter_cond)
 
     # Fetch ALL chunks for the file, then sort, then paginate.
     # Qdrant returns chunks in insertion order, not sorted by chunk_index,
@@ -759,6 +1417,8 @@ def get_file_chunks(collection: str, source: str, limit: int = 100, offset: int 
             "chunk_type": p["payload"].get("chunk_type", "normal"),
             "parent_id": p["payload"].get("parent_id"),
             "summary": p["payload"].get("summary", ""),
+            "version_id": p["payload"].get("version_id") or "",
+            "archived": bool(p["payload"].get("archived")),
             # Position fields for source navigation
             "char_offset": p["payload"].get("char_offset"),
             "page_number": p["payload"].get("page_number"),

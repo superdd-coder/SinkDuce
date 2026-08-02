@@ -1761,7 +1761,16 @@ function showSlashMenu(
     }
   }
 
+  const onEditorDestroy = () => {
+    closeMenu()
+  }
+
   const closeMenu = () => {
+    try {
+      editor.off?.("destroy", onEditorDestroy)
+    } catch {
+      /* ignore */
+    }
     if (!menu.isConnected) {
       document.removeEventListener("pointerdown", onPointerDownOutside, true)
       document.removeEventListener("keydown", onDocKeyDown, true)
@@ -1772,6 +1781,11 @@ function showSlashMenu(
     document.removeEventListener("keydown", onDocKeyDown, true)
   }
   ;(menu as HTMLElement & { __close?: () => void }).__close = closeMenu
+  try {
+    editor.on?.("destroy", onEditorDestroy)
+  } catch {
+    /* ignore */
+  }
 
   searchInput.addEventListener("keydown", (e) => {
     switch (e.key) {
@@ -1794,12 +1808,17 @@ function showSlashMenu(
         }
         break
       case "Escape":
-        e.preventDefault()
-        closeMenu()
-        try {
-          editor.chain().focus().run()
-        } catch {
-          /* ignore */
+      case "Delete":
+      case "Backspace":
+        // Empty filter + Delete/Backspace (or always Escape) → dismiss slash menu
+        if (e.key === "Escape" || !(e.target as HTMLInputElement).value) {
+          e.preventDefault()
+          closeMenu()
+          try {
+            editor.chain().focus().run()
+          } catch {
+            /* ignore */
+          }
         }
         break
     }
@@ -1944,13 +1963,27 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     btn.addEventListener("mouseleave", () => { btn.style.background = "transparent" })
   }
 
-  const makeBtn = (title: string, svg: string, action: () => void) => {
+  const dismissFloatingMenu = () => {
+    menu.remove()
+  }
+
+  const makeBtn = (
+    title: string,
+    svg: string,
+    action: () => void,
+    /** Close the floating bar after the action (delete ops). */
+    closeAfter = false
+  ) => {
     const b = document.createElement("button")
     b.innerHTML = svg
     b.title = title
     b.style.cssText = btnStyle
     hover(b)
-    b.addEventListener("click", (e) => { e.stopPropagation(); action() })
+    b.addEventListener("click", (e) => {
+      e.stopPropagation()
+      action()
+      if (closeAfter) dismissFloatingMenu()
+    })
     return b
   }
 
@@ -1980,23 +2013,33 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
   menu.appendChild(makeDivider())
 
-  // Delete row/column buttons
-  menu.appendChild(makeBtn("Delete row",
+  // Delete row/column — close bar after delete (stale selection otherwise)
+  menu.appendChild(makeBtn(
+    "Delete row",
     `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 6h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 3l8 10M13 3L5 13" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteRow().run()))
-  menu.appendChild(makeBtn("Delete column",
+    () => editor.chain().focus().deleteRow().run(),
+    true
+  ))
+  menu.appendChild(makeBtn(
+    "Delete column",
     `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 5l10 8M3 13L13 5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteColumn().run()))
+    () => editor.chain().focus().deleteColumn().run(),
+    true
+  ))
 
   menu.appendChild(makeDivider())
 
-  // Delete table — red icon
+  // Delete table — red icon; always dismiss menu
   const delTableBtn = document.createElement("button")
   delTableBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" stroke="#ef4444" stroke-width="1.3" rx="1"/><path d="M5 5l6 6M11 5l-6 6" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/></svg>`
   delTableBtn.title = "Delete table"
   delTableBtn.style.cssText = btnStyle
   hover(delTableBtn)
-  delTableBtn.addEventListener("click", (e) => { e.stopPropagation(); editor.chain().focus().deleteTable().run(); menu.remove() })
+  delTableBtn.addEventListener("click", (e) => {
+    e.stopPropagation()
+    editor.chain().focus().deleteTable().run()
+    dismissFloatingMenu()
+  })
   menu.appendChild(delTableBtn)
 
   menu.appendChild(makeDivider())
@@ -2779,6 +2822,10 @@ export function EditorToolbar({ editor, stickyOffset = 0, actions }: { editor: E
   )
 }
 
+/** Shared empty-editor hint for message-style MarkdownEditors. */
+export const MESSAGE_EDITOR_PLACEHOLDER =
+  "Write a message… type / for commands"
+
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
@@ -2790,6 +2837,10 @@ export function TiptapEditor({
   const editorRef = useRef<any>(null)
   const _readonlyRef = useRef(readonly)
   _readonlyRef.current = readonly
+  // Placeholder extension is configured once; read latest text via ref so
+  // prop updates / HMR are not stuck on the first mount string.
+  const placeholderRef = useRef(placeholder || MESSAGE_EDITOR_PLACEHOLDER)
+  placeholderRef.current = placeholder || MESSAGE_EDITOR_PLACEHOLDER
 
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
@@ -2863,7 +2914,12 @@ export function TiptapEditor({
       StarterKit, DistillBlock, Callout, ResizableImage, ReadonlyProtectExt, MarkdownHoverExt, TableEnhancementExt,
       Table.configure({ resizable: true }), TableRow, TableCell, TableHeader,
       TaskList, TaskItem.configure({ nested: true }),
-      Placeholder.configure({ placeholder: placeholder || 'Type "/" for commands...' }),
+      Placeholder.configure({
+        placeholder: () => placeholderRef.current || MESSAGE_EDITOR_PLACEHOLDER,
+        showOnlyWhenEditable: true,
+        showOnlyCurrent: false,
+        includeChildren: false,
+      }),
       SlashCmd,
       Youtube.configure({ width: 640, height: 360 }),
       Highlight.configure({ multicolor: true }),
@@ -3078,6 +3134,17 @@ export function TiptapEditor({
         .tiptap-editor .ProseMirror {
           min-height: 100%;
         }
+        /* TipTap Placeholder extension — without this, data-placeholder is invisible */
+        .tiptap-editor .ProseMirror p.is-editor-empty:first-child::before,
+        .tiptap-editor .ProseMirror p.is-empty:first-child::before {
+          content: attr(data-placeholder);
+          float: left;
+          height: 0;
+          pointer-events: none;
+          color: var(--muted-foreground, #737373);
+          opacity: 0.7;
+          font-style: italic;
+        }
         .tiptap-editor ul[data-type="taskList"] {
           list-style: none !important;
           padding-left: 0 !important;
@@ -3164,7 +3231,7 @@ function PlainEditor({ value, onChange, className, minHeight, placeholder }: Mar
       )}
       {!focused && isEmpty && (
         <div className="md-editor-overlay" onClick={() => textareaRef.current?.focus()}>
-          <span className="text-muted-foreground italic text-sm">{placeholder || "Nothing to preview"}</span>
+          <span className="text-muted-foreground italic text-sm">{placeholder || MESSAGE_EDITOR_PLACEHOLDER}</span>
         </div>
       )}
     </div>

@@ -3,7 +3,11 @@ import { Search, Upload, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import type { FileSummary } from "@/types/file-mgmt"
-import { attachFileToNode, uploadFileToNode } from "@/api/file-mgmt"
+import {
+  attachFileToNode,
+  detachFileFromNode,
+  uploadFileToNode,
+} from "@/api/file-mgmt"
 import { FileTreePicker } from "./file-tree-picker"
 
 /** Fixed drop-zone height so Select/tree does not grow the box. */
@@ -30,15 +34,17 @@ export function NodeFileAttach({
 
   const attachedSet = new Set(attachedIds)
 
-  const attachExisting = async (file: FileSummary) => {
-    if (attachedSet.has(file.file_id)) {
-      toast.message("Already attached")
-      return
-    }
+  /** Toggle: attach if not yet on node; detach if already attached. */
+  const toggleExisting = async (file: FileSummary) => {
     setLoading(true)
     try {
-      await attachFileToNode(collectionId, nodeId, file.file_id)
-      toast.success(`Attached “${file.filename}”`)
+      if (attachedSet.has(file.file_id)) {
+        await detachFileFromNode(collectionId, nodeId, file.file_id)
+        toast.success(`Detached “${file.display_name || file.filename}”`)
+      } else {
+        await attachFileToNode(collectionId, nodeId, file.file_id)
+        toast.success(`Attached “${file.display_name || file.filename}”`)
+      }
       onAttached()
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -151,7 +157,7 @@ export function NodeFileAttach({
           <div className="flex-1 min-h-0 flex flex-col gap-1 overflow-hidden">
             <div className="flex items-center justify-between gap-1 shrink-0">
               <span className="text-[10px] text-muted-foreground">
-                Click a file to attach
+                Click to attach · click again to detach
               </span>
               <button
                 type="button"
@@ -166,7 +172,7 @@ export function NodeFileAttach({
               <FileTreePicker
                 collectionId={collectionId}
                 selectedIds={attachedIds}
-                onSelectFile={(file) => void attachExisting(file)}
+                onSelectFile={(file) => void toggleExisting(file)}
                 maxHeightClass="h-full max-h-full"
                 className="h-full flex flex-col"
               />

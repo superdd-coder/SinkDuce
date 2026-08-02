@@ -1109,6 +1109,550 @@ input[type="checkbox"] {
   letter-spacing: 0.04em;
 }
 
+/* ── @file-viewer Raw panel: SinkDuce design language ──
+   Requires styleIsolation: 'none' on FileViewer options.
+   Font: Geist · weight 300–400 · primary green for chrome text.
+   Toolbar sits as a top strip (position: top) so it never overlays pages. */
+.sinkduce-file-viewer {
+  --fv-green: var(--ze-green, #1a5e3d);
+  --fv-green-soft: color-mix(in oklch, var(--fv-green) 12%, transparent);
+  --fv-muted: var(--muted-foreground, oklch(0.5 0.02 160));
+  --fv-border: var(--border, oklch(0.9 0.01 160));
+  --fv-bg: var(--background, #fff);
+  --fv-surface: var(--muted, oklch(0.97 0.005 160));
+  font-family: var(--font-sans, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 12px !important;
+  font-weight: 300 !important;
+  line-height: 1.45 !important;
+  color: inherit;
+  letter-spacing: 0.01em;
+}
+.sinkduce-file-viewer,
+.sinkduce-file-viewer * {
+  font-family: inherit !important;
+}
+
+/* ── Global chrome toolbar (search / zoom / download / print) ──
+   Compact right-aligned strip — not full-width "pill" spanning the pane. */
+.sinkduce-file-viewer .file-viewer-web-toolbar {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+  width: auto !important;
+  max-width: 100% !important;
+  margin-left: auto !important;
+  border-bottom: 1px solid var(--fv-border) !important;
+  background: var(--fv-bg) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  min-height: 32px !important;
+  padding: 3px 8px !important;
+  gap: 6px !important;
+  /* overflow-x:auto was clipping the search field; allow full chrome */
+  overflow: visible !important;
+}
+/* Shell toolbar row: hug content, leave room for search text */
+.sinkduce-file-viewer .file-viewer-web-shell > .file-viewer-web-toolbar {
+  align-self: flex-end !important;
+  width: fit-content !important;
+  max-width: min(100%, 640px) !important;
+  border-radius: 0 0 0 8px !important;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar-group {
+  border: 1px solid var(--fv-border) !important;
+  background: transparent !important;
+  border-radius: 6px !important;
+  padding: 1px 3px !important;
+  gap: 1px !important;
+  box-shadow: none !important;
+  flex-shrink: 0 !important;
+}
+.sinkduce-file-viewer .file-viewer-web-search {
+  gap: 2px !important;
+  flex-shrink: 0 !important;
+  overflow: visible !important;
+}
+/* Full "Search document" placeholder — no white clip */
+.sinkduce-file-viewer .file-viewer-web-search input {
+  width: 148px !important;
+  min-width: 148px !important;
+  max-width: 180px !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar button,
+.sinkduce-file-viewer .file-viewer-web-toolbar input,
+.sinkduce-file-viewer .file-viewer-web-toolbar select,
+.sinkduce-file-viewer .file-viewer-web-toolbar .file-viewer-web-zoom-meter,
+.sinkduce-file-viewer .file-viewer-web-toolbar .file-viewer-web-search-count {
+  font-size: 11px !important;
+  font-weight: 300 !important;
+  letter-spacing: 0.03em !important;
+  color: var(--fv-green) !important;
+  text-transform: none !important;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar button {
+  font-weight: 300 !important;
+  min-width: auto !important;
+  height: 24px !important;
+  padding: 0 6px !important;
+  border-radius: 4px !important;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar button:hover:not(:disabled) {
+  background: var(--fv-green-soft) !important;
+  color: var(--fv-green) !important;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar button:disabled {
+  color: var(--fv-muted) !important;
+  opacity: 0.55;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar input {
+  border: 1px solid var(--fv-border) !important;
+  background: var(--fv-bg) !important;
+  color: var(--foreground, inherit) !important;
+  font-weight: 300 !important;
+  border-radius: 4px !important;
+  height: 24px !important;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar input::placeholder {
+  color: var(--fv-muted) !important;
+  font-weight: 300 !important;
+  opacity: 1 !important;
+}
+.sinkduce-file-viewer .file-viewer-web-zoom-meter--readonly {
+  font-weight: 300 !important;
+  font-variant-numeric: tabular-nums;
+  color: var(--fv-green) !important;
+  min-width: 36px !important;
+}
+
+/* Hide HTML export / dark-mode / 1:1 reset */
+.sinkduce-file-viewer .file-viewer-web-toolbar button[data-part*="theme"],
+.sinkduce-file-viewer .file-viewer-web-toolbar [class*="theme-toggle"],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[title*="HTML" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[title*="Export HTML" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[aria-label*="HTML" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[aria-label*="Dark" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[aria-label*="Light" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[aria-label*="theme" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[title*="1:1"],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[aria-label*="1:1"],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[aria-label*="Reset zoom" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[title*="Reset zoom" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[aria-label*="还原" i],
+.sinkduce-file-viewer .file-viewer-web-toolbar button[title*="还原" i] {
+  display: none !important;
+}
+
+/*
+ * PDF open: hide GLOBAL (library) zoom strip — PDF bar owns zoom/rotate.
+ */
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group[aria-label="Zoom controls"],
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group[aria-label="缩放控制"],
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group[aria-label*="Zoom" i],
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group[aria-label*="缩放"] {
+  display: none !important;
+}
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar
+  .file-viewer-web-zoom-meter,
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar
+  .file-viewer-web-zoom-meter--readonly {
+  display: none !important;
+}
+
+/*
+ * Single visual top row without moving zoom nodes out of .pdf-shell
+ * (moving into web-toolbar was destroyed on toolbar re-render).
+ *
+ * Search row: full width, padding-left reserves the red-box slot.
+ * PDF toolbar: pulled up with negative margin into that slot.
+ */
+.sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-shell {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+.sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-shell > .file-viewer-web-toolbar {
+  display: flex !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  align-self: stretch !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 6px !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid var(--fv-border) !important;
+  /* Red-box slot on the left for zoom/rotate */
+  padding-left: 200px !important;
+  padding-right: 10px !important;
+  min-height: 36px !important;
+  height: 36px !important;
+  box-sizing: border-box !important;
+  flex-shrink: 0 !important;
+  position: relative !important;
+  z-index: 2 !important;
+}
+.sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-content {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: visible !important; /* allow pdf-toolbar to sit up into search row */
+  position: relative !important;
+  z-index: 3 !important;
+}
+.sinkduce-file-viewer:has(.pdf-shell) .pdf-shell {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+  position: relative !important;
+  background: var(--fv-bg) !important;
+}
+
+/* Zoom/rotate: pull up into the left of the Search row (red box) */
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  width: auto !important;
+  max-width: 190px !important;
+  min-height: 36px !important;
+  height: 36px !important;
+  padding: 4px 8px 4px 10px !important;
+  margin: -36px 0 0 0 !important; /* sit on search row */
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+  position: relative !important;
+  z-index: 20 !important;
+  flex-shrink: 0 !important;
+  pointer-events: auto !important;
+}
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-toolbar-group--zoom,
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-toolbar-group--rotate {
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 4px !important;
+  gap: 2px !important;
+  border: 1px solid var(--fv-border) !important;
+  border-radius: 6px !important;
+  background: var(--fv-bg) !important;
+  box-shadow: none !important;
+  flex-shrink: 0 !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] > .pdf-icon-button,
+.sinkduce-file-viewer
+  .pdf-toolbar[data-sinkduce-bar="top-left"]
+  > .pdf-toolbar-group:not(.pdf-toolbar-group--zoom):not(.pdf-toolbar-group--rotate) {
+  display: none !important;
+}
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-icon-button,
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-scale-button,
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-rotation-meter {
+  height: 22px !important;
+  min-width: 22px !important;
+  font-size: 11px !important;
+  font-weight: 300 !important;
+  color: var(--fv-green) !important;
+  border: none !important;
+  background: transparent !important;
+  padding: 0 5px !important;
+}
+.sinkduce-file-viewer:has(.pdf-shell) .pdf-content {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Pinch / trackpad zoom surface */
+.sinkduce-file-viewer .pdf-viewport,
+.sinkduce-file-viewer .pdf-wrapper {
+  touch-action: pan-x pan-y !important;
+}
+
+/* ── PDF left nav: text list only (no number tiles) ──
+   DOM: button.pdf-page-button > span.pdf-page-thumb + span.pdf-page-label */
+.sinkduce-file-viewer .pdf-shell {
+  background: var(--fv-bg) !important;
+  color: inherit !important;
+  font-weight: 300 !important;
+}
+.sinkduce-file-viewer .pdf-nav-pane {
+  width: 140px !important;
+  min-width: 120px !important;
+  max-width: 160px !important;
+  border-right: 1px solid var(--fv-border) !important;
+  background: var(--fv-surface) !important;
+  box-shadow: none !important;
+}
+.sinkduce-file-viewer .pdf-nav-tabs {
+  border-color: var(--fv-border) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 4px 8px 8px !important;
+}
+/*
+ * Nav head = sidebar toggle + page (1/24) only.
+ * "PAGE NAVIGATION" title is removed by layoutPdfChrome; keep hidden as fallback.
+ */
+.sinkduce-file-viewer .pdf-nav-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 4px !important;
+  min-height: 28px !important;
+  padding: 6px 8px 4px !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+/* Never show library title / page-count label */
+.sinkduce-file-viewer .pdf-nav-head > span:not(.pdf-page-meter):not(.pdf-panel-icon),
+.sinkduce-file-viewer .pdf-nav-head > strong {
+  display: none !important;
+}
+/* Compact sidebar toggle in nav head */
+.sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button {
+  width: 22px !important;
+  min-width: 22px !important;
+  height: 22px !important;
+  padding: 0 !important;
+  border: 1px solid var(--fv-border) !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: var(--fv-green) !important;
+  box-shadow: none !important;
+  flex-shrink: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button .pdf-panel-icon {
+  width: 12px !important;
+  height: 12px !important;
+  font-size: 11px !important;
+  transform: scale(0.85);
+}
+.sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button:hover {
+  background: var(--fv-green-soft) !important;
+}
+/* Compact page group (‹ 1/24 ›) in nav head */
+.sinkduce-file-viewer .pdf-nav-head > .pdf-toolbar-group {
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 22px !important;
+  min-height: 22px !important;
+  gap: 1px !important;
+  padding: 0 2px !important;
+  border: 1px solid var(--fv-border) !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  justify-content: center !important;
+}
+.sinkduce-file-viewer .pdf-nav-head .pdf-icon-button {
+  width: 18px !important;
+  min-width: 18px !important;
+  height: 18px !important;
+  font-size: 11px !important;
+  padding: 0 !important;
+  border: none !important;
+  color: var(--fv-green) !important;
+  background: transparent !important;
+}
+.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter,
+.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter strong,
+.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter span {
+  font-size: 10px !important;
+  font-weight: 300 !important;
+  letter-spacing: 0.02em !important;
+  min-width: 0 !important;
+  color: var(--fv-green) !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter strong {
+  font-weight: 400 !important;
+}
+
+.sinkduce-file-viewer .pdf-nav-tabs {
+  display: flex !important;
+  gap: 4px !important;
+  padding: 0 8px 8px !important;
+}
+.sinkduce-file-viewer .pdf-nav-tabs button {
+  flex: 1 1 auto !important;
+  height: 24px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--fv-muted) !important;
+  font-size: 11px !important;
+  font-weight: 300 !important;
+  letter-spacing: 0.04em !important;
+  box-shadow: none !important;
+}
+.sinkduce-file-viewer .pdf-nav-tabs button:hover,
+.sinkduce-file-viewer .pdf-nav-tabs button.active {
+  border-bottom-color: var(--fv-green) !important;
+  background: transparent !important;
+  color: var(--fv-green) !important;
+}
+.sinkduce-file-viewer .pdf-page-list,
+.sinkduce-file-viewer .pdf-outline-list {
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 2px 6px 10px !important;
+  gap: 1px !important;
+}
+/* Kill grid layout that stacks number tile + label out of alignment */
+.sinkduce-file-viewer .pdf-page-button,
+.sinkduce-file-viewer .pdf-page-button--with-thumbnail,
+.sinkduce-file-viewer .pdf-outline-button {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  grid-template-columns: none !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  border: none !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: inherit !important;
+  font-size: 12px !important;
+  font-weight: 300 !important;
+  letter-spacing: 0.02em !important;
+  min-height: 28px !important;
+  height: auto !important;
+  padding: 5px 8px !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+  text-align: left !important;
+  gap: 0 !important;
+  line-height: 1.3 !important;
+}
+/* Hide the number square (pdf-page-thumb); keep only "Page N" label */
+.sinkduce-file-viewer .pdf-page-button > .pdf-page-thumb,
+.sinkduce-file-viewer .pdf-page-thumb:not(.pdf-page-thumb--thumbnail) {
+  display: none !important;
+}
+.sinkduce-file-viewer .pdf-page-label,
+.sinkduce-file-viewer .pdf-outline-title {
+  display: block !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  font-size: 12px !important;
+  font-weight: 300 !important;
+  color: inherit !important;
+  line-height: 1.3 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.sinkduce-file-viewer .pdf-page-button:hover,
+.sinkduce-file-viewer .pdf-outline-button:hover {
+  background: var(--fv-green-soft) !important;
+  color: var(--fv-green) !important;
+}
+/* Single full-width selected row — no floating box offset */
+.sinkduce-file-viewer .pdf-page-button--active,
+.sinkduce-file-viewer .pdf-page-button.pdf-page-button--active {
+  background: var(--fv-green-soft) !important;
+  color: var(--fv-green) !important;
+  border: none !important;
+  box-shadow: inset 2px 0 0 0 var(--fv-green) !important;
+  font-weight: 400 !important;
+  transform: none !important;
+  outline: none !important;
+}
+.sinkduce-file-viewer .pdf-page-button--active .pdf-page-label {
+  color: var(--fv-green) !important;
+  font-weight: 400 !important;
+}
+.sinkduce-file-viewer .pdf-outline-empty,
+.sinkduce-file-viewer .pdf-state {
+  border: none !important;
+  background: transparent !important;
+  color: var(--fv-muted) !important;
+  font-size: 11px !important;
+  font-weight: 300 !important;
+}
+/* PDF toolbar leftovers (if not fully re-homed) */
+.sinkduce-file-viewer .pdf-toolbar {
+  border-color: var(--fv-border) !important;
+  background: var(--fv-bg) !important;
+  box-shadow: none !important;
+  font-weight: 300 !important;
+  min-height: 0 !important;
+}
+.sinkduce-file-viewer .pdf-icon-button,
+.sinkduce-file-viewer .pdf-scale-button,
+.sinkduce-file-viewer .pdf-rotation-meter {
+  color: var(--fv-green) !important;
+  font-size: 11px !important;
+  font-weight: 300 !important;
+  border-radius: 4px !important;
+}
+.sinkduce-file-viewer .pdf-page-meter,
+.sinkduce-file-viewer .pdf-page-meter strong {
+  color: var(--fv-green) !important;
+  font-size: 10px !important;
+  font-weight: 300 !important;
+  border-radius: 4px !important;
+}
+.sinkduce-file-viewer .pdf-icon-button:hover:not(:disabled),
+.sinkduce-file-viewer .pdf-scale-button:hover,
+.sinkduce-file-viewer .pdf-icon-button--active {
+  background: var(--fv-green-soft) !important;
+  color: var(--fv-green) !important;
+  border-color: transparent !important;
+}
+.sinkduce-file-viewer .pdf-wrapper {
+  background: var(--fv-surface) !important;
+}
+
+/* Spreadsheet sheet tabs (bottom bar) */
+.sinkduce-file-viewer [class*="spreadsheet"] button,
+.sinkduce-file-viewer [class*="sheet-tab"],
+.sinkduce-file-viewer [class*="SheetTab"] {
+  font-size: 11px !important;
+  font-weight: 300 !important;
+  letter-spacing: 0.03em !important;
+  color: var(--fv-green) !important;
+}
+
+/* Document body: keep readable but not oversized */
+.sinkduce-file-viewer [class*="page"],
+.sinkduce-file-viewer [class*="Page"],
+.sinkduce-file-viewer [class*="slide"],
+.sinkduce-file-viewer [class*="Slide"],
+.sinkduce-file-viewer article,
+.sinkduce-file-viewer .markdown-body,
+.sinkduce-file-viewer pre {
+  font-size: 12.5px !important;
+  line-height: 1.5 !important;
+  font-weight: 400 !important;
+}
+
 /* -----------------------------------------------------------
    Hide scrollbars globally — keep overflow scroll functionality
    but remove the visible track & thumb for a cleaner editorial

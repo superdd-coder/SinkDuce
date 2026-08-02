@@ -95,6 +95,14 @@ interface FileMgmtState {
   messageIncludeNodes: boolean
   viewMode: "folder" | "timeline"
   uploadingTasks: Set<string>  // task IDs being polled
+  /**
+   * Files currently in async ingest (upload or new version).
+   * Key = file_id → task progress for folder-view badges.
+   */
+  ingestingFiles: Record<
+    string,
+    { taskId: string; progress: number; message: string }
+  >
 
   // Per-collection folder position cache
   perCollectionFolderCache: Record<string, string | null>
@@ -192,8 +200,12 @@ interface FileMgmtState {
   resolveNameConflict: (newName: string) => Promise<void>
   cancelNameConflict: () => void
 
-  // Internal: task polling
-  _startTaskPolling: (collectionId: string, taskId: string) => void
+  // Internal: task polling (fileId links progress badge in folder grid)
+  _startTaskPolling: (
+    collectionId: string,
+    taskId: string,
+    fileId?: string | null
+  ) => void
 }
 
 export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
@@ -217,6 +229,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   viewMode: "folder",
   timelineNavRequest: null,
   uploadingTasks: new Set<string>(),
+  ingestingFiles: {},
   perCollectionFolderCache: {},
   nameConflict: null,
 
@@ -572,7 +585,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         )
       } else if (result.task_id) {
         toast.info(`"${displayName}" uploaded, ingesting...`)
-        get()._startTaskPolling(collectionId, result.task_id)
+        get()._startTaskPolling(collectionId, result.task_id, result.file_id)
       } else {
         toast.success(`"${displayName}" uploaded`)
       }
@@ -607,11 +620,11 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       const results = await uploadFolderToCollection(collectionId, currentFolderId || "", files)
       await get().fetchFolderTree(collectionId)
       await get().refreshFiles(collectionId)
-      const taskIds = results.filter((r) => r.task_id).map((r) => r.task_id!)
-      if (taskIds.length > 0) {
-        toast.info(`${files.length} files uploaded, ${taskIds.length} ingesting...`)
-        for (const tid of taskIds) {
-          get()._startTaskPolling(collectionId, tid)
+      const withTasks = results.filter((r) => r.task_id)
+      if (withTasks.length > 0) {
+        toast.info(`${files.length} files uploaded, ${withTasks.length} ingesting...`)
+        for (const r of withTasks) {
+          get()._startTaskPolling(collectionId, r.task_id!, r.file_id)
         }
       } else {
         toast.success(`${files.length} files uploaded`)
@@ -856,64 +869,26 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         return
       }
 
-      // 1. Update SQLite is_definitive immediately (must not block on summary gen)
-      const resp = await fetch(`/api/file-mgmt/${collectionId}/files/${fileId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_definitive: definitive, version: ver }),
+      // Backend owns: is_definitive + optional doc_summary gen + consolidate debounce
+      await updateFile(collectionId, fileId, {
+        is_definitive: definitive,
+        version: ver,
       })
-      if (!resp.ok) {
-        const body = await resp.text()
-        toast.error(`Failed: API ${resp.status}: ${body}`)
-        return
-      }
 
       await get().refreshFiles(collectionId)
-      toast.success(definitive ? "Marked as definitive" : "Removed definitive")
-
-      // 2. Background: sync doc_summary include for consolidate (non-blocking)
-      const source = `__file__:${fileId}`
-      void (async () => {
-        try {
-          const { setDocSummaryInclude, generateDocSummary, getDocSummary } =
-            await import("@/api/client")
-          if (definitive) {
-            try {
-              await setDocSummaryInclude(collectionId, source, true)
-            } catch {
-              toast.info("Generating summary for definitive file…")
-              await generateDocSummary(collectionId, source)
-              const start = Date.now()
-              while (Date.now() - start < 300_000) {
-                await new Promise((r) => setTimeout(r, 2000))
-                try {
-                  const ds = await getDocSummary(collectionId, source)
-                  if (ds) {
-                    await setDocSummaryInclude(collectionId, source, true)
-                    break
-                  }
-                } catch {
-                  /* still generating */
-                }
-              }
-            }
-          } else {
-            try {
-              await setDocSummaryInclude(collectionId, source, false)
-            } catch {
-              /* no summary */
-            }
-          }
-        } catch {
-          /* summary sync optional */
-        }
-      })()
+      toast.success(
+        definitive
+          ? "Marked definitive — feeds Collection Summary"
+          : "Cleared definitive"
+      )
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   },
 
   toggleSelection: (fileId: string) => {
+    // Ingesting files cannot be selected (no file toolbar actions).
+    if (get().ingestingFiles[fileId]) return
     if (!get().multiSelectMode) {
       get().selectSingleFile(fileId)
       return
@@ -927,6 +902,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   },
 
   selectSingleFile: (fileId: string) => {
+    if (get().ingestingFiles[fileId]) return
     set({
       selectedFileIds: new Set([fileId]),
       selectedFolderIds: new Set(),
@@ -935,9 +911,13 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   selectAllFiles: () => {
     if (!get().multiSelectMode) return
-    const { currentFolderFiles } = get()
+    const { currentFolderFiles, ingestingFiles } = get()
     set({
-      selectedFileIds: new Set(currentFolderFiles.map((f) => f.file_id)),
+      selectedFileIds: new Set(
+        currentFolderFiles
+          .map((f) => f.file_id)
+          .filter((id) => !ingestingFiles[id])
+      ),
       selectedFolderIds: new Set(),
     })
   },
@@ -1184,53 +1164,84 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     set({ timelineNavRequest: null })
   },
 
-  _startTaskPolling: (collectionId: string, taskId: string) => {
+  _startTaskPolling: (collectionId, taskId, fileId = null) => {
+    const fid = fileId || null
     set((s) => {
       const next = new Set(s.uploadingTasks)
       next.add(taskId)
-      return { uploadingTasks: next }
+      const ingestingFiles = { ...s.ingestingFiles }
+      // Drop selection so file action toolbar does not appear for ingesting files
+      const selectedFileIds = new Set(s.selectedFileIds)
+      if (fid) {
+        ingestingFiles[fid] = {
+          taskId,
+          progress: 0,
+          message: "Queued for processing",
+        }
+        selectedFileIds.delete(fid)
+      }
+      return { uploadingTasks: next, ingestingFiles, selectedFileIds }
     })
+
+    const clearIngesting = () => {
+      set((s) => {
+        const next = new Set(s.uploadingTasks)
+        next.delete(taskId)
+        const ingestingFiles = { ...s.ingestingFiles }
+        if (fid && ingestingFiles[fid]?.taskId === taskId) {
+          delete ingestingFiles[fid]
+        }
+        // Also drop any entry still pointing at this taskId
+        for (const [k, v] of Object.entries(ingestingFiles)) {
+          if (v.taskId === taskId) delete ingestingFiles[k]
+        }
+        return { uploadingTasks: next, ingestingFiles }
+      })
+    }
 
     const poll = async () => {
       try {
         const res = await getTasks(collectionId)
         const task = res.tasks.find((t) => t.id === taskId)
         if (!task) {
-          // Task may have been cleared; stop polling
-          set((s) => {
-            const next = new Set(s.uploadingTasks)
-            next.delete(taskId)
-            return { uploadingTasks: next }
-          })
+          clearIngesting()
           return
         }
         if (task.status === "completed") {
-          set((s) => {
-            const next = new Set(s.uploadingTasks)
-            next.delete(taskId)
-            return { uploadingTasks: next }
-          })
+          clearIngesting()
           await get().refreshFiles(collectionId)
           await get().refreshMessages(collectionId)
           toast.success(`Ingest complete: ${task.filename}`)
         } else if (task.status === "failed") {
-          set((s) => {
-            const next = new Set(s.uploadingTasks)
-            next.delete(taskId)
-            return { uploadingTasks: next }
-          })
+          clearIngesting()
           await get().refreshFiles(collectionId)
           await get().refreshMessages(collectionId)
-          toast.error(`Ingest failed: ${task.filename} — ${task.error || "unknown error"}`)
+          toast.error(
+            `Ingest failed: ${task.filename} — ${task.error || "unknown error"}`
+          )
         } else {
-          // Still pending/processing — keep polling
+          // Update progress badge while pending/processing
+          if (fid) {
+            set((s) => {
+              if (!s.ingestingFiles[fid]) return s
+              return {
+                ingestingFiles: {
+                  ...s.ingestingFiles,
+                  [fid]: {
+                    taskId,
+                    progress: task.progress ?? 0,
+                    message: task.message || "Processing…",
+                  },
+                },
+              }
+            })
+          }
           setTimeout(poll, 1500)
         }
       } catch {
-        // Network error — retry once more after delay
         setTimeout(poll, 3000)
       }
     }
-    setTimeout(poll, 1500)
+    setTimeout(poll, 800)
   },
 }))

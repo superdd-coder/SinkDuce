@@ -251,15 +251,21 @@ class ContextualRetrieval:
                 check_cancelled()
                 pos = ctx_futures[future]
                 chunk = chunks[pos]
+                ctx = ""
                 try:
-                    ctx = future.result()
+                    ctx = future.result() or ""
                     if ctx:
                         results[pos] = ctx
                         chunk.metadata["context"] = ctx
-                        if on_chunk_ready:
-                            on_chunk_ready(chunk, ctx)
                 except Exception:
                     logger.warning("[Enrich] chunk %d context failed", pos)
+                # Always notify completion (success or fail) so progress uses
+                # finished work, not submitted work.
+                if on_chunk_ready:
+                    try:
+                        on_chunk_ready(chunk, ctx)
+                    except Exception:
+                        logger.debug("[Enrich] on_chunk_ready failed for chunk %d", pos)
 
             logger.info("[Enrich] %d/%d chunk contexts ready", len(results), len(chunks))
 

@@ -192,10 +192,13 @@ def test_upload_to_folder_txt():
         ).fetchone()
         assert m_row is not None
 
-        # Verify disk file exists
-        file_dir = Path("data/collections") / coll / "files" / file_id
-        assert file_dir.exists()
-        assert any(f.is_file() for f in file_dir.iterdir())
+        # Verify disk file exists under files/{file_id}/{version_id}/
+        from src.file_mgmt.storage_paths import resolve_version_blob
+
+        blob = resolve_version_blob(
+            coll, file_id, v_row["version_id"], v_row["storage_file_id"]
+        )
+        assert blob is not None and blob.is_file()
     finally:
         conn.close()
 
@@ -342,8 +345,113 @@ def test_upload_version():
         ).fetchone()
         assert m_row is not None
         assert "Updated to v2" in (m_row["body"] or "")
+
+        # Old version blob still on disk (version-level archive, not deleted)
+        from src.file_mgmt.storage_paths import resolve_version_blob
+
+        old_blob = resolve_version_blob(
+            coll,
+            file_id,
+            old_vers["version_id"],
+            old_vers["storage_file_id"],
+        )
+        assert old_blob is not None and old_blob.is_file()
+
+        # File-level archive flag stays off — not moved into Archive folder
+        assert f_row["archived"] == 0
     finally:
         conn.close()
+
+
+def test_list_old_versions_and_delete_non_current():
+    """Old versions list excludes current; delete removes blob + row, not whole file."""
+    from src.main import app
+
+    coll = "p4-old-ver-del"
+    _setup_collection(coll)
+    client = TestClient(app)
+
+    folder_id = _get_plain_folder_id(client, coll)
+
+    resp1 = client.post(
+        f"/api/file-mgmt/{coll}/files/upload",
+        files={"file": ("a.txt", _fake_txt_bytes("A"), "text/plain")},
+        data={"folder_id": folder_id},
+    )
+    assert resp1.status_code == 201
+    file_id = resp1.json()["file_id"]
+
+    resp2 = client.post(
+        f"/api/file-mgmt/{coll}/files/{file_id}/versions",
+        files={"file": ("b.txt", _fake_txt_bytes("B"), "text/plain")},
+        data={"commit_message": "to b"},
+    )
+    assert resp2.status_code == 201, resp2.text
+
+    # List old versions — only non-current
+    list_resp = client.get(f"/api/file-mgmt/{coll}/old-versions")
+    assert list_resp.status_code == 200, list_resp.text
+    olds = list_resp.json()
+    assert isinstance(olds, list)
+    assert len(olds) == 1
+    assert olds[0]["file_id"] == file_id
+    assert olds[0]["version_no"] == 1
+    old_version_id = olds[0]["version_id"]
+
+    conn = get_db(coll)
+    try:
+        current_id = conn.execute(
+            "SELECT current_version_id FROM files WHERE file_id=?", (file_id,)
+        ).fetchone()["current_version_id"]
+        assert old_version_id != current_id
+        # files.archived still 0 — old version is not Archive-folder material
+        assert (
+            conn.execute(
+                "SELECT archived FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()["archived"]
+            == 0
+        )
+    finally:
+        conn.close()
+
+    # Cannot delete current version
+    bad = client.delete(
+        f"/api/file-mgmt/{coll}/files/{file_id}/versions/{current_id}"
+    )
+    assert bad.status_code == 400
+
+    # Delete old version
+    old_storage = olds[0]["storage_file_id"]
+    del_resp = client.delete(
+        f"/api/file-mgmt/{coll}/files/{file_id}/versions/{old_version_id}"
+    )
+    assert del_resp.status_code == 200, del_resp.text
+    assert del_resp.json().get("deleted") is True
+
+    # Version row gone; file + current version remain
+    conn = get_db(coll)
+    try:
+        assert not conn.execute(
+            "SELECT 1 FROM file_versions WHERE version_id=?", (old_version_id,)
+        ).fetchone()
+        assert conn.execute(
+            "SELECT 1 FROM files WHERE file_id=?", (file_id,)
+        ).fetchone()
+        assert conn.execute(
+            "SELECT 1 FROM file_versions WHERE version_id=?", (current_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    from src.file_mgmt.storage_paths import resolve_version_blob
+
+    old_blob = resolve_version_blob(coll, file_id, old_version_id, old_storage)
+    assert old_blob is None
+
+    # List is empty after delete
+    list2 = client.get(f"/api/file-mgmt/{coll}/old-versions")
+    assert list2.status_code == 200
+    assert list2.json() == []
 
 
 def test_version_limit_warning():

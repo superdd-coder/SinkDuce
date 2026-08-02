@@ -1,21 +1,22 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { FolderTreeIcon, GitBranchPlus, Settings } from "lucide-react"
+import { List, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/stores/app-store"
-import { getFiles, getFileChunks, deleteDocument, getTasks, type FileListItem, type ChunkDetail } from "@/api/client"
+import { getFiles, deleteDocument, getTasks, type FileListItem } from "@/api/client"
 import { CollectionList } from "./collection-list"
 import { CreateCollectionDialog } from "./create-collection-dialog"
 import { DeleteCollectionDialog } from "./delete-collection-dialog"
 import { RenameCollectionDialog } from "./rename-collection-dialog"
 import { CollectionConfig } from "./collection-config"
 import { InfoPanel } from "./info-panel"
-import { FileDetailDialog } from "./file-detail-dialog"
+import { ClassicFilesDialog } from "./classic-files-dialog"
 import { QuickChat } from "./quick-chat"
 import { FolderView } from "@/components/file-mgmt/folder-view"
 import { TimelineView } from "@/components/file-mgmt/timeline-view"
+import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { cn } from "@/lib/utils"
 
@@ -25,8 +26,8 @@ export function _triggerFilesRefresh() {
   _refreshFilesCallback?.()
 }
 
-type DbViewMode = "classic" | "folders" | "timeline"
-type DbTab = "info" | "files" | "config"
+/** Top-level database tabs: Info | Files (folders) | Timeline | Config */
+type DbTab = "info" | "files" | "timeline" | "config"
 
 function loadDbUi<T>(key: string, fallback: T): T {
   try {
@@ -43,21 +44,35 @@ function saveDbUi(key: string, value: unknown) {
   } catch { /* ignore */ }
 }
 
+function loadInitialDbTab(): DbTab {
+  const t = loadDbUi<string>("dbActiveTab", "info")
+  if (t === "info" || t === "files" || t === "timeline" || t === "config") {
+    // Migrate legacy: Files tab + Folders/Timeline sub-toggle
+    if (t === "files") {
+      const mode = loadDbUi<string>("dbViewMode", "folders")
+      if (mode === "timeline") return "timeline"
+    }
+    return t
+  }
+  return "info"
+}
+
 export function DatabaseView() {
   const { activeCollection, setActiveCollection, removeDeletedCollection, pendingCreateCollection, setPendingCreateCollection, pendingOpenFile, setPendingOpenFile, collections, fetchCollections } = useAppStore()
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<DbTab>(() => {
-    const t = loadDbUi<string>("dbActiveTab", "info")
-    return t === "info" || t === "files" || t === "config" ? t : "info"
-  })
+  const [activeTab, setActiveTab] = useState<DbTab>(() => loadInitialDbTab())
+  /** Tabs visited at least once — keepMounted after first open for snappy re-switch. */
+  const [visitedTabs, setVisitedTabs] = useState<Set<DbTab>>(
+    () => new Set([loadInitialDbTab()])
+  )
   const [files, setFiles] = useState<FileListItem[]>([])
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [dialogKey, setDialogKey] = useState(0)
-  const [chunks, setChunks] = useState<ChunkDetail[]>([])
-  const [chunksTotal, setChunksTotal] = useState(0)
-  const [chunksLoading, setChunksLoading] = useState(false)
+  /** Unified file detail — fileId for metadata, source for chunks/meeting/note. */
+  const [detailOpen, setDetailOpen] = useState<{
+    fileId?: string | null
+    source?: string | null
+  } | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fetchFilesRef = useRef<() => void>(() => {})
   // Per-fetch stale-response tokens. fetchFiles and fetchTasks each own their
@@ -70,34 +85,37 @@ export function DatabaseView() {
   const [deleteFileTarget, setDeleteFileTarget] = useState<string | null>(null)
   const deleteFileDisplay = files.find(f => f.source === deleteFileTarget)?.display_name || deleteFileTarget
   const [quickChatOpen, setQuickChatOpen] = useState(false)
-  const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | undefined>(undefined)
-  // Phase 6: view mode for folder view vs timeline view
-  const [dbViewMode, setDbViewMode] = useState<DbViewMode>(() => {
-    const m = loadDbUi<string>("dbViewMode", "folders")
-    // UI toggle is Folders | Timeline only (legacy "classic" → folders)
-    return m === "timeline" ? "timeline" : "folders"
-  })
+  /** All Files flat list — dialog only, not a top-level tab. */
+  const [classicFilesOpen, setClassicFilesOpen] = useState(false)
 
   const handleTabChange = useCallback((tab: string) => {
-    const next: DbTab = tab === "info" || tab === "files" || tab === "config" ? tab : "info"
+    const next: DbTab =
+      tab === "info" || tab === "files" || tab === "timeline" || tab === "config"
+        ? tab
+        : "info"
     setActiveTab(next)
+    setVisitedTabs((prev) => {
+      if (prev.has(next)) return prev
+      const n = new Set(prev)
+      n.add(next)
+      return n
+    })
     saveDbUi("dbActiveTab", next)
-  }, [])
-
-  const handleDbViewMode = useCallback((mode: DbViewMode) => {
-    // UI only offers folders | timeline; classic kept for type compat
-    const next = mode === "timeline" ? "timeline" : "folders"
-    setDbViewMode(next)
-    saveDbUi("dbViewMode", next)
   }, [])
 
   // In-app jump from message mini-graph → Timeline (same SPA route, no new window)
   const timelineNavRequest = useFileMgmtStore((s) => s.timelineNavRequest)
   useEffect(() => {
     if (!timelineNavRequest) return
-    handleTabChange("files")
-    handleDbViewMode("timeline")
-  }, [timelineNavRequest, handleDbViewMode, handleTabChange])
+    handleTabChange("timeline")
+  }, [timelineNavRequest, handleTabChange])
+
+  // Collection switch remounts the panel tree (key=activeCollection); reset visit
+  // cache so we don't keepMounted-mount every prior tab for the new collection.
+  useEffect(() => {
+    setVisitedTabs(new Set([activeTab]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
+  }, [activeCollection])
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -125,10 +143,21 @@ export function DatabaseView() {
     return () => window.removeEventListener("show-meeting-log", handler)
   }, [handleTabChange])
 
-  // Open file detail from Meeting Log
+  // Open unified file detail from Meeting Log / Info panel / etc.
   useEffect(() => {
     if (pendingOpenFile) {
-      openFileDetail(pendingOpenFile)
+      const raw = pendingOpenFile
+      const fileId =
+        raw.startsWith("__file__:")
+          ? raw.slice("__file__:".length)
+          : /^[a-f0-9]{32}$/i.test(raw.trim())
+            ? raw.trim()
+            : null
+      setDetailOpen({
+        fileId,
+        // Keep original when it's a document source; when only fileId, detail will fill source
+        source: fileId && raw === fileId ? `__file__:${fileId}` : raw,
+      })
       setPendingOpenFile(null)
     }
   }, [pendingOpenFile, setPendingOpenFile])
@@ -202,22 +231,6 @@ export function DatabaseView() {
     }
   }
 
-  const openFileDetail = async (source: string) => {
-    setSelectedFile(source)
-    setDialogKey(k => k + 1)
-    setChunksLoading(true)
-    try {
-      const res = await getFileChunks(activeCollection, source, 10000)
-      setChunks(res.chunks)
-      setChunksTotal(res.total)
-    } catch {
-      setChunks([])
-      setChunksTotal(0)
-    } finally {
-      setChunksLoading(false)
-    }
-  }
-
   return (
     <div className="h-full flex">
       <CollectionList
@@ -267,154 +280,127 @@ export function DatabaseView() {
               </div>
             </div>
 
-            <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col min-h-0">
+            <div className="flex-1 flex flex-col min-h-0 min-w-0">
               {/*
-                Shared row height: text vertically centered (字对齐);
-                underline sits at bottom-0 of the row = toggle bottom edge.
+                Tab list only uses Base UI Tabs (for indicator).
+                Panels are custom — NO TabsContent: its [hidden]/starting-style
+                transitions zero size and flash Timeline on every switch.
               */}
-              <div className="flex items-stretch gap-0 min-w-0 h-7">
-                <TabsList className="!h-7 w-fit bg-transparent p-0 gap-5 border-0 rounded-none relative shrink-0 items-center">
-                  <TabsIndicator
-                    renderBeforeHydration
-                    className="!bottom-0 h-0.5"
-                  />
-                  <TabsTrigger
-                    value="info"
-                    className={cn(
-                      "!h-7 min-h-0 px-0 py-0 rounded-none bg-transparent",
-                      "data-[state=active]:shadow-none data-active:bg-transparent",
-                      "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
-                      "text-muted-foreground data-active:text-primary",
-                      "after:!opacity-0 after:!content-none",
-                      "inline-flex items-center justify-center"
-                    )}
-                    style={{ borderColor: "transparent" }}
-                  >
-                    Info
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="files"
-                    className={cn(
-                      "!h-7 min-h-0 px-0 py-0 rounded-none bg-transparent",
-                      "data-[state=active]:shadow-none data-active:bg-transparent",
-                      "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
-                      "text-muted-foreground data-active:text-primary",
-                      "after:!opacity-0 after:!content-none",
-                      "inline-flex items-center justify-center"
-                    )}
-                    style={{ borderColor: "transparent" }}
-                  >
-                    Files
-                  </TabsTrigger>
-                </TabsList>
-
-                <div
-                  className={cn(
-                    "overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-                    "flex items-stretch h-7",
-                    activeTab === "files"
-                      ? "max-w-[300px] opacity-100 ml-3"
-                      : "max-w-0 opacity-0 ml-0 pointer-events-none"
-                  )}
+              <div className="shrink-0 flex items-center justify-between gap-3 min-w-0 w-full h-7">
+                <Tabs
+                  value={activeTab}
+                  onValueChange={handleTabChange}
+                  className="min-w-0"
                 >
-                  <div
+                  <TabsList className="!h-7 w-fit bg-transparent p-0 gap-5 border-0 rounded-none relative shrink-0 items-center">
+                    <TabsIndicator
+                      renderBeforeHydration
+                      className="!bottom-0 h-0.5"
+                    />
+                    {(
+                      [
+                        ["info", "Info"],
+                        ["files", "Files"],
+                        ["timeline", "Timeline"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <TabsTrigger
+                        key={value}
+                        value={value}
+                        className={cn(
+                          "!h-7 min-h-0 px-0 py-0 rounded-none bg-transparent",
+                          "data-[state=active]:shadow-none data-active:bg-transparent",
+                          "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                          "text-muted-foreground data-active:text-primary",
+                          "after:!opacity-0 after:!content-none",
+                          "inline-flex items-center justify-center"
+                        )}
+                        style={{ borderColor: "transparent" }}
+                      >
+                        {label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+                {/* Files tab only: All Files flat list dialog — right edge of tab bar row */}
+                {activeTab === "files" && (
+                  <button
+                    type="button"
+                    onClick={() => setClassicFilesOpen(true)}
+                    title="All Files"
                     className={cn(
-                      "flex items-center gap-2.5 whitespace-nowrap h-7",
-                      "transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-                      activeTab === "files" ? "translate-x-0" : "-translate-x-2"
+                      "shrink-0 inline-flex items-center gap-1.5 h-7 px-1.5 rounded-md ml-auto",
+                      "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                      "text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
                     )}
                   >
-                    <span
-                      className="w-px h-3.5 bg-border/60 shrink-0 self-center"
-                      aria-hidden
-                    />
-                    {/* Full row height so bottom edge lines up with tab underline */}
-                    <div
-                      role="group"
-                      aria-label="Files view mode"
-                      className="relative grid grid-cols-2 h-full rounded-md bg-muted/50 p-0.5"
-                    >
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[5px]",
-                          "bg-primary shadow-sm",
-                          "transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
-                        )}
-                        style={{
-                          transform:
-                            dbViewMode === "timeline"
-                              ? "translateX(100%)"
-                              : "translateX(0)",
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className={cn(
-                          "relative z-10 h-full px-2.5 inline-flex items-center justify-center gap-1",
-                          "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
-                          "transition-colors duration-200",
-                          dbViewMode === "folders"
-                            ? "text-primary-foreground"
-                            : "text-muted-foreground hover:text-foreground"
-                        )}
-                        onClick={() => handleDbViewMode("folders")}
-                        aria-pressed={dbViewMode === "folders"}
-                      >
-                        <FolderTreeIcon className="size-3 shrink-0 opacity-90" />
-                        Folders
-                      </button>
-                      <button
-                        type="button"
-                        className={cn(
-                          "relative z-10 h-full px-2.5 inline-flex items-center justify-center gap-1",
-                          "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
-                          "transition-colors duration-200",
-                          dbViewMode === "timeline"
-                            ? "text-primary-foreground"
-                            : "text-muted-foreground hover:text-foreground"
-                        )}
-                        onClick={() => handleDbViewMode("timeline")}
-                        aria-pressed={dbViewMode === "timeline"}
-                      >
-                        <GitBranchPlus className="size-3 shrink-0 opacity-90" />
-                        Timeline
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                    <List className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">All Files</span>
+                  </button>
+                )}
               </div>
 
-              <TabsContent key={`info-${activeTab}`} value="info" className="flex-1 mt-1 overflow-hidden min-h-0 animate-tab-in">
-                <ScrollArea className="h-full">
-                  <InfoPanel collection={activeCollection} />
-                </ScrollArea>
-              </TabsContent>
-
-              <TabsContent
-                key={`files-${activeTab}`}
-                value="files"
-                // overflow-visible: folder message sidebar shadow must paint outside its box.
-                // Timeline / grid keep their own overflow-hidden scroll roots.
-                className="flex-1 flex flex-col mt-1 overflow-visible min-h-0 animate-tab-in"
-              >
-                {dbViewMode === "timeline" ? (
-                  <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                    <TimelineView collectionId={activeCollection} />
-                  </div>
-                ) : (
-                  <div className="flex-1 flex flex-col min-h-0 overflow-visible">
-                    <FolderView collectionId={activeCollection} />
-                  </div>
-                )}
-              </TabsContent>
-
-              <TabsContent key={`config-${activeTab}`} value="config" className="flex-1 mt-1 overflow-hidden min-h-0 animate-tab-in">
-                <ScrollArea className="h-full">
-                  <CollectionConfig collection={activeCollection} />
-                </ScrollArea>
-              </TabsContent>
-            </Tabs>
+              {/*
+                Keep-alive tab panels (SaaS-style):
+                - Visit once → stay mounted (no remount / Loading flash).
+                - Inactive = opacity-0 + inert (NOT display:none, NOT visibility:hidden).
+                  · opacity cannot be re-opened by descendants → no residual bleed.
+                  · display:none zeroed Timeline's viewport → wrong pan, nodes clipped on return.
+                  · visibility:hidden can be overridden by child visibility:visible.
+                - Active panel has solid bg + higher z so nothing shows through.
+              */}
+              <div className="relative flex-1 min-h-0 min-w-0 mt-1 bg-background isolate">
+                {(
+                  [
+                    ["info", visitedTabs.has("info")] as const,
+                    ["files", visitedTabs.has("files")] as const,
+                    ["timeline", visitedTabs.has("timeline")] as const,
+                    ["config", visitedTabs.has("config")] as const,
+                  ] as const
+                ).map(([tab, visited]) => {
+                  if (!visited) return null
+                  const isActive = activeTab === tab
+                  return (
+                    <div
+                      key={tab}
+                      className={cn(
+                        "absolute inset-0 flex flex-col overflow-hidden bg-background",
+                        "transition-opacity duration-0",
+                        isActive
+                          ? "z-10 opacity-100"
+                          : "z-0 opacity-0 pointer-events-none select-none"
+                      )}
+                      aria-hidden={!isActive}
+                      inert={!isActive ? true : undefined}
+                    >
+                      {tab === "info" && (
+                        <ScrollArea className="h-full">
+                          <InfoPanel collection={activeCollection} />
+                        </ScrollArea>
+                      )}
+                      {tab === "files" && (
+                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                          <FolderView collectionId={activeCollection} />
+                        </div>
+                      )}
+                      {tab === "timeline" && (
+                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                          <TimelineView
+                            collectionId={activeCollection}
+                            active={isActive}
+                          />
+                        </div>
+                      )}
+                      {tab === "config" && (
+                        <ScrollArea className="h-full">
+                          <CollectionConfig collection={activeCollection} />
+                        </ScrollArea>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           </div>
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
@@ -434,10 +420,15 @@ export function DatabaseView() {
           onOpen={() => setQuickChatOpen(true)}
           onClose={() => setQuickChatOpen(false)}
           files={files}
-          onSourceClick={(source, chunkIndex) => {
+          onSourceClick={(source) => {
             setActiveTab("files")
-            setHighlightChunkIndex(chunkIndex)
-            openFileDetail(source)
+            const fileId =
+              source.startsWith("__file__:")
+                ? source.slice("__file__:".length)
+                : /^[a-f0-9]{32}$/i.test(source.trim())
+                  ? source.trim()
+                  : null
+            setDetailOpen({ fileId, source })
           }}
         />
       )}
@@ -459,21 +450,35 @@ export function DatabaseView() {
         />
       )}
 
-      <FileDetailDialog
-        collection={activeCollection}
-        source={selectedFile}
-        displayName={files.find(f => f.source === selectedFile)?.display_name}
-        fileType={files.find(f => f.source === selectedFile)?.file_type}
-        originalExt={files.find(f => f.source === selectedFile)?.original_ext}
-        openKey={dialogKey}
-        chunks={chunks}
-        chunksTotal={chunksTotal}
-        loading={chunksLoading}
-        highlightChunkIndex={highlightChunkIndex}
-        onOpenChange={(v) => { if (!v) { setSelectedFile(null); setHighlightChunkIndex(undefined); fetchFiles() } }}
-      />
+      {activeCollection && (
+        <FileMgmtDetailDialog
+          collectionId={activeCollection}
+          fileId={detailOpen?.fileId}
+          source={detailOpen?.source}
+          open={!!detailOpen}
+          onOpenChange={(v) => {
+            if (!v) {
+              setDetailOpen(null)
+              fetchFiles()
+              void useFileMgmtStore.getState().refreshFiles(activeCollection)
+            }
+          }}
+          onDeleted={() => {
+            setDetailOpen(null)
+            fetchFiles()
+          }}
+        />
+      )}
 
-      {/* File deletion confirmation */}
+      {activeCollection && (
+        <ClassicFilesDialog
+          collectionId={activeCollection}
+          open={classicFilesOpen}
+          onOpenChange={setClassicFilesOpen}
+        />
+      )}
+
+      {/* File deletion confirmation (Quick Chat / pendingOpenFile paths) */}
       <Dialog open={!!deleteFileTarget} onOpenChange={(v) => !v && setDeleteFileTarget(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>

@@ -29,6 +29,7 @@ import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { NodeFileAttach } from "./node-file-attach"
 import { MessageCard } from "../message-card"
 import { MessageEditorDialog } from "../folder-view/message-editor-dialog"
+import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 
 /** Format ISO timestamp as yyyy/mm/dd HH:mm:ss (24h local). */
 function formatCreatedAt(iso: string): string {
@@ -88,6 +89,8 @@ export function NodeDetailSidebar({
   const [msgDialogOpen, setMsgDialogOpen] = useState(false)
   const [editingMsg, setEditingMsg] = useState<Message | null>(null)
   const [msgDialogReadonly, setMsgDialogReadonly] = useState(false)
+  /** Open unified file detail from attachment list. */
+  const [detailFileId, setDetailFileId] = useState<string | null>(null)
   const dateInputRef = useRef<HTMLInputElement>(null)
 
   const fetchDetail = useCallback(async () => {
@@ -513,7 +516,14 @@ export function NodeDetailSidebar({
                       className="flex items-center gap-2 px-2 py-1.5 rounded bg-muted/30 text-xs group/file"
                     >
                       <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
-                      <span className="flex-1 truncate">{att.filename}</span>
+                      <button
+                        type="button"
+                        className="flex-1 min-w-0 text-left truncate hover:text-primary transition-colors"
+                        title="Open file detail"
+                        onClick={() => setDetailFileId(att.file_id)}
+                      >
+                        {att.filename}
+                      </button>
                       {att.archived && (
                         <span className="text-[9px] text-amber-500 font-medium">
                           archived
@@ -714,6 +724,20 @@ export function NodeDetailSidebar({
           </div>
         </div>
       )}
+
+      <FileMgmtDetailDialog
+        collectionId={collectionId}
+        fileId={detailFileId}
+        open={!!detailFileId}
+        onOpenChange={(v) => {
+          if (!v) setDetailFileId(null)
+        }}
+        onDeleted={() => {
+          setDetailFileId(null)
+          fetchDetail()
+          onNodeUpdated()
+        }}
+      />
     </div>
   )
 }

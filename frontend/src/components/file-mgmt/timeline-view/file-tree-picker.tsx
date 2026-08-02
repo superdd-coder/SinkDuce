@@ -12,7 +12,10 @@ import {
   getRootFiles,
   listGroups,
 } from "@/api/file-mgmt"
-import { FileTypeIcon } from "@/components/file-mgmt/file-type-icon"
+import {
+  FileTypeIcon,
+  resolveDocKind,
+} from "@/components/file-mgmt/file-type-icon"
 import { FolderIconView } from "./group-icons"
 
 export type PickerFolderNode = {
@@ -298,10 +301,14 @@ function FileRow({
           filename: file.filename,
           original_ext: file.original_ext,
           unsupported: file.unsupported,
+          source: file.source,
+          kind: resolveDocKind(file),
         }}
         className="h-3 w-3"
       />
-      <span className="truncate">{file.filename}</span>
+      <span className="truncate">
+        {file.display_name || file.filename}
+      </span>
       {(file.archived || file.is_greyed) && (
         <span className="text-[9px] text-amber-500 shrink-0">archived</span>
       )}

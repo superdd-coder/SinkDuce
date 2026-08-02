@@ -261,9 +261,19 @@ def list_files(
     collection_id: str,
     folder_id: Optional[str] = Query(None),
     archived: Optional[bool] = Query(None),
+    is_definitive: Optional[bool] = Query(None),
 ):
-    """List all files, optionally filtered by folder or archive status."""
-    return service.list_files(collection_id, folder_id=folder_id, archived=archived)
+    """List files, optionally filtered by folder, archive, or definitive flag.
+
+    ``is_definitive=true`` returns all definitive files collection-wide
+    (sources that feed Collection Summary).
+    """
+    return service.list_files(
+        collection_id,
+        folder_id=folder_id,
+        archived=archived,
+        is_definitive=is_definitive,
+    )
 
 
 @router.get("/{collection_id}/files/{file_id}")
@@ -292,6 +302,16 @@ def remove_file_path(collection_id: str, file_id: str, path_id: str):
 def promote_file_path(collection_id: str, file_id: str, body: dict):
     """Promote a derived path to persistent path. Body: {path_id}."""
     return service.promote_file_path(collection_id, file_id, body["path_id"])
+
+
+@router.post("/{collection_id}/files/{file_id}/demote-path")
+def demote_file_path(collection_id: str, file_id: str, body: dict):
+    """Revert a persistent (pinned) path to derived mode. Body: {path_id}.
+
+    Restores source_node_id from a linked timeline node for the same folder.
+    Does not delete the path.
+    """
+    return service.demote_file_path(collection_id, file_id, body["path_id"])
 
 
 @router.get("/{collection_id}/files/{file_id}/messages")
@@ -369,6 +389,12 @@ async def upload_entire_folder(
     return service.upload_folder(collection_id, parent_folder_id, files_data)
 
 
+@router.get("/{collection_id}/old-versions")
+def list_old_versions(collection_id: str):
+    """List non-current file versions (history; not the Archive folder)."""
+    return service.list_old_versions(collection_id)
+
+
 @router.post("/{collection_id}/files/{file_id}/versions", status_code=201)
 async def upload_new_version(
     collection_id: str,
@@ -376,12 +402,29 @@ async def upload_new_version(
     file: UploadFile = File(...),
     commit_message: str = Form(""),
 ):
-    """Upload a new version of an existing file."""
+    """Upload a new version of an existing file.
+
+    Previous version rows stay on disk with ``archived=1`` (version-level
+    history — **not** the system Archive folder). Returns immediately with
+    optional ``task_id``; ingest uses the same async upload pipeline as folder
+    upload (MinerU / collection chunk config / embed).
+    """
     file_bytes = await file.read()
     return service.upload_file_version(
         collection_id, file_id, file_bytes, file.filename or "unnamed",
         commit_message=commit_message,
     )
+
+
+@router.delete(
+    "/{collection_id}/files/{file_id}/versions/{version_id}",
+    status_code=200,
+)
+def delete_file_version(
+    collection_id: str, file_id: str, version_id: str
+):
+    """Permanently delete a non-current version (blob + Qdrant + log message)."""
+    return service.delete_file_version(collection_id, file_id, version_id)
 
 
 @router.patch("/{collection_id}/files/{file_id}")

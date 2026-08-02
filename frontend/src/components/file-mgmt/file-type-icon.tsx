@@ -18,6 +18,12 @@ export type FileTypeIconSource = {
   filename?: string | null
   original_ext?: string | null
   unsupported?: boolean
+  /** Document source key, e.g. __meeting__:{id}:{tab} */
+  source?: string | null
+  /** Human label (e.g. "Meeting: Title / Section" or "Note: …") */
+  display_name?: string | null
+  /** Explicit kind when source is unavailable */
+  kind?: "meeting" | "note" | "file" | null
 }
 
 /** Resolve extension from original_ext or filename. */
@@ -28,6 +34,33 @@ export function resolveFileExt(source: FileTypeIconSource): string {
   const i = name.lastIndexOf(".")
   if (i <= 0 || i === name.length - 1) return ""
   return name.slice(i + 1).toLowerCase()
+}
+
+function isMeetingFile(source: FileTypeIconSource): boolean {
+  if (source.kind === "meeting") return true
+  // Only trust document source key — never match display_name/filename
+  // (e.g. a PDF titled "Meeting notes" must not get MEET badge).
+  return (source.source || "").trim().startsWith("__meeting__:")
+}
+
+function isNoteFile(source: FileTypeIconSource): boolean {
+  if (source.kind === "note") return true
+  return (source.source || "").trim().startsWith("__note__:")
+}
+
+/** Prefer explicit backend doc_kind, then source key / kind. */
+export function resolveDocKind(
+  file: {
+    doc_kind?: string | null
+    source?: string | null
+  }
+): "meeting" | "note" | "file" {
+  const k = (file.doc_kind || "").toLowerCase()
+  if (k === "meeting" || k === "note" || k === "file") return k
+  const s = (file.source || "").trim()
+  if (s.startsWith("__meeting__:")) return "meeting"
+  if (s.startsWith("__note__:")) return "note"
+  return "file"
 }
 
 /**
@@ -43,6 +76,14 @@ export function resolveFileTypeIcon(source: FileTypeIconSource): {
 } {
   if (source.unsupported) {
     return { Icon: FileWarning, color: "#D97706", label: "Unsupported" }
+  }
+
+  // Meeting / note ingest — must win over .md storage ext (often tab_xx.md)
+  if (isMeetingFile(source)) {
+    return { Icon: File, color: "#B45309", label: "Meeting", badge: "MEET" }
+  }
+  if (isNoteFile(source)) {
+    return { Icon: File, color: "#2563EB", label: "Note", badge: "NOTE" }
   }
 
   const ext = resolveFileExt(source)
@@ -204,10 +245,11 @@ export function FileTypeIcon({
   }
 
   // File glyph + solid corner badge that covers the lower-left stroke.
-  // W / X / P / PDF share the same chip height and centered letter alignment.
-  const badgeFont = Math.max(6, px * 0.24)
-  const badgeH = Math.max(10, px * 0.34)
-  const padX = Math.max(2, px * 0.08)
+  // Multi-char badges (PDF / MEET / NOTE) use a slightly smaller type scale.
+  const multi = (badge?.length ?? 0) > 1
+  const badgeFont = Math.max(6, px * (multi ? 0.20 : 0.24))
+  const badgeH = Math.max(10, px * (multi ? 0.36 : 0.34))
+  const padX = Math.max(2, px * (multi ? 0.06 : 0.08))
 
   return (
     <span

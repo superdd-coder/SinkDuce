@@ -44,6 +44,7 @@ from src.file_mgmt.models import (
     NodeOut,
     NodeReorder,
     NodeUpdate,
+    OldVersionOut,
 )
 from src.file_mgmt.store import get_db
 
@@ -1863,11 +1864,54 @@ def _row_to_message(row, conn=None) -> MessageOut:
     )
 
 
-def _row_to_file_out(row, conn=None) -> FileOut:
+def _load_file_index(collection_id: str | None) -> dict[str, dict]:
+    """Load files.json index for *collection_id* (empty dict on miss/error)."""
+    if not collection_id:
+        return {}
+    try:
+        from src.collections.file_index import load as load_file_index
+        return load_file_index(collection_id) or {}
+    except Exception:
+        logger.warning(
+            "Failed to load files.json index for %s", collection_id, exc_info=True
+        )
+        return {}
+
+
+def _index_entry_display(entry: dict | None) -> tuple[str, str]:
+    """Return (display_name, source) from one files.json entry."""
+    if not entry:
+        return "", ""
+    label = (entry.get("source_label") or "").strip()
+    # Normalize legacy "Meeting: Title / Section" → "Title / Section"
+    if label.startswith("Meeting: "):
+        label = label[len("Meeting: ") :].strip()
+    if label.startswith("Note: "):
+        label = label[len("Note: ") :].strip()
+    src = (entry.get("source") or "").strip()
+    return label, src
+
+
+def _doc_kind_from_source(src: str) -> str:
+    if (src or "").startswith("__meeting__:"):
+        return "meeting"
+    if (src or "").startswith("__note__:"):
+        return "note"
+    return "file"
+
+
+def _row_to_file_out(
+    row,
+    conn=None,
+    collection_id: str | None = None,
+    *,
+    index: dict[str, dict] | None = None,
+) -> FileOut:
     from src.file_mgmt.models import FileOut
 
+    file_id = row["file_id"]
     f = FileOut(
-        file_id=row["file_id"],
+        file_id=file_id,
         current_version_id=row["current_version_id"],
         is_definitive=bool(row["is_definitive"]),
         archived=bool(row["archived"]),
@@ -1889,6 +1933,16 @@ def _row_to_file_out(row, conn=None) -> FileOut:
             from pathlib import Path
             f.original_ext = Path(ver["storage_file_id"]).suffix.lstrip(".") if Path(ver["storage_file_id"]).suffix else ""
             f.created_at = ver["created_at"]
+
+    # Prefer preloaded index (list endpoints); else load single entry
+    if index is not None:
+        entry = index.get(file_id)
+    else:
+        entry = _load_file_index(collection_id).get(file_id) if collection_id else None
+    label, src = _index_entry_display(entry)
+    f.source = src or f"__file__:{file_id}"
+    f.display_name = label or f.filename or file_id
+    f.doc_kind = _doc_kind_from_source(f.source)
     return f
 
 
@@ -2066,7 +2120,7 @@ def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
         if not file_row:
             raise HTTPException(404, f"File '{file_id}' not found")
 
-        base = _row_to_file_out(file_row, conn)
+        base = _row_to_file_out(file_row, conn, collection_id)
 
         # file_paths
         path_rows = conn.execute(
@@ -2085,11 +2139,17 @@ def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
         ).fetchall()
         versions = [_row_to_file_version(r) for r in ver_rows]
 
-        # node associations
+        # node associations (group + chain labels for file-detail UI)
         node_rows = conn.execute(
-            """SELECT n.node_id, n.title, n.node_type, fn.greyed
+            """SELECT n.node_id, n.title, n.node_type, n.group_id, n.chain_id,
+                      fn.greyed,
+                      g.name AS group_name,
+                      c.title AS chain_title,
+                      c.parent_chain_id
                FROM file_nodes fn
                JOIN nodes n ON n.node_id = fn.node_id
+               LEFT JOIN node_groups g ON g.group_id = n.group_id
+               LEFT JOIN chains c ON c.chain_id = n.chain_id
                WHERE fn.file_id=?""",
             (file_id,),
         ).fetchall()
@@ -2098,15 +2158,24 @@ def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
                 "node_id": nr["node_id"],
                 "title": nr["title"],
                 "node_type": nr["node_type"],
+                "group_id": nr["group_id"],
+                "chain_id": nr["chain_id"],
+                "group_name": nr["group_name"],
+                "chain_title": (
+                    nr["chain_title"]
+                    if nr["chain_title"]
+                    else ("Main" if nr["chain_id"] and not nr["parent_chain_id"] else None)
+                ),
                 "greyed": bool(nr["greyed"]),
             }
             for nr in node_rows
         ]
 
-        # messages
+        # messages: user file messages + system version messages
         msg_rows = conn.execute(
             """SELECT * FROM messages
-               WHERE owner_type='file' AND owner_id=?
+               WHERE owner_id=?
+                 AND owner_type IN ('file', 'system_version')
                ORDER BY created_at DESC""",
             (file_id,),
         ).fetchall()
@@ -2124,11 +2193,26 @@ def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
 
 
 def list_files(
-    collection_id: str, folder_id: str | None = None, archived: bool | None = None
+    collection_id: str,
+    folder_id: str | None = None,
+    archived: bool | None = None,
+    is_definitive: bool | None = None,
 ) -> list[FileSummary]:
+    """List files.
+
+    When ``is_definitive`` is True/False, returns all files with that flag
+    (collection-wide), ignoring folder_id root/orphan scoping.
+    """
     conn = _open_db(collection_id)
     try:
-        if folder_id:
+        if is_definitive is not None:
+            rows = conn.execute(
+                """SELECT f.* FROM files f
+                   WHERE f.is_definitive=?
+                   ORDER BY f.file_id""",
+                (1 if is_definitive else 0,),
+            ).fetchall()
+        elif folder_id:
             rows = conn.execute(
                 """SELECT DISTINCT f.* FROM files f
                    JOIN file_paths fp ON fp.file_id = f.file_id
@@ -2147,11 +2231,12 @@ def list_files(
                    ORDER BY f.file_id"""
             ).fetchall()
 
+        idx = _load_file_index(collection_id)
         results: list[FileSummary] = []
         for r in rows:
             if archived is not None and bool(r["archived"]) != archived:
                 continue
-            fs = _row_to_file_out(r, conn)
+            fs = _row_to_file_out(r, conn, collection_id, index=idx)
             # For list_files, compute per-file is_greyed from archived flag
             fs.is_greyed = bool(r["archived"])
             results.append(fs)
@@ -2192,9 +2277,11 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
                ORDER BY f.file_id""",
             (folder_id,),
         ).fetchall()
+        # Load files.json once — source/doc_kind for Meeting/Note badges
+        idx = _load_file_index(collection_id)
         result: list = []
         for r in rows:
-            fs = _row_to_file_out(r, conn)
+            fs = _row_to_file_out(r, conn, collection_id, index=idx)
             try:
                 has_active = int(r["has_active_path"] or 0) == 1
             except (KeyError, IndexError, TypeError):
@@ -2218,9 +2305,10 @@ def list_archived_files(collection_id: str) -> list[FileSummary]:
         rows = conn.execute(
             "SELECT * FROM files WHERE archived=1 ORDER BY file_id"
         ).fetchall()
+        idx = _load_file_index(collection_id)
         results: list[FileSummary] = []
         for r in rows:
-            fs = _row_to_file_out(r, conn)
+            fs = _row_to_file_out(r, conn, collection_id, index=idx)
             fs.is_greyed = True
             results.append(fs)
         return results
@@ -2356,6 +2444,152 @@ def promote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePat
         conn.close()
 
 
+def _node_derived_target_folders(conn, node_id: str) -> set[str]:
+    """Folders where *node_id* should place derived file paths (group + branch)."""
+    node = conn.execute(
+        "SELECT * FROM nodes WHERE node_id=?", (node_id,)
+    ).fetchone()
+    if not node:
+        return set()
+    targets: set[str] = set()
+    if node["group_id"]:
+        grp = conn.execute(
+            "SELECT folder_id FROM node_groups WHERE group_id=?",
+            (node["group_id"],),
+        ).fetchone()
+        if grp and grp["folder_id"]:
+            targets.add(grp["folder_id"])
+    targets |= _branch_folder_ids_for_node(conn, node_id)
+    return targets
+
+
+def demote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePathOut:
+    """Revert a persistent (pinned) path back to a derived path.
+
+    Finds a timeline node linked to this file that would place a derived path
+    in the same folder, and restores ``source_node_id``.
+
+    Special cases (same folder can hold both pinned NULL + derived N rows):
+    - If a derived path for this folder already exists, **delete** the pinned
+      row instead (unpin success — folder stays via the derived link).
+    - If no node can own this folder, delete the pinned row so Unpin still
+      works for pins created without a surviving timeline link.
+    """
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            path = conn.execute(
+                "SELECT * FROM file_paths WHERE path_id=? AND file_id=?",
+                (path_id, file_id),
+            ).fetchone()
+            if not path:
+                raise HTTPException(
+                    404, f"Path '{path_id}' not found for file '{file_id}'"
+                )
+            if path["source_node_id"] is not None:
+                raise HTTPException(400, "Path is already a derived path")
+
+            folder_id = path["folder_id"]
+            if not folder_id:
+                raise HTTPException(
+                    400, "Cannot demote a path without a folder"
+                )
+
+            node_ids = [
+                r["node_id"]
+                for r in conn.execute(
+                    "SELECT node_id FROM file_nodes WHERE file_id=?",
+                    (file_id,),
+                ).fetchall()
+            ]
+            candidate: str | None = None
+            # Derived row already covering this folder (any node) — unpin = drop pin only
+            existing_derived = conn.execute(
+                """SELECT path_id, source_node_id FROM file_paths
+                   WHERE file_id=? AND folder_id=? AND source_node_id IS NOT NULL
+                     AND path_id!=?
+                   LIMIT 1""",
+                (file_id, folder_id, path_id),
+            ).fetchone()
+
+            for nid in node_ids:
+                if folder_id in _node_derived_target_folders(conn, nid):
+                    # Avoid UNIQUE collision if another row already holds this derived path
+                    clash = conn.execute(
+                        """SELECT path_id FROM file_paths
+                           WHERE file_id=? AND folder_id=? AND source_node_id=?
+                             AND path_id!=?""",
+                        (file_id, folder_id, nid, path_id),
+                    ).fetchone()
+                    if clash:
+                        continue
+                    candidate = nid
+                    break
+
+            removed_pin = False
+            if not candidate:
+                # Cannot re-link this row: either derived already exists for the
+                # folder, or no timeline node maps here. Drop the pin row so
+                # Unpin never dead-ends with a cryptic error.
+                conn.execute(
+                    "DELETE FROM file_paths WHERE path_id=?", (path_id,)
+                )
+                removed_pin = True
+                # Prefer returning the surviving derived path for this folder
+                if existing_derived:
+                    row = conn.execute(
+                        "SELECT * FROM file_paths WHERE path_id=?",
+                        (existing_derived["path_id"],),
+                    ).fetchone()
+                else:
+                    # No remaining path in this folder — synthesize a minimal
+                    # response from the deleted row (frontend reloads detail).
+                    row = path
+                candidate = (
+                    existing_derived["source_node_id"]
+                    if existing_derived
+                    else None
+                )
+            else:
+                conn.execute(
+                    "UPDATE file_paths SET source_node_id=? WHERE path_id=?",
+                    (candidate, path_id),
+                )
+                row = conn.execute(
+                    "SELECT * FROM file_paths WHERE path_id=?", (path_id,)
+                ).fetchone()
+
+        emit_event(
+            "file_path.demoted",
+            collection_id,
+            {
+                "path_id": path_id,
+                "file_id": file_id,
+                "source_node_id": candidate,
+                "removed_pin": removed_pin,
+            },
+        )
+        file_row = conn.execute(
+            "SELECT * FROM files WHERE file_id=?", (file_id,)
+        ).fetchone()
+        # Deleted-only case: still return a FilePathOut for API shape
+        if removed_pin and not existing_derived:
+            fp = _compute_folder_path(conn, folder_id)
+            return _row_to_file_path(
+                path,
+                folder_path=fp,
+                is_greyed=False,
+            )
+        fp = _compute_folder_path(conn, row["folder_id"])
+        return _row_to_file_path(
+            row,
+            folder_path=fp,
+            is_greyed=_compute_is_greyed(conn, file_row, row) if file_row else False,
+        )
+    finally:
+        conn.close()
+
+
 # ════════════════════════════════════════════════════════════════════
 # Phase 4: File Upload Pipeline
 # ════════════════════════════════════════════════════════════════════
@@ -2378,16 +2612,29 @@ def _is_file_supported(filename: str, collection_id: str) -> bool:
     return ext in _get_supported_file_types(collection_id)
 
 
-def _write_upload_file(collection_id: str, file_id: str, file_bytes: bytes, filename: str) -> tuple[Path, str]:
-    """Write upload file bytes to disk. Returns (file_path, safe_name)."""
-    safe_name = Path(filename).name
-    if not safe_name:
-        raise HTTPException(400, "Invalid filename")
-    file_dir = _files_dir(collection_id) / file_id
-    file_dir.mkdir(parents=True, exist_ok=True)
-    save_path = file_dir / safe_name
-    save_path.write_bytes(file_bytes)
-    return save_path, safe_name
+def _write_upload_file(
+    collection_id: str,
+    file_id: str,
+    file_bytes: bytes,
+    filename: str,
+    *,
+    version_id: str,
+    storage_name: str | None = None,
+) -> tuple[Path, str]:
+    """Write upload bytes under ``files/{file_id}/{version_id}/{basename}``.
+
+    Returns ``(file_path, safe_name)`` where *safe_name* is stored as
+    ``file_versions.storage_file_id`` (basename only; version lives in the path).
+    """
+    from src.file_mgmt.storage_paths import write_version_blob
+
+    return write_version_blob(
+        collection_id,
+        file_id,
+        version_id,
+        file_bytes,
+        storage_name or filename,
+    )
 
 
 def _ingest_file_to_qdrant(
@@ -2515,7 +2762,12 @@ def _ingest_file_to_qdrant(
 
 
 def _mark_qdrant_chunks_archived(collection_id: str, file_id: str) -> int:
-    """Set archived=true on all Qdrant chunks for a given file_id. Returns updated count."""
+    """Set archived=true on all Qdrant chunks for a managed file.
+
+    Matches both ``file_id`` payload and ``source=__file__:{file_id}`` so
+    legacy points that only have ``source`` still leave the current index.
+    Returns updated count.
+    """
     _log = logging.getLogger("file_mgmt.service")
     try:
         from src.services import services
@@ -2524,42 +2776,61 @@ def _mark_qdrant_chunks_archived(collection_id: str, file_id: str) -> int:
             return 0
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-        count = services.db.count_by_filter(
-            collection_id,
-            Filter(must=[FieldCondition(key="file_id", match=MatchValue(value=file_id))]),
-        )
-        # Update payload: set archived=true, is_current=false via scroll + re-upsert
-        filter_cond = Filter(
-            must=[FieldCondition(key="file_id", match=MatchValue(value=file_id))]
-        )
-        all_points = []
-        offset = None
-        while True:
-            pts, offset = services.db.client.scroll(
-                collection_name=collection_id,
-                scroll_filter=filter_cond,
-                limit=1000,
-                offset=offset,
-                with_payload=True,
-                with_vectors=True,
+        source_key = f"__file__:{file_id}"
+        all_points: list[tuple[str, object, dict]] = []
+        seen_ids: set[str] = set()
+
+        def _scroll_and_collect(filt: Filter) -> None:
+            offset = None
+            while True:
+                pts, offset = services.db.client.scroll(
+                    collection_name=collection_id,
+                    scroll_filter=filt,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                for p in pts:
+                    pid = str(p.id)
+                    if pid in seen_ids:
+                        continue
+                    seen_ids.add(pid)
+                    payload = dict(p.payload or {})
+                    payload["archived"] = True
+                    payload["is_current"] = False
+                    all_points.append((pid, p.vector, payload))
+                if offset is None:
+                    break
+
+        # Two passes: file_id payload + source=__file__:{id} (legacy rows)
+        _scroll_and_collect(
+            Filter(
+                must=[
+                    FieldCondition(key="file_id", match=MatchValue(value=file_id))
+                ]
             )
-            for p in pts:
-                payload = dict(p.payload or {})
-                payload["archived"] = True
-                payload["is_current"] = False
-                all_points.append((str(p.id), p.vector, payload))
-            if offset is None:
-                break
+        )
+        _scroll_and_collect(
+            Filter(
+                must=[
+                    FieldCondition(
+                        key="source", match=MatchValue(value=source_key)
+                    )
+                ]
+            )
+        )
 
         if all_points:
             from qdrant_client.models import PointStruct
+
             points = [
                 PointStruct(id=id_, vector=vec, payload=pl)
                 for id_, vec, pl in all_points
             ]
             services.db.client.upsert(collection_name=collection_id, points=points)
 
-        return count
+        return len(all_points)
     except Exception:
         _log.warning("Failed to mark Qdrant chunks archived for %s", file_id, exc_info=True)
         return 0
@@ -2709,7 +2980,11 @@ def upload_file_to_folder(
             version_id = uuid.uuid4().hex
 
             save_path, safe_name = _write_upload_file(
-                collection_id, file_id, file_bytes, filename
+                collection_id,
+                file_id,
+                file_bytes,
+                filename,
+                version_id=version_id,
             )
             now = _now_iso()
 
@@ -2767,6 +3042,7 @@ def upload_file_to_folder(
                         filename_param=file_source,
                         source_label=safe_name,
                         file_id=file_id,
+                        version_id=version_id,
                     )
                     task_id = task.id
                     chunk_count = -1  # pending, actual count unknown yet
@@ -2809,7 +3085,7 @@ def upload_file_to_folder(
                 "chunk_count": chunk_count,
             },
         )
-        result = _row_to_file_out(row, conn)
+        result = _row_to_file_out(row, conn, collection_id)
         result.unsupported = bool(unsupported)
         result.task_id = task_id
         return result
@@ -2941,17 +3217,20 @@ def upload_file_version(
     filename: str,
     commit_message: str = "",
 ) -> FileSummary:
-    """Upload a new version of an existing file.
+    """Upload a new version of an existing file (non-blocking ingest).
+
+    Same full upload pipeline as folder upload (MinerU / collection chunk
+    config / contextual / embed) via async ``task_type="upload"``.
 
     Steps:
     1. Get current version_no → new version_no = MAX+1
-    2. Generate new version_id, store new version
-    3. Archive old version (DB + Qdrant)
-    4. Ingest new version to Qdrant
-    5. Update files.current_version_id
-    6. Create system version message
+    2. Generate new version_id, store new version on disk + DB
+    3. Archive old version (DB) + mark old Qdrant chunks archived
+    4. Update files.current_version_id
+    5. Create system version message
+    6. Queue async ingest task (same as ``upload_file_to_folder``)
     7. Check version limit (>20 → warning)
-    8. emit_event
+    8. emit_event — returns immediately with ``task_id`` for polling
     """
     conn = _open_db(collection_id)
     try:
@@ -2976,14 +3255,29 @@ def upload_file_version(
             new_version_id = uuid.uuid4().hex
             now = _now_iso()
 
-            # 2. Store new version
-            save_path, safe_name = _write_upload_file(collection_id, file_id, file_bytes, filename)
+            # 2. Store new version under files/{file_id}/{version_id}/{basename}
+            # Isolation is by version_id directory — same display name is fine.
+            base = Path(filename).name or "upload.bin"
+            save_path, safe_name = _write_upload_file(
+                collection_id,
+                file_id,
+                file_bytes,
+                filename,
+                version_id=new_version_id,
+                storage_name=base,
+            )
+            commit_body = (commit_message or "").strip() or "version update"
+            # Re-evaluate support from new filename (ext may change)
+            supported = _is_file_supported(safe_name, collection_id)
+            unsupported = 0 if supported else 1
+            # parsed.txt lives inside the *new* version dir (empty until ingest).
+            # Old versions keep their own parsed.txt under their version_id dirs.
             conn.execute(
                 """INSERT INTO file_versions
                    (version_id, file_id, version_no, storage_file_id,
                     archived, commit_message, created_by, created_at)
                    VALUES (?, ?, ?, ?, 0, ?, 'local', ?)""",
-                (new_version_id, file_id, new_version_no, safe_name, commit_message, now),
+                (new_version_id, file_id, new_version_no, safe_name, commit_body, now),
             )
 
             # 3. Archive old version in DB
@@ -2993,45 +3287,95 @@ def upload_file_version(
                     (old_version["version_id"],),
                 )
 
-            # Archive old Qdrant chunks
+            # Archive old Qdrant chunks so search uses only the new version after ingest
             _mark_qdrant_chunks_archived(collection_id, file_id)
 
-            # 4. Ingest new version
-            chunk_count = 0
-            if not bool(file_row["unsupported"]):
-                try:
-                    chunk_count = _ingest_file_to_qdrant(
-                        collection_id, file_id, save_path, new_version_id,
-                        source_label=safe_name,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Version ingest failed for file %s: %s", file_id, e
-                    )
-
-            # 5. Update current_version_id
+            # 4. Update current_version_id + unsupported flag for new file type
             conn.execute(
-                "UPDATE files SET current_version_id=? WHERE file_id=?",
-                (new_version_id, file_id),
+                """UPDATE files SET current_version_id=?, unsupported=?
+                   WHERE file_id=?""",
+                (new_version_id, unsupported, file_id),
             )
 
-            # 6. Create system version message
+            # 5. Create system version message (editable note; default body)
             message_id = uuid.uuid4().hex
-            body = commit_message if commit_message else f"Updated to version {new_version_no}"
             conn.execute(
                 """INSERT INTO messages
                    (message_id, owner_type, owner_id, source_node_id, body,
                     author_type, author_id, created_at, edited_at, edited_by, version)
                    VALUES (?, 'system_version', ?, NULL, ?,
                     'system', 'local', ?, NULL, NULL, 1)""",
-                (message_id, file_id, body, now),
+                (message_id, file_id, commit_body, now),
             )
+
+            # 6. Queue async ingest — same pipeline as folder upload (MinerU, chunk config, …)
+            task_id: str | None = None
+            file_source = f"__file__:{file_id}"
+            if supported:
+                try:
+                    from src.tasks.task_manager import task_manager
+
+                    task = task_manager.create_task(
+                        filename=safe_name,
+                        task_type="upload",
+                        file_path=str(save_path),
+                        collection=collection_id,
+                        filename_param=file_source,
+                        source_label=safe_name,
+                        file_id=file_id,
+                        version_id=new_version_id,
+                    )
+                    task_id = task.id
+                except Exception as e:
+                    logger.warning(
+                        "Failed to queue version ingest for file %s (%s): %s",
+                        file_id,
+                        safe_name,
+                        e,
+                    )
+                    err_msg_id = uuid.uuid4().hex
+                    conn.execute(
+                        """INSERT INTO messages
+                           (message_id, owner_type, owner_id, source_node_id, body,
+                            author_type, author_id, created_at, edited_at, edited_by, version)
+                           VALUES (?, 'system_version', ?, NULL, ?,
+                            'system', 'system', ?, NULL, NULL, 1)""",
+                        (
+                            err_msg_id,
+                            file_id,
+                            f"Failed to queue ingest: {e}",
+                            now,
+                        ),
+                    )
+
+            # 6b. Always refresh files.json so display_name / original_ext match
+            # the new version immediately — including unsupported types that skip
+            # the upload task (which would otherwise leave the old label forever).
+            try:
+                from src.collections.file_index import add as add_file_index
+
+                orig_ext = Path(safe_name).suffix.lower().lstrip(".") or None
+                add_file_index(
+                    collection_id,
+                    file_id,
+                    file_source,
+                    safe_name,  # source_label → UI display_name
+                    "unsupported" if unsupported else "file",
+                    0,  # chunk count; ingest overwrites when task completes
+                    orig_ext,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to update files.json after version upload for %s",
+                    file_id,
+                    exc_info=True,
+                )
 
             row = conn.execute(
                 "SELECT * FROM files WHERE file_id=?", (file_id,)
             ).fetchone()
 
-        # 9. Version limit warning
+        # 7. Version limit warning
         warning = None
         if new_version_no > MAX_VERSIONS:
             warning = (
@@ -3042,10 +3386,16 @@ def upload_file_version(
         emit_event(
             "file.updated",
             collection_id,
-            {"file_id": file_id, "version_no": new_version_no},
+            {
+                "file_id": file_id,
+                "version_no": new_version_no,
+                "task_id": task_id,
+            },
         )
 
-        result = _row_to_file_out(row, conn)
+        result = _row_to_file_out(row, conn, collection_id)
+        result.unsupported = bool(unsupported)
+        result.task_id = task_id
         if warning:
             result.filename = f"[WARNING] {result.filename}"
         return result
@@ -3053,22 +3403,207 @@ def upload_file_version(
         conn.close()
 
 
+def list_old_versions(collection_id: str) -> list[OldVersionOut]:
+    """List non-current file versions across the collection (not Archive-folder).
+
+    Old versions are version-level history (``file_versions.archived=1`` or
+    simply not ``current_version_id``). They never appear in the system
+    Archive folder (that is file-/path-level archive only).
+    """
+    conn = _open_db(collection_id)
+    try:
+        rows = conn.execute(
+            """SELECT fv.version_id, fv.file_id, fv.version_no, fv.storage_file_id,
+                      fv.archived, fv.commit_message, fv.created_at,
+                      f.current_version_id,
+                      cur.storage_file_id AS current_storage
+               FROM file_versions fv
+               JOIN files f ON f.file_id = fv.file_id
+               LEFT JOIN file_versions cur ON cur.version_id = f.current_version_id
+               WHERE fv.version_id != f.current_version_id
+                  OR COALESCE(fv.archived, 0) = 1
+               ORDER BY fv.created_at DESC"""
+        ).fetchall()
+        # Prefer files.json labels for parent display
+        idx = _load_file_index(collection_id)
+        out: list[OldVersionOut] = []
+        seen: set[str] = set()
+        for r in rows:
+            vid = r["version_id"]
+            if vid in seen:
+                continue
+            # Skip true current version even if archived flag wrong
+            if r["version_id"] == r["current_version_id"]:
+                continue
+            seen.add(vid)
+            fid = r["file_id"]
+            storage = r["storage_file_id"] or ""
+            entry = idx.get(fid) or {}
+            cur_name = Path(r["current_storage"] or "").name
+            parent_label = (entry.get("source_label") or "").strip() or cur_name
+            safe_name = Path(storage).name if storage else ""
+            blob_ok = False
+            if safe_name or vid:
+                try:
+                    from src.file_mgmt.storage_paths import version_blob_exists
+
+                    blob_ok = version_blob_exists(
+                        collection_id, fid, vid, storage
+                    )
+                except Exception:
+                    blob_ok = False
+            out.append(
+                OldVersionOut(
+                    version_id=vid,
+                    file_id=fid,
+                    version_no=int(r["version_no"] or 0),
+                    storage_file_id=storage,
+                    archived=bool(r["archived"]),
+                    commit_message=r["commit_message"],
+                    created_at=r["created_at"] or "",
+                    current_filename=cur_name,
+                    current_display_name=parent_label,
+                    filename=safe_name,
+                    original_ext=Path(safe_name).suffix.lstrip(".") if safe_name else "",
+                    blob_available=blob_ok,
+                )
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def delete_file_version(
+    collection_id: str, file_id: str, version_id: str
+) -> dict:
+    """Permanently delete one non-current version.
+
+    - Refuses if *version_id* is the file's current version
+    - Deletes version blob under ``files/{file_id}/``
+    - Deletes Qdrant points with matching ``version_id`` (and archived legacy
+      points cannot always be attributed; best-effort)
+    - Deletes paired ``system_version`` message when identifiable
+    - Removes the ``file_versions`` row
+
+    Does **not** delete the managed file_id or other versions.
+    """
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+            if file_row["current_version_id"] == version_id:
+                raise HTTPException(
+                    400,
+                    "Cannot delete the current version. Upload a newer version first, "
+                    "or delete the whole file.",
+                )
+            ver = conn.execute(
+                "SELECT * FROM file_versions WHERE version_id=? AND file_id=?",
+                (version_id, file_id),
+            ).fetchone()
+            if not ver:
+                raise HTTPException(
+                    404, f"Version '{version_id}' not found for file '{file_id}'"
+                )
+
+            storage_name = ver["storage_file_id"] or ""
+            ver_created = ver["created_at"] or ""
+            commit_body = (ver["commit_message"] or "").strip()
+
+            # 1. Disk: remove this version's directory (or legacy flat blob)
+            from src.file_mgmt.storage_paths import delete_version_storage
+
+            delete_version_storage(
+                collection_id, file_id, version_id, storage_name
+            )
+
+            # 2. Qdrant: points tagged with this version_id
+            _delete_qdrant_chunks_by_version_id(collection_id, version_id)
+
+            # 3. Paired system_version message (same file, same created_at when possible)
+            msg = conn.execute(
+                """SELECT message_id FROM messages
+                   WHERE owner_type='system_version' AND owner_id=?
+                     AND created_at=?""",
+                (file_id, ver_created),
+            ).fetchone()
+            if not msg and commit_body:
+                msg = conn.execute(
+                    """SELECT message_id FROM messages
+                       WHERE owner_type='system_version' AND owner_id=?
+                         AND body=?
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (file_id, commit_body),
+                ).fetchone()
+            if msg:
+                conn.execute(
+                    "DELETE FROM messages WHERE message_id=?",
+                    (msg["message_id"],),
+                )
+
+            # 4. Version row
+            conn.execute(
+                "DELETE FROM file_versions WHERE version_id=?", (version_id,)
+            )
+
+        emit_event(
+            "file.version_deleted",
+            collection_id,
+            {
+                "file_id": file_id,
+                "version_id": version_id,
+                "storage_file_id": storage_name,
+            },
+        )
+        return {
+            "file_id": file_id,
+            "version_id": version_id,
+            "deleted": True,
+        }
+    finally:
+        conn.close()
+
+
+def _delete_qdrant_chunks_by_version_id(
+    collection_id: str, version_id: str
+) -> int:
+    """Delete Qdrant points whose payload.version_id matches *version_id*."""
+    try:
+        from src.services import services
+
+        if services.db is None:
+            return 0
+        return services.db.delete_by_filter(
+            collection_id, "version_id", version_id
+        )
+    except Exception:
+        logger.warning(
+            "Failed to delete Qdrant chunks for version_id=%s",
+            version_id,
+            exc_info=True,
+        )
+        return 0
+
+
 # ── delete_file ──────────────────────────────────────────────────
 
 
 def delete_file(collection_id: str, file_id: str) -> None:
-    """Permanently delete a file: Qdrant chunks, disk, DB records, messages.
+    """Permanently delete a file: Qdrant chunks, disk, DB records, messages, index.
 
     Cascading cleanup:
-    1. Delete Qdrant chunks
+    1. Delete Qdrant chunks (by file_id and by document source)
     2. Delete disk directory
-    3. Delete file_nodes
-    4. Delete file_paths
-    5. Delete file_versions
-    6. Delete file's messages
-    7. Delete files record
-    8. emit_event
+    3. Delete file_nodes / file_paths / messages / versions / files row
+    4. Remove files.json index entry (All Files list source of truth)
+    5. Delete doc summary for ``__file__:{file_id}``
+    6. emit_event
     """
+    source = f"__file__:{file_id}"
     conn = _open_db(collection_id)
     try:
         conn.execute("PRAGMA defer_foreign_keys=ON")
@@ -3079,8 +3614,18 @@ def delete_file(collection_id: str, file_id: str) -> None:
             if not file_row:
                 raise HTTPException(404, f"File '{file_id}' not found")
 
-            # 1. Delete Qdrant chunks
+            # 1. Delete Qdrant chunks (payload may key by file_id and/or source)
             _delete_qdrant_chunks_by_file_id(collection_id, file_id)
+            try:
+                from src.services import services as _svc
+                if _svc.db is not None:
+                    _svc.db.delete_by_filter(collection_id, "source", source)
+            except Exception:
+                logger.warning(
+                    "Failed to delete Qdrant chunks by source for %s",
+                    file_id,
+                    exc_info=True,
+                )
 
             # 2. Delete disk directory
             file_dir = _files_dir(collection_id) / file_id
@@ -3111,12 +3656,27 @@ def delete_file(collection_id: str, file_id: str) -> None:
             # 8. Delete files record
             conn.execute("DELETE FROM files WHERE file_id=?", (file_id,))
 
-        # Clean up file index
+        # 9. Clean up file index (All Files reads this — remove by key AND source)
         try:
-            from src.collections.file_index import remove_by_source as remove_file_index
-            remove_file_index(collection_id, f"__file__:{file_id}")
+            from src.collections.file_index import (
+                remove as remove_file_index_by_id,
+                remove_by_source as remove_file_index_by_source,
+            )
+            remove_file_index_by_id(collection_id, file_id)
+            remove_file_index_by_source(collection_id, source)
         except Exception:
             logger.warning("Failed to clean up file index for %s", file_id, exc_info=True)
+
+        # 10. Doc summary (same source string All Files / classic delete use)
+        try:
+            from src.services import services as _svc
+            from src.rag.summary_manager import SummaryManager
+            if _svc.db is not None:
+                SummaryManager(db=_svc.db).delete_doc_summary(collection_id, source)
+        except Exception:
+            logger.warning(
+                "Failed to clean up doc_summary for %s", source, exc_info=True
+            )
 
         emit_event("file.deleted", collection_id, {"file_id": file_id})
     finally:
@@ -3190,16 +3750,41 @@ def update_file(
                         new_base,
                         exclude_file_id=file_id,
                     )
+                old_storage_for_disk = old_name
                 conn.execute(
                     "UPDATE file_versions SET storage_file_id=? WHERE version_id=?",
                     (new_base, file_row["current_version_id"]),
                 )
+                from src.file_mgmt.storage_paths import rename_version_blob_on_disk
+
+                rename_version_blob_on_disk(
+                    collection_id,
+                    file_id,
+                    file_row["current_version_id"],
+                    old_storage_for_disk,
+                    new_base,
+                )
+
+            old_definitive = bool(file_row["is_definitive"])
+            new_definitive = (
+                bool(req["is_definitive"]) if has_def else old_definitive
+            )
+            definitive_changed = has_def and old_definitive != new_definitive
+            pre_snapshot: dict | None = None
+            if definitive_changed:
+                # Snapshot BEFORE flipping is_definitive (debounce net-change)
+                try:
+                    from src.api.routes.info import _snapshot_includes
+
+                    pre_snapshot = _snapshot_includes(collection_id)
+                except Exception:
+                    pre_snapshot = {}
 
             if has_def:
                 cursor = conn.execute(
                     "UPDATE files SET is_definitive=?, version=version+1 "
                     "WHERE file_id=? AND version=?",
-                    (1 if req["is_definitive"] else 0, file_id, version),
+                    (1 if new_definitive else 0, file_id, version),
                 )
             else:
                 cursor = conn.execute(
@@ -3217,9 +3802,89 @@ def update_file(
             ).fetchone()
 
         emit_event("file.updated", collection_id, {"file_id": file_id})
-        return _row_to_file_out(row, conn)
+        result = _row_to_file_out(row, conn, collection_id)
+
+        # Definitive is the sole user switch for Collection Summary.
+        # - mark definitive + has summary → debounce consolidate
+        # - mark definitive + no summary → generate summary, then consolidate (via handler)
+        # - clear definitive → keep summary, debounce consolidate
+        if definitive_changed:
+            _on_definitive_changed(
+                collection_id, file_id, new_definitive, pre_snapshot
+            )
+
+        return result
     finally:
         conn.close()
+
+
+def _on_definitive_changed(
+    collection_id: str,
+    file_id: str,
+    is_definitive: bool,
+    pre_snapshot: dict | None = None,
+) -> None:
+    """Sync summary flag + ensure summary if needed + schedule consolidate."""
+    source = f"__file__:{file_id}"
+    try:
+        from src.api.routes.info import (
+            schedule_debounced_consolidate,
+            _get_summary_manager,
+        )
+        from src.tasks.task_manager import task_manager
+    except Exception:
+        logger.warning(
+            "definitive side-effects unavailable for %s/%s",
+            collection_id,
+            file_id,
+            exc_info=True,
+        )
+        return
+
+    sm = _get_summary_manager()
+    existing = sm.get_doc_summary(collection_id, source)
+    snap = pre_snapshot if pre_snapshot is not None else {}
+
+    if existing is not None:
+        # Keep summary content; flip participation for any leftover include readers
+        try:
+            sm.set_doc_summary_include(collection_id, source, is_definitive)
+        except Exception:
+            logger.warning(
+                "Failed to sync include_in_summary for %s", source, exc_info=True
+            )
+        schedule_debounced_consolidate(collection_id, snap)
+        logger.info(
+            "definitive=%s for %s — scheduled consolidate (summary exists)",
+            is_definitive,
+            source,
+        )
+        return
+
+    if is_definitive:
+        # No summary yet → generate; doc_summary_handler consolidates when definitive
+        try:
+            task_manager.create_task(
+                filename=f"doc_summary:{collection_id}:{source}",
+                task_type="doc_summary",
+                collection=collection_id,
+                source=source,
+            )
+            logger.info(
+                "definitive=True for %s — queued doc_summary (will consolidate)",
+                source,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to queue doc_summary for %s", source, exc_info=True
+            )
+        # Debounce as well: once summary appears, net-change vs pre-snapshot
+        schedule_debounced_consolidate(collection_id, snap)
+    else:
+        logger.info(
+            "definitive=False for %s with no summary — no consolidate",
+            source,
+        )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -3615,7 +4280,7 @@ def toggle_archive(
             row = conn.execute(
                 "SELECT * FROM files WHERE file_id=?", (file_id,)
             ).fetchone()
-            out = _row_to_file_out(row, conn)
+            out = _row_to_file_out(row, conn, collection_id)
             # Unified display: not archived after successful unarchive
             if not req.archived and not bool(row["archived"]):
                 out.is_greyed = False
@@ -3747,7 +4412,7 @@ def attach_file_to_node(
             collection_id,
             {"file_id": file_id, "node_id": node_id},
         )
-        return _row_to_file_out(file_row, conn)
+        return _row_to_file_out(file_row, conn, collection_id)
     finally:
         conn.close()
 
@@ -4000,20 +4665,60 @@ def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> M
             if not msg:
                 raise HTTPException(404, f"Message '{message_id}' not found")
 
-            if msg["author_type"] == "system":
+            # system_version notes (file version updates) are editable;
+            # other system messages stay locked.
+            owner_type = (msg["owner_type"] or "").lower()
+            if msg["author_type"] == "system" and owner_type != "system_version":
                 raise HTTPException(403, "System messages cannot be edited")
 
             now = _now_iso()
+            body = (req.body or "").strip() or (
+                "version update" if owner_type == "system_version" else req.body
+            )
             cursor = conn.execute(
                 """UPDATE messages
                    SET body=?, edited_at=?, edited_by='local', version=version+1
                    WHERE message_id=? AND version=?""",
-                (req.body, now, message_id, req.version),
+                (body, now, message_id, req.version),
             )
             if cursor.rowcount == 0:
                 raise HTTPException(
                     409, "Message was modified by another user (version conflict)"
                 )
+
+            # Keep matching file_versions.commit_message in sync when possible
+            if owner_type == "system_version":
+                try:
+                    # Pair by chronological order: nth system_version ↔ version_no n
+                    sv_rows = conn.execute(
+                        """SELECT message_id FROM messages
+                           WHERE owner_type='system_version' AND owner_id=?
+                           ORDER BY created_at ASC, message_id ASC""",
+                        (msg["owner_id"],),
+                    ).fetchall()
+                    idx = next(
+                        (
+                            i
+                            for i, r in enumerate(sv_rows)
+                            if r["message_id"] == message_id
+                        ),
+                        None,
+                    )
+                    if idx is not None:
+                        ver = conn.execute(
+                            """SELECT version_id FROM file_versions
+                               WHERE file_id=?
+                               ORDER BY version_no ASC
+                               LIMIT 1 OFFSET ?""",
+                            (msg["owner_id"], idx),
+                        ).fetchone()
+                        if ver:
+                            conn.execute(
+                                "UPDATE file_versions SET commit_message=? WHERE version_id=?",
+                                (body, ver["version_id"]),
+                            )
+                except Exception:
+                    pass
 
             row = conn.execute(
                 "SELECT * FROM messages WHERE message_id=?", (message_id,)

@@ -122,6 +122,8 @@ function NodeChip({
   dimmed,
   onClick,
   style,
+  /** Soften dim less on frosted glass so chips stay readable */
+  glass = false,
 }: {
   node: Node
   groups: NodeGroup[]
@@ -130,6 +132,7 @@ function NodeChip({
   dimmed: boolean
   onClick: () => void
   style?: CSSProperties
+  glass?: boolean
 }) {
   const label = nodeLabel(node)
   const src = groupFromList(groups, node.group_id)
@@ -146,13 +149,18 @@ function NodeChip({
         active
           ? "border-[var(--ze-green,#1A5E3D)] bg-[var(--ze-green,#1A5E3D)]/15 ring-2 ring-[var(--ze-green,#1A5E3D)]/50 z-[3] opacity-100"
           : dimmed
-            ? "border-border/50 text-muted-foreground/70 opacity-[0.38] z-[1] hover:opacity-70 hover:bg-muted/30"
+            ? glass
+              ? "border-border/70 text-muted-foreground bg-background/95 opacity-75 z-[1] hover:opacity-100 hover:bg-muted/50"
+              : "border-border/50 text-muted-foreground/70 opacity-[0.38] z-[1] hover:opacity-70 hover:bg-muted/30"
             : "border-border/70 hover:bg-muted/40 z-[1]"
       )}
     >
       <GroupIconView
         source={src}
-        className={cn("h-3 w-3 shrink-0", dimmed && !active && "opacity-70")}
+        className={cn(
+          "h-3 w-3 shrink-0",
+          dimmed && !active && (glass ? "opacity-85" : "opacity-70")
+        )}
       />
       <span className="text-[10px] truncate font-medium leading-tight">
         {label}
@@ -170,12 +178,16 @@ export function MiniChainGraph({
   nodeId,
   onNodeClick,
   className,
+  /** Higher-contrast chips for frosted-glass overlays (file detail node preview). */
+  variant = "default",
 }: {
   collectionId: string
   nodeId: string
   onNodeClick?: (nodeId: string, chainId: string) => void
   className?: string
+  variant?: "default" | "glass"
 }) {
+  const glass = variant === "glass"
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [groups, setGroups] = useState<NodeGroup[]>([])
   const [loading, setLoading] = useState(true)
@@ -536,6 +548,7 @@ export function MiniChainGraph({
                 groups={groups}
                 active={active}
                 dimmed={!active}
+                glass={glass}
                 onClick={() => onNodeClick?.(p.node.node_id, p.chainId)}
                 style={{
                   left: p.x,

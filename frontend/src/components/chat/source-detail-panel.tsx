@@ -10,14 +10,15 @@ import type { Editor } from "@tiptap/core"
 import { transformImageBlocks } from "@/lib/utils"
 import { getFileChunks, getFilePreviewUrl, getDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
 import { useAppStore, type Source } from "@/stores/app-store"
+import {
+  isRawViewerSupported,
+  RawFileViewer,
+  resolveRawFilename,
+} from "@/components/file-mgmt/raw-file-viewer"
 
 interface SourceDetailPanelProps {
   source: Source | null
   onClose: () => void
-}
-
-function _isPdf(name: string) {
-  return name.toLowerCase().endsWith(".pdf")
 }
 
 function _getHighlightOffset(source: Source): number | undefined {
@@ -35,7 +36,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [activeTab, setActiveTab] = useState("preview")
   const [highlightOffset, setHighlightOffset] = useState<number | undefined>(undefined)
-  const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined)
   // Force scroll effect to re-run on every locate click
   const [locateTick, setLocateTick] = useState(0)
   const sourceContentRef = useRef<HTMLDivElement>(null)
@@ -51,7 +51,21 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const chunkId = source?.metadata?.id as string | undefined
   const { collections } = useAppStore()
   const collectionDisplay = collections.find(c => c.id === collectionId)?.name || collectionId
-  const isPdfFile = _isPdf(displayName)
+  const metaExt =
+    (source?.metadata?.original_ext as string | undefined) ||
+    (source?.metadata?.file_type as string | undefined)
+  const rawFilename = resolveRawFilename(
+    displayName,
+    metaExt && !String(metaExt).includes("/") ? `file.${metaExt}` : null,
+    sourceKey
+  )
+  const showRawTab = isRawViewerSupported(rawFilename)
+  const rawPreviewUrl =
+    collectionId && sourceKey
+      ? getFilePreviewUrl(sourceKey, { collection: collectionId })
+      : sourceKey
+        ? getFilePreviewUrl(sourceKey)
+        : null
 
   // Reset file-level state when file changes
   useEffect(() => {
@@ -66,7 +80,6 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   useEffect(() => {
     const offset = source ? _getHighlightOffset(source) : undefined
     setHighlightOffset(offset)
-    setHighlightPage(source?.metadata?.page_number as number | undefined)
     // Bump tick so scroll effect re-fires even if offset is the same
     setLocateTick(t => t + 1)
   }, [source?.metadata?.id])
@@ -172,9 +185,8 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     })
   }, [])
 
-  const handleLocate = useCallback((offset?: number, pageNumber?: number, _length?: number) => {
+  const handleLocate = useCallback((offset?: number, _pageNumber?: number, _length?: number) => {
     setHighlightOffset(offset)
-    if (pageNumber !== undefined) setHighlightPage(pageNumber)
     setActiveTab("preview")
     setLocateTick(t => t + 1)
   }, [])
@@ -225,12 +237,16 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
           <TabsList variant="line" className="mb-1 shrink-0 relative">
             <TabsIndicator renderBeforeHydration />
             <TabsTrigger value="preview" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SOURCE</TabsTrigger>
-            {isPdfFile && <TabsTrigger value="raw" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">RAW</TabsTrigger>}
+            {showRawTab && (
+              <TabsTrigger value="raw" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">
+                RAW
+              </TabsTrigger>
+            )}
             <TabsTrigger value="chunks" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">CHUNKS{chunks.length > 0 ? ` (${chunks.length})` : ""}</TabsTrigger>
             <TabsTrigger value="summary" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SUMMARY</TabsTrigger>
           </TabsList>
 
-          {/* Source Tab */}
+          {/* Source Tab — parsed/extracted text (unchanged) */}
           <TabsContent key={`preview-${activeTab}`} value="preview" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
             <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
               {previewLoading || chunksLoading ? (
@@ -242,7 +258,18 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                 <ScrollArea className="h-full">
                   <div ref={sourceContentRef} className="p-3">
                     <TiptapEditor
-                      value={previewContent ? transformImageBlocks(previewContent, collectionId) : ""}
+                      value={
+                        previewContent
+                          ? transformImageBlocks(
+                              previewContent,
+                              collectionId,
+                              // Empty file_id: in :::image blocks → managed id from source
+                              sourceKey.startsWith("__file__:")
+                                ? sourceKey.slice("__file__:".length)
+                                : undefined
+                            )
+                          : ""
+                      }
                       readonly
                       showToolbar={false}
                       onEditorReady={(e) => { sourceEditorRef.current = e }}
@@ -261,19 +288,15 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
             </div>
           </TabsContent>
 
-          {/* Raw PDF Tab */}
-          {isPdfFile && (
+          {/* Raw — original file via File Viewer (PDF / Office / md / txt / csv…) */}
+          {showRawTab && (
             <TabsContent key={`raw-${activeTab}`} value="raw" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
-              <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
-                <iframe
-                  key={highlightPage ?? "default"}
-                  src={highlightPage
-                    ? `${getFilePreviewUrl(sourceKey)}#page=${highlightPage}`
-                    : getFilePreviewUrl(sourceKey)}
-                  className="w-full h-full border-0"
-                  title={`Raw PDF: ${displayName}`}
-                />
-              </div>
+              <RawFileViewer
+                url={rawPreviewUrl}
+                filename={rawFilename}
+                downloadUrl={rawPreviewUrl}
+                className="h-full"
+              />
             </TabsContent>
           )}
 

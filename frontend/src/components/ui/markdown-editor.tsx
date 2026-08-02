@@ -2,7 +2,7 @@ import { useState, useRef, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { TiptapEditor } from "./tiptap-editor"
+import { TiptapEditor, MESSAGE_EDITOR_PLACEHOLDER } from "./tiptap-editor"
 import { preprocessDistillBlocks, postprocessDistillBlocks } from "./tiptap-editor"
 
 interface MarkdownEditorProps {
@@ -100,7 +100,7 @@ function PlainEditor({ value, onChange, className, minHeight, placeholder }: Mar
       {!focused && isEmpty && (
         <div className="md-editor-overlay" onClick={() => textareaRef.current?.focus()}>
           <span className="text-muted-foreground italic text-sm">
-            {placeholder || "Nothing to preview"}
+            {placeholder || MESSAGE_EDITOR_PLACEHOLDER}
           </span>
         </div>
       )}

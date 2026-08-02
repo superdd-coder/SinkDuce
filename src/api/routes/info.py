@@ -26,18 +26,60 @@ MEETINGS_DIR = Path("data").resolve() / "meetings"
 
 # ═══════════════════════════════════════════════════════════════
 # Debounced consolidate — 10 s timer, net-change detection
+# Truth source: files.is_definitive (for __file__: sources).
 # ═══════════════════════════════════════════════════════════════
 
 _debounce: dict[str, dict] = {}  # collection_id -> {"timer": Timer, "snapshot": {source: bool}}
 
 
+def source_is_definitive(collection_id: str, source: str) -> bool:
+    """Whether this source participates in Collection Summary consolidate.
+
+    File-mgmt files (``__file__:{file_id}``): ``files.is_definitive``.
+    Other sources (notes/meetings legacy): fall back to doc_summary.include_in_summary.
+    """
+    if (source or "").startswith("__file__:"):
+        file_id = source[len("__file__:") :]
+        try:
+            from src.file_mgmt.store import get_db
+
+            conn = get_db(collection_id)
+            try:
+                row = conn.execute(
+                    "SELECT is_definitive FROM files WHERE file_id=?",
+                    (file_id,),
+                ).fetchone()
+                return bool(row and row["is_definitive"])
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning(
+                "source_is_definitive failed for %s/%s",
+                collection_id,
+                source,
+                exc_info=True,
+            )
+            return False
+
+    sm = _get_summary_manager()
+    ds = sm.get_doc_summary(collection_id, source)
+    if not ds:
+        return False
+    return ds.get("include_in_summary", True) is not False
+
+
 def _snapshot_includes(collection_id: str) -> dict[str, bool]:
-    """Take a snapshot of include_in_summary for every doc-summary in a collection."""
+    """Snapshot of which doc-summary sources are definitive (consolidate set).
+
+    Key = source, value = participates in Collection Summary.
+    Used for debounce net-change detection.
+    """
     sm = _get_summary_manager()
     summaries = sm.get_doc_summaries(collection_id, included_only=False)
     return {
-        s["source"]: s.get("include_in_summary", True) is not False
+        s["source"]: source_is_definitive(collection_id, s["source"])
         for s in summaries
+        if s.get("source")
     }
 
 
@@ -76,7 +118,7 @@ def _do_consolidate(collection_id: str) -> None:
 
 
 def schedule_debounced_consolidate(collection_id: str, pre_change_snapshot: dict[str, bool] | None = None) -> None:
-    """Schedule a debounced consolidation check after an include_in_summary change.
+    """Schedule a debounced consolidation check after definitive-set changes.
 
     Must be called with a snapshot taken BEFORE the change was applied.
     On the first call within a debounce window, the snapshot is stored.
@@ -232,44 +274,129 @@ def get_doc_summary(collection: str, source: str):
 
 @router.put("/collections/{collection}/info/doc-summaries/{source:path}/include")
 async def set_doc_summary_include(collection: str, source: str, body: dict):
-    """Toggle whether a doc summary is included in consolidation."""
+    """Legacy endpoint: maps to files.is_definitive for ``__file__:`` sources.
+
+    Prefer PATCH /api/file-mgmt/.../files/{id} with is_definitive.
+    Kept for non-file sources and any remaining callers.
+    """
     collection_id = _resolve_collection_id(collection)
     include = body.get("include", True)
-    logger.info("[INFO] SET include_in_summary=%s for source='%s' in collection='%s'", include, source, collection_id)
-    sm = _get_summary_manager()
+    logger.info(
+        "[INFO] SET include/definitive=%s for source='%s' in collection='%s'",
+        include,
+        source,
+        collection_id,
+    )
 
-    # Take snapshot BEFORE applying the change (for debounce net-change detection)
+    # File-mgmt: route through is_definitive (truth source)
+    if (source or "").startswith("__file__:"):
+        file_id = source[len("__file__:") :]
+        from src.file_mgmt import service as fm_service
+
+        conn = None
+        try:
+            from src.file_mgmt.store import get_db
+
+            conn = get_db(collection_id)
+            row = conn.execute(
+                "SELECT version, is_definitive FROM files WHERE file_id=?",
+                (file_id,),
+            ).fetchone()
+        finally:
+            if conn is not None:
+                conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"File not found for source '{source}'")
+        if bool(row["is_definitive"]) == bool(include):
+            return {
+                "source": source,
+                "include_in_summary": include,
+                "debounce_skipped": True,
+            }
+        fm_service.update_file(
+            collection_id,
+            file_id,
+            {"is_definitive": bool(include), "version": row["version"]},
+        )
+        return {"source": source, "include_in_summary": include}
+
+    # Non-file: keep include_in_summary + debounce
+    sm = _get_summary_manager()
     pre_snapshot = _snapshot_includes(collection_id)
-    previous_include = pre_snapshot.get(source)  # True / False / None
+    previous = pre_snapshot.get(source)
 
     found = sm.set_doc_summary_include(collection_id, source, include)
     if not found:
-        raise HTTPException(status_code=404, detail=f"No summary found for document '{source}'")
-
-    # Only enter the debounce flow if this toggle actually changes the definitive
-    # set. A no-op toggle (e.g. ON→ON) leaves the snapshot identical, so skipping
-    # saves the 10s timer + the "no change" check.
-    previous_definitive = previous_include is True
-    new_definitive = include is True
-    if previous_definitive == new_definitive:
-        logger.info(
-            "[INFO] include toggle for '%s' is a no-op (definitive=%s), skipping debounce",
-            source, new_definitive,
+        raise HTTPException(
+            status_code=404, detail=f"No summary found for document '{source}'"
         )
-        return {"source": source, "include_in_summary": include, "debounce_skipped": True}
 
-    # Schedule debounced consolidation (auto-trigger on any include change)
+    if (previous is True) == (include is True):
+        return {
+            "source": source,
+            "include_in_summary": include,
+            "debounce_skipped": True,
+        }
+
     schedule_debounced_consolidate(collection_id, pre_snapshot)
-
     return {"source": source, "include_in_summary": include}
 
 
 @router.post("/collections/{collection}/info/doc-summaries/{source:path}/generate")
-async def generate_doc_summary(collection: str, source: str):
-    """Generate or re-generate doc summary for a specific document (async via task queue)."""
+async def generate_doc_summary(
+    collection: str,
+    source: str,
+    version_id: str | None = None,
+):
+    """Generate or re-generate doc summary for a document (async via task queue).
+
+    Always targets the **current** version of a managed file. Historical
+    versions cannot be re-summarized (would overwrite current summary / wrong
+    content). Optional *version_id* must equal ``files.current_version_id`` when
+    provided; otherwise 400.
+    """
     collection_id = _resolve_collection_id(collection)
-    logger.info("[INFO] Generate doc-summary for collection='%s' source='%s'", collection_id, source)
+    logger.info(
+        "[INFO] Generate doc-summary for collection='%s' source='%s' version_id=%r",
+        collection_id,
+        source,
+        version_id,
+    )
     from src.tasks import task_manager as _tm
+
+    # Managed files: only allow summarize for current version
+    if (source or "").startswith("__file__:"):
+        file_id = source[len("__file__:") :]
+        try:
+            from src.file_mgmt.store import get_db
+
+            conn = get_db(collection_id)
+            try:
+                row = conn.execute(
+                    "SELECT current_version_id FROM files WHERE file_id=?",
+                    (file_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if row:
+                current_vid = row["current_version_id"] or ""
+                if version_id and current_vid and version_id != current_vid:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Cannot re-summarize a historical version. "
+                            "Open the current version to generate or refresh the summary."
+                        ),
+                    )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.debug(
+                "current_version check skipped for %s/%s",
+                collection_id,
+                source,
+                exc_info=True,
+            )
 
     # Validate source file exists via file index
     from src.collections.file_index import load as load_file_index
@@ -279,14 +406,48 @@ async def generate_doc_summary(collection: str, source: str):
     idx = load_file_index(collection_id)
     for fid, entry in idx.items():
         if entry.get("source") == source:
-            fd = _COL_DIR / collection_id / "files" / fid
-            if (fd / "parsed.txt").is_file():
-                file_path = fd / "parsed.txt"
-            else:
-                for f in sorted(fd.iterdir()):
-                    if f.is_file() and f.name != "parsed.txt":
-                        file_path = f
-                        break
+            # Prefer current version dir (v2 layout); fall back to flat legacy
+            try:
+                from src.file_mgmt.storage_paths import (
+                    ensure_layout_migrated,
+                    resolve_version_blob,
+                )
+                from src.file_mgmt.store import get_db
+
+                ensure_layout_migrated(collection_id)
+                conn = get_db(collection_id)
+                try:
+                    row = conn.execute(
+                        """SELECT fv.version_id, fv.storage_file_id
+                           FROM files f
+                           JOIN file_versions fv ON fv.version_id = f.current_version_id
+                           WHERE f.file_id=?""",
+                        (fid,),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if row:
+                    blob = resolve_version_blob(
+                        collection_id,
+                        fid,
+                        row["version_id"],
+                        row["storage_file_id"],
+                    )
+                    if blob is not None:
+                        parsed = blob.parent / "parsed.txt"
+                        file_path = parsed if parsed.is_file() else blob
+            except Exception:
+                pass
+            if file_path is None:
+                fd = _COL_DIR / collection_id / "files" / fid
+                if fd.is_dir():
+                    if (fd / "parsed.txt").is_file():
+                        file_path = fd / "parsed.txt"
+                    else:
+                        for f in sorted(fd.iterdir()):
+                            if f.is_file() and f.name != "parsed.txt":
+                                file_path = f
+                                break
             break
 
     if not file_path:

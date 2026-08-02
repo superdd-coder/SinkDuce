@@ -109,6 +109,8 @@ type ToolbarChrome =
       showDefinitive: boolean
       isDefinitive: boolean
       isArchivedView: boolean
+      /** Root lists orphans (no path) — no "remove from folder" / path-archive. */
+      isRootView: boolean
     }
   | {
       kind: "mixed"
@@ -120,7 +122,12 @@ type ToolbarChrome =
       showDefinitive: boolean
       isDefinitive: boolean
       isArchivedView: boolean
+      isRootView: boolean
     }
+
+/** Dropdown surface — solid fill; parent toolbar must sit above the icon grid (z-index). */
+const tbMenuPanel =
+  "absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-md border border-border bg-background text-foreground shadow-lg py-1"
 
 function chromeToolKey(c: ToolbarChrome): string {
   switch (c.kind) {
@@ -139,6 +146,7 @@ function chromeToolKey(c: ToolbarChrome): string {
         c.archive.showExcludeSearch ? "e" : "-",
         c.showDefinitive ? "d" : "-",
         c.multiSelectMode ? "m" : "-",
+        c.isRootView ? "root" : "f",
       ].join(":")
     case "mixed":
       return [
@@ -147,6 +155,7 @@ function chromeToolKey(c: ToolbarChrome): string {
         c.archive.showMenu ? "a" : "-",
         c.showDefinitive ? "d" : "-",
         c.multiSelectMode ? "m" : "-",
+        c.isRootView ? "root" : "f",
       ].join(":")
   }
 }
@@ -207,6 +216,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
     selectedFolderIds,
     currentFolderFiles,
     folderTree,
+    ingestingFiles,
     createSubFolder,
     uploadFile,
     uploadFolder,
@@ -249,12 +259,15 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
   const folderInputRef = useRef<HTMLInputElement>(null)
 
   const isArchivedView = currentFolderId === "__archived__"
-  const hasFileSelection = selectedFileIds.size > 0
-  const hasFolderSelection = selectedFolderIds.size > 0
-  const selectedFiles = currentFolderFiles.filter((f) =>
-    selectedFileIds.has(f.file_id)
+  /** Root = orphan / no-path files (currentFolderId is null). */
+  const isRootView = currentFolderId == null
+  // Exclude ingesting files — they must not drive the file action toolbar
+  const selectedFiles = currentFolderFiles.filter(
+    (f) => selectedFileIds.has(f.file_id) && !ingestingFiles[f.file_id]
   )
-  const selectedIds = Array.from(selectedFileIds)
+  const selectedIds = selectedFiles.map((f) => f.file_id)
+  const hasFileSelection = selectedFiles.length > 0
+  const hasFolderSelection = selectedFolderIds.size > 0
   const selectedFolderIdsArr = Array.from(selectedFolderIds)
   const hasSystemFolder = selectedFolderIdsArr.some((fid) => {
     const f = findFolderInTree(folderTree, fid)
@@ -282,7 +295,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
     const anyActive = selectedFiles.some(isActiveInFolder)
     const anyPathOnly = selectedFiles.some(isPathArchivedOnly)
     const anyFileArchived = selectedFiles.some(isFileArchived)
-    const showArchiveHere = anyActive
+    // Root files have no path — path-level "archive in this folder" is meaningless
+    const showArchiveHere = anyActive && !isRootView
     const showExcludeSearch = anyActive || anyPathOnly
     const showUnarchive = anyPathOnly || anyFileArchived
     return {
@@ -291,20 +305,27 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
       showUnarchive,
       showMenu: showArchiveHere || showExcludeSearch || showUnarchive,
     }
-  }, [selectedFiles, isArchivedView])
+  }, [selectedFiles, isArchivedView, isRootView])
 
+  // Close Move / Archive / Delete dropdowns when clicking blank area (or Esc).
+  // Capture-phase pointerdown so icon-grid stopPropagation cannot swallow it.
   useEffect(() => {
     if (!openMenu) return
-    const onDown = (e: MouseEvent) => {
-      if (
-        menusRef.current &&
-        !menusRef.current.contains(e.target as globalThis.Node)
-      ) {
-        setOpenMenu(null)
-      }
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target
+      if (!(t instanceof globalThis.Node)) return
+      if (menusRef.current?.contains(t)) return
+      setOpenMenu(null)
     }
-    document.addEventListener("mousedown", onDown)
-    return () => document.removeEventListener("mousedown", onDown)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenMenu(null)
+    }
+    document.addEventListener("pointerdown", onPointerDown, true)
+    document.addEventListener("keydown", onKey, true)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("keydown", onKey, true)
+    }
   }, [openMenu])
 
   useEffect(() => {
@@ -398,6 +419,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
         showDefinitive,
         isDefinitive,
         isArchivedView,
+        isRootView,
       }
     }
     if (hasFileSelection) {
@@ -409,6 +431,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
         showDefinitive,
         isDefinitive,
         isArchivedView,
+        isRootView,
       }
     }
     if (hasFolderSelection) {
@@ -436,6 +459,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
     archiveUi,
     selectedFiles,
     isArchivedView,
+    isRootView,
   ])
 
   const toolKey = chromeToolKey(liveChrome)
@@ -676,141 +700,204 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
 
             <ToolbarDivider />
 
-            <div className="relative">
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => on && toggleMenu("move")}
-                className={cn(tbBtn, openMenu === "move" && opts.menus && "bg-accent")}
-                title="Move or mirror to another folder"
-                tabIndex={tab}
-              >
-                <MoveRight />
-                Move
-                <ChevronDown className="size-3 opacity-60" />
-              </Button>
-              {opts.menus && openMenu === "move" && (
-                <div
-                  className="absolute left-0 top-full mt-1 z-50 min-w-[240px] rounded-md border border-border bg-popover shadow-md py-1"
-                  role="menu"
-                >
-                  <MenuItem
-                    icon={<MoveRight className="h-3.5 w-3.5" />}
-                    title="Move to…"
-                    description="Move selected files to the destination."
-                    onClick={() => {
-                      setOpenMenu(null)
-                      setMoveDialogOpen(true)
-                    }}
-                  />
-                  <MenuItem
-                    icon={<Link2 className="h-3.5 w-3.5" />}
-                    title="Mirror to…"
-                    description="Create a mirror of selected files in the destination."
-                    onClick={() => {
-                      setOpenMenu(null)
-                      setCopyDialogOpen(true)
-                    }}
-                  />
-                </div>
-              )}
-            </div>
-
-            {filePart.archive.showMenu && (
-              <div className="relative">
+            {/*
+              Root: orphans have no path — only Move to / Archive globally / Delete globally.
+              Each is a single action → plain buttons (no empty dropdowns).
+            */}
+            {filePart.isRootView ? (
+              <>
                 <Button
                   variant="ghost"
                   size="xs"
-                  onClick={() => on && toggleMenu("archive")}
-                  className={cn(
-                    tbBtn,
-                    openMenu === "archive" && opts.menus && "bg-accent"
-                  )}
-                  title="Archive options"
+                  onClick={() => {
+                    if (!on) return
+                    setOpenMenu(null)
+                    setMoveDialogOpen(true)
+                  }}
+                  title="Move selected files to a folder"
+                  className={tbBtn}
                   tabIndex={tab}
                 >
-                  <Archive />
-                  Archive
-                  <ChevronDown className="size-3 opacity-60" />
+                  <MoveRight />
+                  Move
                 </Button>
-                {opts.menus && openMenu === "archive" && (
-                  <div
-                    className="absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-md border border-border bg-popover shadow-md py-1"
-                    role="menu"
+                {filePart.archive.showExcludeSearch && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => on && pickMenuAction("excludeSearch")}
+                    title="Exclude selected files from search everywhere"
+                    className={tbBtn}
+                    tabIndex={tab}
                   >
-                    {filePart.archive.showUnarchive && (
-                      <MenuItem
-                        icon={<ArchiveRestore className="h-3.5 w-3.5" />}
-                        title="Restore"
-                        description={
-                          filePart.isArchivedView
-                            ? "Re-enable search for selected files."
-                            : "Restore selected files in this folder."
-                        }
-                        onClick={() => pickMenuAction("unarchive")}
-                      />
+                    <SearchX />
+                    Archive
+                  </Button>
+                )}
+                {filePart.archive.showUnarchive && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => on && pickMenuAction("unarchive")}
+                    title="Restore selected files"
+                    className={tbBtn}
+                    tabIndex={tab}
+                  >
+                    <ArchiveRestore />
+                    Restore
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => on && pickMenuAction("delete")}
+                  title="Permanently delete selected files"
+                  className={cn(
+                    tbBtn,
+                    "text-destructive hover:text-destructive hover:bg-destructive/10"
+                  )}
+                  tabIndex={tab}
+                >
+                  <Trash2 />
+                  Delete
+                </Button>
+              </>
+            ) : (
+              <>
+                <div className="relative">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => on && toggleMenu("move")}
+                    className={cn(
+                      tbBtn,
+                      openMenu === "move" && opts.menus && "bg-accent"
                     )}
-                    {filePart.archive.showArchiveHere && (
+                    title="Move or mirror to another folder"
+                    tabIndex={tab}
+                  >
+                    <MoveRight />
+                    Move
+                    <ChevronDown className="size-3 opacity-60" />
+                  </Button>
+                  {opts.menus && openMenu === "move" && (
+                    <div
+                      className={cn(tbMenuPanel, "min-w-[240px]")}
+                      role="menu"
+                    >
                       <MenuItem
-                        icon={<Archive className="h-3.5 w-3.5" />}
-                        title="Archive in this folder"
-                        description="Grey out selected files in this folder only."
-                        onClick={() => pickMenuAction("archiveFolder")}
+                        icon={<MoveRight className="h-3.5 w-3.5" />}
+                        title="Move to…"
+                        description="Move selected files to the destination."
+                        onClick={() => {
+                          setOpenMenu(null)
+                          setMoveDialogOpen(true)
+                        }}
                       />
-                    )}
-                    {filePart.archive.showExcludeSearch && (
                       <MenuItem
-                        icon={<SearchX className="h-3.5 w-3.5" />}
-                        title="Archive globally"
-                        description="Exclude selected files from search everywhere."
-                        onClick={() => pickMenuAction("excludeSearch")}
+                        icon={<Link2 className="h-3.5 w-3.5" />}
+                        title="Mirror to…"
+                        description="Create a mirror of selected files in the destination."
+                        onClick={() => {
+                          setOpenMenu(null)
+                          setCopyDialogOpen(true)
+                        }}
                       />
+                    </div>
+                  )}
+                </div>
+
+                {filePart.archive.showMenu && (
+                  <div className="relative">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => on && toggleMenu("archive")}
+                      className={cn(
+                        tbBtn,
+                        openMenu === "archive" && opts.menus && "bg-accent"
+                      )}
+                      title="Archive options"
+                      tabIndex={tab}
+                    >
+                      <Archive />
+                      Archive
+                      <ChevronDown className="size-3 opacity-60" />
+                    </Button>
+                    {opts.menus && openMenu === "archive" && (
+                      <div className={tbMenuPanel} role="menu">
+                        {filePart.archive.showUnarchive && (
+                          <MenuItem
+                            icon={<ArchiveRestore className="h-3.5 w-3.5" />}
+                            title="Restore"
+                            description={
+                              filePart.isArchivedView
+                                ? "Re-enable search for selected files."
+                                : "Restore selected files in this folder."
+                            }
+                            onClick={() => pickMenuAction("unarchive")}
+                          />
+                        )}
+                        {filePart.archive.showArchiveHere && (
+                          <MenuItem
+                            icon={<Archive className="h-3.5 w-3.5" />}
+                            title="Archive in this folder"
+                            description="Grey out selected files in this folder only."
+                            onClick={() => pickMenuAction("archiveFolder")}
+                          />
+                        )}
+                        {filePart.archive.showExcludeSearch && (
+                          <MenuItem
+                            icon={<SearchX className="h-3.5 w-3.5" />}
+                            title="Archive globally"
+                            description="Exclude selected files from search everywhere."
+                            onClick={() => pickMenuAction("excludeSearch")}
+                          />
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
-              </div>
-            )}
 
-            <div className="relative">
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => on && toggleMenu("delete")}
-                className={cn(
-                  tbBtn,
-                  openMenu === "delete" && opts.menus && "bg-accent",
-                  "text-destructive hover:text-destructive hover:bg-destructive/10"
-                )}
-                title="Remove or delete"
-                tabIndex={tab}
-              >
-                <Trash2 />
-                Delete
-                <ChevronDown className="size-3 opacity-60" />
-              </Button>
-              {opts.menus && openMenu === "delete" && (
-                <div
-                  className="absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-md border border-border bg-popover shadow-md py-1"
-                  role="menu"
-                >
-                  {!filePart.isArchivedView && (
-                    <MenuItem
-                      icon={<X className="h-3.5 w-3.5" />}
-                      title="Remove from this folder"
-                      description="Remove selected files from this folder only."
-                      onClick={() => pickMenuAction("unlink")}
-                    />
+                <div className="relative">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => on && toggleMenu("delete")}
+                    className={cn(
+                      tbBtn,
+                      openMenu === "delete" && opts.menus && "bg-accent",
+                      "text-destructive hover:text-destructive hover:bg-destructive/10"
+                    )}
+                    title="Remove or delete"
+                    tabIndex={tab}
+                  >
+                    <Trash2 />
+                    Delete
+                    <ChevronDown className="size-3 opacity-60" />
+                  </Button>
+                  {opts.menus && openMenu === "delete" && (
+                    <div className={tbMenuPanel} role="menu">
+                      {!filePart.isArchivedView && (
+                        <MenuItem
+                          icon={<X className="h-3.5 w-3.5" />}
+                          title="Remove from this folder"
+                          description="Remove selected files from this folder only."
+                          onClick={() => pickMenuAction("unlink")}
+                        />
+                      )}
+                      <MenuItem
+                        icon={<Trash2 className="h-3.5 w-3.5" />}
+                        title="Delete file globally"
+                        description="Permanently delete selected files everywhere."
+                        destructive
+                        onClick={() => pickMenuAction("delete")}
+                      />
+                    </div>
                   )}
-                  <MenuItem
-                    icon={<Trash2 className="h-3.5 w-3.5" />}
-                    title="Delete file globally"
-                    description="Permanently delete selected files everywhere."
-                    destructive
-                    onClick={() => pickMenuAction("delete")}
-                  />
                 </div>
-              )}
-            </div>
+              </>
+            )}
 
             {filePart.showDefinitive && (
               <>

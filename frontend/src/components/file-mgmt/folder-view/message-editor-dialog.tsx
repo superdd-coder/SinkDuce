@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { Calendar, Loader2, Paperclip, Pencil } from "lucide-react"
 import type { Message, NodeDetail, NodeGroup } from "@/types/file-mgmt"
 import {
@@ -214,8 +215,14 @@ export function MessageEditorDialog({
     })
   }, [nodeMsgs])
 
-  const dialogMotion =
-    "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-1"
+  // Enter/exit must stay mounted (portal keepMounted + no key flip on close)
+  const dialogMotion = cn(
+    "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+    "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-3",
+    "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2",
+    // Slightly longer exit so close feels less abrupt
+    "data-closed:duration-280 data-open:duration-320"
+  )
 
   // Non-node: single-column dialog; Edit / Cancel / Save sit top-right
   if (!isNodeMsg) {
@@ -287,7 +294,7 @@ export function MessageEditorDialog({
                 value={content}
                 onChange={setContent}
                 minHeight="280px"
-                placeholder="Write a message… type / for commands"
+                placeholder={MESSAGE_EDITOR_PLACEHOLDER}
                 showToolbar={false}
               />
             ) : (
@@ -377,7 +384,7 @@ export function MessageEditorDialog({
                         value={content}
                         onChange={setContent}
                         minHeight="140px"
-                        placeholder="Write a message… type / for commands"
+                        placeholder={MESSAGE_EDITOR_PLACEHOLDER}
                         showToolbar={false}
                       />
                     </div>

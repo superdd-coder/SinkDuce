@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import { Paperclip, Search, Upload, X } from "lucide-react"
 import { toast } from "sonner"
@@ -102,10 +103,13 @@ export function AddNodeDialog({
     setAttachMode(null)
   }
 
-  const addExistingFile = (file: FileSummary) => {
+  /** Click once to select, again to deselect (toggle). */
+  const toggleExistingFile = (file: FileSummary) => {
     setPending((prev) => {
       if (prev.some((p) => p.kind === "existing" && p.file_id === file.file_id)) {
-        return prev
+        return prev.filter(
+          (p) => !(p.kind === "existing" && p.file_id === file.file_id)
+        )
       }
       return [
         ...prev,
@@ -113,7 +117,7 @@ export function AddNodeDialog({
           kind: "existing",
           key: `existing-${file.file_id}`,
           file_id: file.file_id,
-          filename: file.filename,
+          filename: file.display_name || file.filename,
         },
       ]
     })
@@ -219,9 +223,9 @@ export function AddNodeDialog({
 
         {/* Left params + Right message editor */}
         <div className="flex-1 min-h-0 flex gap-4">
-          {/* ── Left: form params + attachments ── */}
-          <div className="w-[300px] shrink-0 flex flex-col min-h-0 gap-3 overflow-y-auto pr-1">
-            <div>
+          {/* ── Left: form params + attachments (attachments fill remaining height) ── */}
+          <div className="w-[300px] shrink-0 flex flex-col min-h-0 gap-3 pr-1">
+            <div className="shrink-0">
               <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
                 Title <span className="text-destructive">*</span>
               </label>
@@ -235,7 +239,7 @@ export function AddNodeDialog({
               />
             </div>
 
-            <div>
+            <div className="shrink-0">
               <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
                 Group <span className="text-destructive">*</span>
               </label>
@@ -262,7 +266,7 @@ export function AddNodeDialog({
               </select>
             </div>
 
-            <div>
+            <div className="shrink-0">
               <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
                 Event Time (optional)
               </label>
@@ -292,9 +296,9 @@ export function AddNodeDialog({
               </div>
             </div>
 
-            {/* Attachments drop zone */}
+            {/* Attachments — fills remaining height under form fields */}
             <div className="flex-1 min-h-0 flex flex-col">
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between mb-1.5 shrink-0">
                 <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60">
                   Attachments ({pending.length})
                 </label>
@@ -331,7 +335,7 @@ export function AddNodeDialog({
 
               <div
                 className={cn(
-                  "h-[200px] shrink-0 rounded border border-dashed p-2 transition-colors overflow-hidden flex flex-col",
+                  "flex-1 min-h-[160px] rounded border border-dashed p-2 transition-colors overflow-hidden flex flex-col",
                   dragOver
                     ? "border-primary bg-primary/5"
                     : "border-border bg-muted/10"
@@ -345,7 +349,7 @@ export function AddNodeDialog({
                   <div className="flex-1 min-h-0 flex flex-col gap-1 overflow-hidden">
                     <div className="flex items-center justify-between gap-1 shrink-0">
                       <span className="text-[10px] text-muted-foreground">
-                        Click a file to add
+                        Click to select · click again to deselect
                       </span>
                       <button
                         type="button"
@@ -360,7 +364,7 @@ export function AddNodeDialog({
                       <FileTreePicker
                         collectionId={collectionId}
                         selectedIds={pendingExistingIds}
-                        onSelectFile={addExistingFile}
+                        onSelectFile={toggleExistingFile}
                         maxHeightClass="h-full max-h-full"
                         className="h-full flex flex-col"
                       />
@@ -369,7 +373,7 @@ export function AddNodeDialog({
                 ) : (
                   <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                     {pending.length > 0 && (
-                      <div className="space-y-1 mb-2 overflow-y-auto max-h-[72px] shrink-0">
+                      <div className="space-y-1 mb-2 overflow-y-auto max-h-[40%] shrink-0 min-h-0">
                         {pending.map((att) => (
                           <div
                             key={att.key}
@@ -419,7 +423,7 @@ export function AddNodeDialog({
                 value={messageBody}
                 onChange={setMessageBody}
                 minHeight="100%"
-                placeholder="Write a message in Markdown..."
+                placeholder={MESSAGE_EDITOR_PLACEHOLDER}
                 showToolbar
               />
             </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react"
-import { Loader2, RefreshCw } from "lucide-react"
+import { ChevronDown, ChevronRight, Loader2, RefreshCw, Star } from "lucide-react"
 import { toast } from "sonner"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
@@ -14,6 +14,8 @@ import {
   type ConflictItem,
   type MeetingLogItem,
 } from "@/api/client"
+import { getDefinitiveFiles, updateFile } from "@/api/file-mgmt"
+import type { FileSummary } from "@/types/file-mgmt"
 import { ConflictViewerDialog } from "./conflict-viewer-dialog"
 import { NotesCard } from "./notes-card"
 
@@ -44,6 +46,11 @@ export function InfoPanel({ collection }: InfoPanelProps) {
   const [notesCount, setNotesCount] = useState(0)
   const [ingestedNotesCount, setIngestedNotesCount] = useState(0)
   const [docCount, setDocCount] = useState(0)
+  const [definitiveFiles, setDefinitiveFiles] = useState<FileSummary[]>([])
+  const [definitiveLoading, setDefinitiveLoading] = useState(false)
+  /** Collapsed by default — sources used for Collection Summary. */
+  const [definitiveOpen, setDefinitiveOpen] = useState(false)
+  const [clearingDefinitiveId, setClearingDefinitiveId] = useState<string | null>(null)
 
   const { setSidebarView, setActiveMeeting, setPendingOpenFile, collections } = useAppStore()
 
@@ -54,6 +61,8 @@ export function InfoPanel({ collection }: InfoPanelProps) {
     setProjectDescription(null)
     setConflicts([])
     setMeetings([])
+    setDefinitiveFiles([])
+    setDefinitiveOpen(false)
     setConsolidating(false)
     setConsolidatingCollection(null)
     setSelectedConflict(null)
@@ -78,11 +87,25 @@ export function InfoPanel({ collection }: InfoPanelProps) {
           fetchProjectDescription()
           fetchConflicts()
           fetchMeetings()
+          fetchDefinitiveFiles()
         }
       } catch { /* ignore */ }
     }, 2000)
     return () => clearInterval(poll)
   }, [consolidating, consolidatingCollection, collection])
+
+  const fetchDefinitiveFiles = useCallback(async () => {
+    if (!collection) return
+    setDefinitiveLoading(true)
+    try {
+      const files = await getDefinitiveFiles(collection)
+      setDefinitiveFiles(files ?? [])
+    } catch {
+      setDefinitiveFiles([])
+    } finally {
+      setDefinitiveLoading(false)
+    }
+  }, [collection])
 
   const fetchSummary = useCallback(async () => {
     if (!collection) return
@@ -128,6 +151,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
     fetchProjectDescription()
     fetchConflicts()
     fetchMeetings()
+    fetchDefinitiveFiles()
     // Fetch stats
     if (collection) {
       import("@/api/client").then(({ getNotes, getFiles }) => {
@@ -138,7 +162,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
         getFiles(collection).then(r => setDocCount(r.files?.length ?? 0)).catch(() => setDocCount(0))
       })
     }
-  }, [fetchSummary, fetchConflicts, fetchMeetings])
+  }, [fetchSummary, fetchConflicts, fetchMeetings, fetchDefinitiveFiles])
 
   const fetchProjectDescription = useCallback(async () => {
     if (!collection) return
@@ -287,6 +311,103 @@ export function InfoPanel({ collection }: InfoPanelProps) {
         )}
       </div>
 
+      {/* Definitive sources — feed the Collection Summary above; collapsed by default */}
+      <div>
+        <button
+          type="button"
+          className="w-full flex items-center gap-1.5 text-left group"
+          style={{ background: "none", border: "none", padding: 0 }}
+          onClick={() => setDefinitiveOpen((o) => !o)}
+        >
+          {definitiveOpen ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          )}
+          <SectionLabel className="mb-0 flex-1">
+            Definitive sources
+            <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/60">
+              · {definitiveLoading ? "…" : definitiveFiles.length}
+            </span>
+          </SectionLabel>
+        </button>
+        {definitiveOpen && (
+          <div className="mt-2 pl-1">
+            {definitiveLoading ? (
+              <div className="flex items-center gap-2 py-3 text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span className="text-xs">Loading…</span>
+              </div>
+            ) : definitiveFiles.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-1">
+                No definitive files yet. Mark files as definitive to include them in
+                Collection Summary.
+              </p>
+            ) : (
+              <ul className="space-y-0">
+                {definitiveFiles.map((f) => (
+                  <li
+                    key={f.file_id}
+                    className="flex items-center gap-1 border-b border-dashed border-border group/def"
+                  >
+                    <button
+                      type="button"
+                      className="flex-1 min-w-0 text-left flex items-center gap-2 py-2 cursor-pointer transition-opacity hover:opacity-80"
+                      style={{ background: "none", border: "none" }}
+                      title={f.filename || f.file_id}
+                      onClick={() => {
+                        setPendingOpenFile(`__file__:${f.file_id}`)
+                      }}
+                    >
+                      <Star className="h-3 w-3 shrink-0 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
+                      <span className="text-xs flex-1 truncate text-foreground">
+                        {f.filename || f.file_id.slice(0, 8)}
+                      </span>
+                      {f.original_ext && (
+                        <span className="text-[10px] shrink-0 uppercase text-muted-foreground">
+                          {f.original_ext}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="shrink-0 px-1.5 py-1 text-[11px] font-normal uppercase tracking-[0.1em] text-muted-foreground hover:text-[var(--ze-green,#1A5E3D)] transition-colors disabled:opacity-50"
+                      style={{ background: "none", border: "none" }}
+                      title="Exclude from Collection Summary sources"
+                      disabled={clearingDefinitiveId === f.file_id}
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        setClearingDefinitiveId(f.file_id)
+                        try {
+                          await updateFile(collection, f.file_id, {
+                            is_definitive: false,
+                            version: f.version,
+                          })
+                          toast.success("Excluded from Collection Summary")
+                          await fetchDefinitiveFiles()
+                        } catch (err) {
+                          toast.error(
+                            `Failed: ${err instanceof Error ? err.message : String(err)}`
+                          )
+                        } finally {
+                          setClearingDefinitiveId(null)
+                        }
+                      }}
+                    >
+                      {clearingDefinitiveId === f.file_id ? (
+                        <Loader2 className="h-3 w-3 animate-spin inline" />
+                      ) : (
+                        "Exclude"
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Conflicts */}
       {conflicts.length > 0 && (
         <div>
@@ -360,7 +481,9 @@ export function InfoPanel({ collection }: InfoPanelProps) {
                           type="button"
                           className="block text-[11px] truncate w-full text-left cursor-pointer transition-colors text-muted-foreground"
                           style={{ background: "none", border: "none" }}
-                          onClick={() => setPendingOpenFile(fid)}
+                          onClick={() =>
+                            setPendingOpenFile(`__file__:${fid}`)
+                          }
                         >
                           {meeting.file_labels?.[fid] || fid}
                         </button>

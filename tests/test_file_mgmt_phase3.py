@@ -409,6 +409,24 @@ def test_promote_path():
         if p["path_id"] == path_id:
             assert p["source_node_id"] is None
 
+    # demote (unpin) → back to derived; path stays in list
+    resp = client.post(
+        f"/api/file-mgmt/p3-5/files/{fid}/demote-path",
+        json={"path_id": path_id},
+    )
+    assert resp.status_code == 200, resp.text
+    demoted = resp.json()
+    assert demoted["source_node_id"] == nid
+    assert demoted["path_id"] == path_id
+
+    resp = client.get(f"/api/file-mgmt/p3-5/files/{fid}")
+    detail = resp.json()
+    path_ids = [p["path_id"] for p in detail["paths"]]
+    assert path_id in path_ids
+    for p in detail["paths"]:
+        if p["path_id"] == path_id:
+            assert p["source_node_id"] == nid
+
 
 # ── 6. UNIQUE constraint: persistent + derived coexist ──────────
 

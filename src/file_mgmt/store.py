@@ -632,6 +632,16 @@ def init_collection_db(collection_id: str) -> None:
         finally:
             conn_backfill.close()
 
+        # Disk layout: files/{file_id}/{version_id}/… (idempotent; safe for flat legacy)
+        try:
+            from src.file_mgmt.storage_paths import ensure_layout_migrated
+
+            ensure_layout_migrated(collection_id)
+        except Exception:
+            logger.exception(
+                "Version-dir layout migration failed for %s", collection_id
+            )
+
     # Note: files.json → SQLite migration now happens lazily when
     # listing the Uncategorized folder (see service.list_files_in_folder).
 

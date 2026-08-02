@@ -350,4 +350,12 @@ All optional. Copy `.env.template` to `.env`:
 
 ---
 
+## 📜 License
+
+SinkDuce is licensed under the **[GNU Affero General Public License v3.0 or later](LICENSE)** (AGPL-3.0-or-later).
+
+Third-party open-source dependencies (Python packages, frontend libraries, fonts, Docker system packages, Qdrant, etc.) remain under their own licenses. See **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** for attribution and a direct-dependency inventory. All direct dependencies reviewed for this notice are open source (MIT / BSD / Apache-2.0 / ISC / OFL-1.1 / …). Optional commercial **remote APIs** (OpenAI, Cohere, DashScope, MinerU cloud, …) are not part of the source license; only their client libraries (where used) are OSS dependencies.
+
+---
+
 [中文文档](README_CN.md)

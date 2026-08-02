@@ -30,24 +30,81 @@ _embed_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="embed-w
 _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker")
 
 
+class _WorkProgress:
+    """Linear progress over discrete **completed** work units (not submitted).
+
+    Maps ``done/total`` into ``[lo, hi]`` percent on the task progress bar.
+    Completions that arrive before ``add_work`` are banked so the bar never
+    jumps backward when the full unit total becomes known.
+    """
+
+    def __init__(self, update_fn, lo: float = 30.0, hi: float = 90.0):
+        self._update = update_fn
+        self._lo = lo
+        self._hi = hi
+        self._lock = threading.Lock()
+        self._total = 0
+        self._done = 0
+        self._pending_done = 0  # completions before total was registered
+
+    def add_work(self, n: int) -> None:
+        if n <= 0:
+            return
+        with self._lock:
+            self._total += n
+            if self._pending_done:
+                self._done += self._pending_done
+                self._pending_done = 0
+            if self._done > self._total:
+                self._done = self._total
+            self._emit()
+
+    def done(self, n: int = 1, msg: str | None = None) -> None:
+        if n <= 0:
+            return
+        with self._lock:
+            if self._total <= 0:
+                self._pending_done += n
+                return
+            self._done = min(self._done + n, self._total)
+            self._emit(msg)
+
+    def snapshot(self) -> tuple[int, int]:
+        with self._lock:
+            return self._done, max(self._total, 1)
+
+    def _emit(self, msg: str | None = None) -> None:
+        if self._total <= 0:
+            pct = self._lo
+            label = msg or "Processing…"
+        else:
+            frac = min(1.0, self._done / self._total)
+            pct = self._lo + (self._hi - self._lo) * frac
+            label = msg or f"Processing {self._done}/{self._total}…"
+        self._update(min(pct, self._hi), label)
+
+
 class _EmbedBatcher:
     """Collects ready chunks, assembles enriched text, and submits batches to the
     shared embedding executor as soon as 10 chunks accumulate.  Chunks that arrive
     before the summary is available are queued and flushed once ``set_summary()``
     is called.
+
+    Progress (``on_embed_done``) is reported when a batch **finishes** embedding,
+    not when it is submitted.
     """
 
-    def __init__(self, embedding, *, total_chunks: int = 0, on_progress=None):
+    def __init__(self, embedding, *, total_chunks: int = 0, on_embed_done=None):
         self._embedding = embedding
         self._lock = threading.Lock()
-        self._buffer: list[str] = []
+        self._buffer: list = []                  # (idx, text)
         self._all_texts: list[str] = []
         self._futures: list[tuple] = []          # (future, batch_texts, indices) for retry
         self._summary: str | None = None
         self._pending: list[tuple] = []          # (chunk, context) waiting for summary
         self._assembled = 0
         self._total = total_chunks
-        self._on_progress = on_progress
+        self._on_embed_done = on_embed_done      # called with n=batch_size after result
 
     def set_summary(self, summary: str):
         with self._lock:
@@ -72,8 +129,7 @@ class _EmbedBatcher:
         self._buffer.append((idx, text))
         self._all_texts.append(text)
         self._assembled += 1
-        if self._on_progress and self._total:
-            self._on_progress(self._assembled, self._total)
+        # Progress is deferred until embed completes (see wait_all)
         if len(self._buffer) >= 10:
             self._submit_batch()
 
@@ -105,6 +161,7 @@ class _EmbedBatcher:
 
         Returns flat list of embeddings matching *chunks* order.  Parent chunks
         are filled with zero vectors since they're never searched directly.
+        Reports ``on_embed_done`` after each batch **completes** (success or zero-fill).
         """
         import time as _time
         from src.tasks.task_manager import check_cancelled
@@ -132,6 +189,9 @@ class _EmbedBatcher:
                     embs = [zero] * len(batch)
             for j, emb in enumerate(embs):
                 pairs[indices[j]] = emb
+            # Count completed embeds only after the batch has finished
+            if self._on_embed_done:
+                self._on_embed_done(len(batch))
         # Build result matching chunk list order
         if chunks:
             return [pairs.get(c.metadata.get("_embed_idx", 0), zero) for c in chunks]
@@ -458,15 +518,27 @@ def parse_consolidation_response(raw: str, alias_map: dict[str, str] | None = No
 
 
 async def consolidate_handler(task: Task, collection: str) -> dict:
-    """Consolidate all document summaries into a collection summary and detect conflicts."""
+    """Consolidate definitive document summaries into a collection summary."""
     logger.info("[CONSOLIDATE] Starting consolidation for collection='%s'", collection)
     summary_mgr = SummaryManager(db=services.db)
     summary_mgr.ensure_collection()
     logger.info("[CONSOLIDATE] __summaries__ collection ensured")
 
-    # 1. Read all doc_summaries
-    doc_summaries = summary_mgr.get_doc_summaries(collection, included_only=True)
-    logger.info("[CONSOLIDATE] Found %d doc_summaries for collection='%s'", len(doc_summaries), collection)
+    # 1. Doc summaries for definitive files only (files.is_definitive)
+    from src.api.routes.info import source_is_definitive
+
+    all_summaries = summary_mgr.get_doc_summaries(collection, included_only=False)
+    doc_summaries = [
+        s
+        for s in all_summaries
+        if s.get("source") and source_is_definitive(collection, s["source"])
+    ]
+    logger.info(
+        "[CONSOLIDATE] Found %d definitive doc_summaries (of %d total) for collection='%s'",
+        len(doc_summaries),
+        len(all_summaries),
+        collection,
+    )
     if not doc_summaries:
         logger.info("[CONSOLIDATE] No documents to consolidate, aborting")
         return {"message": "No documents to consolidate"}
@@ -577,7 +649,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     return {"message": "Consolidation done", "conflicts_count": len(conflicts)}
 
 
-async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None, source_label: str | None = None, file_id: str | None = None, meeting_date: str | None = None) -> dict[str, Any]:
+async def upload_handler(task: Task, file_path: str, collection: str, filename_param: str, meeting_id: str | None = None, source_label: str | None = None, file_id: str | None = None, meeting_date: str | None = None, version_id: str | None = None) -> dict[str, Any]:
     """处理文件上传任务 - 使用流水线队列控制并发"""
     from src.tasks.task_manager import set_current_task, clear_current_task, check_cancelled
 
@@ -594,14 +666,19 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         if not path.is_file():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        # ── Stage 1: Parsing + Chunking (concurrent, no lock) ──
+        # ── Stage 1: Parsing + image describe + chunking ──
+        # Progress map:
+        #   0–30  parse / setup / chunking
+        #  30–90  image description + enrichment + embedding (linear by *completed* units)
+        #  90–100 store
         update(10, "Checking collection...")
+        work = _WorkProgress(update, lo=30.0, hi=90.0)
 
         def _parse_and_chunk():
             if not services.db.collection_exists(collection):
                 services.db.create_collection(collection, vector_size=services.embedding.dimensions)
 
-            update(20, "Parsing file...")
+            update(15, "Parsing file...")
 
             # Load collection config first (needed for cloud_parsing flag)
             config = services.db.get_collection_config(collection)
@@ -635,7 +712,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             )
 
             if mineru_ready:
-                update(20, "Parsing file via MinerU cloud...")
+                update(18, "Parsing file via MinerU cloud...")
                 try:
                     doc = parse_with_mineru(path, mineru_cfg)
                     logger.info("[%s] MinerU parse done in %.1fs, content length: %d",
@@ -657,6 +734,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             file_dir = path.parent
 
             # ── Image processing: filter, save, describe, update content ──
+            # Describe work units feed 30–90% linear progress (completed only).
             if doc.images and file_id:
                 from src.parsers.image_utils import process_document_images
                 from src.config import get_config
@@ -674,11 +752,19 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 # Use the VISUAL_PROMPT from prompts.py
                 from src.prompts import VISUAL_PROMPT
 
+                update(25, "Processing images...")
+                def _img_done():
+                    work.done(1)
+                    d, t = work.snapshot()
+                    update(30.0 + 60.0 * (d / t), f"Describing images… {d}/{t}")
+
                 doc = process_document_images(
                     doc, file_id, file_dir,
                     vision_provider=vision_provider,
                     vision_model_id=vision_model_id,
                     vision_prompt=VISUAL_PROMPT,
+                    on_describe_planned=lambda n: work.add_work(n),
+                    on_image_done=_img_done,
                 )
                 logger.info("[%s] Image processing done: %d images in doc",
                             filename_param, len(doc.images or []))
@@ -687,10 +773,14 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             try:
                 parsed_path = file_dir / "parsed.txt"
                 parsed_path.write_text(doc.content, encoding="utf-8")
+                # Per-blob cache so historical version Source stays instant after
+                # a later version upload replaces shared parsed.txt.
+                blob_cache = file_dir / f"{path.name}.extracted.txt"
+                blob_cache.write_text(doc.content, encoding="utf-8")
             except Exception as e:
                 logger.warning("[%s] Failed to save parsed text: %s", filename_param, e)
 
-            update(40, "Chunking...")
+            update(28, "Chunking...")
             # Use MarkdownChunker when content has ::: blocks (images, distill, etc.)
             # so fenced blocks are treated as atomic units and not split across chunks.
             use_markdown_chunker = doc.file_type == "markdown" or bool(doc.images)
@@ -740,6 +830,8 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 extra_meta["meeting_date"] = meeting_date
             if file_id:
                 extra_meta["file_id"] = file_id
+            if version_id:
+                extra_meta["version_id"] = version_id
             # Phase 4: Qdrant payload extensions for file management v2
             extra_meta["archived"] = False
             extra_meta["is_current"] = True
@@ -771,28 +863,54 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         doc, chunks, config = await loop.run_in_executor(_cpu_executor, _parse_and_chunk)
 
         # ── Stage 2+3: Enriching + Embedding (pipelined) ──
+        # Work units for 30–90%: enrich (per finished context) + embed (per finished vector).
         t_ctx = time.time()
         contextual_enabled = config.get("contextual_enabled", True)
+        # Only count non-parent chunks for embedding (parents skip embed)
+        embed_count = len([c for c in chunks if c.chunk_type != "parent"])
+        enrich_count = len(chunks) if contextual_enabled else 0
+        work.add_work(enrich_count + embed_count)
+        d0, t0 = work.snapshot()
+        update(max(30.0, float(getattr(task, "progress", 30) or 30)),
+               f"Enrich+Embed {d0}/{t0}…")
+
         if contextual_enabled:
             embedding = get_collection_embedding(config, collection)
-            # Only count non-parent chunks for progress (parents skip embed)
-            embed_count = len([c for c in chunks if c.chunk_type != "parent"])
-            batcher = _EmbedBatcher(embedding, total_chunks=embed_count,
-                                    on_progress=lambda done, total:
-                                        update(50 + int(30 * done / total),
-                                               f"Enrich+Embed {done}/{total} chunks"))
+
+            def _on_embed_done(n: int):
+                work.done(n)
+                d, t = work.snapshot()
+                # Re-emit with clearer label (done() already advanced bar)
+                update(30.0 + 60.0 * (d / t), f"Embedding… {d}/{t}")
+
+            batcher = _EmbedBatcher(
+                embedding,
+                total_chunks=embed_count,
+                on_embed_done=_on_embed_done,
+            )
 
             # Pre-number chunks so embeddings map back to list position
             for i, c in enumerate(chunks):
                 c.metadata["_embed_idx"] = i
 
+            def _on_enrich_ready(chunk, context: str):
+                # One completed enrichment unit (success or fail)
+                work.done(1)
+                d, t = work.snapshot()
+                update(30.0 + 60.0 * (d / t), f"Enriching… {d}/{t}")
+                batcher.on_ready(chunk, context)
+
             def _enrich_and_embed():
                 _enrich_lock.acquire()
                 try:
-                    update(50, f"Enriching with context ({len(chunks)} chunks)...")
-                    return _do_enrich(chunks, doc, config, collection,
-                                      on_summary=batcher.set_summary,
-                                      on_chunk_ready=batcher.on_ready)
+                    return _do_enrich(
+                        chunks,
+                        doc,
+                        config,
+                        collection,
+                        on_summary=batcher.set_summary,
+                        on_chunk_ready=_on_enrich_ready,
+                    )
                 finally:
                     _enrich_lock.release()
 
@@ -813,23 +931,36 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 )
             else:
                 # Enrichment skipped (e.g. >200 chunks) — embed all at once.
-                # Same reason: push both blocking calls into a thread.
                 logger.info("[%s] enrichment skipped, embedding all %d chunks inline",
                             filename_param, len(chunks))
+                # Enrich units never fired — mark them completed so progress can finish
+                if enrich_count:
+                    work.done(enrich_count)
+                    d, t = work.snapshot()
+                    update(30.0 + 60.0 * (d / t), f"Enrich skipped… {d}/{t}")
                 texts = [_build_enriched_text(c) for c in chunks]
 
                 def _embed_and_sparse():
                     emb = embedding.embed_texts(texts)
+                    # Count all embeds as completed after the call returns
+                    if embed_count:
+                        work.done(embed_count)
+                        d, t = work.snapshot()
+                        update(30.0 + 60.0 * (d / t), f"Embedding… {d}/{t}")
                     sp = _do_sparse(texts, collection)
                     return emb, sp
 
                 embeddings, sparse_vectors = await loop.run_in_executor(None, _embed_and_sparse)
 
         else:
-            # No enrichment — embed + sparse inline
+            # No enrichment — embed + sparse; only embed units count in 30–90
             embedding = get_collection_embedding(config, collection)
             texts = [_build_enriched_text(c) for c in chunks]
             embeddings = embedding.embed_texts(texts)
+            if embed_count:
+                work.done(embed_count)
+                d, t = work.snapshot()
+                update(30.0 + 60.0 * (d / t), f"Embedding… {d}/{t}")
             sparse_vectors = _do_sparse(texts, collection)
 
         t_emb = time.time()
@@ -838,7 +969,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
         # ── Stage 4: Storage ──
         def _do_store():
-            update(85, "Storing...")
+            update(92, "Storing...")
             ids = []
             for c in chunks:
                 if c.chunk_type in ("parent", "child"):
@@ -1015,15 +1146,57 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     idx = load_file_index(collection)
     for fid, entry in idx.items():
         if entry.get("source") == source:
-            fd = _COL_DIR / collection / "files" / fid
-            if (fd / "parsed.txt").is_file():
-                file_path = fd / "parsed.txt"
-            else:
-                for f in sorted(fd.iterdir()):
-                    if f.is_file() and f.name != "parsed.txt":
-                        file_path = f
-                        break
-            logger.info("[DOC_SUMMARY] Resolved source=%s -> file_id=%s path=%s", source, fid, file_path)
+            try:
+                from src.file_mgmt.storage_paths import (
+                    ensure_layout_migrated,
+                    resolve_version_blob,
+                )
+                from src.file_mgmt.store import get_db
+
+                ensure_layout_migrated(collection)
+                conn = get_db(collection)
+                try:
+                    row = conn.execute(
+                        """SELECT fv.version_id, fv.storage_file_id
+                           FROM files f
+                           JOIN file_versions fv ON fv.version_id = f.current_version_id
+                           WHERE f.file_id=?""",
+                        (fid,),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if row:
+                    blob = resolve_version_blob(
+                        collection,
+                        fid,
+                        row["version_id"],
+                        row["storage_file_id"],
+                    )
+                    if blob is not None:
+                        parsed = blob.parent / "parsed.txt"
+                        file_path = parsed if parsed.is_file() else blob
+            except Exception:
+                pass
+            if file_path is None:
+                fd = _COL_DIR / collection / "files" / fid
+                if fd.is_dir():
+                    if (fd / "parsed.txt").is_file():
+                        file_path = fd / "parsed.txt"
+                    else:
+                        for f in sorted(fd.iterdir()):
+                            if (
+                                f.is_file()
+                                and f.name != "parsed.txt"
+                                and not f.name.endswith(".extracted.txt")
+                            ):
+                                file_path = f
+                                break
+            logger.info(
+                "[DOC_SUMMARY] Resolved source=%s -> file_id=%s path=%s",
+                source,
+                fid,
+                file_path,
+            )
             break
 
     if not file_path:
@@ -1048,9 +1221,15 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     logger.info("[DOC_SUMMARY] Generated: data=%d, facts=%d, insights=%d",
                 len(doc_summary.get("data", [])), len(doc_summary.get("facts", [])), len(doc_summary.get("insights", [])))
 
-    # Take snapshot before storing (for debounce net-change detection)
-    from src.api.routes.info import _snapshot_includes, schedule_debounced_consolidate
+    # Truth source: files.is_definitive — store include for sync only.
+    from src.api.routes.info import (
+        _snapshot_includes,
+        schedule_debounced_consolidate,
+        source_is_definitive,
+    )
+
     pre_snapshot = _snapshot_includes(collection)
+    is_def = source_is_definitive(collection, source)
 
     sm = _get_summary_manager()
     sm.ensure_collection()
@@ -1059,13 +1238,17 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
         doc_summary.get("data", []),
         doc_summary.get("facts", []),
         doc_summary.get("insights", []),
-        include_in_summary=True,
+        include_in_summary=is_def,
     )
 
-    # Schedule debounced consolidation (replaces old counter-based trigger).
-    # This handler always stores include_in_summary=True, so the new entry is
-    # by definition a "definitive" file — always enter the debounce flow.
-    schedule_debounced_consolidate(collection, pre_snapshot)
+    # Only consolidate when this file is definitive (mark definitive / re-summarize definitive)
+    if is_def:
+        schedule_debounced_consolidate(collection, pre_snapshot)
+    else:
+        logger.info(
+            "[DOC_SUMMARY] source=%s not definitive — skip consolidate",
+            source,
+        )
 
     # ── Catalog coverage refresh ──────────────────────────────────
     try:

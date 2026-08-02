@@ -2539,9 +2539,12 @@ class MeetingService:
             created_at=datetime.now(timezone.utc),
         )
 
+        # Display name: meeting title + section (tab) name — used by All Files & file detail
+        meeting_title = (meeting.title or "").strip() or "Untitled meeting"
+        display_label = f"{meeting_title} / {section_label}"
         await upload_handler(
             upload_task, str(file_path), collection_id, section_source,
-            source_label=f"Meeting: {meeting.title} / {section_label}",
+            source_label=display_label,
             file_id=alloc_file_id,
             meeting_id=meeting_id,
             meeting_date=meeting_date,

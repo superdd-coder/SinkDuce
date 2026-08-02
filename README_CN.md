@@ -351,4 +351,12 @@ tests/                pytest 测试套件（asyncio_mode = auto）
 
 ---
 
+## 📜 许可证
+
+SinkDuce 采用 **[GNU Affero General Public License v3.0 or later](LICENSE)**（AGPL-3.0-or-later）开源。
+
+第三方开源依赖（Python 包、前端库、字体、Docker 系统包、Qdrant 等）仍遵循各自许可证。完整声明与直接依赖清单见 **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**。当前审查范围内的直接依赖均为开源（MIT / BSD / Apache-2.0 / ISC / OFL-1.1 等）。可选的商业**远程 API**（OpenAI、Cohere、DashScope、MinerU 云端等）不属于本仓库源码许可证范围；仅其客户端库（若使用）属于开源依赖。
+
+---
+
 [English](README.md)

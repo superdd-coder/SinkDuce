@@ -488,7 +488,7 @@ export const useAppStore = create<AppState>((set) => ({
   logPanelOpen: false,
   toggleLogPanel: () => set((s) => ({ logPanelOpen: !s.logPanelOpen })),
 
-  developerMode: false,
+  developerMode: true,
   toggleDeveloperMode: () => set((s) => ({ developerMode: !s.developerMode })),
 
   activeMeeting: null,

@@ -75,6 +75,12 @@ export interface FileSummary {
   created_at: string
   is_greyed: boolean
   task_id: string | null
+  /** Human label from files.json (e.g. "Meeting: Title / Section") */
+  display_name?: string
+  /** Document source key (__file__:…, __meeting__:…, …) */
+  source?: string
+  /** Backend kind for badges: meeting | note | file */
+  doc_kind?: "meeting" | "note" | "file" | string
 }
 
 export interface FilePath {
@@ -84,6 +90,8 @@ export interface FilePath {
   is_primary: boolean
   source_node_id: string | null
   created_by: string
+  /** Path-level archive (this folder only). */
+  archived?: boolean
   folder_path: string
   is_greyed: boolean
 }
@@ -99,10 +107,39 @@ export interface FileVersion {
   created_at: string
 }
 
+/** Non-current version row for All Files collapsible history. */
+export interface OldVersion {
+  version_id: string
+  file_id: string
+  version_no: number
+  storage_file_id: string
+  archived: boolean
+  commit_message: string | null
+  created_at: string
+  current_filename: string
+  current_display_name: string
+  filename: string
+  original_ext: string
+  /** False when the version blob is missing on disk (cannot preview Raw). */
+  blob_available?: boolean
+}
+
+/** Node association on a file (from GET file detail). */
+export interface FileNodeRef {
+  node_id: string
+  title: string | null
+  node_type: string
+  group_id?: string | null
+  chain_id?: string | null
+  group_name?: string | null
+  chain_title?: string | null
+  greyed: boolean
+}
+
 export interface FileDetail extends FileSummary {
   paths: FilePath[]
   versions: FileVersion[]
-  nodes: Record<string, unknown>[]
+  nodes: FileNodeRef[]
   messages: Message[]
 }
 

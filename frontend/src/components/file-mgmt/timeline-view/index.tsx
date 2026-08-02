@@ -223,7 +223,15 @@ function SNC(p:{
 const MIN_SCALE = 0.25
 const MAX_SCALE = 2.5
 
-interface TVP {collectionId:string}
+interface TVP {
+  collectionId: string
+  /**
+   * Whether this view is the active database tab. When false the panel stays
+   * mounted (keep-alive) but may be opacity-hidden; we still keep layout size.
+   * Used to ignore 0×0 measures and re-apply camera when re-shown.
+   */
+  active?: boolean
+}
 interface CWN {chain:Chain;nodes:Node[]}
 
 /** Horizontal pitch of one main-chain node slot (w-48 card + inter-node connector). */
@@ -350,7 +358,7 @@ function assignBranchLevels(binfo: BranchInfo[]): void {
   }
 }
 
-export function TimelineView({collectionId}:TVP){
+export function TimelineView({ collectionId, active = true }: TVP) {
   const [chains,setChains]=useState<Chain[]>([])
   const [chainData,setChainData]=useState<Map<string,CWN>>(new Map())
   const [groups,setGroups]=useState<NodeGroup[]>([])
@@ -1337,6 +1345,8 @@ export function TimelineView({collectionId}:TVP){
   /** Viewport size — drives canvas margin so nodes can scroll fully off-screen. null until measured. */
   const [vpSize, setVpSize] = useState<{ w: number; h: number } | null>(null)
   const didCenterRef = useRef(false)
+  /** Gate world-layer paint until first camera center — avoids a frame of uncentered nodes (clipped cards). */
+  const [canvasReady, setCanvasReady] = useState(false)
 
   // ── Display order is always live (incl. drag preview) ──
   // Only branch *lane levels* freeze during drag (prevents row remount thrash).
@@ -1452,69 +1462,88 @@ export function TimelineView({collectionId}:TVP){
   const canvasPadX = Math.max(vpSize?.w ?? 800, 480)
   const canvasPadY = Math.max(vpSize?.h ?? 600, 320)
 
-  // Track viewport size for infinite-canvas padding (only update when size actually changes)
+  // Track viewport size for infinite-canvas padding (only update when size actually changes).
+  // Ignore 0×0 (or tiny) measures — those fire when a keep-alive parent uses display:none
+  // and would corrupt canvasPad / pan, causing clipped nodes on the next show.
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
     const apply = () => {
       const w = el.clientWidth
       const h = el.clientHeight
+      if (w < 40 || h < 40) return
       setVpSize(prev => (prev && prev.w === w && prev.h === h ? prev : { w, h }))
     }
     apply()
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(apply) : null
     ro?.observe(el)
     return () => ro?.disconnect()
-  }, [loading, mc])
+  }, [loading, mc, active])
 
   // Reset centering when switching collection
   useEffect(() => {
     didCenterRef.current = false
+    setCanvasReady(false)
   }, [collectionId])
 
   /** Center the node layout at default scale=1 (do NOT fit-zoom on open). */
   const centerAtDefaultScale = useCallback(() => {
     const vp = viewportRef.current
     const layout = layoutRef.current
-    if (!vp || !layout) return
-    // Reset zoom; pan so layout bbox is centered in the viewport
+    if (!vp || !layout) return false
+    // Need real layout box — skip if children not measured yet
+    const lw = layout.offsetWidth || contentW
+    const lh = layout.offsetHeight
+    if (lw < 8 || lh < 8) return false
+    if (vp.clientWidth < 40 || vp.clientHeight < 40) return false
     const s = 1
     setScale(s)
     // Layout sits inside world with padding (canvasPadX/Y). World origin = padding corner.
-    // Content (layout) top-left in world coords ≈ (canvasPadX, canvasPadY)
-    const lw = layout.offsetWidth || contentW
-    const lh = layout.offsetHeight || 200
     const nextTx = (vp.clientWidth - lw * s) / 2 - canvasPadX * s
     const nextTy = (vp.clientHeight - lh * s) / 2 - canvasPadY * s
     setTx(nextTx)
     setTy(nextTy)
+    return true
   }, [contentW, canvasPadX, canvasPadY])
 
-  // Center once data is ready — keep scale at 1, only pan to center.
+  // When tab becomes active again: remeasure. Camera (tx/ty/scale) is preserved.
+  useLayoutEffect(() => {
+    if (!active) return
+    const el = viewportRef.current
+    if (!el) return
+    const w = el.clientWidth
+    const h = el.clientHeight
+    if (w < 40 || h < 40) return
+    setVpSize(prev => (prev && prev.w === w && prev.h === h ? prev : { w, h }))
+    // Returning to an already-centered canvas — show immediately
+    if (didCenterRef.current) setCanvasReady(true)
+  }, [active])
+
+  // Center once data is ready — prefer sync layout pass so the first *visible*
+  // frame already has correct pan. World layer stays opacity-0 until ready.
   // Skip when a folder→timeline jump is pending (that path centers the target node).
   useLayoutEffect(() => {
+    if (!active) return
     if (loading || !mc || !vpSize || didCenterRef.current) return
     if (vpSize.w < 40 || vpSize.h < 40) return
     if (navFocusRef.current || timelineNavRequest) {
       didCenterRef.current = true
+      setCanvasReady(true)
       return
     }
-    let raf2 = 0
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        if (navFocusRef.current) {
-          didCenterRef.current = true
-          return
-        }
-        centerAtDefaultScale()
+    const finish = () => {
+      if (didCenterRef.current) return
+      if (centerAtDefaultScale()) {
         didCenterRef.current = true
-      })
-    })
-    return () => {
-      cancelAnimationFrame(raf1)
-      cancelAnimationFrame(raf2)
+        setCanvasReady(true)
+      }
     }
-  }, [loading, mc, contentW, canvasPadX, canvasPadY, vpSize, centerAtDefaultScale, timelineNavRequest])
+    finish()
+    // Layout height can lag one frame when grid first mounts — one retry max
+    if (didCenterRef.current) return
+    const id = requestAnimationFrame(finish)
+    return () => cancelAnimationFrame(id)
+  }, [active, loading, mc, contentW, canvasPadX, canvasPadY, vpSize, centerAtDefaultScale, timelineNavRequest])
 
   // When selection changes (sidebar opens / switches node), pan so card stays in view
   // Skip when a nav-focus is pending — that path centers with fitNodeCards instead.
@@ -1827,8 +1856,24 @@ export function TimelineView({collectionId}:TVP){
     [msgScopeNodeIds]
   )
 
-  if (loading) return <div className="flex items-center justify-center h-full text-muted-foreground"><p className="text-sm">Loading...</p></div>
-  if (!mc) return <div className="flex items-center justify-center h-full text-muted-foreground"><div className="text-center"><p className="text-sm">No main chain found</p></div></div>
+  // Only block the whole view on true cold start — avoid blank flash when re-opening
+  // a keepMounted tab or when silently refreshing after drag/reorder.
+  if (loading && chains.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full text-muted-foreground">
+        <p className="text-sm">Loading...</p>
+      </div>
+    )
+  }
+  if (!mc) {
+    return (
+      <div className="flex items-center justify-center h-full text-muted-foreground">
+        <div className="text-center">
+          <p className="text-sm">No main chain found</p>
+        </div>
+      </div>
+    )
+  }
 
   /** One horizontal lane: all branches at the same level share a grid row (natural height). */
   const renderLane = (level: number) => {
@@ -2132,7 +2177,7 @@ export function TimelineView({collectionId}:TVP){
               panDrag.current = null
             }}
           >
-            {/* World layer: pan + zoom */}
+            {/* World layer: pan + zoom. Hidden until first center so we never flash uncentered nodes. */}
             <div
               style={{
                 // translate3d + rounded values reduce subpixel blur on scaled text
@@ -2148,6 +2193,9 @@ export function TimelineView({collectionId}:TVP){
                 // Avoid permanent will-change layer which often blurs text under scale
                 backfaceVisibility: 'hidden',
                 WebkitFontSmoothing: 'antialiased',
+                opacity: canvasReady ? 1 : 0,
+                // Keep layout measurable while gated (no display:none)
+                pointerEvents: canvasReady ? 'auto' : 'none',
               }}
             >
               <div

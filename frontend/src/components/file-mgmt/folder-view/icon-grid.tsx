@@ -4,7 +4,10 @@ import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { listGroups } from "@/api/file-mgmt"
 import { Loader2, Star, Check, Pencil } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { FileTypeIcon } from "@/components/file-mgmt/file-type-icon"
+import {
+  FileTypeIcon,
+  resolveDocKind,
+} from "@/components/file-mgmt/file-type-icon"
 import { FolderIconView } from "@/components/file-mgmt/timeline-view/group-icons"
 import {
   DEFAULT_ICON_COLOR,
@@ -34,7 +37,14 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-export function IconGrid({ collectionId }: { collectionId: string }) {
+export function IconGrid({
+  collectionId,
+  onOpenFile,
+}: {
+  collectionId: string
+  /** Double-click a file to open detail dialog (Phase 8). */
+  onOpenFile?: (fileId: string) => void
+}) {
   const {
     folderTree,
     currentFolderId,
@@ -55,6 +65,7 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
     uploadFolder,
     updateFolderDetails,
     renameFile,
+    ingestingFiles,
   } = useFileMgmtStore()
 
   const [dragOver, setDragOver] = useState(false)
@@ -372,11 +383,23 @@ export function IconGrid({ collectionId }: { collectionId: string }) {
                   file={file}
                   selected={selectedFileIds.has(file.file_id)}
                   multiSelectMode={multiSelectMode}
+                  ingesting={ingestingFiles[file.file_id] ?? null}
                   onSelect={() => {
+                    // Ingesting: no select → no file toolbar
+                    if (ingestingFiles[file.file_id]) return
                     if (multiSelectMode) toggleSelection(file.file_id)
                     else selectSingleFile(file.file_id)
                   }}
-                  onEdit={() => openEditFile(file)}
+                  onOpen={
+                    multiSelectMode || ingestingFiles[file.file_id]
+                      ? undefined
+                      : () => onOpenFile?.(file.file_id)
+                  }
+                  onEdit={
+                    ingestingFiles[file.file_id]
+                      ? undefined
+                      : () => openEditFile(file)
+                  }
                 />
               ))}
               {orderedFolders.length === 0 &&
@@ -607,19 +630,30 @@ function FileIconItem({
   file,
   selected,
   multiSelectMode,
+  ingesting,
   onSelect,
+  onOpen,
   onEdit,
 }: {
   file: FileSummary
   selected: boolean
   multiSelectMode: boolean
+  /** Async upload / version ingest in progress */
+  ingesting?: { taskId: string; progress: number; message: string } | null
   onSelect: () => void
+  /** Double-click: open file detail (disabled in multi-select). */
+  onOpen?: () => void
   onEdit?: () => void
 }) {
   const ext = file.original_ext || ""
   // Unified: file-level or path-level archive both look "archived"
   const isArchived = file.is_greyed || file.archived
-  const fullName = file.filename || "Untitled"
+  const isIngesting = !!ingesting
+  const fullName = file.display_name || file.filename || "Untitled"
+  const progressPct = Math.max(
+    0,
+    Math.min(100, Math.round(ingesting?.progress ?? 0))
+  )
 
   return (
     <Tooltip>
@@ -631,25 +665,52 @@ function FileIconItem({
             type="button"
             className={cn(
               "group flex flex-col items-center gap-1 p-2 rounded-lg transition-colors w-[88px] shrink-0",
-              selected
+              selected && !isIngesting
                 ? "bg-primary/10 ring-1 ring-primary/30"
-                : "hover:bg-muted/50",
-              isArchived && "opacity-40"
+                : !isIngesting && "hover:bg-muted/50",
+              isArchived && "opacity-40",
+              isIngesting && "ring-1 ring-sky-500/40 bg-sky-500/5 cursor-default"
             )}
             onClick={onSelect}
+            onDoubleClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (isIngesting) return
+              if (!onOpen) return
+              onOpen()
+            }}
           >
-            <div className="relative">
-              <span className="inline-flex h-10 w-10 items-center justify-center">
+            <div className="relative overflow-visible">
+              <span
+                className={cn(
+                  "inline-flex h-10 w-10 items-center justify-center overflow-visible",
+                  isIngesting && "opacity-70"
+                )}
+              >
                 <FileTypeIcon
                   source={{
                     filename: file.filename,
                     original_ext: file.original_ext,
                     unsupported: file.unsupported,
+                    source: file.source,
+                    kind: resolveDocKind(file),
                   }}
                   className="h-10 w-10"
                 />
               </span>
-              {file.is_definitive && (
+              {isIngesting && (
+                <div
+                  className="absolute inset-0 flex items-center justify-center rounded-md bg-background/50 pointer-events-none"
+                  title={
+                    ingesting?.message
+                      ? `${ingesting.message} — open when done`
+                      : "Ingesting… open when done"
+                  }
+                >
+                  <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+                </div>
+              )}
+              {file.is_definitive && !isIngesting && (
                 <Star className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
               )}
               {selected && multiSelectMode && (
@@ -668,16 +729,19 @@ function FileIconItem({
             >
               {fullName}
             </span>
-            {isArchived && (
+            {isIngesting ? (
+              <span className="text-[9px] text-sky-600 font-medium tabular-nums">
+                {progressPct > 0 ? `${progressPct}%` : "updating…"}
+              </span>
+            ) : isArchived ? (
               <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">
                 archived
               </span>
-            )}
-            {ext && !isArchived && (
+            ) : ext ? (
               <span className="text-[9px] text-muted-foreground/40 uppercase">
                 {ext}
               </span>
-            )}
+            ) : null}
           </button>
         }
       />
@@ -687,13 +751,23 @@ function FileIconItem({
         className={cn(TIP_MAX, "p-0 overflow-hidden")}
       >
         <div className={cn("flex items-start gap-1 px-2 py-1.5", TIP_MAX)}>
-          <span
-            className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2 break-all"
-            title={fullName}
-          >
-            {fullName}
-          </span>
-          {onEdit && (
+          <div className="flex-1 min-w-0">
+            <span
+              className="block text-[11px] leading-snug line-clamp-2 break-all"
+              title={fullName}
+            >
+              {fullName}
+            </span>
+            {isIngesting && (
+              <span className="block text-[10px] text-sky-200/90 mt-0.5 line-clamp-2">
+                {ingesting?.message || "Ingesting…"}
+                {progressPct > 0 ? ` · ${progressPct}%` : ""}
+                {" · "}
+                cannot open until done
+              </span>
+            )}
+          </div>
+          {onEdit && !isIngesting && (
             <button
               type="button"
               className="shrink-0 p-0.5 rounded hover:bg-background/20 text-background/90 hover:text-background transition-colors"

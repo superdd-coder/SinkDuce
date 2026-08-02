@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { Bot, Clock, Loader2, Pencil, Plus, X } from "lucide-react"
 import { toast } from "sonner"
 import type { Chain, Message, Node } from "@/types/file-mgmt"
@@ -597,7 +598,7 @@ export function MessageStreamSidebar({
                     value={detailDraft}
                     onChange={setDetailDraft}
                     minHeight="100%"
-                    placeholder="Write a message… type / for commands"
+                    placeholder={MESSAGE_EDITOR_PLACEHOLDER}
                     showToolbar={false}
                   />
                 </div>

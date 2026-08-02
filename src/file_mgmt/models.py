@@ -193,11 +193,17 @@ class FileOut(BaseModel):
     unsupported: bool = False
     created_by: str = "local"
     version: int = 1
-    filename: str = ""      # derived: current version original filename
+    filename: str = ""      # derived: current version original filename (storage name)
     original_ext: str = ""  # derived: extension from filename (e.g. "pdf", "md", "" for none)
     created_at: str = ""    # derived: first version creation timestamp
     is_greyed: bool = False  # True if file- or path-level archived (folder view grey)
     task_id: str | None = None  # upload task ID for async ingest polling
+    # Human-readable label from files.json (e.g. "Meeting: Title / Section")
+    display_name: str = ""
+    # Document source key (e.g. __file__:{id}, __meeting__:{id}:{tab})
+    source: str = ""
+    # Derived kind for UI badges: meeting | note | file
+    doc_kind: str = "file"
 
 
 # Alias used in service signatures (contract section 8)
@@ -209,6 +215,26 @@ class FileDetail(FileOut):
     versions: list[FileVersionOut] = []
     nodes: list[dict] = []  # node associations (shape finalized in Phase 2)
     messages: list[MessageOut] = []
+
+
+class OldVersionOut(BaseModel):
+    """A non-current file version (for All Files collapsible history)."""
+
+    version_id: str
+    file_id: str
+    version_no: int
+    storage_file_id: str
+    archived: bool = True
+    commit_message: str | None = None
+    created_at: str
+    # Parent file (current) display
+    current_filename: str = ""
+    current_display_name: str = ""
+    # This version's own label (usually storage basename)
+    filename: str = ""
+    original_ext: str = ""
+    # False when the on-disk blob is missing (legacy overwrite / never stored)
+    blob_available: bool = True
 
 
 # ════════════════════════════════════════════════════════════════

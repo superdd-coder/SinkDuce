@@ -9,6 +9,7 @@ import type {
   FileDetail,
   FilePath,
   Message,
+  OldVersion,
   Chain,
   Node,
   NodeDetail,
@@ -151,6 +152,10 @@ export const getRootFiles = (collectionId: string) =>
 
 export const getArchivedFiles = (collectionId: string) =>
   req<FileSummary[]>(`/${collectionId}/archived`)
+
+/** Files marked definitive — feed Collection Summary consolidate. */
+export const getDefinitiveFiles = (collectionId: string) =>
+  req<FileSummary[]>(`/${collectionId}/files?is_definitive=true`)
 
 // ── NodeGroup ──
 
@@ -420,4 +425,68 @@ export const updateFile = (
   req<FileSummary>(`/${collectionId}/files/${fileId}`, {
     method: "PATCH",
     body: JSON.stringify(body),
+  })
+
+/** Upload a new version of an existing file (multipart). */
+export const uploadFileVersion = async (
+  collectionId: string,
+  fileId: string,
+  file: File,
+  commitMessage = ""
+): Promise<FileSummary> => {
+  const formData = new FormData()
+  formData.append("file", file)
+  formData.append("commit_message", commitMessage)
+  const res = await fetch(`${BASE}/${collectionId}/files/${fileId}/versions`, {
+    method: "POST",
+    body: formData,
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new FileMgmtApiError(res.status, body)
+  }
+  return res.json()
+}
+
+/**
+ * List non-current (old) file versions across the collection.
+ * Version-level history only — not the system Archive folder.
+ */
+export const listOldVersions = (collectionId: string) =>
+  req<OldVersion[]>(`/${collectionId}/old-versions`)
+
+/**
+ * Permanently delete one non-current version (blob + Qdrant + log message).
+ * Refuses if version_id is the file's current version.
+ */
+export const deleteFileVersion = (
+  collectionId: string,
+  fileId: string,
+  versionId: string
+) =>
+  req<{ file_id: string; version_id: string; deleted: boolean }>(
+    `/${collectionId}/files/${fileId}/versions/${versionId}`,
+    { method: "DELETE" }
+  )
+
+/** Promote a derived path (source_node_id set) to a persistent path. */
+export const promoteFilePath = (
+  collectionId: string,
+  fileId: string,
+  pathId: string
+) =>
+  req<FilePath>(`/${collectionId}/files/${fileId}/promote-path`, {
+    method: "POST",
+    body: JSON.stringify({ path_id: pathId }),
+  })
+
+/** Revert a persistent (pinned) path back to derived mode (does not delete). */
+export const demoteFilePath = (
+  collectionId: string,
+  fileId: string,
+  pathId: string
+) =>
+  req<FilePath>(`/${collectionId}/files/${fileId}/demote-path`, {
+    method: "POST",
+    body: JSON.stringify({ path_id: pathId }),
   })
