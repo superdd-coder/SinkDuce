@@ -428,6 +428,107 @@ def test_promote_path():
             assert p["source_node_id"] == nid
 
 
+def test_demote_plain_folder_path_keeps_path():
+    """Unpin (demote) on a plain folder mount must not delete the path card.
+
+    Files uploaded/added to a folder have source_node_id=NULL (shown as pinned
+    in UI). Demote with no reclaimable timeline node must refuse and leave the
+    path in place — removal is ``remove-path``, not unpin.
+    """
+    from src.main import app
+
+    _setup_collection("p3-5b")
+    client = TestClient(app)
+
+    # plain user folder (not a group/branch derived target)
+    resp = client.post(
+        "/api/file-mgmt/p3-5b/folders",
+        json={"name": "Docs"},
+    )
+    assert resp.status_code == 201, resp.text
+    folder_id = resp.json()["folder_id"]
+
+    fid = uuid.uuid4().hex
+    _create_file_record("p3-5b", fid)
+
+    resp = client.post(
+        f"/api/file-mgmt/p3-5b/files/{fid}/paths",
+        json={"folder_id": folder_id},
+    )
+    assert resp.status_code == 201, resp.text
+    path_id = resp.json()["path_id"]
+    assert resp.json()["source_node_id"] is None
+
+    # demote must not wipe the only path
+    resp = client.post(
+        f"/api/file-mgmt/p3-5b/files/{fid}/demote-path",
+        json={"path_id": path_id},
+    )
+    assert resp.status_code == 400, resp.text
+
+    resp = client.get(f"/api/file-mgmt/p3-5b/files/{fid}")
+    detail = resp.json()
+    path_ids = [p["path_id"] for p in detail["paths"]]
+    assert path_id in path_ids
+    assert len(detail["paths"]) == 1
+    assert detail["paths"][0]["source_node_id"] is None
+
+
+def test_demote_drops_pin_when_derived_sibling_exists():
+    """When pin + derived share a folder, unpin deletes only the pin row."""
+    from src.main import app
+
+    _setup_collection("p3-5c")
+    client = TestClient(app)
+
+    main_id = _get_main_chain_id(client, "p3-5c")
+    resp = client.post(
+        "/api/file-mgmt/p3-5c/groups",
+        json={"name": "BothPaths"},
+    )
+    assert resp.status_code == 201
+    group = resp.json()
+    folder_id = group["folder_id"]
+    node = _create_node(
+        client, "p3-5c", main_id, "both-node", order=1, group_id=group["group_id"]
+    )
+    nid = node["node_id"]
+
+    fid = uuid.uuid4().hex
+    _create_file_record("p3-5c", fid)
+
+    # persistent pin
+    resp = client.post(
+        f"/api/file-mgmt/p3-5c/files/{fid}/paths",
+        json={"folder_id": folder_id},
+    )
+    assert resp.status_code == 201
+    pin_id = resp.json()["path_id"]
+
+    # derived via attach
+    resp = client.post(
+        f"/api/file-mgmt/p3-5c/nodes/{nid}/files",
+        json={"file_id": fid},
+    )
+    assert resp.status_code == 201
+
+    resp = client.get(f"/api/file-mgmt/p3-5c/files/{fid}")
+    paths = [p for p in resp.json()["paths"] if p["folder_id"] == folder_id]
+    assert len(paths) == 2
+
+    resp = client.post(
+        f"/api/file-mgmt/p3-5c/files/{fid}/demote-path",
+        json={"path_id": pin_id},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get(f"/api/file-mgmt/p3-5c/files/{fid}")
+    remaining = [p for p in resp.json()["paths"] if p["folder_id"] == folder_id]
+    assert len(remaining) == 1
+    assert remaining[0]["source_node_id"] == nid
+    assert remaining[0]["path_id"] != pin_id
+
+
 # ── 6. UNIQUE constraint: persistent + derived coexist ──────────
 
 

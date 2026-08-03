@@ -1955,6 +1955,18 @@ export function FileMgmtDetailDialog({
                                   q.folder_id === p.folder_id &&
                                   !q.source_node_id
                               )
+                            // Unpin only when demote can re-link to a node or drop
+                            // a pin that has a derived sibling — never on a lone
+                            // plain-folder mount (that would delete the path card).
+                            const canUnpin =
+                              !p.source_node_id &&
+                              (!!p.folder_id &&
+                                (detail!.paths.some(
+                                  (q) =>
+                                    q.folder_id === p.folder_id &&
+                                    !!q.source_node_id
+                                ) ||
+                                  detail!.nodes.length > 0))
                             return (
                               <PathRow
                                 key={p.path_id}
@@ -1964,6 +1976,7 @@ export function FileMgmtDetailDialog({
                                   (p.source_node_id ? "Untitled node" : null)
                                 }
                                 folderHasPinned={folderHasPinned}
+                                canUnpin={canUnpin}
                                 busy={actionBusy}
                                 onNavigate={() => {
                                   if (p.folder_id && onNavigateToFolder) {
@@ -2566,6 +2579,7 @@ function PathRow({
   path,
   sourceNodeTitle,
   folderHasPinned = false,
+  canUnpin = false,
   busy,
   onNavigate,
   onPromote,
@@ -2580,15 +2594,25 @@ function PathRow({
    * the folder is already covered by the pin.
    */
   folderHasPinned?: boolean
+  /**
+   * True when demote can re-link to a node or drop a pin that has a derived
+   * sibling. Plain folder mounts (no node) must not show Unpin — that used to
+   * delete the only path row and make the card vanish.
+   */
+  canUnpin?: boolean
   busy: boolean
   onNavigate: () => void
   onPromote: () => void
   onUnpin: () => void
 }) {
-  /** Persistent pin: source_node_id is null */
-  const isActuallyPinned = !path.source_node_id
-  const typeLabel = isActuallyPinned
-    ? "Pinned to folder"
+  /** Persistent path: source_node_id is null (pin or plain folder mount). */
+  const isPersistent = !path.source_node_id
+  /** Timeline pin that can be demoted (vs plain “in folder” mount). */
+  const isTimelinePin = isPersistent && canUnpin
+  const typeLabel = isPersistent
+    ? isTimelinePin
+      ? "Pinned to folder"
+      : "In folder"
     : `From node · ${sourceNodeTitle || "Untitled node"}`
   return (
     <li
@@ -2627,7 +2651,7 @@ function PathRow({
       </div>
       {/* Right column: actions left-aligned with each other across rows */}
       <div className="shrink-0 flex flex-col items-start justify-start pt-0.5 min-w-[7.5rem]">
-        {isActuallyPinned ? (
+        {isTimelinePin ? (
           <Button
             size="sm"
             variant="ghost"
@@ -2639,6 +2663,14 @@ function PathRow({
             <PinOff className="h-3 w-3 mr-0.5" />
             Unpin
           </Button>
+        ) : isPersistent ? (
+          // Plain folder mount — not a demotable timeline pin
+          <span
+            className="h-6 px-1.5 text-[10px] text-muted-foreground/50 leading-6"
+            title="Folder placement. Use Remove from folder in the footer to unlink."
+          >
+            —
+          </span>
         ) : folderHasPinned ? (
           // Derived sibling: folder already has a real pin — no second Pin action
           <span

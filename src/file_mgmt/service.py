@@ -2493,9 +2493,10 @@ def demote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePath
 
     Special cases (same folder can hold both pinned NULL + derived N rows):
     - If a derived path for this folder already exists, **delete** the pinned
-      row instead (unpin success — folder stays via the derived link).
-    - If no node can own this folder, delete the pinned row so Unpin still
-      works for pins created without a surviving timeline link.
+      row only (unpin success — folder stays via the derived link).
+    - If no node can re-own this folder and no derived sibling exists, raise
+      400 and **keep** the path. Plain folder mounts are not timeline pins;
+      use remove-path to unlink from the folder.
     """
     conn = _open_db(collection_id)
     try:
@@ -2549,30 +2550,7 @@ def demote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePath
                     break
 
             removed_pin = False
-            if not candidate:
-                # Cannot re-link this row: either derived already exists for the
-                # folder, or no timeline node maps here. Drop the pin row so
-                # Unpin never dead-ends with a cryptic error.
-                conn.execute(
-                    "DELETE FROM file_paths WHERE path_id=?", (path_id,)
-                )
-                removed_pin = True
-                # Prefer returning the surviving derived path for this folder
-                if existing_derived:
-                    row = conn.execute(
-                        "SELECT * FROM file_paths WHERE path_id=?",
-                        (existing_derived["path_id"],),
-                    ).fetchone()
-                else:
-                    # No remaining path in this folder — synthesize a minimal
-                    # response from the deleted row (frontend reloads detail).
-                    row = path
-                candidate = (
-                    existing_derived["source_node_id"]
-                    if existing_derived
-                    else None
-                )
-            else:
+            if candidate:
                 conn.execute(
                     "UPDATE file_paths SET source_node_id=? WHERE path_id=?",
                     (candidate, path_id),
@@ -2580,6 +2558,26 @@ def demote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePath
                 row = conn.execute(
                     "SELECT * FROM file_paths WHERE path_id=?", (path_id,)
                 ).fetchone()
+            elif existing_derived:
+                # Sibling derived covers the folder — drop the pin row only.
+                conn.execute(
+                    "DELETE FROM file_paths WHERE path_id=?", (path_id,)
+                )
+                removed_pin = True
+                row = conn.execute(
+                    "SELECT * FROM file_paths WHERE path_id=?",
+                    (existing_derived["path_id"],),
+                ).fetchone()
+                candidate = existing_derived["source_node_id"]
+            else:
+                # No reclaimable node and no derived sibling — keep the path.
+                # Deleting here made plain folder mounts vanish from file detail
+                # after Unpin (UI treats source_node_id NULL as "pinned").
+                raise HTTPException(
+                    400,
+                    "Cannot unpin: no timeline node places this file in this "
+                    "folder. Use Remove from folder to unlink.",
+                )
 
         emit_event(
             "file_path.demoted",
@@ -2594,14 +2592,6 @@ def demote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePath
         file_row = conn.execute(
             "SELECT * FROM files WHERE file_id=?", (file_id,)
         ).fetchone()
-        # Deleted-only case: still return a FilePathOut for API shape
-        if removed_pin and not existing_derived:
-            fp = _compute_folder_path(conn, folder_id)
-            return _row_to_file_path(
-                path,
-                folder_path=fp,
-                is_greyed=False,
-            )
         fp = _compute_folder_path(conn, row["folder_id"])
         return _row_to_file_path(
             row,

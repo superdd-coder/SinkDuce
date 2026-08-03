@@ -480,7 +480,11 @@ export const promoteFilePath = (
     body: JSON.stringify({ path_id: pathId }),
   })
 
-/** Revert a persistent (pinned) path back to derived mode (does not delete). */
+/**
+ * Revert a persistent (pinned) path back to derived mode.
+ * Does not delete the only path in a folder — when no timeline node can re-own
+ * the folder, the API returns 400 and the path stays (use removeFilePath).
+ */
 export const demoteFilePath = (
   collectionId: string,
   fileId: string,
