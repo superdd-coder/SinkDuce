@@ -1830,7 +1830,17 @@ def _message_source_name(conn, owner_type: str, owner_id: str) -> str | None:
         if ot == "collection":
             return "Root"
         if ot == "system_version":
-            return "System"
+            # Prefer current display name of the file this version log belongs to
+            r = conn.execute(
+                """SELECT fv.storage_file_id AS filename
+                   FROM files f
+                   LEFT JOIN file_versions fv ON fv.version_id = f.current_version_id
+                   WHERE f.file_id=?""",
+                (owner_id,),
+            ).fetchone()
+            if r and r["filename"]:
+                return Path(r["filename"]).name
+            return "Version update"
     except Exception:
         return None
     return None
@@ -2255,6 +2265,18 @@ def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary
     ``is_greyed=True`` — they are not removed from the folder. The virtual
     ``/Archived`` view still lists all file-level archives globally.
     """
+    # Lazy import notes/meetings from files.json (not only root orphans).
+    try:
+        from src.file_mgmt.store import _migrate_files_json_import
+
+        _migrate_files_json_import(collection_id)
+    except Exception:
+        logger.debug(
+            "files.json migration skipped for folder list %s",
+            collection_id,
+            exc_info=True,
+        )
+
     conn = _open_db(collection_id)
     try:
         # Check folder exists
@@ -2588,6 +2610,299 @@ def demote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePath
         )
     finally:
         conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Note / Meeting ingest → file-mgmt (immediate, not only lazy migration)
+# ════════════════════════════════════════════════════════════════════
+
+
+def _system_folder_id(conn, name: str) -> str | None:
+    row = conn.execute(
+        "SELECT folder_id FROM folders WHERE name=? AND is_system=1 LIMIT 1",
+        (name,),
+    ).fetchone()
+    return row["folder_id"] if row else None
+
+
+def _purge_file_sqlite_rows(conn, file_id: str) -> None:
+    """Remove a managed file from meta.db only (disk/Qdrant left to caller)."""
+    conn.execute("DELETE FROM file_nodes WHERE file_id=?", (file_id,))
+    conn.execute("DELETE FROM file_paths WHERE file_id=?", (file_id,))
+    conn.execute(
+        "DELETE FROM messages WHERE owner_id=? AND owner_type IN ('file','system_version')",
+        (file_id,),
+    )
+    conn.execute(
+        "UPDATE files SET current_version_id=NULL WHERE file_id=?", (file_id,)
+    )
+    conn.execute("DELETE FROM file_versions WHERE file_id=?", (file_id,))
+    conn.execute("DELETE FROM files WHERE file_id=?", (file_id,))
+
+
+def register_ingested_source_file(
+    collection_id: str,
+    *,
+    file_id: str,
+    source: str,
+    storage_name: str,
+    system_folder_name: str = "Notes",
+) -> None:
+    """Idempotently place an ingested note/meeting snapshot into file-mgmt.
+
+    - Ensures a row under the system folder (Notes / Meeting).
+    - Drops older SQLite rows for the same ``source`` (re-ingest).
+    Safe to call after files.json has been updated.
+    """
+    if not file_id or not source:
+        return
+    try:
+        conn = _open_db(collection_id)
+    except Exception:
+        logger.warning(
+            "register_ingested_source_file: open db failed col=%s",
+            collection_id,
+            exc_info=True,
+        )
+        return
+
+    now = _now_iso()
+    name = (storage_name or file_id).strip() or f"{file_id}.md"
+    try:
+        with conn:
+            conn.execute("PRAGMA defer_foreign_keys=ON")
+            folder_id = _system_folder_id(conn, system_folder_name)
+            if not folder_id:
+                logger.warning(
+                    "register_ingested_source_file: no system folder %r in %s",
+                    system_folder_name,
+                    collection_id,
+                )
+                return
+
+            # Purge older file_ids for the same source (re-ingest)
+            try:
+                from src.collections.file_index import load as load_file_index
+
+                idx = load_file_index(collection_id) or {}
+                for fid, entry in list(idx.items()):
+                    if (
+                        entry.get("source") == source
+                        and fid != file_id
+                        and conn.execute(
+                            "SELECT 1 FROM files WHERE file_id=?", (fid,)
+                        ).fetchone()
+                    ):
+                        _purge_file_sqlite_rows(conn, fid)
+                        logger.info(
+                            "Purged stale file-mgmt row %s for source %s",
+                            fid,
+                            source,
+                        )
+            except Exception:
+                logger.debug(
+                    "stale source purge skipped for %s", source, exc_info=True
+                )
+
+            existing = conn.execute(
+                "SELECT file_id, current_version_id FROM files WHERE file_id=?",
+                (file_id,),
+            ).fetchone()
+
+            if existing:
+                cvid = existing["current_version_id"]
+                if cvid:
+                    conn.execute(
+                        "UPDATE file_versions SET storage_file_id=? WHERE version_id=?",
+                        (name, cvid),
+                    )
+                else:
+                    version_id = uuid.uuid4().hex
+                    conn.execute(
+                        """INSERT INTO file_versions
+                           (version_id, file_id, version_no, storage_file_id,
+                            archived, commit_message, created_by, created_at)
+                           VALUES (?, ?, 1, ?, 0, NULL, 'local', ?)""",
+                        (version_id, file_id, name, now),
+                    )
+                    conn.execute(
+                        "UPDATE files SET current_version_id=?, unsupported=0 "
+                        "WHERE file_id=?",
+                        (version_id, file_id),
+                    )
+                conn.execute(
+                    "UPDATE files SET unsupported=0 WHERE file_id=?", (file_id,)
+                )
+                has_path = conn.execute(
+                    "SELECT 1 FROM file_paths WHERE file_id=? AND folder_id=? LIMIT 1",
+                    (file_id, folder_id),
+                ).fetchone()
+                if not has_path:
+                    conn.execute(
+                        """INSERT INTO file_paths
+                           (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
+                           VALUES (?, ?, ?, 1, NULL, 'local')""",
+                        (uuid.uuid4().hex, file_id, folder_id),
+                    )
+            else:
+                version_id = uuid.uuid4().hex
+                conn.execute(
+                    """INSERT INTO files
+                       (file_id, current_version_id, is_definitive, archived,
+                        unsupported, created_by, version)
+                       VALUES (?, NULL, 0, 0, 0, 'local', 1)""",
+                    (file_id,),
+                )
+                conn.execute(
+                    """INSERT INTO file_versions
+                       (version_id, file_id, version_no, storage_file_id,
+                        archived, commit_message, created_by, created_at)
+                       VALUES (?, ?, 1, ?, 0, NULL, 'local', ?)""",
+                    (version_id, file_id, name, now),
+                )
+                conn.execute(
+                    "UPDATE files SET current_version_id=? WHERE file_id=?",
+                    (version_id, file_id),
+                )
+                conn.execute(
+                    """INSERT INTO file_paths
+                       (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
+                       VALUES (?, ?, ?, 1, NULL, 'local')""",
+                    (uuid.uuid4().hex, file_id, folder_id),
+                )
+
+        logger.info(
+            "Registered ingested source file col=%s file_id=%s source=%s folder=%s",
+            collection_id,
+            file_id[:12],
+            source,
+            system_folder_name,
+        )
+    except Exception:
+        logger.warning(
+            "register_ingested_source_file failed col=%s file_id=%s",
+            collection_id,
+            file_id,
+            exc_info=True,
+        )
+    finally:
+        conn.close()
+
+
+def unregister_files_for_source(
+    collection_id: str,
+    source: str,
+    *,
+    remove_disk: bool = True,
+    remove_index: bool = False,
+) -> list[str]:
+    """Remove managed files for a document *source* (e.g. ``__note__:{id}``).
+
+    Cleans:
+      - meta.db rows (files / versions / paths)
+      - optional on-disk ``files/{file_id}/`` dirs
+      - optional files.json entries (when *remove_index*)
+
+    Returns the list of file_ids removed (best-effort).
+    """
+    if not source:
+        return []
+
+    fids: list[str] = []
+    try:
+        from src.collections.file_index import load as load_file_index
+
+        idx = load_file_index(collection_id) or {}
+        fids = [fid for fid, e in idx.items() if e.get("source") == source]
+    except Exception:
+        logger.debug(
+            "unregister: load files.json failed col=%s", collection_id, exc_info=True
+        )
+
+    # Fallback: if index missing/stale, still try note_id suffix as file lookup
+    # is not possible from SQLite alone — scan files dir for leftover nothing.
+    # (source is only stored in files.json / Qdrant payloads.)
+
+    removed: list[str] = []
+    try:
+        conn = _open_db(collection_id)
+    except Exception:
+        logger.warning(
+            "unregister_files_for_source: open db failed col=%s",
+            collection_id,
+            exc_info=True,
+        )
+        conn = None
+
+    if conn is not None:
+        try:
+            with conn:
+                conn.execute("PRAGMA defer_foreign_keys=ON")
+                for fid in fids:
+                    if conn.execute(
+                        "SELECT 1 FROM files WHERE file_id=?", (fid,)
+                    ).fetchone():
+                        _purge_file_sqlite_rows(conn, fid)
+                        removed.append(fid)
+                        logger.info(
+                            "Purged file-mgmt row file_id=%s source=%s col=%s",
+                            fid[:16],
+                            source,
+                            collection_id,
+                        )
+                    else:
+                        # Not in SQLite but still drop disk/index
+                        removed.append(fid)
+        except Exception:
+            logger.warning(
+                "unregister_files_for_source SQLite failed col=%s source=%s",
+                collection_id,
+                source,
+                exc_info=True,
+            )
+        finally:
+            conn.close()
+
+    if remove_disk:
+        for fid in fids:
+            try:
+                file_dir = _files_dir(collection_id) / fid
+                if file_dir.is_dir():
+                    shutil.rmtree(file_dir, ignore_errors=True)
+                    logger.info(
+                        "Removed disk snapshot files/%s for source %s",
+                        fid[:16],
+                        source,
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed removing disk for file_id=%s", fid, exc_info=True
+                )
+
+    if remove_index:
+        try:
+            from src.collections.file_index import remove_by_source as remove_file_index
+
+            remove_file_index(collection_id, source)
+        except Exception:
+            logger.warning(
+                "Failed removing files.json for source %s", source, exc_info=True
+            )
+
+    if not fids:
+        logger.info(
+            "unregister_files_for_source: no files.json entries for %s in %s",
+            source,
+            collection_id,
+        )
+    else:
+        logger.info(
+            "Unregistered source %s in %s — file_ids=%s",
+            source,
+            collection_id,
+            [f[:12] for f in fids],
+        )
+    return fids
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -3216,21 +3531,18 @@ def upload_file_version(
     file_bytes: bytes,
     filename: str,
     commit_message: str = "",
+    *,
+    document_source: str | None = None,
+    source_label: str | None = None,
+    file_type: str = "file",
 ) -> FileSummary:
     """Upload a new version of an existing file (non-blocking ingest).
 
     Same full upload pipeline as folder upload (MinerU / collection chunk
     config / contextual / embed) via async ``task_type="upload"``.
 
-    Steps:
-    1. Get current version_no → new version_no = MAX+1
-    2. Generate new version_id, store new version on disk + DB
-    3. Archive old version (DB) + mark old Qdrant chunks archived
-    4. Update files.current_version_id
-    5. Create system version message
-    6. Queue async ingest task (same as ``upload_file_to_folder``)
-    7. Check version limit (>20 → warning)
-    8. emit_event — returns immediately with ``task_id`` for polling
+    *document_source* / *source_label*: when set (e.g. note reingest),
+    Qdrant/files.json keep ``__note__:{id}`` identity instead of ``__file__:{file_id}``.
     """
     conn = _open_db(collection_id)
     try:
@@ -3310,8 +3622,19 @@ def upload_file_version(
 
             # 6. Queue async ingest — same pipeline as folder upload (MinerU, chunk config, …)
             task_id: str | None = None
-            file_source = f"__file__:{file_id}"
-            if supported:
+            file_source = (document_source or "").strip() or f"__file__:{file_id}"
+            label = (source_label or "").strip() or safe_name
+            # Notes always ingest (markdown snapshot); treat as supported when source is note
+            force_supported = file_source.startswith("__note__:") or file_source.startswith(
+                "__meeting__:"
+            )
+            will_ingest = supported or force_supported
+            if force_supported:
+                unsupported = 0
+                conn.execute(
+                    "UPDATE files SET unsupported=0 WHERE file_id=?", (file_id,)
+                )
+            if will_ingest:
                 try:
                     from src.tasks.task_manager import task_manager
 
@@ -3321,7 +3644,7 @@ def upload_file_version(
                         file_path=str(save_path),
                         collection=collection_id,
                         filename_param=file_source,
-                        source_label=safe_name,
+                        source_label=label,
                         file_id=file_id,
                         version_id=new_version_id,
                     )
@@ -3355,12 +3678,19 @@ def upload_file_version(
                 from src.collections.file_index import add as add_file_index
 
                 orig_ext = Path(safe_name).suffix.lower().lstrip(".") or None
+                idx_type = (
+                    "note"
+                    if file_source.startswith("__note__:")
+                    else "meeting"
+                    if file_source.startswith("__meeting__:")
+                    else ("unsupported" if unsupported else file_type or "file")
+                )
                 add_file_index(
                     collection_id,
                     file_id,
                     file_source,
-                    safe_name,  # source_label → UI display_name
-                    "unsupported" if unsupported else "file",
+                    label,
+                    idx_type,
                     0,  # chunk count; ingest overwrites when task completes
                     orig_ext,
                 )
@@ -3601,9 +3931,13 @@ def delete_file(collection_id: str, file_id: str) -> None:
     3. Delete file_nodes / file_paths / messages / versions / files row
     4. Remove files.json index entry (All Files list source of truth)
     5. Delete doc summary for ``__file__:{file_id}``
-    6. emit_event
+    6. If the file was definitive → debounced consolidate
+       (after window, if no definitive remain → clear consolidate results)
+    7. emit_event
     """
     source = f"__file__:{file_id}"
+    was_definitive = False
+    pre_snapshot: dict | None = None
     conn = _open_db(collection_id)
     try:
         conn.execute("PRAGMA defer_foreign_keys=ON")
@@ -3613,6 +3947,17 @@ def delete_file(collection_id: str, file_id: str) -> None:
             ).fetchone()
             if not file_row:
                 raise HTTPException(404, f"File '{file_id}' not found")
+
+            was_definitive = bool(file_row["is_definitive"])
+            # Snapshot BEFORE delete so debounce can detect net change
+            # (definitive membership drop → re-consolidate / clear).
+            if was_definitive:
+                try:
+                    from src.api.routes.info import _snapshot_includes
+
+                    pre_snapshot = _snapshot_includes(collection_id)
+                except Exception:
+                    pre_snapshot = {}
 
             # 1. Delete Qdrant chunks (payload may key by file_id and/or source)
             _delete_qdrant_chunks_by_file_id(collection_id, file_id)
@@ -3677,6 +4022,35 @@ def delete_file(collection_id: str, file_id: str) -> None:
             logger.warning(
                 "Failed to clean up doc_summary for %s", source, exc_info=True
             )
+
+        # 11. Definitive membership changed → debounced consolidate.
+        # After the window, consolidate_handler re-checks: if zero definitive
+        # remain, it deletes collection summary / conflicts / project desc.
+        # force_content_change when none left: membership may not appear in the
+        # doc-summary snapshot (no summary row), so net-change would skip.
+        if was_definitive:
+            try:
+                from src.api.routes.info import schedule_debounced_consolidate
+
+                remaining = _count_definitive_files(collection_id)
+                schedule_debounced_consolidate(
+                    collection_id,
+                    pre_snapshot if pre_snapshot is not None else {},
+                    force_content_change=(remaining == 0),
+                )
+                logger.info(
+                    "Deleted definitive file %s — scheduled debounced consolidate "
+                    "(%d definitive remain; force=%s → clear results if still zero)",
+                    source,
+                    remaining,
+                    remaining == 0,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to schedule consolidate after deleting definitive %s",
+                    source,
+                    exc_info=True,
+                )
 
         emit_event("file.deleted", collection_id, {"file_id": file_id})
     finally:
@@ -3818,13 +4192,25 @@ def update_file(
         conn.close()
 
 
+def _count_definitive_files(collection_id: str) -> int:
+    """How many files currently have ``is_definitive=1`` in this collection."""
+    conn = _open_db(collection_id)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM files WHERE is_definitive=1"
+        ).fetchone()
+        return int(row["c"] if row else 0)
+    finally:
+        conn.close()
+
+
 def _on_definitive_changed(
     collection_id: str,
     file_id: str,
     is_definitive: bool,
     pre_snapshot: dict | None = None,
 ) -> None:
-    """Sync summary flag + ensure summary if needed + schedule consolidate."""
+    """Sync summary flag + ensure summary if needed + schedule/clear consolidate."""
     source = f"__file__:{file_id}"
     try:
         from src.api.routes.info import (
@@ -3845,46 +4231,63 @@ def _on_definitive_changed(
     existing = sm.get_doc_summary(collection_id, source)
     snap = pre_snapshot if pre_snapshot is not None else {}
 
+    # Keep per-doc summary content; only flip participation flag for legacy readers
     if existing is not None:
-        # Keep summary content; flip participation for any leftover include readers
         try:
             sm.set_doc_summary_include(collection_id, source, is_definitive)
         except Exception:
             logger.warning(
                 "Failed to sync include_in_summary for %s", source, exc_info=True
             )
+
+    if not is_definitive:
+        # Debounce re-evaluate when a definitive is cleared (including the last
+        # one and files with no doc_summary). After the window, consolidate_handler
+        # re-checks: if still zero definitive → delete consolidate results.
+        # force when remaining==0 so empty membership is not skipped by
+        # snapshot net-change (source may be absent from doc_summary keys).
+        remaining = _count_definitive_files(collection_id)
+        schedule_debounced_consolidate(
+            collection_id,
+            snap,
+            force_content_change=(remaining == 0),
+        )
+        logger.info(
+            "definitive=False for %s — %d definitive remain, "
+            "scheduled debounced consolidate (force=%s)",
+            source,
+            remaining,
+            remaining == 0,
+        )
+        return
+
+    # is_definitive=True
+    if existing is not None:
         schedule_debounced_consolidate(collection_id, snap)
         logger.info(
-            "definitive=%s for %s — scheduled consolidate (summary exists)",
-            is_definitive,
+            "definitive=True for %s — scheduled consolidate (summary exists)",
             source,
         )
         return
 
-    if is_definitive:
-        # No summary yet → generate; doc_summary_handler consolidates when definitive
-        try:
-            task_manager.create_task(
-                filename=f"doc_summary:{collection_id}:{source}",
-                task_type="doc_summary",
-                collection=collection_id,
-                source=source,
-            )
-            logger.info(
-                "definitive=True for %s — queued doc_summary (will consolidate)",
-                source,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to queue doc_summary for %s", source, exc_info=True
-            )
-        # Debounce as well: once summary appears, net-change vs pre-snapshot
-        schedule_debounced_consolidate(collection_id, snap)
-    else:
+    # No summary yet → generate; doc_summary_handler consolidates when definitive
+    try:
+        task_manager.create_task(
+            filename=f"doc_summary:{collection_id}:{source}",
+            task_type="doc_summary",
+            collection=collection_id,
+            source=source,
+        )
         logger.info(
-            "definitive=False for %s with no summary — no consolidate",
+            "definitive=True for %s — queued doc_summary (will consolidate)",
             source,
         )
+    except Exception:
+        logger.warning(
+            "Failed to queue doc_summary for %s", source, exc_info=True
+        )
+    # Debounce as well: once summary appears, net-change vs pre-snapshot
+    schedule_debounced_consolidate(collection_id, snap)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -4761,16 +5164,32 @@ def delete_message(collection_id: str, message_id: str) -> None:
 def list_messages(
     collection_id: str, owner_type: str, owner_id: str
 ) -> list[MessageOut]:
+    """List messages for an owner.
+
+    For *files*, includes both user file notes (``owner_type=file``) and
+    version-update logs (``owner_type=system_version``), matching
+    ``get_file_detail`` / the file-detail Log panel.
+    """
     from src.file_mgmt.models import MessageOut
 
     conn = _open_db(collection_id)
     try:
-        rows = conn.execute(
-            """SELECT * FROM messages
-               WHERE owner_type=? AND owner_id=?
-               ORDER BY created_at DESC""",
-            (owner_type, owner_id),
-        ).fetchall()
+        ot = (owner_type or "").strip().lower()
+        if ot == "file":
+            rows = conn.execute(
+                """SELECT * FROM messages
+                   WHERE owner_id=?
+                     AND owner_type IN ('file', 'system_version')
+                   ORDER BY created_at DESC""",
+                (owner_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT * FROM messages
+                   WHERE owner_type=? AND owner_id=?
+                   ORDER BY created_at DESC""",
+                (owner_type, owner_id),
+            ).fetchall()
         return [_row_to_message(r, conn) for r in rows]
     finally:
         conn.close()
@@ -4831,9 +5250,10 @@ def list_root_messages(
                      AND m.owner_id IN (SELECT folder_id FROM folders)"""
             )
             if include_file_msgs:
+                # User file notes + version-update logs (system_version)
                 queries.append(
                     """SELECT m.* FROM messages m
-                       WHERE m.owner_type='file'
+                       WHERE m.owner_type IN ('file', 'system_version')
                          AND m.owner_id IN (SELECT file_id FROM files)"""
                 )
             if include_node_msgs:
@@ -4847,7 +5267,7 @@ def list_root_messages(
                 # Root layer only: orphan files (not mounted in any folder)
                 queries.append(
                     """SELECT m.* FROM messages m
-                       WHERE m.owner_type='file'
+                       WHERE m.owner_type IN ('file', 'system_version')
                          AND m.owner_id IN (SELECT file_id FROM files)
                          AND m.owner_id NOT IN (SELECT file_id FROM file_paths)"""
                 )
@@ -4932,11 +5352,11 @@ def list_folder_messages(
         )
         params.extend(scope_ids)
 
-        # 2. File messages for files mounted in scope folders
+        # 2. File messages + version-update logs for files mounted in scope
         if include_file_msgs:
             queries.append(
                 f"""SELECT m.* FROM messages m
-                    WHERE m.owner_type='file'
+                    WHERE m.owner_type IN ('file', 'system_version')
                       AND m.owner_id IN (
                         SELECT DISTINCT file_id FROM file_paths
                         WHERE folder_id IN ({placeholders})

@@ -55,10 +55,11 @@ Rules:
 - Preserve original section structure (## headings) if the source has clear sections
 - For code blocks: summarize purpose in one line, keep short snippets in backticks
 - For tables: preserve as markdown tables if the data is important
+- Preserve every [spk:ID] token exactly as written (e.g. [spk:0], [spk:2]) — do not replace them with person names
 - If the source is empty or has no extractable content, output exactly: *No extractable content*
 - No preamble, no commentary, no meta-remarks"""
 
-DISTILL_USER_PROMPT = """Distill the following content. Capture all important information — be thorough and information-dense. Preserve every specific data point, number, name, and technical detail.
+DISTILL_USER_PROMPT = """Distill the following content. Capture all important information — be thorough and information-dense. Preserve every specific data point, number, name, and technical detail. Keep any [spk:ID] markers unchanged.
 
 ---
 {source_content}

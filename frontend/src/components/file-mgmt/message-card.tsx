@@ -99,7 +99,12 @@ export function formatMessageSourceTag(
 } | null {
   const ot = (msg.owner_type || "").toLowerCase()
   if (ot === "system_version") {
-    return { kind: "System", label: "System", full: "System" }
+    const rawName = (msg.source_name && msg.source_name.trim()) || ""
+    return {
+      kind: "Version",
+      label: "version update",
+      full: rawName ? `Version update · ${rawName}` : "Version update",
+    }
   }
 
   // Folder-level message of the active folder → "Current folder"
@@ -194,7 +199,11 @@ export async function enrichMessageSourceNames(
     const id = m.owner_id
     if (!id) continue
     if (ot === "folder" && !folderMap.has(id)) folderIds.add(id)
-    else if (ot === "file" && !fileMap.has(id)) fileIds.add(id)
+    else if (
+      (ot === "file" || ot === "system_version") &&
+      !fileMap.has(id)
+    )
+      fileIds.add(id)
     else if (ot === "node") nodeIds.add(id)
   }
 
@@ -236,7 +245,8 @@ export async function enrichMessageSourceNames(
     const ot = (m.owner_type || "").toLowerCase()
     let name: string | undefined
     if (ot === "folder") name = folderMap.get(m.owner_id)
-    else if (ot === "file") name = fileMap.get(m.owner_id)
+    else if (ot === "file" || ot === "system_version")
+      name = fileMap.get(m.owner_id)
     else if (ot === "node") name = nodeMap.get(m.owner_id)
     else if (ot === "collection") name = "Root"
     return name ? { ...m, source_name: name } : m
@@ -317,6 +327,10 @@ export function MessageCard({
   folderMsgsAreCurrentScope?: boolean
 }) {
   const isSystem = msg.author_type === "system"
+  const isVersionUpdate =
+    (msg.owner_type || "").toLowerCase() === "system_version"
+  // Version logs store a free-text note (often "version update"); show as-is
+  const displayBody = (msg.body || "").trim() || (isVersionUpdate ? "version update" : "")
   const time = msg.created_at
     ? new Date(msg.created_at).toLocaleString(undefined, {
         month: "short",
@@ -336,7 +350,11 @@ export function MessageCard({
     <div
       className={cn(
         "rounded-md p-2 text-xs group cursor-pointer hover:bg-accent/60 transition-colors relative min-w-0 max-w-full overflow-x-hidden",
-        isSystem ? "bg-muted/30 border border-border/30" : "bg-background",
+        isVersionUpdate
+          ? "bg-muted/20 border border-border/50"
+          : isSystem
+            ? "bg-muted/30 border border-border/30"
+            : "bg-background",
         isActive && "bg-primary/10 ring-1 ring-primary/40 hover:bg-primary/15",
       )}
       onClick={() => onView(msg)}
@@ -353,7 +371,7 @@ export function MessageCard({
         >
           <div className="w-[320px] max-h-[360px] overflow-y-auto rounded-lg border border-border bg-popover shadow-2xl p-3">
             <MessageBody
-              body={msg.body || ""}
+              body={displayBody}
               className="prose prose-xs dark:prose-invert max-w-none text-xs leading-relaxed break-words"
             />
           </div>
@@ -372,7 +390,14 @@ export function MessageCard({
             edited
           </span>
         )}
-        {sourceTag && (
+        {isVersionUpdate ? (
+          <span
+            className="text-[9px] px-1.5 py-0.5 rounded shrink-0 font-medium border-transparent bg-[var(--ze-green,#1A5E3D)]/15 text-[var(--ze-green,#1A5E3D)]"
+            title={sourceTag?.full || "Version update"}
+          >
+            version update
+          </span>
+        ) : sourceTag ? (
           <button
             type="button"
             className={cn(
@@ -392,7 +417,7 @@ export function MessageCard({
           >
             {sourceTag.label}
           </button>
-        )}
+        ) : null}
         {!isSystem && (
           <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 shrink-0">
             <Button
@@ -409,7 +434,7 @@ export function MessageCard({
           </div>
         )}
       </div>
-      <MessagePreview body={msg.body || ""} />
+      <MessagePreview body={displayBody} />
     </div>
   )
 }

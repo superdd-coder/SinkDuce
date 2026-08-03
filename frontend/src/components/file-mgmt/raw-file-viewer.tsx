@@ -207,10 +207,22 @@ export function resolveRawFilename(
   ...candidates: Array<string | null | undefined>
 ): string {
   const cleaned: string[] = []
+  let noteOrMeetingHint = false
   for (const c of candidates) {
     const t = (c || "").trim()
     if (!t) continue
-    if (t.startsWith("__file__:") || t.startsWith("__meeting__:") || t.startsWith("__note__:")) {
+    if (t.startsWith("__meeting__:")) {
+      noteOrMeetingHint = true
+      continue
+    }
+    if (t.startsWith("__note__:")) {
+      noteOrMeetingHint = true
+      continue
+    }
+    if (t.startsWith("__file__:")) continue
+    // Display labels from files.json import (no real extension)
+    if (/^note:\s*/i.test(t) || /^meeting:\s*/i.test(t)) {
+      noteOrMeetingHint = true
       continue
     }
     const base = t.split(/[/\\]/).pop() || t
@@ -230,7 +242,28 @@ export function resolveRawFilename(
       return `file.${t}`
     }
   }
+  // Notes / meetings always ingest as markdown snapshots (tab_xx.md / Title.md)
+  if (noteOrMeetingHint) return "document.md"
   return "file.bin"
+}
+
+/** Best-effort filename from Content-Disposition / X-File-Name. */
+function filenameFromResponseHeaders(res: Response): string | null {
+  const xName = res.headers.get("x-file-name") || res.headers.get("X-File-Name")
+  if (xName && xName.trim()) return xName.trim()
+  const cd = res.headers.get("content-disposition") || ""
+  // filename*=UTF-8''... or filename="..."
+  const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(cd)
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^["']|["']$/g, ""))
+    } catch {
+      return star[1].trim()
+    }
+  }
+  const plain = /filename\s*=\s*("?)([^";]+)\1/i.exec(cd)
+  if (plain?.[2]) return plain[2].trim()
+  return null
 }
 
 export interface RawFileViewerProps {
@@ -355,18 +388,29 @@ export function RawFileViewer({
         }
         const buf = await res.arrayBuffer()
         if (cancelled) return
+        // Prefer real on-disk name from preview response (notes/meetings often
+        // have display labels like "Meeting: …" without .md in the client state).
+        const headerName = filenameFromResponseHeaders(res)
+        const finalName = resolveRawFilename(headerName, safeName, filename)
         // Prefer server Content-Type, but force a known Office MIME by extension
         // so File Viewer never treats a mislabeled blob as plain text.
         const headerType = (res.headers.get("content-type") || "")
           .split(";")[0]
           .trim()
         const type = mimeForName(
-          safeName,
-          headerType && !headerType.startsWith("text/plain")
+          finalName,
+          headerType &&
+            !headerType.startsWith("text/plain") &&
+            headerType !== "application/octet-stream"
             ? headerType
             : "application/octet-stream"
         )
-        const file = new File([buf], safeName, { type })
+        // text/markdown from preview is valid for note/meeting .md
+        const finalType =
+          headerType.startsWith("text/markdown") || headerType.startsWith("text/plain")
+            ? headerType.split(";")[0].trim() || type
+            : type
+        const file = new File([buf], finalName, { type: finalType || type })
         setViewerFile(file)
       } catch {
         if (!cancelled) {

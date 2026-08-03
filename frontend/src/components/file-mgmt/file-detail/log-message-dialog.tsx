@@ -459,10 +459,12 @@ function VersionFileTabs({
   const isPdf = ext === "pdf"
 
   const previewUrl = useMemo(() => {
-    if (!docSource || !storageFile) return null
+    // Prefer version_id; storage_file alone is ambiguous when versions share a name
+    if (!docSource) return null
+    if (!storageFile && !version?.version_id) return null
     return getFilePreviewUrl(docSource, {
       collection: collectionId,
-      storageFile,
+      storageFile: storageFile || undefined,
       versionId: version?.version_id || undefined,
     })
   }, [docSource, collectionId, storageFile, version?.version_id])
@@ -470,7 +472,12 @@ function VersionFileTabs({
   // Source = parse/extract text for *this* version (parsed.txt / .extracted.txt
   // cache, or text-like file body). Raw = original file (PDF iframe / download).
   useEffect(() => {
-    if (!docSource || !collectionId || !storageFile) {
+    if (!docSource || !collectionId) {
+      setPreviewContent(null)
+      setPreviewLoading(false)
+      return
+    }
+    if (!storageFile && !version?.version_id) {
       setPreviewContent(null)
       setPreviewLoading(false)
       return
@@ -478,7 +485,8 @@ function VersionFileTabs({
     let cancelled = false
     setPreviewLoading(true)
     getExtractedText(docSource, collectionId, {
-      storageFile,
+      storageFile: storageFile || undefined,
+      versionId: version?.version_id || undefined,
     })
       .then((res) => {
         if (!cancelled) setPreviewContent(res.text?.trim() ? res.text : null)
@@ -492,7 +500,7 @@ function VersionFileTabs({
     return () => {
       cancelled = true
     }
-  }, [docSource, collectionId, storageFile])
+  }, [docSource, collectionId, storageFile, version?.version_id])
 
   // Chunks: this version_id when known (works for archived historical versions).
   // Summary: document-level (one per source), only meaningful for current ingest.

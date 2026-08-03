@@ -807,6 +807,12 @@ async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Bod
     """Save edited markdown content for a section tab."""
     content = body.get("content", "")
     path = store.save_section_md(meeting_id, tab_id, content)
+    # Invalidate cached meeting→note distillation for this tab
+    try:
+        from src.notes.service import invalidate_meeting_distillation
+        invalidate_meeting_distillation(meeting_id, tab_id)
+    except Exception:
+        pass
     logger.info("[SAVE-SECTION-MD] Saved %s/%s (%d chars)", meeting_id, tab_id, len(content))
     return {"ok": True, "path": path}
 

@@ -727,7 +727,11 @@ export function FileMgmtDetailDialog({
     setPreviewLoading(true)
     getExtractedText(docSource, collectionId, {
       storageFile: storageForExtract,
-      versionId: focusVersionId || undefined,
+      // Always pin version when known — same basename across versions
+      versionId:
+        focusVersionId ||
+        detail?.current_version_id ||
+        undefined,
     })
       .then((res) => {
         if (!cancelled) setPreviewContent(res.text || null)
@@ -1088,6 +1092,8 @@ export function FileMgmtDetailDialog({
       )
       await loadDetail()
       await refreshFiles(collectionId)
+      const { triggerInfoRefresh } = await import("@/lib/info-refresh")
+      triggerInfoRefresh({ collectionId, reason: "definitive" })
       // Summary may be generating; soft-refresh after a short wait if missing
       if (next && source && !docSummary) {
         setTimeout(() => {
@@ -1164,24 +1170,27 @@ export function FileMgmtDetailDialog({
     }
   }
 
-  // Blob for Raw/Download: focused historical version or current latest
+  // Blob for Raw/Download — always pin version_id when known (same storage
+  // basename across versions would 404 if only storage_file is sent).
   const viewStorageFile = extractStorageFile
+  const viewVersionId =
+    focusVersionId ||
+    focusVersion?.version_id ||
+    versionIdProp ||
+    detail?.current_version_id ||
+    undefined
   const downloadUrl = source
     ? getFilePreviewUrl(source, {
         collection: collectionId || undefined,
-        storageFile: viewStorageFile,
-        versionId: isHistoricalFocus
-          ? focusVersion?.version_id || versionIdProp || undefined
-          : undefined,
+        storageFile: viewStorageFile || undefined,
+        versionId: viewVersionId,
       })
     : null
   const currentRawUrl = source
     ? getFilePreviewUrl(source, {
         collection: collectionId || undefined,
-        storageFile: viewStorageFile,
-        versionId: isHistoricalFocus
-          ? focusVersion?.version_id || versionIdProp || undefined
-          : undefined,
+        storageFile: viewStorageFile || undefined,
+        versionId: viewVersionId,
       })
     : null
 
@@ -1368,11 +1377,16 @@ export function FileMgmtDetailDialog({
                         focusVersion?.storage_file_id,
                         storageFileIdProp,
                         detail?.filename,
-                        focusVersion || storageFileIdProp
-                          ? undefined
-                          : detail?.original_ext
-                            ? `file.${detail.original_ext}`
-                            : null,
+                        detail?.original_ext
+                          ? `file.${detail.original_ext}`
+                          : null,
+                        // Note/meeting ingest → .md even when storage_file_id is a label
+                        detail?.doc_kind === "note" ||
+                          detail?.doc_kind === "meeting" ||
+                          source?.startsWith("__note__:") ||
+                          source?.startsWith("__meeting__:")
+                          ? source || "document.md"
+                          : null,
                         isHistoricalFocus ? undefined : detail?.display_name,
                         source
                       )}

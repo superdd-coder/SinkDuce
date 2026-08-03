@@ -12,6 +12,7 @@ import {
   type NoteListItem,
 } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
+import { onInfoRefresh } from "@/lib/info-refresh"
 import { NoteEditorDialog } from "./note-editor-dialog"
 import { cn } from "@/lib/utils"
 
@@ -25,22 +26,35 @@ export function NotesCard({ collection }: NotesCardProps) {
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null)
 
-  const fetchNotes = useCallback(async () => {
+  const hasNotesLoadedRef = useRef(false)
+
+  const fetchNotes = useCallback(async (opts?: { silent?: boolean }) => {
     if (!collection) return
-    setLoading(true)
+    const silent = !!opts?.silent && hasNotesLoadedRef.current
+    if (!silent) setLoading(true)
     try {
       const res = await getNotes(collection)
       setNotes(res.notes ?? [])
+      hasNotesLoadedRef.current = true
     } catch {
       setNotes([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [collection])
 
   useEffect(() => {
-    fetchNotes()
+    hasNotesLoadedRef.current = false
+    void fetchNotes()
   }, [fetchNotes])
+
+  // Silent refresh when note ingest / consolidate / definitive changes
+  useEffect(() => {
+    return onInfoRefresh((detail) => {
+      if (detail.collectionId && detail.collectionId !== collection) return
+      void fetchNotes({ silent: true })
+    })
+  }, [collection, fetchNotes])
 
   // Listen for external note-open requests (e.g. from file detail dialog "GO TO THE NOTE")
   const { pendingOpenNote, setPendingOpenNote } = useAppStore()
@@ -258,17 +272,21 @@ export function NotesCard({ collection }: NotesCardProps) {
         )}
       </div>
 
-      <NoteEditorDialog
-        collection={collection}
-        noteId={activeNoteId || ""}
-        open={!!activeNoteId}
-        onOpenChange={(v) => {
-          if (!v) {
-            setActiveNoteId(null)
-            fetchNotes() // refresh list after closing editor
-          }
-        }}
-      />
+      {/* Only mount when a note is open — avoids empty-id fetches & toasts
+          while Database view stays mounted under Meeting (keepMounted Dialog). */}
+      {activeNoteId ? (
+        <NoteEditorDialog
+          collection={collection}
+          noteId={activeNoteId}
+          open
+          onOpenChange={(v) => {
+            if (!v) {
+              setActiveNoteId(null)
+              fetchNotes() // refresh list after closing editor
+            }
+          }}
+        />
+      ) : null}
 
       <input
         ref={fileInputRef}

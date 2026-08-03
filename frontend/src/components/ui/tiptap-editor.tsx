@@ -1170,6 +1170,94 @@ function showImageFloatingMenu(
 // ──────────────────────────────────────────────
 // DistillBlock Node Extension
 // ──────────────────────────────────────────────
+
+/**
+ * Speaker maps for live [spk:ID] rendering. Always re-fetched (in-flight
+ * deduped) so rename in Meeting UI shows up in open distill blocks.
+ */
+const _speakerInflight = new Map<string, Promise<Record<string, string>>>()
+
+/** Drop cache so next paint pulls latest names (call when note dialog opens). */
+export function invalidateMeetingSpeakerCache(meetingId?: string) {
+  if (meetingId) {
+    _speakerInflight.delete(meetingId)
+  } else {
+    _speakerInflight.clear()
+  }
+  // Notify open distill NodeViews to re-paint
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("meeting-speakers-changed", {
+        detail: meetingId ? { meetingId } : {},
+      })
+    )
+  }
+}
+
+function parseMeetingSourceId(
+  sourceId: string | null | undefined,
+): { meetingId: string; tabId: string } | null {
+  if (!sourceId || !sourceId.startsWith("meeting:")) return null
+  const rest = sourceId.slice("meeting:".length).trim()
+  if (!rest) return null
+  const colon = rest.indexOf(":")
+  if (colon === -1) return { meetingId: rest, tabId: "tab_general" }
+  const meetingId = rest.slice(0, colon).trim()
+  const tabId = rest.slice(colon + 1).trim() || "tab_general"
+  return meetingId ? { meetingId, tabId } : null
+}
+
+/** Apply latest speaker names to [spk:ID] / Speaker N tokens (display only). */
+function applySpeakerDisplay(
+  text: string,
+  names: Record<string, string>,
+): string {
+  let t = text || ""
+  t = t.replace(/\\\[/g, "[").replace(/\\\]/g, "]")
+  t = t.replace(/\[spk:([^\]]+)\]/g, (_, id: string) => {
+    const name = names[id]?.trim()
+    return name || `Speaker ${id}`
+  })
+  for (const [id, name] of Object.entries(names)) {
+    if (!name) continue
+    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    t = t.replace(new RegExp(`\\bSpeaker\\s+${esc}\\b`, "gi"), name)
+  }
+  return t
+}
+
+async function fetchMeetingSpeakerNames(
+  meetingId: string,
+): Promise<Record<string, string>> {
+  let p = _speakerInflight.get(meetingId)
+  if (!p) {
+    p = (async () => {
+      try {
+        const { getMeeting } = await import("@/api/client")
+        const m = await getMeeting(meetingId)
+        return (m.speaker_names ?? {}) as Record<string, string>
+      } catch {
+        return {}
+      } finally {
+        // Allow a fresh fetch next time (after this promise settles)
+        _speakerInflight.delete(meetingId)
+      }
+    })()
+    _speakerInflight.set(meetingId, p)
+  }
+  return p
+}
+
+async function resolveDistillTextForDisplay(
+  text: string,
+  sourceNoteId: string | null | undefined,
+): Promise<string> {
+  const parsed = parseMeetingSourceId(sourceNoteId)
+  if (!parsed || !text) return text || ""
+  const names = await fetchMeetingSpeakerNames(parsed.meetingId)
+  return applySpeakerDisplay(text, names)
+}
+
 function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
   return Node.create({
     name: "distillBlock",
@@ -1324,33 +1412,70 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
         const content = document.createElement("div")
         content.style.cssText = `padding: 10px 14px; font-size: 13px; line-height: 1.6; color: #333;`
 
-        // Loading state
-        if (node.attrs.loading) {
-          content.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 8px; color: #666;">
-              <div class="loading-spinner" style="
-                width: 16px; height: 16px; border: 2px solid #e0e0e0;
-                border-top: 2px solid #1A5E3D; border-radius: 50%;                animation: spin 1s linear infinite;
-              "></div>
-              <span>⏳ Distilling content from "${node.attrs.sourceTitle}"...</span>
-            </div>
-          `
+        // Latest attrs for speaker re-paint (meeting names change while note stays open)
+        let latestText = node.attrs.text as string
+        let latestSourceId = node.attrs.sourceNoteId as string | null
+        let latestLoading = !!node.attrs.loading
+        let latestTitle = (node.attrs.sourceTitle as string) || "source"
 
-          // Add animation style
-          if (!document.getElementById("distill-loading-style")) {
-            const style = document.createElement("style")
-            style.id = "distill-loading-style"
-            style.textContent = `
-              @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-              }
+        const paintContent = (
+          text: string,
+          sourceId: string | null,
+          loading: boolean,
+          title: string,
+        ) => {
+          latestText = text
+          latestSourceId = sourceId
+          latestLoading = loading
+          latestTitle = title
+          if (loading) {
+            content.innerHTML = `
+              <div style="display: flex; align-items: center; gap: 8px; color: #666;">
+                <div class="loading-spinner" style="
+                  width: 16px; height: 16px; border: 2px solid #e0e0e0;
+                  border-top: 2px solid #1A5E3D; border-radius: 50%;
+                  animation: spin 1s linear infinite;
+                "></div>
+                <span>⏳ Distilling content from "${title}"...</span>
+              </div>
             `
-            document.head.appendChild(style)
+            if (!document.getElementById("distill-loading-style")) {
+              const style = document.createElement("style")
+              style.id = "distill-loading-style"
+              style.textContent = `
+                @keyframes spin {
+                  0% { transform: rotate(0deg); }
+                  100% { transform: rotate(360deg); }
+                }
+              `
+              document.head.appendChild(style)
+            }
+            return
           }
-        } else {
-          content.innerHTML = renderMarkdown(node.attrs.text)
+          // Sync first paint (IDs as Speaker N until names load)
+          content.innerHTML = renderMarkdown(
+            applySpeakerDisplay(text || "", {})
+          )
+          // Always re-fetch latest speaker names for meeting distill sources
+          void resolveDistillTextForDisplay(text || "", sourceId).then((resolved) => {
+            if (content.isConnected) {
+              content.innerHTML = renderMarkdown(resolved)
+              requestAnimationFrame(() => {
+                if (content.scrollHeight > 200) {
+                  expandBtn.style.display = "block"
+                }
+              })
+            }
+          })
         }
+
+        // Loading / body
+        paintContent(
+          node.attrs.text,
+          node.attrs.sourceNoteId,
+          !!node.attrs.loading,
+          node.attrs.sourceTitle || "source",
+        )
 
         contentWrapper.appendChild(content)
 
@@ -1377,6 +1502,28 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
         dom.append(header, contentWrapper, expandBtn)
 
+        // Re-resolve speakers when names change (Meeting page) or tab becomes visible
+        const onSpeakersChanged = (ev: Event) => {
+          if (latestLoading || !content.isConnected) return
+          const detail = (ev as CustomEvent).detail as { meetingId?: string } | undefined
+          const parsed = parseMeetingSourceId(latestSourceId)
+          if (
+            detail?.meetingId &&
+            parsed &&
+            detail.meetingId !== parsed.meetingId
+          ) {
+            return
+          }
+          paintContent(latestText, latestSourceId, latestLoading, latestTitle)
+        }
+        const onVisible = () => {
+          if (document.visibilityState === "visible") {
+            onSpeakersChanged(new Event("visibilitychange"))
+          }
+        }
+        window.addEventListener("meeting-speakers-changed", onSpeakersChanged)
+        document.addEventListener("visibilitychange", onVisible)
+
         // Check if content overflows
         requestAnimationFrame(() => {
           if (content.scrollHeight > 200) {
@@ -1390,20 +1537,12 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           update: (updatedNode: ProseMirrorNode) => {
             if (updatedNode.type.name !== "distillBlock") return false
 
-            // Update loading state
-            if (updatedNode.attrs.loading) {
-              content.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 8px; color: #666;">
-                  <div style="
-                    width: 16px; height: 16px; border: 2px solid #e0e0e0;
-                    border-top: 2px solid #1A5E3D; border-radius: 50%;                    animation: spin 1s linear infinite;
-                  "></div>
-                  <span>⏳ Distilling content from "${updatedNode.attrs.sourceTitle}"...</span>
-                </div>
-              `
-            } else {
-              content.innerHTML = renderMarkdown(updatedNode.attrs.text)
-            }
+            paintContent(
+              updatedNode.attrs.text,
+              updatedNode.attrs.sourceNoteId,
+              !!updatedNode.attrs.loading,
+              updatedNode.attrs.sourceTitle || "source",
+            )
 
             link.textContent = `📎 ${updatedNode.attrs.sourceTitle}`
             badge.textContent = updatedNode.attrs.sourceNoteId?.slice(-3) || "?"
@@ -1436,12 +1575,11 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
             return true
           },
-          // NOTE: No destroy() callback here. destroy() fires on every NodeView
-          // teardown — including when switching notes (Tiptap replaces content,
-          // old NodeViews are destroyed). At that point activeNoteId has already
-          // changed but latestContentRef may still hold old content, so saving
-          // would overwrite the target note's content. Backspace/Delete removal
-          // of distill blocks is detected in handleContentChange instead.
+          // Only clean listeners — do not flush note content here
+          destroy: () => {
+            window.removeEventListener("meeting-speakers-changed", onSpeakersChanged)
+            document.removeEventListener("visibilitychange", onVisible)
+          },
         }
       }
     },

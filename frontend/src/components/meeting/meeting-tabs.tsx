@@ -24,6 +24,7 @@ import { useTranslationStream, startTranslationStream } from "@/hooks/use-transl
 import { toast } from "sonner"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 import { SummaryTranslateControl } from "./summary-translate-control"
+import { SummaryMarkdownViewer, normalizeMd } from "./summary-markdown-viewer"
 
 const SAVE_DELAY = 800
 
@@ -47,127 +48,7 @@ interface Props {
   className?: string
 }
 
-// ── Inline markdown normalizer ────────────────────────────────────
-
-/** Fix Tiptap-style markdown quirks: extra spaces inside bold/italic/link syntax. */
-function normalizeMd(md: string): string {
-  return md
-    .replace(/\*\*\s+([^*]+?)\s*\*\*/g, "**$1**")
-    .replace(/(?<!\*)\*(?!\*)\s+([^*]+?)\s*(?<!\*)\*(?!\*)/g, "*$1*")
-}
-
-// ── Markdown viewer with clickable [stt_XXXX] ref buttons ──────────
-
-/** Render inline markdown: **bold**, *italic*, `code`, [stt_XXXX] refs, [priority: X] badges */
-function renderInline(text: string, onRefClick: (id: string) => void): ReactNode[] {
-  const parts: ReactNode[] = []
-  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|(\[(?:ref:)?\s*(stt_\d+(?:\s*,\s*stt_\d+)*)\s*\])|(【(?:ref:)?\s*(stt_\d+(?:\s*,\s*stt_\d+)*)\s*】)|(\[priority:\s*(high|medium|low)\s*\])|(【priority:\s*(high|medium|low)\s*】)/gi
-  let lastIdx = 0
-  let match
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIdx) {
-      parts.push(<span key={`t${lastIdx}`}>{text.slice(lastIdx, match.index)}</span>)
-    }
-    if (match[1]) {
-      parts.push(<strong key={`b${lastIdx}`}>{match[2]}</strong>)
-    } else if (match[3]) {
-      parts.push(<em key={`i${lastIdx}`}>{match[4]}</em>)
-    } else if (match[5]) {
-      parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
-    } else if (match[8] || match[10]) {
-      // [stt_0044,stt_0045,stt_0046] or 【stt_0044,stt_0045,stt_0046】
-      const raw = (match[8] || match[10])!
-      const ids = raw.split(",").map((s) => s.trim()).filter(Boolean)
-      const parsed = ids
-        .map((id) => ({ id, num: parseInt(id.replace(/^stt_0*/, "") || "0", 10) }))
-        .sort((a, b) => a.num - b.num)
-
-      // Group consecutive ids into ranges
-      let ri = 0
-      while (ri < parsed.length) {
-        const start = parsed[ri]
-        let end = start
-        let rj = ri + 1
-        while (rj < parsed.length && parsed[rj].num === end.num + 1) { end = parsed[rj]; rj++ }
-        const sl = start.id.replace(/^stt_0*/, "") || "0"
-        const el = end.id.replace(/^stt_0*/, "") || "0"
-        const label = start.id === end.id ? sl : `${sl}-${el}`
-        const allInRange = parsed.slice(ri, rj).map((p) => p.id)
-        parts.push(
-          <button
-            key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.20)] t-mono-family align-baseline cursor-pointer mr-1"
-            onClick={(e) => { e.stopPropagation(); onRefClick(start.id) }}
-            title={`Sources: ${allInRange.join(", ")}`}
-          >
-            {label}
-          </button>,
-        )
-        ri = rj
-      }
-    } else if (match[12] || match[14]) {
-      // [priority: high/medium/low] or 【priority: high/medium/low】
-      const level = (match[12] || match[14])!.toLowerCase()
-      const colors: Record<string, { bg: string; fg: string }> = {
-        high:    { bg: "rgba(140,46,46,0.12)",  fg: "#C06060" },
-        medium:  { bg: "rgba(138,101,0,0.10)",   fg: "#B09030" },
-        low:     { bg: "rgba(26,94,61,0.10)",    fg: "#5A9070" },
-      }
-      const c = colors[level] ?? colors.medium
-      parts.push(
-        <span
-          key={`p${lastIdx}`}
-          className="inline-flex items-center px-1 py-0 text-[9px] rounded font-medium tracking-wider align-baseline select-none"
-          style={{ backgroundColor: c.bg, color: c.fg }}
-        >
-          {level.toUpperCase()}
-        </span>,
-      )
-    }
-    lastIdx = match.index + match[0].length
-  }
-  if (lastIdx < text.length) {
-    parts.push(<span key={`t${lastIdx}`}>{text.slice(lastIdx)}</span>)
-  }
-  return parts
-}
-
-function MarkdownViewer({ md, onRefClick, speakerNames }: {
-  md: string
-  onRefClick: (id: string) => void
-  speakerNames: Record<string, string>
-}) {
-  if (!md) {
-    return <p className="text-muted-foreground text-sm py-8 text-center">No content yet.</p>
-  }
-
-  // Normalize + resolve [spk:ID] markers and legacy "Speaker X" patterns
-  let resolved = normalizeMd(md)
-  if (speakerNames && Object.keys(speakerNames).length > 0) {
-    resolved = resolved.replace(/\[spk:(\d+)\]/g, (_, id: string) => speakerNames[id] ?? `Speaker ${id}`)
-    for (const [id, name] of Object.entries(speakerNames)) {
-      resolved = resolved.replace(
-        new RegExp(`Speaker ${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g"),
-        name,
-      )
-    }
-  }
-
-  return (
-    <div className="prose prose-sm dark:prose-invert max-w-none">
-      {resolved.split("\n").map((line, i) => {
-        if (!line.trim()) return <div key={i} className="h-3" />
-        if (line.startsWith("### ")) return <h3 key={i} className="text-base font-light mb-1.5 mt-2">{renderInline(line.slice(4), onRefClick)}</h3>
-        if (line.startsWith("## ")) return <h2 key={i} className="text-lg font-light mb-2 mt-3">{renderInline(line.slice(3), onRefClick)}</h2>
-        if (line.startsWith("# ")) return <h1 key={i} className="text-xl font-light mb-3 mt-4">{renderInline(line.slice(2), onRefClick)}</h1>
-        if (/^\s*[-*+]\s/.test(line)) {
-          return <li key={i} className="text-sm leading-relaxed ml-4">{renderInline(line.replace(/^\s*[-*+]\s/, ""), onRefClick)}</li>
-        }
-        return <p key={i} className="text-sm leading-relaxed mb-1">{renderInline(line, onRefClick)}</p>
-      })}
-    </div>
-  )
-}
+// MarkdownViewer lives in summary-markdown-viewer.tsx (shared with note editor)
 
 // ── Thinking skeleton (shown while LLM is generating) ─────────────
 
@@ -331,7 +212,7 @@ function EditableSectionContent({
             }
           />
         ) : (
-          <MarkdownViewer md={content} onRefClick={onRefClick} speakerNames={speakerNames} />
+          <SummaryMarkdownViewer md={content} onRefClick={onRefClick} speakerNames={speakerNames} />
         )}
       </div>
     </div>
@@ -2214,6 +2095,10 @@ export function MeetingTabs({
             const updated = { ...meeting.speaker_names, [id]: name }
             updateMeeting(meetingId, { speaker_names: updated }).then((m) => {
               onMeetingUpdate(m)
+              // Refresh [spk:…] display in open note distill blocks
+              void import("@/components/ui/tiptap-editor").then((mod) => {
+                mod.invalidateMeetingSpeakerCache(meetingId)
+              })
             }).catch(() => {})
           }}
           onSegmentClick={onSeekTo}

@@ -110,6 +110,9 @@ def create_collection(req: CollectionCreateRequest):
         chunk_config["rerank_api_key"] = req.rerank_api_key
     if req.allowed_file_types is not None:
         chunk_config["allowed_file_types"] = req.allowed_file_types
+    # Persist explicitly so UI checkbox and ingest path share the same stored value
+    # (not only via _DEFAULT_COLLECTION_CONFIG merge on read).
+    chunk_config["cloud_parsing"] = bool(req.cloud_parsing)
 
     # Create metadata first to get ID
     collection_id = collections_store.generate_id()

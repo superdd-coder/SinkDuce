@@ -430,8 +430,18 @@ def _migrate_files_json_import(collection_id: str) -> None:
         backfilled_paths = 0
 
         for file_id, entry in fj.items():
-            filename = entry.get("source_label", "") or file_id
             source = entry.get("source", "")
+            # Prefer real on-disk basename over source_label (notes store
+            # "Note: Title" as label but write "{safe_title}.md" on disk).
+            filename = entry.get("source_label", "") or file_id
+            try:
+                from src.file_mgmt.storage_paths import discover_content_blob
+
+                disk_blob = discover_content_blob(collection_id, file_id)
+                if disk_blob is not None:
+                    filename = disk_blob.name
+            except Exception:
+                pass
 
             # Determine supported status (per collection config)
             # Note/Meeting files always supported (already ingested)
@@ -467,6 +477,50 @@ def _migrate_files_json_import(collection_id: str) -> None:
                         (unsupported, file_id),
                     )
                     fixed_unsupported += 1
+
+                # 1b) Repair storage_file_id when it is a display label and disk
+                # has a real blob (common for notes/meetings after label import).
+                try:
+                    from src.file_mgmt.storage_paths import (
+                        discover_content_blob,
+                        resolve_version_blob,
+                    )
+
+                    crow = conn.execute(
+                        "SELECT current_version_id FROM files WHERE file_id=?",
+                        (file_id,),
+                    ).fetchone()
+                    cvid = crow["current_version_id"] if crow else None
+                    if cvid:
+                        vrow = conn.execute(
+                            "SELECT storage_file_id FROM file_versions WHERE version_id=?",
+                            (cvid,),
+                        ).fetchone()
+                        old_storage = (vrow["storage_file_id"] if vrow else "") or ""
+                        if resolve_version_blob(
+                            collection_id, file_id, cvid, old_storage
+                        ) is None:
+                            disk_blob = discover_content_blob(
+                                collection_id, file_id, cvid
+                            )
+                            if disk_blob is not None and disk_blob.name != old_storage:
+                                conn.execute(
+                                    "UPDATE file_versions SET storage_file_id=? "
+                                    "WHERE version_id=?",
+                                    (disk_blob.name, cvid),
+                                )
+                                logger.info(
+                                    "Repaired storage_file_id for %s: %r -> %r",
+                                    file_id,
+                                    old_storage,
+                                    disk_blob.name,
+                                )
+                except Exception:
+                    logger.debug(
+                        "storage_file_id repair skipped for %s",
+                        file_id,
+                        exc_info=True,
+                    )
 
                 # 2) Backfill missing file_paths for note/meeting files
                 if target_fid:
@@ -642,8 +696,8 @@ def init_collection_db(collection_id: str) -> None:
                 "Version-dir layout migration failed for %s", collection_id
             )
 
-    # Note: files.json → SQLite migration now happens lazily when
-    # listing the Uncategorized folder (see service.list_files_in_folder).
+    # Note: files.json → SQLite migration runs lazily on root list
+    # (service.list_files) and on every folder list (list_files_in_folder).
 
 
 def delete_collection_db(collection_id: str) -> None:

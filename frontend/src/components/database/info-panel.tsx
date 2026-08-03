@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, Star } from "lucide-react"
 import { toast } from "sonner"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
+import { onInfoRefresh, triggerInfoRefresh } from "@/lib/info-refresh"
 import { useAppStore } from "@/stores/app-store"
 import {
   getCollectionSummary,
@@ -11,6 +12,8 @@ import {
   triggerConsolidation,
   getMeetingLog,
   getActiveCollectionTasks,
+  getNotes,
+  getFiles,
   type ConflictItem,
   type MeetingLogItem,
 } from "@/api/client"
@@ -34,15 +37,12 @@ function SectionLabel({ children, className }: { children: React.ReactNode; clas
 
 export function InfoPanel({ collection }: InfoPanelProps) {
   const [summary, setSummary] = useState<string | null>(null)
+  /** Only true on first load / collection switch — never on silent hot-refresh. */
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [consolidating, setConsolidating] = useState(false)
-  const [consolidatingCollection, setConsolidatingCollection] = useState<string | null>(null)
   const [projectDescription, setProjectDescription] = useState<string | null>(null)
   const [conflicts, setConflicts] = useState<ConflictItem[]>([])
-  const [conflictsLoading, setConflictsLoading] = useState(false)
-  const [selectedConflict, setSelectedConflict] = useState<ConflictItem | null>(null)
   const [meetings, setMeetings] = useState<MeetingLogItem[]>([])
-  const [meetingsLoading, setMeetingsLoading] = useState(false)
   const [notesCount, setNotesCount] = useState(0)
   const [ingestedNotesCount, setIngestedNotesCount] = useState(0)
   const [docCount, setDocCount] = useState(0)
@@ -51,12 +51,132 @@ export function InfoPanel({ collection }: InfoPanelProps) {
   /** Collapsed by default — sources used for Collection Summary. */
   const [definitiveOpen, setDefinitiveOpen] = useState(false)
   const [clearingDefinitiveId, setClearingDefinitiveId] = useState<string | null>(null)
+  const [selectedConflict, setSelectedConflict] = useState<ConflictItem | null>(null)
 
   const { setSidebarView, setActiveMeeting, setPendingOpenFile, collections } = useAppStore()
-
   const collectionName = collections.find(c => c.id === collection)?.name || collection
 
+  // Track activity edges so we only silent-refresh when work finishes
+  const wasConsolidatingRef = useRef(false)
+  const wasBusyRef = useRef(false)
+  const hasLoadedRef = useRef(false)
+  const collectionRef = useRef(collection)
+  collectionRef.current = collection
+
+  // ── Silent / loud fetchers ─────────────────────────────────
+
+  const fetchDefinitiveFiles = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!collection) return
+    const silent = opts?.silent && hasLoadedRef.current
+    if (!silent) setDefinitiveLoading(true)
+    try {
+      const files = await getDefinitiveFiles(collection)
+      if (collectionRef.current !== collection) return
+      setDefinitiveFiles(files ?? [])
+    } catch {
+      if (collectionRef.current !== collection) return
+      setDefinitiveFiles([])
+    } finally {
+      if (!silent) setDefinitiveLoading(false)
+    }
+  }, [collection])
+
+  const fetchSummary = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!collection) return
+    const silent = opts?.silent && hasLoadedRef.current
+    if (!silent) setSummaryLoading(true)
+    try {
+      const res = await getCollectionSummary(collection)
+      if (collectionRef.current !== collection) return
+      setSummary(res?.content ?? null)
+    } catch {
+      if (collectionRef.current !== collection) return
+      setSummary(null)
+    } finally {
+      if (!silent) setSummaryLoading(false)
+    }
+  }, [collection])
+
+  const fetchConflicts = useCallback(async () => {
+    if (!collection) return
+    try {
+      const res = await getCollectionConflicts(collection)
+      if (collectionRef.current !== collection) return
+      setConflicts(res.conflicts ?? [])
+    } catch {
+      if (collectionRef.current !== collection) return
+      setConflicts([])
+    }
+  }, [collection])
+
+  const fetchMeetings = useCallback(async () => {
+    if (!collection) return
+    try {
+      const res = await getMeetingLog(collection)
+      if (collectionRef.current !== collection) return
+      setMeetings(res.meetings ?? [])
+    } catch {
+      if (collectionRef.current !== collection) return
+      setMeetings([])
+    }
+  }, [collection])
+
+  const fetchProjectDescription = useCallback(async () => {
+    if (!collection) return
+    try {
+      const res = await getProjectDescription(collection)
+      if (collectionRef.current !== collection) return
+      setProjectDescription(res?.content ?? null)
+    } catch {
+      if (collectionRef.current !== collection) return
+      setProjectDescription(null)
+    }
+  }, [collection])
+
+  const fetchStats = useCallback(async () => {
+    if (!collection) return
+    try {
+      const [notesRes, filesRes] = await Promise.all([
+        getNotes(collection).catch(() => ({ notes: [] as { is_ingested?: boolean }[] })),
+        getFiles(collection).catch(() => ({ files: [] as unknown[] })),
+      ])
+      if (collectionRef.current !== collection) return
+      const notes = notesRes.notes ?? []
+      setNotesCount(notes.length)
+      setIngestedNotesCount(notes.filter((n) => n.is_ingested).length)
+      setDocCount(filesRes.files?.length ?? 0)
+    } catch {
+      /* ignore */
+    }
+  }, [collection])
+
+  /** Full panel refresh — silent keeps existing UI (no skeleton flash). */
+  const refreshAll = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false
+    await Promise.all([
+      fetchSummary({ silent }),
+      fetchProjectDescription(),
+      fetchConflicts(),
+      fetchMeetings(),
+      fetchDefinitiveFiles({ silent }),
+      fetchStats(),
+    ])
+    hasLoadedRef.current = true
+  }, [
+    fetchSummary,
+    fetchProjectDescription,
+    fetchConflicts,
+    fetchMeetings,
+    fetchDefinitiveFiles,
+    fetchStats,
+  ])
+
+  // ── Collection switch: reset + initial load ────────────────
+
   useEffect(() => {
+    hasLoadedRef.current = false
+    wasConsolidatingRef.current = false
+    wasBusyRef.current = false
     setSummary(null)
     setProjectDescription(null)
     setConflicts([])
@@ -64,156 +184,110 @@ export function InfoPanel({ collection }: InfoPanelProps) {
     setDefinitiveFiles([])
     setDefinitiveOpen(false)
     setConsolidating(false)
-    setConsolidatingCollection(null)
     setSelectedConflict(null)
-    getActiveCollectionTasks(collection).then((res) => {
-      if (res.consolidating) {
-        setConsolidating(true)
-        setConsolidatingCollection(collection)
-      }
-    }).catch(() => {})
-  }, [collection])
+    setNotesCount(0)
+    setIngestedNotesCount(0)
+    setDocCount(0)
 
-  useEffect(() => {
-    if (!consolidating || consolidatingCollection !== collection) return
-    const poll = setInterval(async () => {
+    let cancelled = false
+    ;(async () => {
       try {
         const res = await getActiveCollectionTasks(collection)
-        if (!res.consolidating) {
-          clearInterval(poll)
-          setConsolidating(false)
-          setConsolidatingCollection(null)
-          fetchSummary()
-          fetchProjectDescription()
-          fetchConflicts()
-          fetchMeetings()
-          fetchDefinitiveFiles()
+        if (cancelled) return
+        if (res.consolidating) {
+          setConsolidating(true)
+          wasConsolidatingRef.current = true
         }
       } catch { /* ignore */ }
-    }, 2000)
-    return () => clearInterval(poll)
-  }, [consolidating, consolidatingCollection, collection])
+      if (!cancelled) await refreshAll({ silent: false })
+    })()
 
-  const fetchDefinitiveFiles = useCallback(async () => {
-    if (!collection) return
-    setDefinitiveLoading(true)
-    try {
-      const files = await getDefinitiveFiles(collection)
-      setDefinitiveFiles(files ?? [])
-    } catch {
-      setDefinitiveFiles([])
-    } finally {
-      setDefinitiveLoading(false)
-    }
+    return () => { cancelled = true }
+    // Only re-run on collection change — refreshAll is stable enough via deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collection])
 
-  const fetchSummary = useCallback(async () => {
-    if (!collection) return
-    setSummaryLoading(true)
-    try {
-      const res = await getCollectionSummary(collection)
-      setSummary(res?.content ?? null)
-    } catch {
-      setSummary(null)
-    } finally {
-      setSummaryLoading(false)
-    }
-  }, [collection])
-
-  const fetchConflicts = useCallback(async () => {
-    if (!collection) return
-    setConflictsLoading(true)
-    try {
-      const res = await getCollectionConflicts(collection)
-      setConflicts(res.conflicts ?? [])
-    } catch {
-      setConflicts([])
-    } finally {
-      setConflictsLoading(false)
-    }
-  }, [collection])
-
-  const fetchMeetings = useCallback(async () => {
-    if (!collection) return
-    setMeetingsLoading(true)
-    try {
-      const res = await getMeetingLog(collection)
-      setMeetings(res.meetings ?? [])
-    } catch {
-      setMeetings([])
-    } finally {
-      setMeetingsLoading(false)
-    }
-  }, [collection])
+  // ── Background poll: active tasks → silent refresh on edges ──
 
   useEffect(() => {
-    fetchSummary()
-    fetchProjectDescription()
-    fetchConflicts()
-    fetchMeetings()
-    fetchDefinitiveFiles()
-    // Fetch stats
-    if (collection) {
-      import("@/api/client").then(({ getNotes, getFiles }) => {
-        getNotes(collection).then(r => {
-          setNotesCount(r.notes?.length ?? 0)
-          setIngestedNotesCount(r.notes?.filter(n => n.is_ingested).length ?? 0)
-        }).catch(() => { setNotesCount(0); setIngestedNotesCount(0) })
-        getFiles(collection).then(r => setDocCount(r.files?.length ?? 0)).catch(() => setDocCount(0))
-      })
-    }
-  }, [fetchSummary, fetchConflicts, fetchMeetings, fetchDefinitiveFiles])
-
-  const fetchProjectDescription = useCallback(async () => {
     if (!collection) return
-    try {
-      const res = await getProjectDescription(collection)
-      setProjectDescription(res?.content ?? null)
-    } catch {
-      setProjectDescription(null)
+
+    let cancelled = false
+
+    const tick = async () => {
+      try {
+        const res = await getActiveCollectionTasks(collection)
+        if (cancelled || collectionRef.current !== collection) return
+
+        const consolidatingNow = !!res.consolidating
+        const busyNow =
+          consolidatingNow ||
+          !!res.uploading ||
+          (res.active_tasks ?? []).some(
+            (t) =>
+              t.task_type === "doc_summary" ||
+              t.task_type === "upload" ||
+              t.task_type === "consolidate"
+          )
+
+        // Enter consolidating: soft badge only (keep old summary visible)
+        if (consolidatingNow && !wasConsolidatingRef.current) {
+          setConsolidating(true)
+        }
+
+        // Consolidate finished → silent pull new summary/conflicts
+        if (!consolidatingNow && wasConsolidatingRef.current) {
+          setConsolidating(false)
+          await refreshAll({ silent: true })
+        }
+
+        // Any busy work finished (upload / note ingest / doc_summary)
+        if (!busyNow && wasBusyRef.current) {
+          await refreshAll({ silent: true })
+        }
+
+        wasConsolidatingRef.current = consolidatingNow
+        wasBusyRef.current = busyNow
+        if (consolidatingNow) setConsolidating(true)
+        else if (!consolidatingNow) setConsolidating(false)
+      } catch {
+        /* ignore poll errors */
+      }
     }
-  }, [collection])
+
+    void tick()
+    // 2s while busy feels live; still fine idle (cheap endpoint)
+    const id = setInterval(tick, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [collection, refreshAll])
+
+  // ── External triggers (note ingest, definitive from other views) ──
+
+  useEffect(() => {
+    return onInfoRefresh((detail) => {
+      if (detail.collectionId && detail.collectionId !== collection) return
+      void refreshAll({ silent: true })
+    })
+  }, [collection, refreshAll])
+
+  // ── Manual consolidate ─────────────────────────────────────
 
   const handleConsolidate = async () => {
     setConsolidating(true)
-    setConsolidatingCollection(collection)
+    wasConsolidatingRef.current = true
+    wasBusyRef.current = true
     try {
-      const res = await triggerConsolidation(collection)
+      await triggerConsolidation(collection)
       toast.info(`Consolidation started for ${collectionName}...`)
-      const taskId = res.task?.id
-      const targetCollection = collection
-      if (taskId) {
-        const poll = setInterval(async () => {
-          try {
-            const { getTask } = await import("@/api/client")
-            const task = await getTask(taskId)
-            if (task.status === "completed" || task.status === "failed") {
-              clearInterval(poll)
-              setConsolidating(false)
-              setConsolidatingCollection(null)
-              if (task.status === "completed") {
-                toast.success(`Consolidation complete for ${collectionName}`)
-                if (collection === targetCollection) {
-                  fetchSummary()
-                  fetchProjectDescription()
-                  fetchConflicts()
-                  fetchMeetings()
-                }
-              } else {
-                toast.error(`Consolidation failed: ${task.error || "unknown error"}`)
-              }
-            }
-          } catch { /* ignore */ }
-        }, 2000)
-      } else {
-        setConsolidating(false)
-        setConsolidatingCollection(null)
-      }
+      // Poll loop above will silent-refresh when consolidating ends
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       toast.error(msg || "Consolidation failed")
       setConsolidating(false)
-      setConsolidatingCollection(null)
+      wasConsolidatingRef.current = false
     }
   }
 
@@ -242,7 +316,7 @@ export function InfoPanel({ collection }: InfoPanelProps) {
             <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Documents</span>
           </div>
           <div className="flex flex-col">
-            <span className="text-[28px] font-light leading-none text-foreground t-body-family">{meetings.length > 0 || meetingsLoading ? meetings.length : "—"}</span>
+            <span className="text-[28px] font-light leading-none text-foreground t-body-family">{meetings.length > 0 ? meetings.length : "—"}</span>
             <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mt-1.5">Meetings</span>
           </div>
           <div className="flex flex-col">
@@ -259,28 +333,31 @@ export function InfoPanel({ collection }: InfoPanelProps) {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleConsolidate}
-          disabled={consolidating && consolidatingCollection === collection}
-          className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 bg-primary text-primary-foreground border-none"
-          style={{
-            padding: "4px 10px",
-            borderRadius: "2px",
-          }}
-        >
-          {consolidating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-          Consolidate
-        </button>
+        <div className="flex items-center gap-2">
+          {consolidating && (
+            <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Updating
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={handleConsolidate}
+            disabled={consolidating}
+            className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.1em] cursor-pointer transition-opacity hover:opacity-80 bg-primary text-primary-foreground border-none disabled:opacity-60"
+            style={{
+              padding: "4px 10px",
+              borderRadius: "2px",
+            }}
+          >
+            {consolidating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            Consolidate
+          </button>
+        </div>
       </div>
 
-      {/* Project Description */}
-      {consolidating ? (
-        <div className="flex items-center gap-2 text-sm italic text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Updating…
-        </div>
-      ) : projectDescription && (
+      {/* Project Description — keep previous text while consolidating (无感) */}
+      {projectDescription && (
         <div
           className="text-sm leading-[1.8] pl-4 border-l italic text-foreground border-border t-body-italic-family"
         >
@@ -288,16 +365,11 @@ export function InfoPanel({ collection }: InfoPanelProps) {
         </div>
       )}
 
-      {/* Summary */}
+      {/* Summary — never blank out on consolidate; only first load shows spinner */}
       <div>
         <SectionLabel className="mb-2.5">Summary</SectionLabel>
 
-        {consolidating ? (
-          <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            <span className="text-sm">Consolidating…</span>
-          </div>
-        ) : summaryLoading ? (
+        {summaryLoading && !summary ? (
           <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
             <span className="text-sm">Loading…</span>
@@ -327,13 +399,13 @@ export function InfoPanel({ collection }: InfoPanelProps) {
           <SectionLabel className="mb-0 flex-1">
             Definitive sources
             <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/60">
-              · {definitiveLoading ? "…" : definitiveFiles.length}
+              · {definitiveLoading && definitiveFiles.length === 0 ? "…" : definitiveFiles.length}
             </span>
           </SectionLabel>
         </button>
         {definitiveOpen && (
           <div className="mt-2 pl-1">
-            {definitiveLoading ? (
+            {definitiveLoading && definitiveFiles.length === 0 ? (
               <div className="flex items-center gap-2 py-3 text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 <span className="text-xs">Loading…</span>
@@ -384,7 +456,14 @@ export function InfoPanel({ collection }: InfoPanelProps) {
                             version: f.version,
                           })
                           toast.success("Excluded from Collection Summary")
-                          await fetchDefinitiveFiles()
+                          // Optimistic list update + silent full refresh
+                          setDefinitiveFiles((prev) =>
+                            prev.filter((x) => x.file_id !== f.file_id)
+                          )
+                          triggerInfoRefresh({
+                            collectionId: collection,
+                            reason: "definitive",
+                          })
                         } catch (err) {
                           toast.error(
                             `Failed: ${err instanceof Error ? err.message : String(err)}`
@@ -414,32 +493,25 @@ export function InfoPanel({ collection }: InfoPanelProps) {
           <SectionLabel className="!text-amber-600">
             ⚠ Conflicts · {conflicts.length}
           </SectionLabel>
-          {conflictsLoading ? (
-            <div className="flex items-center gap-2 py-4 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-xs">Loading…</span>
-            </div>
-          ) : (
-            <div>
-              {conflicts.map((conflict, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  className="w-full text-left py-2.5 border-b cursor-pointer transition-opacity hover:opacity-80 border-b border-dashed border-border"
-                  style={{ background: "none", borderLeft: "none", borderRight: "none", borderTop: "none" }}
-                  onClick={() => setSelectedConflict(conflict)}
-                >
-                  <div className="text-xs leading-relaxed text-foreground">
-                    <span style={{ color: "#B45309" }}>{conflict.content1}</span>
-                    <span className="text-muted-foreground"> ({conflict.source1_label ?? conflict.source1})</span>
-                    <span className="text-muted-foreground" style={{ margin: "0 6px" }}>vs</span>
-                    <span style={{ color: "#B45309" }}>{conflict.content2}</span>
-                    <span className="text-muted-foreground"> ({conflict.source2_label ?? conflict.source2})</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
+          <div>
+            {conflicts.map((conflict, i) => (
+              <button
+                key={i}
+                type="button"
+                className="w-full text-left py-2.5 border-b cursor-pointer transition-opacity hover:opacity-80 border-b border-dashed border-border"
+                style={{ background: "none", borderLeft: "none", borderRight: "none", borderTop: "none" }}
+                onClick={() => setSelectedConflict(conflict)}
+              >
+                <div className="text-xs leading-relaxed text-foreground">
+                  <span style={{ color: "#B45309" }}>{conflict.content1}</span>
+                  <span className="text-muted-foreground"> ({conflict.source1_label ?? conflict.source1})</span>
+                  <span className="text-muted-foreground" style={{ margin: "0 6px" }}>vs</span>
+                  <span style={{ color: "#B45309" }}>{conflict.content2}</span>
+                  <span className="text-muted-foreground"> ({conflict.source2_label ?? conflict.source2})</span>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -450,50 +522,43 @@ export function InfoPanel({ collection }: InfoPanelProps) {
       {meetings.length > 0 && (
         <div>
           <SectionLabel>Meeting Log · {meetings.length}</SectionLabel>
-          {meetingsLoading ? (
-            <div className="flex items-center gap-2 py-4 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-xs">Loading…</span>
-            </div>
-          ) : (
-            <div>
-              {meetings.map((meeting) => (
-                <div
-                  key={meeting.id}
-                  className="py-2.5 border-b border-b border-dashed border-border"
+          <div>
+            {meetings.map((meeting) => (
+              <div
+                key={meeting.id}
+                className="py-2.5 border-b border-b border-dashed border-border"
+              >
+                <button
+                  type="button"
+                  className="w-full text-left flex items-center gap-3 cursor-pointer transition-opacity hover:opacity-80 text-foreground"
+                  style={{ background: "none", border: "none" }}
+                  onClick={() => handleMeetingClick(meeting)}
                 >
-                  <button
-                    type="button"
-                    className="w-full text-left flex items-center gap-3 cursor-pointer transition-opacity hover:opacity-80 text-foreground"
-                    style={{ background: "none", border: "none" }}
-                    onClick={() => handleMeetingClick(meeting)}
-                  >
-                    <span className="text-xs flex-1 truncate">{meeting.title}</span>
-                    <span className="text-[10px] shrink-0 text-muted-foreground">
-                      {formatDate(meeting.created_at)}
-                    </span>
-                  </button>
-                  {meeting.file_ids && meeting.file_ids.length > 0 && (
-                    <div className="ml-4 mt-1">
-                      {meeting.file_ids.map((fid) => (
-                        <button
-                          key={fid}
-                          type="button"
-                          className="block text-[11px] truncate w-full text-left cursor-pointer transition-colors text-muted-foreground"
-                          style={{ background: "none", border: "none" }}
-                          onClick={() =>
-                            setPendingOpenFile(`__file__:${fid}`)
-                          }
-                        >
-                          {meeting.file_labels?.[fid] || fid}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                  <span className="text-xs flex-1 truncate">{meeting.title}</span>
+                  <span className="text-[10px] shrink-0 text-muted-foreground">
+                    {formatDate(meeting.created_at)}
+                  </span>
+                </button>
+                {meeting.file_ids && meeting.file_ids.length > 0 && (
+                  <div className="ml-4 mt-1">
+                    {meeting.file_ids.map((fid) => (
+                      <button
+                        key={fid}
+                        type="button"
+                        className="block text-[11px] truncate w-full text-left cursor-pointer transition-colors text-muted-foreground"
+                        style={{ background: "none", border: "none" }}
+                        onClick={() =>
+                          setPendingOpenFile(`__file__:${fid}`)
+                        }
+                      >
+                        {meeting.file_labels?.[fid] || fid}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

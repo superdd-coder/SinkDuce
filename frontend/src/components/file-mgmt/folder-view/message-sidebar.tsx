@@ -11,9 +11,11 @@ import {
   FileText,
   GitBranch,
 } from "lucide-react"
-import type { FolderTreeNode, Message } from "@/types/file-mgmt"
+import type { FileVersion, FolderTreeNode, Message } from "@/types/file-mgmt"
 import { MessageEditorDialog } from "./message-editor-dialog"
 import { MessageCard } from "../message-card"
+import { LogMessageDialog } from "../file-detail/log-message-dialog"
+import { getFileDetail } from "@/api/file-mgmt"
 import { cn } from "@/lib/utils"
 
 const SIDEBAR_W = 340
@@ -61,6 +63,13 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
   const [dialogReadonly, setDialogReadonly] = useState(false)
   const [softRefreshing, setSoftRefreshing] = useState(false)
   const softRefreshGen = useRef(0)
+  /** Version-update message → same dual-pane Log as file-detail */
+  const [logOpen, setLogOpen] = useState<{
+    message: Message
+    version: FileVersion | null
+    isCurrent: boolean
+    docSource: string | null
+  } | null>(null)
 
   const selFiles = useMemo(
     () => Array.from(selectedFileIds),
@@ -133,11 +142,73 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
     setDialogOpen(true)
   }, [])
 
-  const handleOpenForView = useCallback((msg: Message) => {
-    setEditingMsg(msg)
-    setDialogReadonly(true)
-    setDialogOpen(true)
-  }, [])
+  const handleOpenForView = useCallback(
+    async (msg: Message) => {
+      const isVer = (msg.owner_type || "").toLowerCase() === "system_version"
+      // Match file-detail Log: version updates open dual-pane LogMessageDialog
+      if (isVer && msg.owner_id) {
+        try {
+          const detail = await getFileDetail(collectionId, msg.owner_id)
+          const versions = detail.versions ?? []
+          const versAsc = [...versions].sort(
+            (a, b) => a.version_no - b.version_no
+          )
+          const body = (msg.body || "").trim()
+          let version =
+            versAsc.find(
+              (v) =>
+                v.created_at &&
+                msg.created_at &&
+                v.created_at === msg.created_at
+            ) ||
+            (body
+              ? versAsc.find(
+                  (v) => (v.commit_message || "").trim() === body
+                )
+              : undefined)
+          if (!version) {
+            // Chronological index: nth system_version ≈ version_no n
+            const verMsgs = currentFolderMessages
+              .filter(
+                (m) =>
+                  (m.owner_type || "").toLowerCase() === "system_version" &&
+                  m.owner_id === msg.owner_id
+              )
+              .slice()
+              .sort(
+                (a, b) =>
+                  (new Date(a.created_at).getTime() || 0) -
+                  (new Date(b.created_at).getTime() || 0)
+              )
+            const idx = verMsgs.findIndex(
+              (m) => m.message_id === msg.message_id
+            )
+            if (idx >= 0 && versAsc[idx]) version = versAsc[idx]
+          }
+          const isCurrent = !!(
+            version &&
+            detail.current_version_id &&
+            version.version_id === detail.current_version_id
+          )
+          setLogOpen({
+            message: msg,
+            version: version ?? null,
+            isCurrent,
+            docSource:
+              detail.source ||
+              (msg.owner_id ? `__file__:${msg.owner_id}` : null),
+          })
+          return
+        } catch {
+          /* fall through to plain message dialog */
+        }
+      }
+      setEditingMsg(msg)
+      setDialogReadonly(true)
+      setDialogOpen(true)
+    },
+    [collectionId, currentFolderMessages]
+  )
 
   const handleCloseDialog = useCallback((open: boolean) => {
     if (!open) setEditingMsg(null)
@@ -440,6 +511,25 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
               window.setTimeout(() => {
                 requestTimelineFocus(nodeId, chainId)
               }, 280)
+            }}
+          />
+
+          <LogMessageDialog
+            open={!!logOpen}
+            onOpenChange={(v) => {
+              if (!v) setLogOpen(null)
+            }}
+            collectionId={collectionId}
+            docSource={logOpen?.docSource ?? null}
+            message={logOpen?.message ?? null}
+            version={logOpen?.version ?? null}
+            isCurrentVersion={!!logOpen?.isCurrent}
+            onSaved={() => {
+              void refreshMessages(collectionId, { silent: true })
+            }}
+            onVersionDeleted={() => {
+              setLogOpen(null)
+              void refreshMessages(collectionId, { silent: true })
             }}
           />
           </div>

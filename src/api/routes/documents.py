@@ -548,13 +548,21 @@ def _find_file_path(
             if storage_file is None and not safe:
                 return None
 
-        # 2) Pin by storage basename (ambiguous if legacy shared names)
+        # 2) Pin by storage basename — often shared across versions after re-upload
+        # of the same display name. Prefer version_id when given; else current.
         if safe and safe != "parsed.txt":
             try:
                 from src.file_mgmt.store import get_db
 
                 conn = get_db(collection_id)
                 try:
+                    crow = conn.execute(
+                        "SELECT current_version_id FROM files WHERE file_id=?",
+                        (fid,),
+                    ).fetchone()
+                    current_vid = (
+                        (crow["current_version_id"] if crow else None) or None
+                    )
                     vrows = conn.execute(
                         """SELECT version_id, storage_file_id FROM file_versions
                            WHERE file_id=? ORDER BY version_no ASC""",
@@ -568,10 +576,22 @@ def _find_file_path(
                     if storage_basename(vr["storage_file_id"]) == safe
                     or (vr["storage_file_id"] or "") == storage_file
                 ]
-                # Prefer exact version_id if already known; else only return if
-                # a single match has a blob (avoid wrong-version for shared names).
-                found: list[Path] = []
-                for vr in matches:
+                # Order: explicit version_id → current_version_id → highest version_no
+                ordered: list = []
+                if version_id:
+                    ordered.extend(
+                        vr for vr in matches if vr["version_id"] == version_id
+                    )
+                if current_vid:
+                    ordered.extend(
+                        vr
+                        for vr in matches
+                        if vr["version_id"] == current_vid
+                        and vr not in ordered
+                    )
+                ordered.extend(vr for vr in reversed(matches) if vr not in ordered)
+
+                for vr in ordered:
                     p = resolve_version_blob(
                         collection_id,
                         fid,
@@ -579,20 +599,7 @@ def _find_file_path(
                         vr["storage_file_id"],
                     )
                     if p is not None:
-                        found.append(p)
-                if len(found) == 1:
-                    return found[0]
-                if version_id:
-                    for vr in matches:
-                        if vr["version_id"] == version_id:
-                            p = resolve_version_blob(
-                                collection_id,
-                                fid,
-                                vr["version_id"],
-                                vr["storage_file_id"],
-                            )
-                            if p is not None:
-                                return p
+                        return p
             except Exception:
                 logger.debug(
                     "storage_file resolve failed for %s/%s", collection_id, fid,
@@ -602,7 +609,10 @@ def _find_file_path(
             p_flat = _files_dir(collection_id) / fid / safe
             if p_flat.is_file():
                 return p_flat
-            return None
+            # Do not hard-fail when version_id was also tried above — fall through
+            # only if neither storage nor version resolved.
+            if version_id or storage_file:
+                return None
         if version_id:
             return None
 
@@ -991,18 +1001,27 @@ def get_extracted_text(
             payload["preview_hint"] = preview_hint
         return payload
 
-    if use_shared_parsed:
+    # Version-isolated dir (files/{file_id}/{version_id}/) — safe for current
+    # and historical; do not use sibling versions' caches.
+    version_isolated = bool(
+        version_id and file_path.parent.name == version_id
+    )
+
+    if use_shared_parsed or version_isolated:
         parsed_path = file_path.parent / "parsed.txt"
         if parsed_path.is_file():
             return _respond(parsed_path.read_text(encoding="utf-8"), fmt)
 
-    # Per-blob extract cache (written after successful parse).
-    # For historical versions that share a storage basename (legacy overwrite),
-    # prefer version_id-scoped cache so v3/v4/v5 do not share one text file.
-    if is_historical and version_id:
-        blob_cache = file_path.parent / f"{file_path.name}.{version_id[:12]}.extracted.txt"
-    else:
-        blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
+    # Per-blob extract cache next to this version's blob
+    blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
+    if is_historical and version_id and not version_isolated:
+        # Legacy flat layout: scope cache by version_id prefix
+        scoped = (
+            file_path.parent
+            / f"{file_path.name}.{version_id[:12]}.extracted.txt"
+        )
+        if scoped.is_file():
+            blob_cache = scoped
     if blob_cache.is_file():
         try:
             return _respond(
@@ -1011,20 +1030,17 @@ def get_extracted_text(
             )
         except Exception:
             pass
-    # Legacy unscoped cache only for non-colliding historical / current
-    legacy_blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
-    if (
-        not is_historical
-        and legacy_blob_cache.is_file()
-        and legacy_blob_cache != blob_cache
-    ):
-        try:
-            return _respond(
-                legacy_blob_cache.read_text(encoding="utf-8"),
-                "markdown" if suffix in {".md", ".docx", ".pdf"} else "text",
-            )
-        except Exception:
-            pass
+    # Current version flat layout: unscoped .extracted.txt
+    if not is_historical:
+        legacy_blob_cache = file_path.parent / f"{file_path.name}.extracted.txt"
+        if legacy_blob_cache.is_file() and legacy_blob_cache != blob_cache:
+            try:
+                return _respond(
+                    legacy_blob_cache.read_text(encoding="utf-8"),
+                    "markdown" if suffix in {".md", ".docx", ".pdf"} else "text",
+                )
+            except Exception:
+                pass
 
     if suffix in text_suffixes:
         try:
@@ -1055,14 +1071,15 @@ def get_extracted_text(
                 else ("markdown" if suffix in {".docx", ".doc", ".md"} else "text")
             )
             return _respond(stitched, fmt_out)
-        # Historical PDF with no version chunks: re-parse the on-disk blob when
-        # it is *not* the current version's basename (unique old blob). Shared
-        # names would only re-show latest content — prefer empty + Raw instead.
+        # Historical PDF: re-parse when blob is version-isolated (unique path)
+        # or storage basename is not the current version's name. Same basename
+        # on flat disk is ambiguous — only then return empty + prefer Raw.
         if suffix in heavy_pdf:
-            if storage_file and not _is_current_storage_file(
-                collection, fid or "", storage_file
-            ):
-                pass  # fall through to full re-parse of this unique blob
+            same_name_as_current = _is_current_storage_file(
+                collection, fid or "", storage_file or file_path.name
+            )
+            if version_isolated or not same_name_as_current:
+                pass  # fall through to full re-parse of this blob
             else:
                 return _respond("", "pdf", preview_hint="raw")
 

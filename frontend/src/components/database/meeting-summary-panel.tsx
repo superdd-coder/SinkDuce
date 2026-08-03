@@ -1,0 +1,289 @@
+import { useEffect, useRef, useState } from "react"
+import { Loader2, Pencil, Eye } from "lucide-react"
+import { toast } from "sonner"
+import {
+  getMeeting,
+  getSectionMd,
+  saveSectionMd,
+  type Meeting,
+} from "@/api/client"
+import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import { Button } from "@/components/ui/button"
+import { SummaryMarkdownViewer } from "@/components/meeting/summary-markdown-viewer"
+
+const SAVE_DELAY = 800
+
+/** Fullwidth-ish brackets that Tiptap will not escape as markdown link syntax. */
+const CITE_OPEN = "\u27E6" // ⟦
+const CITE_CLOSE = "\u27E7" // ⟧
+
+/**
+ * Undo Tiptap/markdown over-escaping that corrupts meeting summary source.
+ * - \[ \]  → citation / link brackets
+ * - \~     → tilde (approx. numbers, paths); md uses ~~ for strike
+ * - \_     → underscore in IDs/names when not emphasis
+ */
+function unescapeMarkdownOverEscapes(md: string): string {
+  return (md || "")
+    .replace(/\\\[/g, "[")
+    .replace(/\\\]/g, "]")
+    .replace(/\\~/g, "~")
+    .replace(/\\_/g, "_")
+}
+
+/**
+ * Protect citation / speaker / priority markers while inside Tiptap so they are
+ * not serialized as \[stt_…\]. Editor shows ⟦stt_…⟧; disk always stores [stt_…].
+ */
+function protectCitationsForTiptap(md: string): string {
+  let s = unescapeMarkdownOverEscapes(md)
+  // [stt_…], [ref: stt_…], ranges/lists inside
+  s = s.replace(
+    /\[((?:ref:\s*)?stt_[^\]]+)\]/gi,
+    `${CITE_OPEN}$1${CITE_CLOSE}`,
+  )
+  // [priority: high|medium|low]
+  s = s.replace(
+    /\[(\s*priority\s*:\s*(?:high|medium|low)\s*)\]/gi,
+    `${CITE_OPEN}$1${CITE_CLOSE}`,
+  )
+  // [spk:ID]
+  s = s.replace(/\[(spk:[^\]]+)\]/gi, `${CITE_OPEN}$1${CITE_CLOSE}`)
+  // Bare numeric citation lists common in meeting summaries: [12], [12,15], [12-15]
+  s = s.replace(
+    /\[(\d+(?:\s*[-–,]\s*\d+)*(?:\s*,\s*\d+(?:\s*[-–,]\s*\d+)*)*)\]/g,
+    `${CITE_OPEN}$1${CITE_CLOSE}`,
+  )
+  return s
+}
+
+/** Restore protected citations + strip Tiptap over-escapes before writing to disk. */
+function restoreCitationsFromTiptap(md: string): string {
+  let s = md || ""
+  s = s.split(CITE_OPEN).join("[").split(CITE_CLOSE).join("]")
+  // If Tiptap still escaped the fullwidth forms
+  s = s.replace(/\\⟦/g, "[").replace(/\\⟧/g, "]")
+  s = unescapeMarkdownOverEscapes(s)
+  return s
+}
+
+interface MeetingSummaryPanelProps {
+  meetingId: string
+  /** ``tab_general`` or a section tab id — one file at a time */
+  tabId: string
+  onMeetingLoaded?: (meeting: Meeting, sectionTitle: string) => void
+}
+
+/**
+ * Single meeting summary file in the note editor.
+ *
+ * Display: Meeting-style viewer (speakers/refs/priority as UI only).
+ * Edit: Tiptap WYSIWYG; citations protected in-editor so they are not escaped.
+ * Disk always stores real [stt_…] / [spk:…] / [priority:…] markers.
+ */
+export function MeetingSummaryPanel({
+  meetingId,
+  tabId,
+  onMeetingLoaded,
+}: MeetingSummaryPanelProps) {
+  const [loading, setLoading] = useState(true)
+  /**
+   * Canonical raw markdown with real [ ] — used for viewer + disk.
+   * Edit mode uses a protected copy for Tiptap only.
+   */
+  const [rawContent, setRawContent] = useState("")
+  /** Tiptap-bound value with protected citations (⟦…⟧). */
+  const [editContent, setEditContent] = useState("")
+  const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({})
+  const [sectionTitle, setSectionTitle] = useState("General Summary")
+  const [meetingTitle, setMeetingTitle] = useState("")
+  const [mode, setMode] = useState<"view" | "edit">("view")
+  const baselineRef = useRef("")
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadKeyRef = useRef("")
+
+  useEffect(() => {
+    let cancelled = false
+    const loadKey = `${meetingId}:${tabId}`
+    loadKeyRef.current = loadKey
+    setLoading(true)
+    setRawContent("")
+    setEditContent("")
+    setMode("view")
+    baselineRef.current = ""
+
+    ;(async () => {
+      try {
+        const m = await getMeeting(meetingId)
+        if (cancelled || loadKeyRef.current !== loadKey) return
+
+        setMeetingTitle(m.title || "")
+        setSpeakerNames(m.speaker_names ?? {})
+
+        let name = "General Summary"
+        if (tabId !== "tab_general") {
+          const tab = (m.tabs ?? []).find((t) => t.tab_id === tabId)
+          name = tab?.name || tabId
+        }
+        setSectionTitle(name)
+        onMeetingLoaded?.(m, name)
+
+        let raw: string | null = null
+        try {
+          raw = await getSectionMd(meetingId, tabId)
+        } catch {
+          raw = null
+        }
+        if (
+          (raw === null || !raw.trim()) &&
+          tabId === "tab_general" &&
+          m.detail
+        ) {
+          raw = m.detail
+        }
+
+        if (cancelled || loadKeyRef.current !== loadKey) return
+
+        const disk = raw ?? ""
+        // Repair files already corrupted by prior Tiptap escapes (\[ \] \~ \_)
+        const text = unescapeMarkdownOverEscapes(disk)
+        setRawContent(text)
+        baselineRef.current = text
+        setLoading(false)
+
+        if (text !== disk && text) {
+          saveSectionMd(meetingId, tabId, text).catch(() => {})
+        }
+      } catch {
+        if (!cancelled) {
+          toast.error("Failed to load meeting summary")
+          setLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetingId, tabId])
+
+  const scheduleSaveRaw = (canonical: string) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        const toSave = restoreCitationsFromTiptap(canonical)
+        await saveSectionMd(meetingId, tabId, toSave)
+        baselineRef.current = toSave
+        setRawContent(toSave)
+      } catch {
+        toast.error("Failed to save summary")
+      }
+    }, SAVE_DELAY)
+  }
+
+  const enterEdit = () => {
+    // Protect citations so Tiptap does not turn [stt_…] into \[stt_…\]
+    setEditContent(protectCitationsForTiptap(rawContent))
+    setMode("edit")
+  }
+
+  const exitEdit = () => {
+    // Flush pending save
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    const canonical = restoreCitationsFromTiptap(editContent)
+    setRawContent(canonical)
+    if (canonical !== baselineRef.current) {
+      void saveSectionMd(meetingId, tabId, canonical)
+        .then(() => {
+          baselineRef.current = canonical
+        })
+        .catch(() => toast.error("Failed to save summary"))
+    }
+    setMode("view")
+  }
+
+  const handleEditChange = (value: string) => {
+    setEditContent(value)
+    const canonical = restoreCitationsFromTiptap(value)
+    // Keep rawContent in sync for quick preview switch
+    setRawContent(canonical)
+    if (canonical !== baselineRef.current) {
+      scheduleSaveRaw(canonical)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-muted-foreground min-h-0">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Loading...
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 flex flex-col min-w-0 min-h-0">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground shrink-0">
+          {tabId === "tab_general" ? "General" : "Section"}
+        </span>
+        <span className="text-xs text-foreground truncate flex-1">
+          {tabId === "tab_general"
+            ? meetingTitle || sectionTitle
+            : `${meetingTitle || "Meeting"} · ${sectionTitle}`}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-[10px] uppercase tracking-[0.1em] text-muted-foreground hover:text-primary gap-1"
+          onClick={() => (mode === "view" ? enterEdit() : exitEdit())}
+          title={
+            mode === "view"
+              ? "Edit with Tiptap (citations protected)"
+              : "Back to Meeting-style preview"
+          }
+        >
+          {mode === "view" ? (
+            <>
+              <Pencil className="h-3 w-3" />
+              Edit raw
+            </>
+          ) : (
+            <>
+              <Eye className="h-3 w-3" />
+              Preview
+            </>
+          )}
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
+        {mode === "view" ? (
+          <SummaryMarkdownViewer
+            md={rawContent}
+            speakerNames={speakerNames}
+            onRefClick={() => {
+              /* note context: no transcript seek */
+            }}
+          />
+        ) : (
+          <MarkdownEditor
+            value={editContent}
+            onChange={handleEditChange}
+            showToolbar={false}
+            className="min-h-[200px]"
+            placeholder="Summary is empty..."
+          />
+        )}
+      </div>
+    </div>
+  )
+}

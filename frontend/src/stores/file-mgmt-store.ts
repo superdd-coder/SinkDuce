@@ -148,7 +148,7 @@ interface FileMgmtState {
   clearFolderSelection: () => void
 
   // Files
-  refreshFiles: (collectionId: string) => Promise<void>
+  refreshFiles: (collectionId: string, opts?: { silent?: boolean }) => Promise<void>
   uploadFile: (collectionId: string, file: File) => Promise<void>
   uploadFolder: (collectionId: string, files: File[]) => Promise<void>
   moveFilesToFolder: (collectionId: string, fileIds: string[], targetFolderId: string) => Promise<void>
@@ -204,7 +204,8 @@ interface FileMgmtState {
   _startTaskPolling: (
     collectionId: string,
     taskId: string,
-    fileId?: string | null
+    fileId?: string | null,
+    opts?: { silentToast?: boolean }
   ) => void
 }
 
@@ -542,9 +543,10 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   // ── Files ──
 
-  refreshFiles: async (collectionId: string) => {
+  refreshFiles: async (collectionId: string, opts?: { silent?: boolean }) => {
     const { currentFolderId, currentFolder } = get()
-    set({ filesLoading: true })
+    const silent = !!opts?.silent
+    if (!silent) set({ filesLoading: true })
     try {
       if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) {
         // Virtual /Archived: all file-level archives
@@ -561,7 +563,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     } catch {
       set({ currentFolderFiles: [] })
     } finally {
-      set({ filesLoading: false })
+      if (!silent) set({ filesLoading: false })
     }
   },
 
@@ -876,6 +878,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       })
 
       await get().refreshFiles(collectionId)
+      // INFO panel: silent refresh definitive list + (after debounce) summary
+      const { triggerInfoRefresh } = await import("@/lib/info-refresh")
+      triggerInfoRefresh({ collectionId, reason: "definitive" })
       toast.success(
         definitive
           ? "Marked definitive — feeds Collection Summary"
@@ -1164,8 +1169,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     set({ timelineNavRequest: null })
   },
 
-  _startTaskPolling: (collectionId, taskId, fileId = null) => {
+  _startTaskPolling: (collectionId, taskId, fileId = null, opts) => {
     const fid = fileId || null
+    const silentToast = !!opts?.silentToast
     set((s) => {
       const next = new Set(s.uploadingTasks)
       next.add(taskId)
@@ -1211,14 +1217,18 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
           clearIngesting()
           await get().refreshFiles(collectionId)
           await get().refreshMessages(collectionId)
-          toast.success(`Ingest complete: ${task.filename}`)
+          if (!silentToast) {
+            toast.success(`Ingest complete: ${task.filename}`)
+          }
         } else if (task.status === "failed") {
           clearIngesting()
           await get().refreshFiles(collectionId)
           await get().refreshMessages(collectionId)
-          toast.error(
-            `Ingest failed: ${task.filename} — ${task.error || "unknown error"}`
-          )
+          if (!silentToast) {
+            toast.error(
+              `Ingest failed: ${task.filename} — ${task.error || "unknown error"}`
+            )
+          }
         } else {
           // Update progress badge while pending/processing
           if (fid) {

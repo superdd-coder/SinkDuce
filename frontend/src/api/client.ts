@@ -69,12 +69,21 @@ export interface ChunkConfig {
   child_chunk_size?: number
   child_chunk_overlap?: number
   allowed_file_types?: string[]
+  /** MinerU cloud parsing — default ON (matches Collection Config UI) */
+  cloud_parsing?: boolean
 }
 
 export const createCollection = (name: string, dimensions?: number, chunkConfig?: ChunkConfig) =>
   request<{ id?: string; message?: string; error?: string; dimensions?: number }>("/collections", {
     method: "POST",
-    body: JSON.stringify({ name, dimensions, ...chunkConfig }),
+    // Always send cloud_parsing so new collections persist the UI default (ON)
+    // even when the create dialog does not expose the checkbox.
+    body: JSON.stringify({
+      name,
+      dimensions,
+      cloud_parsing: true,
+      ...chunkConfig,
+    }),
   })
 
 export const deleteCollection = (collectionId: string) =>
@@ -1306,6 +1315,12 @@ export interface NoteDetail {
   is_extracted: boolean
   extracted_into: string[]
   is_ingested: boolean
+  /** Managed file under Notes folder when ingested */
+  file_id?: string | null
+  /** SHA-256 of content at last successful ingest (for REINGEST dirty state) */
+  ingested_content_hash?: string | null
+  /** Server: content differs from last ingest */
+  needs_reingest?: boolean
 }
 
 export interface NoteReference {
@@ -1372,6 +1387,48 @@ export const distillNote = (collection: string, targetNoteId: string, sourceNote
     { method: "POST", body: JSON.stringify({ source_note_id: sourceNoteId }) }
   )
 
+/** Distill one meeting summary file (General or a Section) into a note distill-block. */
+export const distillMeetingIntoNote = (
+  collection: string,
+  targetNoteId: string,
+  meetingId: string,
+  tabId: string = "tab_general",
+) =>
+  request<{
+    message: string
+    block_id: string
+    source_note_id: string
+    source_title: string
+    source_type?: string
+    meeting_id: string
+    tab_id: string
+    distilled_content: string
+  }>(
+    `/notes/${encodeURIComponent(collection)}/${targetNoteId}/distill-meeting`,
+    {
+      method: "POST",
+      body: JSON.stringify({ meeting_id: meetingId, tab_id: tabId || "tab_general" }),
+    }
+  )
+
+/** Distill-block source id for one meeting tab (matches backend meeting_source_id). */
+export const meetingDistillSourceId = (meetingId: string, tabId: string = "tab_general") =>
+  `meeting:${meetingId}:${tabId || "tab_general"}`
+
+/** Parse ``meeting:{id}:{tab}`` or legacy ``meeting:{id}``. */
+export const parseMeetingDistillSource = (
+  sourceId: string,
+): { meetingId: string; tabId: string } | null => {
+  if (!sourceId.startsWith("meeting:")) return null
+  const rest = sourceId.slice("meeting:".length).trim()
+  if (!rest) return null
+  const colon = rest.indexOf(":")
+  if (colon === -1) return { meetingId: rest, tabId: "tab_general" }
+  const meetingId = rest.slice(0, colon).trim()
+  const tabId = rest.slice(colon + 1).trim() || "tab_general"
+  return meetingId ? { meetingId, tabId } : null
+}
+
 export const getPropagationPreview = (collection: string, noteId: string) =>
   request<PropagationPreview>(`/notes/${encodeURIComponent(collection)}/${noteId}/propagation-preview`)
 
@@ -1382,10 +1439,21 @@ export const triggerPropagation = (collection: string, noteId: string) =>
   )
 
 export const ingestNote = (collection: string, noteId: string) =>
-  request<{ message: string; status: string }>(
+  request<{ message: string; status: string; file_id?: string | null; task_id?: string | null }>(
     `/notes/${encodeURIComponent(collection)}/${noteId}/ingest`,
     { method: "POST" }
   )
+
+/** Re-ingest as a new version on the managed Notes-folder file. */
+export const reingestNote = (collection: string, noteId: string) =>
+  request<{
+    message: string
+    status: string
+    file_id?: string | null
+    task_id?: string | null
+  }>(`/notes/${encodeURIComponent(collection)}/${noteId}/reingest`, {
+    method: "POST",
+  })
 
 export const removeNoteIngestion = (collection: string, noteId: string) =>
   request<{ message: string; is_ingested: boolean }>(

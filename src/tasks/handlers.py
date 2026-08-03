@@ -30,16 +30,32 @@ _embed_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="embed-w
 _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker")
 
 
-class _WorkProgress:
-    """Linear progress over discrete **completed** work units (not submitted).
+class _MonotonicProgress:
+    """Task progress that never moves backward (avoids 70% → 32% jumps)."""
 
-    Maps ``done/total`` into ``[lo, hi]`` percent on the task progress bar.
-    Completions that arrive before ``add_work`` are banked so the bar never
-    jumps backward when the full unit total becomes known.
+    def __init__(self, task):
+        self._task = task
+        self._lock = threading.Lock()
+        self._value = float(getattr(task, "progress", 0) or 0)
+
+    def set(self, pct: float, msg: str) -> None:
+        with self._lock:
+            self._value = max(self._value, min(100.0, float(pct)))
+            self._task.progress = self._value
+            self._task.message = msg
+
+
+class _WorkProgress:
+    """Linear progress over discrete **completed** work units within [lo, hi].
+
+    Completions that arrive before ``add_work`` are banked.
+    Does **not** shrink the bar when total grows mid-stage — new units only
+    affect remaining headroom from the current percent (via parent monotonic).
+    Prefer one ``_WorkProgress`` per stage with a fixed total when possible.
     """
 
-    def __init__(self, update_fn, lo: float = 30.0, hi: float = 90.0):
-        self._update = update_fn
+    def __init__(self, progress: _MonotonicProgress, lo: float = 30.0, hi: float = 90.0):
+        self._progress = progress
         self._lo = lo
         self._hi = hi
         self._lock = threading.Lock()
@@ -52,6 +68,19 @@ class _WorkProgress:
             return
         with self._lock:
             self._total += n
+            if self._pending_done:
+                self._done += self._pending_done
+                self._pending_done = 0
+            if self._done > self._total:
+                self._done = self._total
+            self._emit()
+
+    def set_total(self, n: int) -> None:
+        """Set absolute unit total for this stage (preferred over incremental add)."""
+        if n <= 0:
+            return
+        with self._lock:
+            self._total = max(self._total, n)
             if self._pending_done:
                 self._done += self._pending_done
                 self._pending_done = 0
@@ -73,6 +102,16 @@ class _WorkProgress:
         with self._lock:
             return self._done, max(self._total, 1)
 
+    def finish(self, msg: str | None = None) -> None:
+        with self._lock:
+            if self._total > 0:
+                self._done = self._total
+            if self._total <= 0:
+                label = msg or "Done"
+            else:
+                label = msg or f"Processing {self._done}/{self._total}…"
+            self._progress.set(self._hi, label)
+
     def _emit(self, msg: str | None = None) -> None:
         if self._total <= 0:
             pct = self._lo
@@ -81,7 +120,7 @@ class _WorkProgress:
             frac = min(1.0, self._done / self._total)
             pct = self._lo + (self._hi - self._lo) * frac
             label = msg or f"Processing {self._done}/{self._total}…"
-        self._update(min(pct, self._hi), label)
+        self._progress.set(min(pct, self._hi), label)
 
 
 class _EmbedBatcher:
@@ -319,36 +358,163 @@ def _store_structured_summary(enriched_chunks, doc, config, collection_id: str):
         sm.ensure_collection()
         version_id = None
         file_id = None
+        is_def = False
         if (source or "").startswith("__file__:"):
             file_id = source[len("__file__:") :]
             try:
-                from src.api.routes.info import current_version_id_for_source
+                from src.api.routes.info import (
+                    current_version_id_for_source,
+                    source_is_definitive,
+                )
 
                 version_id = current_version_id_for_source(collection_id, source)
+                is_def = source_is_definitive(collection_id, source)
             except Exception:
                 version_id = None
+                is_def = False
         sm.store_doc_summary(
             collection_id,
             source,
             data,
             facts,
             insights,
-            include_in_summary=False,
+            include_in_summary=is_def,
             version_id=version_id,
             file_id=file_id,
         )
         logger.info(
             "[ENRICH] Stored structured summary col=%r src=%r version_id=%r "
-            "(data=%d, facts=%d, insights=%d)",
+            "definitive=%s (data=%d, facts=%d, insights=%d)",
             collection_id,
             source,
             version_id,
+            is_def,
             len(data),
             len(facts),
             len(insights),
         )
+        # Version update / re-ingest of a definitive file must rebuild
+        # Collection Summary even though membership did not change.
+        if is_def:
+            try:
+                from src.api.routes.info import (
+                    _snapshot_includes,
+                    schedule_debounced_consolidate,
+                )
+
+                schedule_debounced_consolidate(
+                    collection_id,
+                    _snapshot_includes(collection_id),
+                    force_content_change=True,
+                )
+                logger.info(
+                    "[ENRICH] definitive source=%s — scheduled consolidate "
+                    "(force_content_change)",
+                    source,
+                )
+            except Exception:
+                logger.warning(
+                    "[ENRICH] Failed to schedule consolidate for definitive %s",
+                    source,
+                    exc_info=True,
+                )
     except Exception:
         logger.exception("[ENRICH] Failed to store structured summary")
+
+
+def _after_ingest_definitive_followup(
+    collection_id: str,
+    file_id: str,
+    *,
+    version_id: str | None = None,
+) -> None:
+    """After upload/version-ingest of a definitive file, ensure Collection Summary refreshes.
+
+    - If a doc_summary already exists for the current version (e.g. from enrich),
+      schedule debounced consolidate with ``force_content_change`` so membership-
+      only debounce still rebuilds.
+    - If no current-version summary exists (contextual off / enrich skipped),
+      queue ``doc_summary`` which will then schedule consolidate when definitive.
+    """
+    if not file_id or not collection_id:
+        return
+    source = f"__file__:{file_id}"
+    try:
+        from src.api.routes.info import (
+            _get_summary_manager,
+            _snapshot_includes,
+            schedule_debounced_consolidate,
+            source_is_definitive,
+        )
+    except Exception:
+        logger.warning(
+            "[INGEST] definitive follow-up imports failed for %s/%s",
+            collection_id,
+            file_id,
+            exc_info=True,
+        )
+        return
+
+    if not source_is_definitive(collection_id, source):
+        return
+
+    sm = _get_summary_manager()
+    existing = None
+    try:
+        if version_id:
+            existing = sm.get_doc_summary(collection_id, source, version_id=version_id)
+        if existing is None:
+            existing = sm.get_doc_summary(collection_id, source)
+            # Stale summary from an older version — regenerate for current content
+            if (
+                existing
+                and version_id
+                and (existing.get("version_id") or "").strip()
+                and existing.get("version_id") != version_id
+            ):
+                existing = None
+    except Exception:
+        logger.warning(
+            "[INGEST] get_doc_summary failed for %s", source, exc_info=True
+        )
+        existing = None
+
+    if existing is not None:
+        try:
+            schedule_debounced_consolidate(
+                collection_id,
+                _snapshot_includes(collection_id),
+                force_content_change=True,
+            )
+            logger.info(
+                "[INGEST] definitive %s has summary — scheduled consolidate",
+                source,
+            )
+        except Exception:
+            logger.warning(
+                "[INGEST] schedule consolidate failed for %s",
+                source,
+                exc_info=True,
+            )
+        return
+
+    try:
+        task_manager.create_task(
+            filename=f"doc_summary:{collection_id}:{source}",
+            task_type="doc_summary",
+            collection=collection_id,
+            source=source,
+        )
+        logger.info(
+            "[INGEST] definitive %s — queued doc_summary (will consolidate)",
+            source,
+        )
+    except Exception:
+        logger.warning(
+            "[INGEST] Failed to queue doc_summary for %s",
+            source,
+            exc_info=True,
+        )
 
 
 def _build_enriched_text(chunk) -> str:
@@ -574,8 +740,63 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
         collection,
     )
     if not doc_summaries:
-        logger.info("[CONSOLIDATE] No documents to consolidate, aborting")
-        return {"message": "No documents to consolidate"}
+        # Re-check files table: zero *usable* summaries is not enough —
+        # a definitive file may still be waiting on doc_summary generation.
+        # Only clear stale consolidate results when no definitive files remain.
+        definitive_file_count = 0
+        try:
+            from src.file_mgmt.store import get_db as _fm_get_db
+
+            _conn = _fm_get_db(collection)
+            try:
+                row = _conn.execute(
+                    "SELECT COUNT(*) AS c FROM files WHERE is_definitive=1"
+                ).fetchone()
+                definitive_file_count = int(row["c"] if row else 0)
+            finally:
+                _conn.close()
+        except Exception:
+            logger.warning(
+                "[CONSOLIDATE] Could not count definitive files for %s",
+                collection,
+                exc_info=True,
+            )
+
+        if definitive_file_count > 0:
+            logger.info(
+                "[CONSOLIDATE] No doc_summaries yet but %d definitive file(s) "
+                "remain for '%s' — skip clear (wait for summaries)",
+                definitive_file_count,
+                collection,
+            )
+            return {
+                "message": "No summaries yet for definitive files — consolidate deferred",
+            }
+
+        # Truly no definitive files after debounce window — drop stale results.
+        logger.info(
+            "[CONSOLIDATE] No definitive files for collection='%s' — "
+            "clearing previous consolidate results",
+            collection,
+        )
+        summary_mgr.delete_collection_summary(collection)
+        summary_mgr.delete_project_description(collection)
+        summary_mgr.delete_conflicts(collection)
+        try:
+            services.db.update_collection_config(collection, {"summary_change_counter": 0})
+        except Exception:
+            logger.warning(
+                "[CONSOLIDATE] Failed to reset summary_change_counter for %s",
+                collection,
+                exc_info=True,
+            )
+        try:
+            from src.api.routes.info import clear_debounce
+
+            clear_debounce(collection)
+        except Exception:
+            pass
+        return {"message": "No documents to consolidate — previous results cleared"}
 
     # 1b. Check if any doc summary has usable content
     has_content = any(
@@ -687,9 +908,13 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
     """处理文件上传任务 - 使用流水线队列控制并发"""
     from src.tasks.task_manager import set_current_task, clear_current_task, check_cancelled
 
+    # Progress is monotonic and stage-banded by collection pipeline:
+    #   setup/parse → images (optional) → chunk → enrich (optional) → embed → store
+    # Ranges shrink/expand so skipped stages do not leave a dead zone or rewind %.
+    prog = _MonotonicProgress(task)
+
     def update(progress: float, msg: str):
-        task.progress = progress
-        task.message = msg
+        prog.set(progress, msg)
 
     loop = asyncio.get_running_loop()
 
@@ -700,22 +925,25 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         if not path.is_file():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        # ── Stage 1: Parsing + image describe + chunking ──
-        # Progress map:
-        #   0–30  parse / setup / chunking
-        #  30–90  image description + enrichment + embedding (linear by *completed* units)
-        #  90–100 store
-        update(10, "Checking collection...")
-        work = _WorkProgress(update, lo=30.0, hi=90.0)
+        # Stage band ends (filled after config / parse known)
+        # Defaults assume local parse, no images, enrich on — adjusted below.
+        parse_hi = 22.0
+        images_hi = 22.0  # = parse_hi if no images
+        chunk_hi = 28.0
+        mid_lo = 28.0
+        mid_hi = 90.0
+
+        update(5, "Checking collection...")
 
         def _parse_and_chunk():
+            nonlocal parse_hi, images_hi, chunk_hi, mid_lo
+
             if not services.db.collection_exists(collection):
                 services.db.create_collection(collection, vector_size=services.embedding.dimensions)
 
-            update(15, "Parsing file...")
-
-            # Load collection config first (needed for cloud_parsing flag)
+            # Load collection config first (needed for cloud_parsing / contextual)
             config = services.db.get_collection_config(collection)
+            contextual_enabled = bool(config.get("contextual_enabled", True))
 
             # Decide: cloud parsing (MinerU) or local parsing
             # Default True to match Collection Config UI + _DEFAULT_COLLECTION_CONFIG
@@ -731,6 +959,8 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 and bool(mineru_cfg.api_token)
                 and file_ext in MINERU_SUPPORTED_EXTENSIONS
             )
+            # Cloud parse is slower — give it a wider band before images/chunk
+            parse_hi = 28.0 if mineru_ready else 18.0
             logger.info(
                 "[%s] Parsing path: collection=%s, cloud_parsing=%s (raw=%r), "
                 "mineru_enabled=%s, has_token=%s, ext=%s, supported=%s → %s",
@@ -745,8 +975,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 "MinerU" if mineru_ready else "local",
             )
 
+            update(8, "Parsing file via MinerU cloud..." if mineru_ready else "Parsing file...")
+
             if mineru_ready:
-                update(18, "Parsing file via MinerU cloud...")
                 try:
                     doc = parse_with_mineru(path, mineru_cfg)
                     logger.info("[%s] MinerU parse done in %.1fs, content length: %d",
@@ -765,11 +996,13 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                     "The file may be empty or the images could not be read by OCR."
                 )
 
+            update(parse_hi, "Parse complete")
             file_dir = path.parent
 
-            # ── Image processing: filter, save, describe, update content ──
-            # Describe work units feed 30–90% linear progress (completed only).
-            if doc.images and file_id:
+            # ── Image processing (own progress band — never shared with enrich) ──
+            has_images = bool(doc.images and file_id)
+            if has_images:
+                images_hi = parse_hi + 18.0  # e.g. 18→36 or 28→46
                 from src.parsers.image_utils import process_document_images
                 from src.config import get_config
 
@@ -786,22 +1019,30 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 # Use the VISUAL_PROMPT from prompts.py
                 from src.prompts import VISUAL_PROMPT
 
-                update(25, "Processing images...")
+                img_work = _WorkProgress(prog, lo=parse_hi, hi=images_hi)
+                update(parse_hi + 0.5, "Processing images...")
+
                 def _img_done():
-                    work.done(1)
-                    d, t = work.snapshot()
-                    update(30.0 + 60.0 * (d / t), f"Describing images… {d}/{t}")
+                    img_work.done(1, None)
+                    d, t = img_work.snapshot()
+                    update(
+                        parse_hi + (images_hi - parse_hi) * min(1.0, d / max(t, 1)),
+                        f"Describing images… {d}/{t}",
+                    )
 
                 doc = process_document_images(
                     doc, file_id, file_dir,
                     vision_provider=vision_provider,
                     vision_model_id=vision_model_id,
                     vision_prompt=VISUAL_PROMPT,
-                    on_describe_planned=lambda n: work.add_work(n),
+                    on_describe_planned=lambda n: img_work.set_total(n),
                     on_image_done=_img_done,
                 )
+                img_work.finish("Images done")
                 logger.info("[%s] Image processing done: %d images in doc",
                             filename_param, len(doc.images or []))
+            else:
+                images_hi = parse_hi
 
             # Save parsed text for preview (same text the chunker uses)
             try:
@@ -814,7 +1055,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             except Exception as e:
                 logger.warning("[%s] Failed to save parsed text: %s", filename_param, e)
 
-            update(28, "Chunking...")
+            chunk_hi = images_hi + 6.0
+            mid_lo = chunk_hi
+            update(images_hi + 1.0, "Chunking...")
             # Use MarkdownChunker when content has ::: blocks (images, distill, etc.)
             # so fenced blocks are treated as atomic units and not split across chunks.
             use_markdown_chunker = doc.file_type == "markdown" or bool(doc.images)
@@ -891,31 +1134,38 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                     "The content may be too short or not match the chunking strategy."
                 )
 
+            update(chunk_hi, f"Chunked {len(chunks)}")
             return doc, chunks, config
 
         # Use separate CPU thread pool for parsing/chunking
         doc, chunks, config = await loop.run_in_executor(_cpu_executor, _parse_and_chunk)
 
         # ── Stage 2+3: Enriching + Embedding (pipelined) ──
-        # Work units for 30–90%: enrich (per finished context) + embed (per finished vector).
+        # Fresh work band [mid_lo, 90] — never reuses image units (that caused
+        # progress to jump backward when total grew after images finished).
         t_ctx = time.time()
-        contextual_enabled = config.get("contextual_enabled", True)
-        # Only count non-parent chunks for embedding (parents skip embed)
+        contextual_enabled = bool(config.get("contextual_enabled", True))
         embed_count = len([c for c in chunks if c.chunk_type != "parent"])
         enrich_count = len(chunks) if contextual_enabled else 0
-        work.add_work(enrich_count + embed_count)
-        d0, t0 = work.snapshot()
-        update(max(30.0, float(getattr(task, "progress", 30) or 30)),
-               f"Enrich+Embed {d0}/{t0}…")
+        mid_hi = 90.0
+        mid_work = _WorkProgress(prog, lo=mid_lo, hi=mid_hi)
+        total_mid = (enrich_count + embed_count) if contextual_enabled else max(embed_count, 1)
+        mid_work.set_total(total_mid)
+        if contextual_enabled:
+            update(mid_lo, f"Enrich+Embed 0/{total_mid}…")
+        else:
+            update(mid_lo, f"Embedding 0/{embed_count or 1}…")
 
         if contextual_enabled:
             embedding = get_collection_embedding(config, collection)
 
             def _on_embed_done(n: int):
-                work.done(n)
-                d, t = work.snapshot()
-                # Re-emit with clearer label (done() already advanced bar)
-                update(30.0 + 60.0 * (d / t), f"Embedding… {d}/{t}")
+                mid_work.done(n)
+                d, t = mid_work.snapshot()
+                update(
+                    mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
+                    f"Embedding… {d}/{t}",
+                )
 
             batcher = _EmbedBatcher(
                 embedding,
@@ -928,10 +1178,12 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 c.metadata["_embed_idx"] = i
 
             def _on_enrich_ready(chunk, context: str):
-                # One completed enrichment unit (success or fail)
-                work.done(1)
-                d, t = work.snapshot()
-                update(30.0 + 60.0 * (d / t), f"Enriching… {d}/{t}")
+                mid_work.done(1)
+                d, t = mid_work.snapshot()
+                update(
+                    mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
+                    f"Enriching… {d}/{t}",
+                )
                 batcher.on_ready(chunk, context)
 
             def _enrich_and_embed():
@@ -967,36 +1219,41 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 # Enrichment skipped (e.g. >200 chunks) — embed all at once.
                 logger.info("[%s] enrichment skipped, embedding all %d chunks inline",
                             filename_param, len(chunks))
-                # Enrich units never fired — mark them completed so progress can finish
                 if enrich_count:
-                    work.done(enrich_count)
-                    d, t = work.snapshot()
-                    update(30.0 + 60.0 * (d / t), f"Enrich skipped… {d}/{t}")
+                    mid_work.done(enrich_count)
                 texts = [_build_enriched_text(c) for c in chunks]
 
                 def _embed_and_sparse():
                     emb = embedding.embed_texts(texts)
-                    # Count all embeds as completed after the call returns
                     if embed_count:
-                        work.done(embed_count)
-                        d, t = work.snapshot()
-                        update(30.0 + 60.0 * (d / t), f"Embedding… {d}/{t}")
+                        mid_work.done(embed_count)
+                        d, t = mid_work.snapshot()
+                        update(
+                            mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
+                            f"Embedding… {d}/{t}",
+                        )
                     sp = _do_sparse(texts, collection)
                     return emb, sp
 
                 embeddings, sparse_vectors = await loop.run_in_executor(None, _embed_and_sparse)
 
         else:
-            # No enrichment — embed + sparse; only embed units count in 30–90
+            # No enrichment — only embed units fill [mid_lo, mid_hi]
             embedding = get_collection_embedding(config, collection)
             texts = [_build_enriched_text(c) for c in chunks]
             embeddings = embedding.embed_texts(texts)
             if embed_count:
-                work.done(embed_count)
-                d, t = work.snapshot()
-                update(30.0 + 60.0 * (d / t), f"Embedding… {d}/{t}")
+                mid_work.done(embed_count)
+            else:
+                mid_work.finish("No chunks to embed")
+            d, t = mid_work.snapshot()
+            update(
+                mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
+                f"Embedding… {d}/{t}",
+            )
             sparse_vectors = _do_sparse(texts, collection)
 
+        mid_work.finish("Enrich+Embed done")
         t_emb = time.time()
         logger.info("[%s] Enrich+Embed done in %.1fs (%d chunks)",
                     filename_param, t_emb - t_ctx, len(chunks))
@@ -1079,6 +1336,21 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 )
             except Exception:
                 logger.warning("[%s] Failed to update files.json", filename_param, exc_info=True)
+
+            # Definitive file version update / re-ingest:
+            # Enrich path schedules consolidate when it stores a new summary.
+            # When contextual is off (or enrich skipped), no new summary is
+            # written — queue doc_summary so Collection Summary still refreshes.
+            try:
+                _after_ingest_definitive_followup(
+                    collection, file_id, version_id=version_id
+                )
+            except Exception:
+                logger.warning(
+                    "[%s] definitive follow-up after ingest failed",
+                    filename_param,
+                    exc_info=True,
+                )
 
         clear_current_task()
         return {"message": "Done", "filename": filename_param, "chunks_count": len(chunks), "collection": collection}

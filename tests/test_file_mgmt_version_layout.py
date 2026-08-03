@@ -122,6 +122,27 @@ def test_upload_and_version_use_version_id_subdirs():
     assert prev2.content == b"v2 body"
 
 
+def test_resolve_note_label_storage_finds_flat_md():
+    """Note ingest writes Title.md but migration may store 'Note: Title' as storage_file_id."""
+    from src.file_mgmt.storage_paths import resolve_version_blob
+
+    coll = f"layout-note-{uuid.uuid4().hex[:8]}"
+    _setup_collection(coll)
+    file_id = uuid.uuid4().hex
+    version_id = uuid.uuid4().hex
+    root = Path("data/collections") / coll / "files" / file_id
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "My_Note.md").write_text("# hello note", encoding="utf-8")
+
+    # Wrong storage name (display label) — must still find the .md
+    found = resolve_version_blob(
+        coll, file_id, version_id, "Note: My Note"
+    )
+    assert found is not None
+    assert found.name == "My_Note.md"
+    assert found.read_text(encoding="utf-8") == "# hello note"
+
+
 def test_migrate_flat_layout_to_version_dirs():
     from src.file_mgmt.storage_paths import (
         _layout_migrated,

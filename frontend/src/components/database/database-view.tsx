@@ -162,6 +162,58 @@ export function DatabaseView() {
     }
   }, [pendingOpenFile, setPendingOpenFile])
 
+  // From note editor: switch to Files tab → Notes folder → open file detail
+  useEffect(() => {
+    const handler = async (ev: Event) => {
+      const detail = (
+        ev as CustomEvent<{
+          collectionId?: string
+          fileId?: string
+          noteId?: string
+        }>
+      ).detail
+      const fileId = detail?.fileId
+      if (!fileId) return
+      const col = detail.collectionId || activeCollection
+      if (!col) return
+
+      handleTabChange("files")
+      try {
+        const store = useFileMgmtStore.getState()
+        await store.fetchFolderTree(col)
+        const tree = useFileMgmtStore.getState().folderTree
+        type TreeN = {
+          name: string
+          is_system?: boolean
+          folder_id: string
+          children?: TreeN[]
+        }
+        const findNotes = (nodes: TreeN[]): string | null => {
+          for (const n of nodes) {
+            if (n.name === "Notes" && n.is_system) return n.folder_id
+            const hit = findNotes(n.children || [])
+            if (hit) return hit
+          }
+          return null
+        }
+        const notesFolderId = findNotes(tree as TreeN[])
+        if (notesFolderId) {
+          await store.selectFolder(col, notesFolderId)
+        } else {
+          await store.refreshFiles(col, { silent: true })
+        }
+      } catch {
+        /* still open detail */
+      }
+      const source = detail.noteId
+        ? `__note__:${detail.noteId}`
+        : `__file__:${fileId}`
+      setDetailOpen({ fileId, source })
+    }
+    window.addEventListener("open-note-file-in-folder", handler)
+    return () => window.removeEventListener("open-note-file-in-folder", handler)
+  }, [activeCollection, handleTabChange])
+
   const fetchFiles = useCallback(async () => {
     if (!activeCollection) return
     const token = ++filesTokenRef.current

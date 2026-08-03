@@ -35,6 +35,8 @@ COLLECTIONS_DIR = Path("data").resolve() / "collections"
 
 # Process-local: collections whose disk layout migration already ran.
 _layout_migrated: set[str] = set()
+# Process-local: collections whose storage_file_id label repair already ran.
+_storage_labels_repaired: set[str] = set()
 
 
 def files_dir(collection_id: str) -> Path:
@@ -56,6 +58,66 @@ def storage_basename(storage_file_id: str | None) -> str:
         return ""
     # Allow accidental relative paths in DB; always take final component.
     return Path(str(storage_file_id).replace("\\", "/")).name
+
+
+def _is_content_blob_name(name: str) -> bool:
+    """True if *name* looks like a real content file (not a sidecar / noise)."""
+    if not name or name.startswith("."):
+        return False
+    if name in {"parsed.txt"}:
+        return False
+    if name.endswith(".extracted.txt"):
+        return False
+    return True
+
+
+def _iter_content_blobs(directory: Path) -> list[Path]:
+    """List content files in *directory* (non-recursive)."""
+    if not directory.is_dir():
+        return []
+    out: list[Path] = []
+    try:
+        for f in sorted(directory.iterdir()):
+            if f.is_file() and _is_content_blob_name(f.name):
+                out.append(f)
+    except OSError:
+        return []
+    return out
+
+
+def discover_content_blob(
+    collection_id: str,
+    file_id: str,
+    version_id: str | None = None,
+) -> Path | None:
+    """Find a content blob when DB storage_file_id does not match disk.
+
+    Used for note/meeting snapshots (flat ``{title}.md``) and when migration
+    stored a display label instead of the real basename.
+    """
+    root = managed_file_dir(collection_id, file_id)
+    if not root.is_dir():
+        return None
+    if version_id:
+        found = _iter_content_blobs(root / version_id)
+        if found:
+            return found[0]
+    # Flat layout under file_id (notes/meetings ingest)
+    found = _iter_content_blobs(root)
+    if found:
+        return found[0]
+    # Any version subdir (prefer when version_id unknown)
+    if not version_id:
+        try:
+            for child in sorted(root.iterdir()):
+                if not child.is_dir():
+                    continue
+                found = _iter_content_blobs(child)
+                if found:
+                    return found[0]
+        except OSError:
+            pass
+    return None
 
 
 def resolve_version_blob(
@@ -84,15 +146,12 @@ def resolve_version_blob(
     if name:
         candidates.append(root / name)  # legacy flat
     if version_id:
-        # Blob might keep original name under version dir even if DB name drifted
-        vdir = root / version_id
-        if vdir.is_dir():
-            for f in sorted(vdir.iterdir()):
-                if f.is_file() and f.name not in {"parsed.txt"} and not f.name.endswith(
-                    ".extracted.txt"
-                ):
-                    if not name or f.name == name:
-                        candidates.append(f)
+        # Any content file under this version dir (DB name may be a display label)
+        for f in _iter_content_blobs(root / version_id):
+            if not name or f.name == name:
+                candidates.append(f)
+            else:
+                candidates.append(f)
 
     seen: set[str] = set()
     for p in candidates:
@@ -105,7 +164,9 @@ def resolve_version_blob(
                 return p
         except OSError:
             continue
-    return None
+
+    # Note/meeting snapshots + bad storage_file_id (label instead of basename)
+    return discover_content_blob(collection_id, file_id, version_id)
 
 
 def expected_version_blob_path(
@@ -435,12 +496,68 @@ def migrate_collection_layout(collection_id: str) -> dict:
         conn.close()
 
 
-def ensure_layout_migrated(collection_id: str) -> None:
-    """Run layout migration once per process (safe, idempotent)."""
-    if collection_id in _layout_migrated:
-        return
+def repair_storage_file_labels(collection_id: str) -> int:
+    """Fix file_versions.storage_file_id when it is a display label, not disk name.
+
+    Notes/meetings often store ``Meeting: Title / Section`` while disk has
+    ``tab_02.md``. Idempotent; safe to call on every open.
+    """
+    if collection_id in _storage_labels_repaired:
+        return 0
     try:
-        migrate_collection_layout(collection_id)
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection_id)
+    except FileNotFoundError:
+        _storage_labels_repaired.add(collection_id)
+        return 0
+
+    repaired = 0
+    try:
+        rows = conn.execute(
+            "SELECT version_id, file_id, storage_file_id FROM file_versions"
+        ).fetchall()
+        with conn:
+            for r in rows:
+                fid = r["file_id"]
+                vid = r["version_id"]
+                old = storage_basename(r["storage_file_id"])
+                blob = resolve_version_blob(
+                    collection_id, fid, vid, r["storage_file_id"]
+                )
+                if blob is None or not blob.name:
+                    continue
+                if blob.name == old:
+                    continue
+                conn.execute(
+                    "UPDATE file_versions SET storage_file_id=? WHERE version_id=?",
+                    (blob.name, vid),
+                )
+                repaired += 1
+        if repaired:
+            logger.info(
+                "Repaired %d storage_file_id label(s) in %s",
+                repaired,
+                collection_id,
+            )
+        _storage_labels_repaired.add(collection_id)
+        return repaired
+    except Exception:
+        logger.exception("storage_file_id repair failed for %s", collection_id)
+        return repaired
+    finally:
+        conn.close()
+
+
+def ensure_layout_migrated(collection_id: str) -> None:
+    """Run layout migration + storage label repair (safe, idempotent)."""
+    try:
+        if collection_id not in _layout_migrated:
+            migrate_collection_layout(collection_id)
     except Exception:
         logger.exception("Layout migration failed for %s", collection_id)
         # Do not mark done — allow retry next open
+    try:
+        repair_storage_file_labels(collection_id)
+    except Exception:
+        logger.exception("storage label repair failed for %s", collection_id)

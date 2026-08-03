@@ -79,6 +79,58 @@ def _find_note_dir(note_id: str) -> Path | None:
     return None
 
 
+# ── Ingest content fingerprint (for REINGEST dirty detection) ──
+
+
+def content_fingerprint(text: str) -> str:
+    """SHA-256 hex of UTF-8 content — must match frontend ``sha256Hex``."""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def get_ingested_content_hash(note_id: str) -> str | None:
+    """Hash of content at last successful ingest/reingest, or None."""
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        return None
+    path = ndir / "ingested.hash"
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def set_ingested_content_hash(note_id: str, content: str) -> None:
+    """Record content fingerprint after a successful ingest/reingest."""
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        return
+    try:
+        (ndir / "ingested.hash").write_text(
+            content_fingerprint(content), encoding="utf-8"
+        )
+    except OSError:
+        logger.warning(
+            "Failed to write ingested.hash for note %s", note_id, exc_info=True
+        )
+
+
+def clear_ingested_content_hash(note_id: str) -> None:
+    """Drop fingerprint when ingestion is removed."""
+    ndir = _find_note_dir(note_id)
+    if ndir is None:
+        return
+    path = ndir / "ingested.hash"
+    try:
+        if path.is_file():
+            path.unlink()
+    except OSError:
+        logger.warning(
+            "Failed to clear ingested.hash for note %s", note_id, exc_info=True
+        )
+
+
 # ── CRUD ───────────────────────────────────────────────────────
 
 

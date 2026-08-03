@@ -1269,16 +1269,20 @@ input[type="checkbox"] {
 }
 
 /*
- * Single visual top row without moving zoom nodes out of .pdf-shell
- * (moving into web-toolbar was destroyed on toolbar re-render).
+ * PDF chrome layout
+ * ----------------
+ * Wide: one visual top row — left slot for zoom/rotate (pdf-toolbar pulled up),
+ *       right for Search / Download / Print.
+ * Narrow: stack two rows so controls never overlap (no shared absolute slot).
  *
- * Search row: full width, padding-left reserves the red-box slot.
- * PDF toolbar: pulled up with negative margin into that slot.
+ * container-type on shell so we react to *viewer* width, not only viewport.
  */
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-shell {
   display: flex !important;
   flex-direction: column !important;
   overflow: hidden !important;
+  container-type: inline-size !important;
+  container-name: fv-shell !important;
 }
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-shell > .file-viewer-web-toolbar {
   display: flex !important;
@@ -1290,34 +1294,46 @@ input[type="checkbox"] {
   gap: 6px !important;
   border-radius: 0 !important;
   border-bottom: 1px solid var(--fv-border) !important;
-  /* Red-box slot on the left for zoom/rotate */
-  padding-left: 200px !important;
+  /* Left slot for zoom/rotate when single-row mode */
+  padding-left: min(200px, 32%) !important;
   padding-right: 10px !important;
-  min-height: 36px !important;
   height: 36px !important;
+  min-height: 36px !important;
   box-sizing: border-box !important;
   flex-shrink: 0 !important;
   position: relative !important;
   z-index: 2 !important;
+  flex-wrap: nowrap !important;
+  overflow: hidden !important; /* clip rather than paint over zoom */
+}
+/* Search can shrink so Download/Print stay visible */
+.sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-search {
+  flex: 1 1 auto !important;
+  min-width: 72px !important;
+  max-width: 220px !important;
+}
+.sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-search input {
+  min-width: 0 !important;
+  width: 100% !important;
 }
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-content {
   flex: 1 1 auto !important;
   min-height: 0 !important;
-  overflow: visible !important; /* allow pdf-toolbar to sit up into search row */
+  overflow: hidden !important; /* do not let page chrome spill into top bar */
   position: relative !important;
-  z-index: 3 !important;
+  z-index: 1 !important;
 }
 .sinkduce-file-viewer:has(.pdf-shell) .pdf-shell {
   display: flex !important;
   flex-direction: column !important;
   height: 100% !important;
   min-height: 0 !important;
-  overflow: visible !important;
+  overflow: hidden !important;
   position: relative !important;
   background: var(--fv-bg) !important;
 }
 
-/* Zoom/rotate: pull up into the left of the Search row (red box) */
+/* Zoom/rotate: sit in the left slot of the Search row (wide only) */
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] {
   display: flex !important;
   flex-wrap: nowrap !important;
@@ -1325,7 +1341,7 @@ input[type="checkbox"] {
   justify-content: flex-start !important;
   gap: 6px !important;
   width: auto !important;
-  max-width: 190px !important;
+  max-width: min(190px, 30%) !important;
   min-height: 36px !important;
   height: 36px !important;
   padding: 4px 8px 4px 10px !important;
@@ -1333,7 +1349,7 @@ input[type="checkbox"] {
   border: none !important;
   background: transparent !important;
   box-shadow: none !important;
-  overflow: visible !important;
+  overflow: hidden !important;
   position: relative !important;
   z-index: 20 !important;
   flex-shrink: 0 !important;
@@ -1355,10 +1371,13 @@ input[type="checkbox"] {
   visibility: visible !important;
   opacity: 1 !important;
 }
+/* Page / sidebar controls belong in nav head — never on the top overlay row */
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] > .pdf-icon-button,
 .sinkduce-file-viewer
   .pdf-toolbar[data-sinkduce-bar="top-left"]
-  > .pdf-toolbar-group:not(.pdf-toolbar-group--zoom):not(.pdf-toolbar-group--rotate) {
+  > .pdf-toolbar-group:not(.pdf-toolbar-group--zoom):not(.pdf-toolbar-group--rotate),
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-page-meter,
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-page-label {
   display: none !important;
 }
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-icon-button,
@@ -1377,6 +1396,58 @@ input[type="checkbox"] {
   flex: 1 1 auto !important;
   min-height: 0 !important;
   overflow: hidden !important;
+}
+
+/*
+ * Narrow viewer: abandon single-row overlay — two clear rows, no overlap.
+ * container = .file-viewer-web-shell (viewer width, not whole browser).
+ */
+@container fv-shell (max-width: 720px) {
+  .file-viewer-web-toolbar {
+    padding-left: 10px !important;
+    justify-content: flex-start !important;
+    flex-wrap: wrap !important;
+    row-gap: 4px !important;
+    height: auto !important;
+    min-height: 36px !important;
+    overflow: visible !important;
+  }
+  .file-viewer-web-search {
+    flex: 1 1 120px !important;
+    max-width: none !important;
+    min-width: 64px !important;
+  }
+  .pdf-toolbar[data-sinkduce-bar="top-left"] {
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 2px 8px !important;
+    border-bottom: 1px solid var(--fv-border) !important;
+    background: var(--fv-surface, var(--fv-bg)) !important;
+    z-index: 1 !important;
+  }
+}
+
+/* Viewport fallback (outer dialog / no container support) */
+@media (max-width: 900px) {
+  .sinkduce-file-viewer:has(.pdf-shell)
+    .file-viewer-web-shell
+    > .file-viewer-web-toolbar {
+    padding-left: 10px !important;
+    justify-content: flex-start !important;
+    flex-wrap: wrap !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .sinkduce-file-viewer:has(.pdf-shell) .pdf-toolbar[data-sinkduce-bar="top-left"] {
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    border-bottom: 1px solid var(--fv-border) !important;
+    background: var(--fv-surface, var(--fv-bg)) !important;
+  }
 }
 
 /* Pinch / trackpad zoom surface */
