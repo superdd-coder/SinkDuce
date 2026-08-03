@@ -59,6 +59,143 @@ export type NameConflictState = {
   retry: (newName: string) => Promise<void>
 }
 
+/**
+ * Folder-view grid sort (persisted). Folders and files share the same order.
+ * *_desc = newest first; *_asc = oldest first (re-click toggles direction).
+ */
+export type FolderFileSortMode =
+  | "name"
+  | "type"
+  | "created_desc"
+  | "created_asc"
+  | "updated_desc"
+  | "updated_asc"
+
+export type FolderUploadConfirmState = {
+  collectionId: string
+  files: File[]
+}
+
+/** Per-collection sort cache in localStorage. Default mode is "type". */
+const FOLDER_FILE_SORT_MAP_KEY = "sinkduce:folder-file-sort-by-collection"
+/** @deprecated single global key — migrated once into the map */
+const FOLDER_FILE_SORT_LEGACY_KEY = "sinkduce:folder-file-sort"
+
+const SORT_MODES: FolderFileSortMode[] = [
+  "name",
+  "type",
+  "created_desc",
+  "created_asc",
+  "updated_desc",
+  "updated_asc",
+]
+
+const DEFAULT_FOLDER_FILE_SORT: FolderFileSortMode = "type"
+
+function parseSortMode(raw: string | null | undefined): FolderFileSortMode | null {
+  if (!raw) return null
+  if ((SORT_MODES as string[]).includes(raw)) return raw as FolderFileSortMode
+  // Legacy keys
+  if (raw === "time" || raw === "time_desc") return "updated_desc"
+  if (raw === "time_asc") return "updated_asc"
+  return null
+}
+
+function loadSortMap(): Record<string, FolderFileSortMode> {
+  try {
+    const raw = localStorage.getItem(FOLDER_FILE_SORT_MAP_KEY)
+    if (raw) {
+      const obj = JSON.parse(raw) as Record<string, unknown>
+      const out: Record<string, FolderFileSortMode> = {}
+      for (const [k, v] of Object.entries(obj || {})) {
+        const mode = parseSortMode(typeof v === "string" ? v : null)
+        if (mode) out[k] = mode
+      }
+      return out
+    }
+  } catch {
+    /* ignore */
+  }
+  return {}
+}
+
+function saveSortMap(map: Record<string, FolderFileSortMode>) {
+  try {
+    localStorage.setItem(FOLDER_FILE_SORT_MAP_KEY, JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Load sort for a collection; default = type. Migrates legacy global key once. */
+export function loadFolderFileSort(collectionId: string): FolderFileSortMode {
+  if (!collectionId) return DEFAULT_FOLDER_FILE_SORT
+  const map = loadSortMap()
+  if (map[collectionId]) return map[collectionId]
+  // One-time migrate: old global preference becomes this collection's seed
+  try {
+    const legacy = parseSortMode(localStorage.getItem(FOLDER_FILE_SORT_LEGACY_KEY))
+    if (legacy) {
+      map[collectionId] = legacy
+      saveSortMap(map)
+      localStorage.removeItem(FOLDER_FILE_SORT_LEGACY_KEY)
+      return legacy
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_FOLDER_FILE_SORT
+}
+
+function persistFolderFileSort(
+  collectionId: string,
+  mode: FolderFileSortMode
+) {
+  if (!collectionId) return
+  const map = loadSortMap()
+  map[collectionId] = mode
+  saveSortMap(map)
+}
+
+export function isCreatedSortMode(mode: FolderFileSortMode): boolean {
+  return mode === "created_desc" || mode === "created_asc"
+}
+
+export function isUpdatedSortMode(mode: FolderFileSortMode): boolean {
+  return mode === "updated_desc" || mode === "updated_asc"
+}
+
+/** Toggle create-time newest ↔ oldest; default newest. */
+export function nextCreatedSortMode(
+  current: FolderFileSortMode
+): "created_desc" | "created_asc" {
+  if (current === "created_desc") return "created_asc"
+  if (current === "created_asc") return "created_desc"
+  return "created_desc"
+}
+
+/** Toggle update-time newest ↔ oldest; default newest. */
+export function nextUpdatedSortMode(
+  current: FolderFileSortMode
+): "updated_desc" | "updated_asc" {
+  if (current === "updated_desc") return "updated_asc"
+  if (current === "updated_asc") return "updated_desc"
+  return "updated_desc"
+}
+
+/** Skip macOS junk and similar during folder upload. */
+export function isSkippedUploadFile(file: File): boolean {
+  const rel =
+    (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+    file.name ||
+    ""
+  const base = rel.split(/[/\\]/).pop() || file.name || ""
+  if (base === ".DS_Store") return true
+  if (base.startsWith("._")) return true // AppleDouble
+  if (base === "Thumbs.db" || base === "desktop.ini") return true
+  return false
+}
+
 // Check if a folder is the Archived virtual view (by folder_id or name)
 function isArchivedFolder(folderId: string | null, folder?: Folder | null): boolean {
   if (folderId === "__archived__") return true
@@ -148,8 +285,20 @@ interface FileMgmtState {
   clearFolderSelection: () => void
 
   // Files
+  /** Folder view sort for the active collection (default: type). */
+  folderFileSort: FolderFileSortMode
+  /** Load cached sort for a collection (or default type). Call on collection switch. */
+  hydrateFolderFileSort: (collectionId: string) => void
+  /** Persist sort for a collection and apply to the grid. */
+  setFolderFileSort: (collectionId: string, mode: FolderFileSortMode) => void
+  /** Pending folder-upload confirm (system Dialog, not window.confirm). */
+  folderUploadConfirm: FolderUploadConfirmState | null
+  cancelFolderUploadConfirm: () => void
+  /** Always skips system junk (.DS_Store etc.) silently. */
+  confirmFolderUpload: () => Promise<void>
   refreshFiles: (collectionId: string, opts?: { silent?: boolean }) => Promise<void>
   uploadFile: (collectionId: string, file: File) => Promise<void>
+  /** Opens confirm dialog; actual upload runs after user confirms. */
   uploadFolder: (collectionId: string, files: File[]) => Promise<void>
   moveFilesToFolder: (collectionId: string, fileIds: string[], targetFolderId: string) => Promise<void>
   copyFilesToFolder: (collectionId: string, fileIds: string[], targetFolderId: string) => Promise<void>
@@ -233,6 +382,62 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   ingestingFiles: {},
   perCollectionFolderCache: {},
   nameConflict: null,
+  folderFileSort: DEFAULT_FOLDER_FILE_SORT,
+  folderUploadConfirm: null,
+
+  hydrateFolderFileSort: (collectionId) => {
+    set({ folderFileSort: loadFolderFileSort(collectionId) })
+  },
+
+  setFolderFileSort: (collectionId, mode) => {
+    persistFolderFileSort(collectionId, mode)
+    set({ folderFileSort: mode })
+  },
+
+  cancelFolderUploadConfirm: () => set({ folderUploadConfirm: null }),
+
+  confirmFolderUpload: async () => {
+    const pending = get().folderUploadConfirm
+    if (!pending) return
+    const { collectionId } = pending
+    const { currentFolderId, currentFolder } = get()
+    if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) {
+      toast.error("Cannot upload to Archived")
+      set({ folderUploadConfirm: null })
+      return
+    }
+    // Always strip .DS_Store / AppleDouble / Thumbs.db — no UI toggle
+    const files = pending.files.filter((f) => !isSkippedUploadFile(f))
+    set({ folderUploadConfirm: null })
+    if (files.length === 0) {
+      toast.info("No files to upload")
+      return
+    }
+    try {
+      const results = await uploadFolderToCollection(
+        collectionId,
+        currentFolderId || "",
+        files
+      )
+      await get().fetchFolderTree(collectionId)
+      await get().refreshFiles(collectionId)
+      const withTasks = results.filter((r) => r.task_id)
+      if (withTasks.length > 0) {
+        toast.info(
+          `${files.length} files uploaded, ${withTasks.length} ingesting...`
+        )
+        for (const r of withTasks) {
+          get()._startTaskPolling(collectionId, r.task_id!, r.file_id)
+        }
+      } else {
+        toast.success(`${files.length} files uploaded`)
+      }
+    } catch (err) {
+      toast.error(
+        `Folder upload failed: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  },
 
   resolveNameConflict: async (newName: string) => {
     const pending = get().nameConflict
@@ -618,22 +823,13 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       toast.error("Cannot upload to Archived")
       return
     }
-    try {
-      const results = await uploadFolderToCollection(collectionId, currentFolderId || "", files)
-      await get().fetchFolderTree(collectionId)
-      await get().refreshFiles(collectionId)
-      const withTasks = results.filter((r) => r.task_id)
-      if (withTasks.length > 0) {
-        toast.info(`${files.length} files uploaded, ${withTasks.length} ingesting...`)
-        for (const r of withTasks) {
-          get()._startTaskPolling(collectionId, r.task_id!, r.file_id)
-        }
-      } else {
-        toast.success(`${files.length} files uploaded`)
-      }
-    } catch (err) {
-      toast.error(`Folder upload failed: ${err instanceof Error ? err.message : String(err)}`)
+    const list = Array.from(files)
+    if (list.length === 0) {
+      toast.info("No files selected")
+      return
     }
+    // Open system confirm dialog (skip .DS_Store by default there)
+    set({ folderUploadConfirm: { collectionId, files: list } })
   },
 
   moveFilesToFolder: async (collectionId: string, fileIds: string[], targetFolderId: string) => {

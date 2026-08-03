@@ -19,6 +19,11 @@ export interface Folder {
 export interface FolderTreeNode extends Folder {
   children: FolderTreeNode[]
   file_count: number
+  /**
+   * Latest update among contained files (subtree). Empty folder falls back
+   * to folder.updated_at / created_at from API.
+   */
+  content_updated_at?: string
 }
 
 export interface NodeGroup {
@@ -72,7 +77,10 @@ export interface FileSummary {
   version: number
   filename: string
   original_ext: string
+  /** First version creation time. */
   created_at: string
+  /** Latest version creation time (update). */
+  updated_at?: string
   is_greyed: boolean
   task_id: string | null
   /** Human label from files.json (e.g. "Meeting: Title / Section") */

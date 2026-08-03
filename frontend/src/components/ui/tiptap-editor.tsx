@@ -385,6 +385,13 @@ function createResizableImageExtension() {
           margin-left: ${ml};
           margin-right: ${mr};
         `
+        // Description tracks image width + alignment (not full editor width).
+        descArea.style.width = hasPct ? rawWidth : "auto"
+        descArea.style.maxWidth = "100%"
+        descArea.style.marginLeft = ml
+        descArea.style.marginRight = mr
+        descArea.style.boxSizing = "border-box"
+        descArea.style.textAlign = "center"
       }
       // ── Image wrapper — keeps resize handle pinned to image regardless of caption/description height ──
       const imgWrapper = document.createElement("div")
@@ -447,8 +454,7 @@ function createResizableImageExtension() {
         }
       }
 
-      // Visual Description area — shows AI-generated description below caption.
-      // Always present in DOM (hidden when no description), styled with emerald glow.
+      // Visual Description area — under image, same width/alignment as caption.
       const descArea = document.createElement("div")
       descArea.className = "image-visual-desc"
       descArea.style.cssText = `
@@ -456,7 +462,7 @@ function createResizableImageExtension() {
         font-size: 12px;
         color: #6b7280;
         font-style: italic;
-        text-align: left;
+        text-align: center;
         margin-top: 6px;
         padding: 8px 12px;
         border-radius: 6px;
@@ -467,6 +473,7 @@ function createResizableImageExtension() {
           0 0 25px rgba(4, 120, 87, 0.15);
         line-height: 1.5;
         position: relative;
+        box-sizing: border-box;
       `
       const descTextEl = document.createElement("span")
       descTextEl.className = "image-visual-desc-text"
@@ -873,13 +880,48 @@ function createResizableImageExtension() {
             }
           }
 
-          // Restore percentage-based layout on imgWrapper + captionEl,
-          // NOT on container (which stays 100% for full-width description).
-          imgWrapper.style.width = newPctWidth
-          captionEl.style.width = newPctWidth
+          // Restore percentage layout + keep image/caption/desc centered.
+          // Do NOT clear marginLeft/Right after setNodeMarkup — that raced
+          // update() and left caption/description left-aligned.
+          const a = node.attrs.alignment || "center"
+          let ml = "0",
+            mr = "0"
+          if (a === "center") {
+            ml = "auto"
+            mr = "auto"
+          } else if (a === "right") {
+            ml = "auto"
+          }
           container.style.width = "100%"
-          captionEl.style.marginLeft = ""
-          captionEl.style.marginRight = ""
+          imgWrapper.style.cssText = `
+            position: relative;
+            display: block;
+            line-height: 0;
+            width: ${newPctWidth};
+            max-width: 100%;
+            margin-left: ${ml};
+            margin-right: ${mr};
+          `
+          captionEl.style.cssText = `
+            font-size: 13px;
+            color: #666;
+            text-align: center;
+            margin-top: 8px;
+            font-style: italic;
+            cursor: text;
+            min-height: 20px;
+            width: ${newPctWidth};
+            max-width: 100%;
+            margin-left: ${ml};
+            margin-right: ${mr};
+          `
+          // Keep description under the image (same width + center), not full-bleed left
+          descArea.style.width = newPctWidth
+          descArea.style.maxWidth = "100%"
+          descArea.style.marginLeft = ml
+          descArea.style.marginRight = mr
+          descArea.style.boxSizing = "border-box"
+          descArea.style.textAlign = "center"
 
           document.removeEventListener("mousemove", onMouseMove)
           document.removeEventListener("mouseup", onMouseUp)
@@ -946,6 +988,12 @@ function createResizableImageExtension() {
               margin-left: ${ml};
               margin-right: ${mr};
             `
+            descArea.style.width = hasPct ? w : "auto"
+            descArea.style.maxWidth = "100%"
+            descArea.style.marginLeft = ml
+            descArea.style.marginRight = mr
+            descArea.style.boxSizing = "border-box"
+            descArea.style.textAlign = "center"
 
             // Persist to ProseMirror node
             const { tr } = editor.state
@@ -1000,6 +1048,12 @@ function createResizableImageExtension() {
           margin-left: ${ml};
           margin-right: ${mr};
         `
+        descArea.style.width = hasPctW ? w : "auto"
+        descArea.style.maxWidth = "100%"
+        descArea.style.marginLeft = ml
+        descArea.style.marginRight = mr
+        descArea.style.boxSizing = "border-box"
+        descArea.style.textAlign = "center"
         // Refresh caption — ensure captionEl stays in sync even if
         // commitCaption() already updated it before ProseMirror's update() cycle.
         setCaption(updatedNode.attrs.alt || "")

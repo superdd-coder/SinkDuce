@@ -23,7 +23,14 @@ import {
   ChevronDown,
   CheckSquare,
   ChevronLeft,
+  ArrowUpDown,
 } from "lucide-react"
+import {
+  isCreatedSortMode,
+  isUpdatedSortMode,
+  nextCreatedSortMode,
+  nextUpdatedSortMode,
+} from "@/stores/file-mgmt-store"
 import {
   Dialog,
   DialogContent,
@@ -220,6 +227,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
     createSubFolder,
     uploadFile,
     uploadFolder,
+    folderFileSort,
+    setFolderFileSort,
     moveFilesToFolder,
     copyFilesToFolder,
     removeFilesFromCurrentFolder,
@@ -251,7 +260,9 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
   const [copyDialogOpen, setCopyDialogOpen] = useState(false)
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
   /** At most one action menu open: move | archive | delete */
-  const [openMenu, setOpenMenu] = useState<"move" | "archive" | "delete" | null>(
+  const [openMenu, setOpenMenu] = useState<
+    "move" | "archive" | "delete" | "sort" | null
+  >(
     null
   )
   const menusRef = useRef<HTMLDivElement>(null)
@@ -576,6 +587,116 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               </Button>
             </>
           )}
+          {/* Sort files in current folder */}
+          <div className="relative">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() =>
+                on &&
+                setOpenMenu((m) => (m === "sort" ? null : "sort"))
+              }
+              title="Sort files"
+              className={cn(tbBtn, openMenu === "sort" && opts.menus && "bg-accent")}
+              tabIndex={tab}
+            >
+              <ArrowUpDown />
+              Sort
+              <ChevronDown className="size-3 opacity-60" />
+            </Button>
+            {opts.menus && openMenu === "sort" && (
+              <div
+                className="absolute left-0 top-full mt-1 z-50 min-w-[200px] rounded-md border border-border bg-background text-foreground shadow-lg py-1"
+                role="menu"
+              >
+                {(
+                  [
+                    { id: "name" as const, label: "By name" },
+                    { id: "type" as const, label: "By type" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="menuitem"
+                    className={cn(
+                      "w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted/60",
+                      folderFileSort === opt.id &&
+                        "bg-primary/10 text-primary font-medium"
+                    )}
+                    onClick={() => {
+                      setFolderFileSort(collectionId, opt.id)
+                      setOpenMenu(null)
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={cn(
+                    "w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted/60",
+                    isCreatedSortMode(folderFileSort) &&
+                      "bg-primary/10 text-primary font-medium"
+                  )}
+                  title="Click again to toggle newest ↔ oldest"
+                  onClick={() => {
+                    setFolderFileSort(
+                      collectionId,
+                      nextCreatedSortMode(folderFileSort)
+                    )
+                    setOpenMenu(null)
+                  }}
+                >
+                  By created
+                  {folderFileSort === "created_desc" && (
+                    <span className="text-muted-foreground font-normal">
+                      {" "}
+                      · newest
+                    </span>
+                  )}
+                  {folderFileSort === "created_asc" && (
+                    <span className="text-muted-foreground font-normal">
+                      {" "}
+                      · oldest
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={cn(
+                    "w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted/60",
+                    isUpdatedSortMode(folderFileSort) &&
+                      "bg-primary/10 text-primary font-medium"
+                  )}
+                  title="Folder time = latest file update inside. Click again to toggle direction."
+                  onClick={() => {
+                    setFolderFileSort(
+                      collectionId,
+                      nextUpdatedSortMode(folderFileSort)
+                    )
+                    setOpenMenu(null)
+                  }}
+                >
+                  By updated
+                  {folderFileSort === "updated_desc" && (
+                    <span className="text-muted-foreground font-normal">
+                      {" "}
+                      · newest
+                    </span>
+                  )}
+                  {folderFileSort === "updated_asc" && (
+                    <span className="text-muted-foreground font-normal">
+                      {" "}
+                      · oldest
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
           <Button
             variant="ghost"
             size="xs"

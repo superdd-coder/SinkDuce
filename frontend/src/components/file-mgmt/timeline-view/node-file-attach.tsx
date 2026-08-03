@@ -11,7 +11,7 @@ import {
 import { FileTreePicker } from "./file-tree-picker"
 
 /** Fixed drop-zone height so Select/tree does not grow the box. */
-const DROP_ZONE_H = "h-[180px]"
+const DROP_ZONE_H = "h-[200px]"
 
 interface NodeFileAttachProps {
   collectionId: string
@@ -19,6 +19,10 @@ interface NodeFileAttachProps {
   /** Already attached file ids (shown as selected in tree). */
   attachedIds?: string[]
   onAttached: () => void
+  /** Focused file for external left preview panel (parent renders it). */
+  onPreviewFile?: (file: FileSummary | null) => void
+  /** Notify parent when select mode opens/closes (clear preview on close). */
+  onSelectOpenChange?: (open: boolean) => void
 }
 
 export function NodeFileAttach({
@@ -26,6 +30,8 @@ export function NodeFileAttach({
   nodeId,
   attachedIds = [],
   onAttached,
+  onPreviewFile,
+  onSelectOpenChange,
 }: NodeFileAttachProps) {
   const [selectOpen, setSelectOpen] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -33,6 +39,12 @@ export function NodeFileAttach({
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const attachedSet = new Set(attachedIds)
+
+  const setSelect = (open: boolean) => {
+    setSelectOpen(open)
+    onSelectOpenChange?.(open)
+    if (!open) onPreviewFile?.(null)
+  }
 
   /** Toggle: attach if not yet on node; detach if already attached. */
   const toggleExisting = async (file: FileSummary) => {
@@ -66,7 +78,7 @@ export function NodeFileAttach({
           ? `Uploaded and attached “${list[0].name}”`
           : `Uploaded and attached ${list.length} files`
       )
-      setSelectOpen(false)
+      setSelect(false)
       onAttached()
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -102,20 +114,11 @@ export function NodeFileAttach({
         <button
           type="button"
           className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-          onClick={() => setSelectOpen((v) => !v)}
+          onClick={() => setSelect(!selectOpen)}
           disabled={loading}
         >
           <Search className="h-3 w-3" />
-          Select
-        </button>
-        <button
-          type="button"
-          className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={loading}
-        >
-          <Upload className="h-3 w-3" />
-          Upload
+          {selectOpen ? "Close select" : "Select existing"}
         </button>
       </div>
 
@@ -130,7 +133,6 @@ export function NodeFileAttach({
         }}
       />
 
-      {/* Fixed-height zone: Select fills the same box instead of expanding it */}
       <div
         className={cn(
           DROP_ZONE_H,
@@ -144,15 +146,20 @@ export function NodeFileAttach({
         onDrop={handleDrop}
       >
         {!selectOpen ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-1.5 text-center px-3 pointer-events-none">
+          <button
+            type="button"
+            className="flex-1 flex flex-col items-center justify-center gap-1.5 text-center px-3 cursor-pointer rounded hover:bg-muted/30 transition-colors"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading}
+          >
             <Upload className="h-5 w-5 text-muted-foreground/40" />
             <p className="text-[11px] text-muted-foreground/60">
               {loading ? "Uploading..." : "Drag & drop files here"}
             </p>
             <p className="text-[10px] text-muted-foreground/40">
-              or use Select / Upload above
+              or click to browse
             </p>
-          </div>
+          </button>
         ) : (
           <div className="flex-1 min-h-0 flex flex-col gap-1 overflow-hidden">
             <div className="flex items-center justify-between gap-1 shrink-0">
@@ -162,7 +169,7 @@ export function NodeFileAttach({
               <button
                 type="button"
                 className="text-muted-foreground hover:text-foreground"
-                onClick={() => setSelectOpen(false)}
+                onClick={() => setSelect(false)}
                 title="Close"
               >
                 <X className="h-3 w-3" />
@@ -173,6 +180,7 @@ export function NodeFileAttach({
                 collectionId={collectionId}
                 selectedIds={attachedIds}
                 onSelectFile={(file) => void toggleExisting(file)}
+                onPreviewFile={(file) => onPreviewFile?.(file)}
                 maxHeightClass="h-full max-h-full"
                 className="h-full flex flex-col"
               />

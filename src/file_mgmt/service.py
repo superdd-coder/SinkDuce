@@ -508,19 +508,48 @@ def get_folder_tree(collection_id: str) -> list[FolderTree]:
         for r in rows:
             children_map.setdefault(r["parent_folder_id"], []).append(r)
 
+        # Direct-file latest version time per folder (for content_updated_at)
+        direct_file_updated: dict[str, str] = {}
+        for r in conn.execute(
+            """
+            SELECT fp.folder_id AS folder_id,
+                   MAX(fv.created_at) AS max_ts
+            FROM file_paths fp
+            JOIN files f ON f.file_id = fp.file_id
+            JOIN file_versions fv ON fv.version_id = f.current_version_id
+            WHERE fp.folder_id IS NOT NULL
+            GROUP BY fp.folder_id
+            """
+        ).fetchall():
+            if r["folder_id"] and r["max_ts"]:
+                direct_file_updated[r["folder_id"]] = r["max_ts"]
+
+        def _max_ts(*vals: str | None) -> str:
+            best = ""
+            for v in vals:
+                s = (v or "").strip()
+                if s and s > best:
+                    best = s
+            return best
+
         def build(row) -> FolderTree:
             kids = [build(c) for c in children_map.get(row["folder_id"], [])]
             base = _row_to_folder(row)
-            # Compute accurate file_count
             fid = row["folder_id"]
             cnt = conn.execute(
                 "SELECT COUNT(DISTINCT file_id) FROM file_paths WHERE folder_id=?",
                 (fid,),
             ).fetchone()[0]
+            # content_updated_at = max(direct files, nested folders, folder.updated_at)
+            content_ts = direct_file_updated.get(fid, "")
+            for k in kids:
+                content_ts = _max_ts(content_ts, k.content_updated_at)
+            content_ts = _max_ts(content_ts, base.updated_at, base.created_at)
             return FolderTree(
                 **base.model_dump(),
                 children=kids,
                 file_count=cnt,
+                content_updated_at=content_ts,
             )
 
         roots = children_map.get(None, [])
@@ -1930,9 +1959,10 @@ def _row_to_file_out(
         version=row["version"],
         filename=row["current_version_id"] or "",
         created_at="",
+        updated_at="",
         is_greyed=bool(row["archived"]),
     )
-    # compute filename from current version
+    # Filename + timestamps from version history
     if conn and f.current_version_id:
         ver = conn.execute(
             "SELECT storage_file_id, created_at FROM file_versions WHERE version_id=?",
@@ -1942,7 +1972,17 @@ def _row_to_file_out(
             f.filename = ver["storage_file_id"]
             from pathlib import Path
             f.original_ext = Path(ver["storage_file_id"]).suffix.lstrip(".") if Path(ver["storage_file_id"]).suffix else ""
-            f.created_at = ver["created_at"]
+            # updated_at = current (latest) version time
+            f.updated_at = ver["created_at"] or ""
+        # created_at = first version time
+        first = conn.execute(
+            "SELECT MIN(created_at) AS min_ts FROM file_versions WHERE file_id=?",
+            (file_id,),
+        ).fetchone()
+        if first and first["min_ts"]:
+            f.created_at = first["min_ts"]
+        elif f.updated_at:
+            f.created_at = f.updated_at
 
     # Prefer preloaded index (list endpoints); else load single entry
     if index is not None:

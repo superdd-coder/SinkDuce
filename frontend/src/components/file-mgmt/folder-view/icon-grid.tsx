@@ -66,6 +66,7 @@ export function IconGrid({
     updateFolderDetails,
     renameFile,
     ingestingFiles,
+    folderFileSort,
   } = useFileMgmtStore()
 
   const [dragOver, setDragOver] = useState(false)
@@ -211,16 +212,105 @@ export function IconGrid({
     return m
   }, [groups])
 
-  // Get subfolders of current folder (or root folders if no current folder)
-  const subfolders = getSubfolders(folderTree, currentFolderId)
+  /**
+   * Unified grid items: folders + files sorted by the same mode.
+   * - name / type / created / updated all include folders
+   * - folder updated time = content_updated_at (max of contained files)
+   */
+  type GridItem =
+    | { kind: "folder"; folder: FolderTreeNode }
+    | { kind: "file"; file: FileSummary }
 
-  // Separate folders by kind for display ordering
-  const systemFolders = subfolders.filter((f) => f.kind === "system_group")
-  const groupFolders = subfolders.filter((f) => f.kind === "user_group")
-  const branchFolders = subfolders.filter((f) => f.kind === "branch")
-  const plainFolders = subfolders.filter((f) => f.kind === "plain")
+  const sortedItems = useMemo(() => {
+    const subfolders = getSubfolders(folderTree, currentFolderId)
+    const items: GridItem[] = [
+      ...subfolders.map((folder) => ({ kind: "folder" as const, folder })),
+      ...currentFolderFiles.map((file) => ({ kind: "file" as const, file })),
+    ]
 
-  const orderedFolders = [...systemFolders, ...groupFolders, ...branchFolders, ...plainFolders]
+    const collator = new Intl.Collator(undefined, {
+      numeric: true,
+      sensitivity: "base",
+    })
+    const nameOf = (it: GridItem) =>
+      it.kind === "folder"
+        ? (it.folder.name || "").toLowerCase()
+        : (it.file.display_name || it.file.filename || "").toLowerCase()
+    /**
+     * By type order:
+     * 0 system folders → 1 branch → 2 group → 3 plain folders → 4+ files by ext
+     */
+    const typeRank = (it: GridItem): string => {
+      if (it.kind === "folder") {
+        const k = it.folder.kind
+        if (k === "system_group") return "0-system"
+        if (k === "branch") return "1-branch"
+        if (k === "user_group") return "2-group"
+        return "3-plain" // plain and any other folder kinds
+      }
+      const fromMeta = (it.file.original_ext || "")
+        .replace(/^\./, "")
+        .toLowerCase()
+      if (fromMeta) return `4-${fromMeta}`
+      const n = it.file.filename || ""
+      const i = n.lastIndexOf(".")
+      const ext = i > 0 ? n.slice(i + 1).toLowerCase() : ""
+      return ext ? `4-${ext}` : "4-"
+    }
+    const createdOf = (it: GridItem) =>
+      it.kind === "folder"
+        ? it.folder.created_at || ""
+        : it.file.created_at || ""
+    const updatedOf = (it: GridItem) => {
+      if (it.kind === "folder") {
+        return (
+          it.folder.content_updated_at ||
+          it.folder.updated_at ||
+          it.folder.created_at ||
+          ""
+        )
+      }
+      return it.file.updated_at || it.file.created_at || ""
+    }
+    const cmpName = (a: GridItem, b: GridItem) =>
+      collator.compare(nameOf(a), nameOf(b))
+
+    if (folderFileSort === "type") {
+      items.sort((a, b) => {
+        const t = typeRank(a).localeCompare(typeRank(b))
+        if (t !== 0) return t
+        return cmpName(a, b)
+      })
+    } else if (
+      folderFileSort === "created_desc" ||
+      folderFileSort === "created_asc"
+    ) {
+      const desc = folderFileSort === "created_desc"
+      items.sort((a, b) => {
+        const ta = createdOf(a)
+        const tb = createdOf(b)
+        const t = desc ? tb.localeCompare(ta) : ta.localeCompare(tb)
+        if (t !== 0) return t
+        return cmpName(a, b)
+      })
+    } else if (
+      folderFileSort === "updated_desc" ||
+      folderFileSort === "updated_asc"
+    ) {
+      const desc = folderFileSort === "updated_desc"
+      items.sort((a, b) => {
+        const ta = updatedOf(a)
+        const tb = updatedOf(b)
+        const t = desc ? tb.localeCompare(ta) : ta.localeCompare(tb)
+        if (t !== 0) return t
+        return cmpName(a, b)
+      })
+    } else {
+      // name
+      items.sort(cmpName)
+    }
+    return items
+  }, [folderTree, currentFolderId, currentFolderFiles, folderFileSort])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -353,61 +443,67 @@ export function IconGrid({
       />
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        {filesLoading && orderedFolders.length === 0 ? (
+        {filesLoading && sortedItems.length === 0 ? (
           <div className="flex items-center justify-center h-32">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : (
           <TooltipProvider delay={TIP_OPEN_MS} closeDelay={TIP_CLOSE_MS}>
             <div className="flex flex-wrap gap-1 p-3">
-              {orderedFolders.map((folder) => (
-                <FolderIconItem
-                  key={folder.folder_id}
-                  folder={folder}
-                  selected={selectedFolderIds.has(folder.folder_id)}
-                  multiSelectMode={multiSelectMode}
-                  onOpen={() => selectFolder(collectionId, folder.folder_id)}
-                  onSelect={() => {
-                    if (multiSelectMode) toggleFolderSelection(folder.folder_id)
-                    else selectSingleFolder(folder.folder_id)
-                  }}
-                  boundGroup={groupByFolderId.get(folder.folder_id) ?? null}
-                  onEdit={
-                    folder.is_system ? undefined : () => openEditFolder(folder)
-                  }
-                />
-              ))}
-              {currentFolderFiles.map((file) => (
-                <FileIconItem
-                  key={file.file_id}
-                  file={file}
-                  selected={selectedFileIds.has(file.file_id)}
-                  multiSelectMode={multiSelectMode}
-                  ingesting={ingestingFiles[file.file_id] ?? null}
-                  onSelect={() => {
-                    // Ingesting: no select → no file toolbar
-                    if (ingestingFiles[file.file_id]) return
-                    if (multiSelectMode) toggleSelection(file.file_id)
-                    else selectSingleFile(file.file_id)
-                  }}
-                  onOpen={
-                    multiSelectMode || ingestingFiles[file.file_id]
-                      ? undefined
-                      : () => onOpenFile?.(file.file_id)
-                  }
-                  onEdit={
-                    ingestingFiles[file.file_id]
-                      ? undefined
-                      : () => openEditFile(file)
-                  }
-                />
-              ))}
-              {orderedFolders.length === 0 &&
-                currentFolderFiles.length === 0 && (
-                  <div className="w-full text-center text-muted-foreground text-sm py-8">
-                    This folder is empty. Drag files here to upload.
-                  </div>
-                )}
+              {sortedItems.map((item) =>
+                item.kind === "folder" ? (
+                  <FolderIconItem
+                    key={item.folder.folder_id}
+                    folder={item.folder}
+                    selected={selectedFolderIds.has(item.folder.folder_id)}
+                    multiSelectMode={multiSelectMode}
+                    onOpen={() =>
+                      selectFolder(collectionId, item.folder.folder_id)
+                    }
+                    onSelect={() => {
+                      if (multiSelectMode)
+                        toggleFolderSelection(item.folder.folder_id)
+                      else selectSingleFolder(item.folder.folder_id)
+                    }}
+                    boundGroup={
+                      groupByFolderId.get(item.folder.folder_id) ?? null
+                    }
+                    onEdit={
+                      item.folder.is_system
+                        ? undefined
+                        : () => openEditFolder(item.folder)
+                    }
+                  />
+                ) : (
+                  <FileIconItem
+                    key={item.file.file_id}
+                    file={item.file}
+                    selected={selectedFileIds.has(item.file.file_id)}
+                    multiSelectMode={multiSelectMode}
+                    ingesting={ingestingFiles[item.file.file_id] ?? null}
+                    onSelect={() => {
+                      if (ingestingFiles[item.file.file_id]) return
+                      if (multiSelectMode) toggleSelection(item.file.file_id)
+                      else selectSingleFile(item.file.file_id)
+                    }}
+                    onOpen={
+                      multiSelectMode || ingestingFiles[item.file.file_id]
+                        ? undefined
+                        : () => onOpenFile?.(item.file.file_id)
+                    }
+                    onEdit={
+                      ingestingFiles[item.file.file_id]
+                        ? undefined
+                        : () => openEditFile(item.file)
+                    }
+                  />
+                )
+              )}
+              {sortedItems.length === 0 && (
+                <div className="w-full text-center text-muted-foreground text-sm py-8">
+                  This folder is empty. Drag files here to upload.
+                </div>
+              )}
             </div>
           </TooltipProvider>
         )}

@@ -17,7 +17,6 @@ import {
   Paperclip,
   Search,
   Square,
-  Upload,
   X,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -29,6 +28,7 @@ import {
   uploadFileToFolder,
 } from "@/api/file-mgmt"
 import { FileTreePicker } from "./file-tree-picker"
+import { FileSelectPreviewPanel } from "@/components/file-mgmt/file-select-preview-panel"
 
 type PendingAttachment =
   | { kind: "existing"; key: string; file_id: string; filename: string }
@@ -68,10 +68,17 @@ export function EndChainDialog({
   const [messageBody, setMessageBody] = useState("")
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [attachMode, setAttachMode] = useState<"select" | null>(null)
+  const [selectPreviewFile, setSelectPreviewFile] =
+    useState<FileSummary | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [loading, setLoading] = useState(false)
   const dateInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const setSelectMode = (mode: "select" | null) => {
+    setAttachMode(mode)
+    if (mode !== "select") setSelectPreviewFile(null)
+  }
 
   const nodesWithAttachments = useMemo(
     () => nodesWithFiles.filter((n) => n.files.length > 0),
@@ -86,6 +93,7 @@ export function EndChainDialog({
     setMessageBody("")
     setPending([])
     setAttachMode(null)
+    setSelectPreviewFile(null)
     setDragOver(false)
     setExpanded(new Set())
 
@@ -270,9 +278,33 @@ export function EndChainDialog({
     }
   }
 
+  const showSelectPreview = attachMode === "select"
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[780px] max-w-[90vw] sm:max-w-[90vw] h-[85vh] max-h-[85vh] !flex flex-col gap-3 overflow-hidden">
+      <DialogContent
+        className={cn(
+          "max-w-[96vw] sm:max-w-[96vw] h-[85vh] max-h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
+          showSelectPreview ? "w-[min(1100px,96vw)]" : "w-[780px]"
+        )}
+      >
+        {showSelectPreview && (
+          <div
+            className={cn(
+              "w-[min(300px,28vw)] shrink-0 border-r border-border min-h-0 flex flex-col",
+              "animate-in slide-in-from-left-2 fade-in-0 duration-250"
+            )}
+          >
+            <FileSelectPreviewPanel
+              collectionId={collectionId}
+              file={selectPreviewFile}
+              onClose={() => setSelectPreviewFile(null)}
+              className="h-full rounded-none border-0 shadow-none"
+            />
+          </div>
+        )}
+
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 p-4 overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle className="text-sm">End Branch Chain</DialogTitle>
         </DialogHeader>
@@ -346,24 +378,16 @@ export function EndChainDialog({
                 <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60">
                   Attachments ({pending.length})
                 </label>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-                    onClick={() => setAttachMode(attachMode === "select" ? null : "select")}
-                  >
-                    <Search className="h-3 w-3" />
-                    Select
-                  </button>
-                  <button
-                    type="button"
-                    className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Upload className="h-3 w-3" />
-                    Upload
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
+                  onClick={() =>
+                    setSelectMode(attachMode === "select" ? null : "select")
+                  }
+                >
+                  <Search className="h-3 w-3" />
+                  {attachMode === "select" ? "Close select" : "Select existing"}
+                </button>
               </div>
               <input
                 ref={fileInputRef}
@@ -377,9 +401,12 @@ export function EndChainDialog({
               />
               <div
                 className={cn(
-                  "rounded-md border border-dashed p-2 min-h-[56px] text-[10px] text-muted-foreground",
+                  "rounded-md border border-dashed p-2 min-h-[56px] text-[10px] text-muted-foreground cursor-pointer",
                   dragOver && "border-primary bg-primary/5"
                 )}
+                onClick={() => {
+                  if (attachMode !== "select") fileInputRef.current?.click()
+                }}
                 onDragOver={(e: DragEvent) => {
                   e.preventDefault()
                   setDragOver(true)
@@ -388,12 +415,14 @@ export function EndChainDialog({
                 onDrop={(e: DragEvent) => {
                   e.preventDefault()
                   setDragOver(false)
-                  if (e.dataTransfer.files?.length) addUploadFiles(e.dataTransfer.files)
+                  if (e.dataTransfer.files?.length)
+                    addUploadFiles(e.dataTransfer.files)
                 }}
               >
                 {pending.length === 0 ? (
-                  <span className="flex items-center gap-1">
-                    <Paperclip className="h-3 w-3" /> Drop files or upload for the merge node
+                  <span className="flex items-center gap-1 pointer-events-none">
+                    <Paperclip className="h-3 w-3" /> Drop files or click to
+                    browse
                   </span>
                 ) : (
                   <ul className="space-y-1">
@@ -402,7 +431,15 @@ export function EndChainDialog({
                         <span className="truncate flex-1">
                           {p.kind === "upload" ? p.file.name : p.filename}
                         </span>
-                        <button type="button" onClick={() => setPending((prev) => prev.filter((x) => x.key !== p.key))}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setPending((prev) =>
+                              prev.filter((x) => x.key !== p.key)
+                            )
+                          }}
+                        >
                           <X className="h-3 w-3" />
                         </button>
                       </li>
@@ -422,6 +459,7 @@ export function EndChainDialog({
                       )
                     }
                     onSelectFile={toggleExistingFile}
+                    onPreviewFile={setSelectPreviewFile}
                   />
                 </div>
               )}
@@ -544,6 +582,7 @@ export function EndChainDialog({
             {loading ? "Processing..." : "End & Merge"}
           </Button>
         </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   )

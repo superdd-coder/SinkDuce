@@ -50,6 +50,9 @@ class FolderOut(BaseModel):
 class FolderTree(FolderOut):
     children: list[FolderTree] = []
     file_count: int = 0  # derived: files directly in this folder
+    # Max current-version timestamp among files in this folder subtree
+    # (direct + nested). Empty folder falls back to folder.updated_at.
+    content_updated_at: str = ""
 
 
 # ════════════════════════════════════════════════════════════════
@@ -196,6 +199,7 @@ class FileOut(BaseModel):
     filename: str = ""      # derived: current version original filename (storage name)
     original_ext: str = ""  # derived: extension from filename (e.g. "pdf", "md", "" for none)
     created_at: str = ""    # derived: first version creation timestamp
+    updated_at: str = ""    # derived: latest version creation timestamp (current upload)
     is_greyed: bool = False  # True if file- or path-level archived (folder view grey)
     task_id: str | None = None  # upload task ID for async ingest polling
     # Human-readable label from files.json (e.g. "Meeting: Title / Section")

@@ -47,8 +47,13 @@ interface FileTreePickerProps {
   collectionId: string
   /** File ids already chosen (shown as selected). */
   selectedIds?: Set<string> | string[]
-  /** Called when user clicks a file. */
+  /** Called when user clicks a file (select / toggle). */
   onSelectFile: (file: FileSummary) => void
+  /**
+   * Focused file for external slide-in preview panel.
+   * Called on click before onSelectFile so parents can open the left preview.
+   */
+  onPreviewFile?: (file: FileSummary) => void
   className?: string
   /** Max height of the scrollable tree. */
   maxHeightClass?: string
@@ -320,6 +325,7 @@ export function FileTreePicker({
   collectionId,
   selectedIds,
   onSelectFile,
+  onPreviewFile,
   className,
   maxHeightClass = "max-h-48",
 }: FileTreePickerProps) {
@@ -423,8 +429,16 @@ export function FileTreePicker({
     })
   }, [])
 
+  const handleSelectFile = useCallback(
+    (file: FileSummary) => {
+      onPreviewFile?.(file)
+      onSelectFile(file)
+    },
+    [onSelectFile, onPreviewFile]
+  )
+
   return (
-    <div className={cn("space-y-2 min-h-0", className)}>
+    <div className={cn("space-y-2 min-h-0 flex flex-col", className)}>
       <input
         className="w-full text-[10px] border rounded px-2 py-1 bg-background shrink-0"
         placeholder="Search folders or files..."
@@ -460,7 +474,7 @@ export function FileTreePicker({
                 expanded={expanded}
                 onToggle={toggle}
                 selectedSet={selectedSet}
-                onSelectFile={onSelectFile}
+                onSelectFile={handleSelectFile}
                 groupByFolderId={groupByFolderId}
               />
             ))}
@@ -470,14 +484,17 @@ export function FileTreePicker({
                 file={f}
                 depth={0}
                 selected={selectedSet.has(f.file_id)}
-                onSelect={onSelectFile}
+                onSelect={handleSelectFile}
               />
             ))}
-            {filtered.folders.length === 0 && filtered.rootFiles.length === 0 && (
-              <p className="text-[10px] text-muted-foreground/50 px-1.5 py-3 text-center">
-                {search.trim() ? "No matching folders or files" : "No files found"}
-              </p>
-            )}
+            {filtered.folders.length === 0 &&
+              filtered.rootFiles.length === 0 && (
+                <p className="text-[10px] text-muted-foreground/50 px-1.5 py-3 text-center">
+                  {search.trim()
+                    ? "No matching folders or files"
+                    : "No files found"}
+                </p>
+              )}
           </>
         )}
       </div>

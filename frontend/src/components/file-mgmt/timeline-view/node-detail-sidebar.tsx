@@ -13,7 +13,12 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import type { NodeDetail, NodeGroup, Message } from "@/types/file-mgmt"
+import type {
+  FileSummary,
+  Message,
+  NodeDetail,
+  NodeGroup,
+} from "@/types/file-mgmt"
 import {
   getNodeDetail,
   updateNode,
@@ -30,6 +35,7 @@ import { NodeFileAttach } from "./node-file-attach"
 import { MessageCard } from "../message-card"
 import { MessageEditorDialog } from "../folder-view/message-editor-dialog"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
+import { FileSelectPreviewPanel } from "@/components/file-mgmt/file-select-preview-panel"
 
 /** Format ISO timestamp as yyyy/mm/dd HH:mm:ss (24h local). */
 function formatCreatedAt(iso: string): string {
@@ -91,6 +97,9 @@ export function NodeDetailSidebar({
   const [msgDialogReadonly, setMsgDialogReadonly] = useState(false)
   /** Open unified file detail from attachment list. */
   const [detailFileId, setDetailFileId] = useState<string | null>(null)
+  /** External left preview while Select existing is open. */
+  const [selectPreviewFile, setSelectPreviewFile] =
+    useState<FileSummary | null>(null)
   const dateInputRef = useRef<HTMLInputElement>(null)
 
   const fetchDetail = useCallback(async () => {
@@ -131,6 +140,7 @@ export function NodeDetailSidebar({
     setDeleteConfirm(false)
     setEditingTitle(false)
     setEditingGroupId(false)
+    setSelectPreviewFile(null)
   }, [fetchDetail])
 
   const handleSaveTitle = async () => {
@@ -318,6 +328,23 @@ export function NodeDetailSidebar({
   if (!nodeId) return null
 
   return (
+    <div className="relative h-full w-full min-h-0">
+      {/* Slide-in preview: same height as node detail, to the left */}
+      {selectPreviewFile && (
+        <div
+          className={cn(
+            "absolute right-full top-0 bottom-0 z-20 w-[min(320px,36vw)] mr-2",
+            "animate-in slide-in-from-right-2 fade-in-0 duration-200"
+          )}
+        >
+          <FileSelectPreviewPanel
+            collectionId={collectionId}
+            file={selectPreviewFile}
+            onClose={() => setSelectPreviewFile(null)}
+            className="h-full"
+          />
+        </div>
+      )}
     <div
       data-node-detail-sidebar
       className="h-full w-full min-h-0 border border-border rounded-xl bg-background shadow-lg flex flex-col overflow-hidden"
@@ -486,7 +513,11 @@ export function NodeDetailSidebar({
                 </label>
                 <button
                   className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-                  onClick={() => setAttachOpen(!attachOpen)}
+                  onClick={() => {
+                    const next = !attachOpen
+                    setAttachOpen(next)
+                    if (!next) setSelectPreviewFile(null)
+                  }}
                 >
                   <Paperclip className="h-3 w-3" />
                   {attachOpen ? "Hide" : "Add"}
@@ -503,6 +534,10 @@ export function NodeDetailSidebar({
                     onAttached={() => {
                       fetchDetail()
                       onNodeUpdated()
+                    }}
+                    onPreviewFile={setSelectPreviewFile}
+                    onSelectOpenChange={(open) => {
+                      if (!open) setSelectPreviewFile(null)
                     }}
                   />
                 </div>
@@ -739,6 +774,7 @@ export function NodeDetailSidebar({
         }}
         contextNodeId={nodeId}
       />
+    </div>
     </div>
   )
 }

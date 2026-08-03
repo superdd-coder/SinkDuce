@@ -22,6 +22,7 @@ import {
 import { FileTreePicker } from "./file-tree-picker"
 import { GroupFormDialog } from "./group-form-dialog"
 import { listGroups } from "@/api/file-mgmt"
+import { FileSelectPreviewPanel } from "@/components/file-mgmt/file-select-preview-panel"
 
 type PendingAttachment =
   | { kind: "existing"; key: string; file_id: string; filename: string }
@@ -58,9 +59,16 @@ export function AddNodeDialog({
   const [submitting, setSubmitting] = useState(false)
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [attachMode, setAttachMode] = useState<"select" | null>(null)
+  const [selectPreviewFile, setSelectPreviewFile] =
+    useState<FileSummary | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dateInputRef = useRef<HTMLInputElement>(null)
+
+  const setSelectMode = (mode: "select" | null) => {
+    setAttachMode(mode)
+    if (mode !== "select") setSelectPreviewFile(null)
+  }
 
   const pendingExistingIds = useMemo(
     () =>
@@ -82,6 +90,7 @@ export function AddNodeDialog({
       setMessageBody("")
       setPending([])
       setAttachMode(null)
+      setSelectPreviewFile(null)
       setDragOver(false)
       setGroupFormOpen(false)
     } else {
@@ -214,9 +223,34 @@ export function AddNodeDialog({
     }
   }
 
+  const showSelectPreview = attachMode === "select"
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[780px] max-w-[90vw] sm:max-w-[90vw] h-[85vh] flex flex-col gap-3">
+      <DialogContent
+        className={cn(
+          "max-w-[96vw] sm:max-w-[96vw] h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
+          showSelectPreview ? "w-[min(1100px,96vw)]" : "w-[780px]"
+        )}
+      >
+        {/* Left slide-in preview — dialog grows left / shifts form right */}
+        {showSelectPreview && (
+          <div
+            className={cn(
+              "w-[min(300px,28vw)] shrink-0 border-r border-border min-h-0 flex flex-col",
+              "animate-in slide-in-from-left-2 fade-in-0 duration-250"
+            )}
+          >
+            <FileSelectPreviewPanel
+              collectionId={collectionId}
+              file={selectPreviewFile}
+              onClose={() => setSelectPreviewFile(null)}
+              className="h-full rounded-none border-0 shadow-none"
+            />
+          </div>
+        )}
+
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 p-4 overflow-hidden">
         <DialogHeader>
           <DialogTitle className="text-sm">Add Node</DialogTitle>
         </DialogHeader>
@@ -302,24 +336,16 @@ export function AddNodeDialog({
                 <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60">
                   Attachments ({pending.length})
                 </label>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-                    onClick={() => setAttachMode(attachMode === "select" ? null : "select")}
-                  >
-                    <Search className="h-3 w-3" />
-                    Select
-                  </button>
-                  <button
-                    type="button"
-                    className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Upload className="h-3 w-3" />
-                    Upload
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
+                  onClick={() =>
+                    setSelectMode(attachMode === "select" ? null : "select")
+                  }
+                >
+                  <Search className="h-3 w-3" />
+                  {attachMode === "select" ? "Close select" : "Select existing"}
+                </button>
               </div>
 
               <input
@@ -354,7 +380,7 @@ export function AddNodeDialog({
                       <button
                         type="button"
                         className="text-muted-foreground hover:text-foreground"
-                        onClick={() => setAttachMode(null)}
+                        onClick={() => setSelectMode(null)}
                         title="Close"
                       >
                         <X className="h-3 w-3" />
@@ -365,6 +391,7 @@ export function AddNodeDialog({
                         collectionId={collectionId}
                         selectedIds={pendingExistingIds}
                         onSelectFile={toggleExistingFile}
+                        onPreviewFile={setSelectPreviewFile}
                         maxHeightClass="h-full max-h-full"
                         className="h-full flex flex-col"
                       />
@@ -381,10 +408,14 @@ export function AddNodeDialog({
                           >
                             <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
                             <span className="flex-1 truncate">
-                              {att.kind === "existing" ? att.filename : att.file.name}
+                              {att.kind === "existing"
+                                ? att.filename
+                                : att.file.name}
                             </span>
                             {att.kind === "upload" && (
-                              <span className="text-[9px] text-muted-foreground shrink-0">new</span>
+                              <span className="text-[9px] text-muted-foreground shrink-0">
+                                new
+                              </span>
                             )}
                             <button
                               type="button"
@@ -398,15 +429,19 @@ export function AddNodeDialog({
                         ))}
                       </div>
                     )}
-                    <div className="flex-1 flex flex-col items-center justify-center gap-1.5 text-center px-3 pointer-events-none">
+                    <button
+                      type="button"
+                      className="flex-1 flex flex-col items-center justify-center gap-1.5 text-center px-3 cursor-pointer rounded hover:bg-muted/30 transition-colors min-h-[72px]"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
                       <Upload className="h-5 w-5 text-muted-foreground/40" />
                       <p className="text-[11px] text-muted-foreground/60">
                         Drag & drop files here
                       </p>
                       <p className="text-[10px] text-muted-foreground/40">
-                        or use Select / Upload above
+                        or click to browse
                       </p>
-                    </div>
+                    </button>
                   </div>
                 )}
               </div>
@@ -447,6 +482,7 @@ export function AddNodeDialog({
             {submitting ? "Adding..." : "Add Node"}
           </Button>
         </DialogFooter>
+        </div>
       </DialogContent>
 
       <GroupFormDialog

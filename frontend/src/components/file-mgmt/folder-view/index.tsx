@@ -4,6 +4,7 @@ import { Breadcrumb } from "./breadcrumb"
 import { IconGrid } from "./icon-grid"
 import { MessageSidebar } from "./message-sidebar"
 import { NameConflictDialog } from "./name-conflict-dialog"
+import { FolderUploadConfirmDialog } from "./folder-upload-confirm-dialog"
 import { Toolbar } from "./toolbar"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 
@@ -13,6 +14,7 @@ export function FolderView({ collectionId }: { collectionId: string }) {
     navigateToRoot,
     selectFolder,
     perCollectionFolderCache,
+    hydrateFolderFileSort,
   } = useFileMgmtStore()
 
   /** Phase 8: file detail dialog (local — does not touch folder grid layout). */
@@ -22,6 +24,8 @@ export function FolderView({ collectionId }: { collectionId: string }) {
   useEffect(() => {
     if (collectionId) {
       setDetailFileId(null)
+      // Restore per-collection sort (default: type)
+      hydrateFolderFileSort(collectionId)
       const cachedFolder = perCollectionFolderCache[collectionId]
       if (cachedFolder !== undefined) {
         if (cachedFolder === null) {
@@ -63,6 +67,7 @@ export function FolderView({ collectionId }: { collectionId: string }) {
         <MessageSidebar collectionId={collectionId} />
       </div>
       <NameConflictDialog />
+      <FolderUploadConfirmDialog />
 
       <FileMgmtDetailDialog
         collectionId={collectionId}
