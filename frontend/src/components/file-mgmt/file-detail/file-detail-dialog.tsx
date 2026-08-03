@@ -75,6 +75,7 @@ import {
   promoteFilePath,
   demoteFilePath,
   removeFilePath,
+  detachFileFromNode,
   toggleFileArchive,
   deleteFile,
   deleteMessage,
@@ -319,6 +320,13 @@ export interface FileMgmtDetailDialogProps {
   onDeleted?: () => void
   /** Navigate folder view to a path's folder (persistent/derived). */
   onNavigateToFolder?: (folderId: string) => void
+  /**
+   * When opened from a timeline node, archive/remove target paths whose
+   * ``source_node_id`` is this node (group + branch mounts together).
+   * Without this, actions fall back to folder-view ``currentFolderId`` and
+   * can hit a native upload path instead of the node-related mounts.
+   */
+  contextNodeId?: string | null
 }
 
 export function FileMgmtDetailDialog({
@@ -331,6 +339,7 @@ export function FileMgmtDetailDialog({
   onOpenChange,
   onDeleted,
   onNavigateToFolder,
+  contextNodeId = null,
 }: FileMgmtDetailDialogProps) {
   const refreshFiles = useFileMgmtStore((s) => s.refreshFiles)
   const ingestingFiles = useFileMgmtStore((s) => s.ingestingFiles)
@@ -472,7 +481,10 @@ export function FileMgmtDetailDialog({
 
   // Node preview sheet (+ nested file detail from its attachments)
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null)
-  const [nestedFileId, setNestedFileId] = useState<string | null>(null)
+  const [nestedDetail, setNestedDetail] = useState<{
+    fileId: string
+    contextNodeId: string | null
+  } | null>(null)
 
   const genKey =
     collectionId && source ? _genKey(collectionId, source) : null
@@ -547,7 +559,7 @@ export function FileMgmtDetailDialog({
       setAddMsgDialogOpen(false)
       setLogMsgOpen(null)
       setPreviewNodeId(null)
-      setNestedFileId(null)
+      setNestedDetail(null)
       setActionMenu(null)
       return
     }
@@ -962,39 +974,66 @@ export function FileMgmtDetailDialog({
     }
   }
 
-  /** Path(s) in the folder currently open in folder view (if any). */
-  const pathInCurrentFolder = useMemo(() => {
-    if (!detail || !currentFolderId || currentFolderId === "__archived__")
-      return null
-    return (
-      detail.paths.find((p) => p.folder_id === currentFolderId) ?? null
-    )
-  }, [detail, currentFolderId])
-
-  /** All path rows for the open folder (multi-node mounts share one folder). */
-  const pathsInCurrentFolder = useMemo(() => {
-    if (!detail || !currentFolderId || currentFolderId === "__archived__")
+  /**
+   * Paths for the dialog's current context:
+   * - From a timeline node → all mounts with that source_node_id (group + branch)
+   * - From folder view → all mounts in currentFolderId
+   * Never fall back across contexts (avoids archiving a native upload path
+   * when the dialog was opened from a node).
+   */
+  const contextPaths = useMemo(() => {
+    if (!detail) return [] as FilePath[]
+    if (contextNodeId) {
+      return detail.paths.filter((p) => p.source_node_id === contextNodeId)
+    }
+    if (!currentFolderId || currentFolderId === "__archived__") {
       return [] as FilePath[]
+    }
     return detail.paths.filter((p) => p.folder_id === currentFolderId)
-  }, [detail, currentFolderId])
+  }, [detail, contextNodeId, currentFolderId])
+
+  const activeContextPaths = useMemo(
+    () => contextPaths.filter((p) => !p.archived),
+    [contextPaths]
+  )
+  const archivedContextPaths = useMemo(
+    () => contextPaths.filter((p) => !!p.archived),
+    [contextPaths]
+  )
 
   const fileArchived = !!detail?.archived
-  const pathArchivedHere = !!pathInCurrentFolder?.archived
-  const canArchiveInFolder =
-    !!pathInCurrentFolder && !fileArchived && !pathArchivedHere
+  const canArchiveCurrentPath =
+    activeContextPaths.length > 0 && !fileArchived
   const canArchiveGlobally = !!detail && !fileArchived
-  const canRestore = !!detail && (fileArchived || pathArchivedHere)
-  const canRemoveCurrentPath = pathsInCurrentFolder.length > 0
+  const canRestore =
+    !!detail && (fileArchived || archivedContextPaths.length > 0)
+  // Node context: allow remove whenever attached (even if paths not yet synced)
+  const canRemoveCurrentPath = contextNodeId
+    ? !!(detail?.nodes?.some((n) => n.node_id === contextNodeId) ||
+        contextPaths.length > 0)
+    : contextPaths.length > 0
 
-  /** Unlink file from the currently open folder (all path rows for that folder). */
+  /**
+   * Unlink context path(s).
+   * - Folder view: delete path rows for the open folder.
+   * - Node view: detach from the node (drops file_nodes + all derived paths).
+   *   Only deleting path rows is not enough — `_sync_node_derived_paths`
+   *   recreates them while the attachment still exists.
+   */
   const handleRemoveCurrentPath = async () => {
-    if (!fileId || pathsInCurrentFolder.length === 0) return
+    if (!fileId) return
+    if (!contextNodeId && contextPaths.length === 0) return
     setActionBusy(true)
     try {
-      for (const p of pathsInCurrentFolder) {
-        await removeFilePath(collectionId, fileId, p.path_id)
+      if (contextNodeId) {
+        await detachFileFromNode(collectionId, contextNodeId, fileId)
+        toast.success("Removed from this node (paths cleared)")
+      } else {
+        for (const p of contextPaths) {
+          await removeFilePath(collectionId, fileId, p.path_id)
+        }
+        toast.success("Removed current path")
       }
-      toast.success("Removed from this folder")
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
@@ -1006,16 +1045,16 @@ export function FileMgmtDetailDialog({
     }
   }
 
-  /** Archive for current folder only (path-level). */
-  const handleArchiveInFolder = async () => {
-    if (!detail || !fileId || !pathInCurrentFolder?.folder_id) return
+  /** Path-level archive for context mounts only (not native paths outside context). */
+  const handleArchiveCurrentPath = async () => {
+    if (!detail || !fileId || activeContextPaths.length === 0) return
     setActionBusy(true)
     try {
       await toggleFileArchive(collectionId, fileId, true, detail.version, {
-        folderId: pathInCurrentFolder.folder_id,
+        pathIds: activeContextPaths.map((p) => p.path_id),
         scope: "path",
       })
-      toast.success("Archived in this folder")
+      toast.success("Archived current path")
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
@@ -1047,17 +1086,21 @@ export function FileMgmtDetailDialog({
     }
   }
 
-  /** Restore file-level + path archive in current folder (same as folder toolbar). */
+  /** Restore file-level + path archive for current context mounts. */
   const handleRestore = async () => {
     if (!detail || !fileId) return
     setActionBusy(true)
     try {
+      const pathIds = archivedContextPaths.map((p) => p.path_id)
       const folderId =
-        currentFolderId && currentFolderId !== "__archived__"
+        !contextNodeId &&
+        currentFolderId &&
+        currentFolderId !== "__archived__"
           ? currentFolderId
           : null
       await toggleFileArchive(collectionId, fileId, false, detail.version, {
-        folderId,
+        ...(pathIds.length > 0 ? { pathIds } : {}),
+        ...(pathIds.length === 0 && folderId ? { folderId } : {}),
       })
       toast.success("Restored")
       await loadDetail()
@@ -2021,31 +2064,42 @@ export function FileMgmtDetailDialog({
                         <h4 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                           Log
                         </h4>
-                        <div className="flex rounded-md border border-border overflow-hidden text-[10px]">
-                          <button
-                            type="button"
-                            className={cn(
-                              "px-2 py-0.5 transition-colors",
-                              timelineFilter === "all"
-                                ? "bg-primary/10 text-primary"
-                                : "text-muted-foreground hover:bg-muted/50"
-                            )}
-                            onClick={() => setTimelineFilter("all")}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[10px] px-2 shrink-0"
+                            disabled={msgBusy || !fileId}
+                            onClick={() => setAddMsgDialogOpen(true)}
                           >
-                            All
-                          </button>
-                          <button
-                            type="button"
-                            className={cn(
-                              "px-2 py-0.5 border-l border-border transition-colors",
-                              timelineFilter === "versions"
-                                ? "bg-primary/10 text-primary"
-                                : "text-muted-foreground hover:bg-muted/50"
-                            )}
-                            onClick={() => setTimelineFilter("versions")}
-                          >
-                            Versions
-                          </button>
+                            Add message
+                          </Button>
+                          <div className="flex rounded-md border border-border overflow-hidden text-[10px] shrink-0">
+                            <button
+                              type="button"
+                              className={cn(
+                                "px-2 py-0.5 transition-colors",
+                                timelineFilter === "all"
+                                  ? "bg-primary/10 text-primary"
+                                  : "text-muted-foreground hover:bg-muted/50"
+                              )}
+                              onClick={() => setTimelineFilter("all")}
+                            >
+                              All
+                            </button>
+                            <button
+                              type="button"
+                              className={cn(
+                                "px-2 py-0.5 border-l border-border transition-colors",
+                                timelineFilter === "versions"
+                                  ? "bg-primary/10 text-primary"
+                                  : "text-muted-foreground hover:bg-muted/50"
+                              )}
+                              onClick={() => setTimelineFilter("versions")}
+                            >
+                              Versions
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -2144,9 +2198,14 @@ export function FileMgmtDetailDialog({
                                       >
                                         message
                                       </Badge>
-                                      <span className="text-[10px] text-muted-foreground shrink-0">
-                                        {msg.author_id || "user"}
-                                      </span>
+                                      {/* author_id "local" is the single-user default — hide it */}
+                                      {msg.author_id &&
+                                        msg.author_id !== "local" &&
+                                        msg.author_id !== "user" && (
+                                          <span className="text-[10px] text-muted-foreground shrink-0">
+                                            {msg.author_id}
+                                          </span>
+                                        )}
                                     </>
                                   )}
                                   {msg.edited_at && (
@@ -2186,19 +2245,6 @@ export function FileMgmtDetailDialog({
                           })
                         )}
                       </ul>
-
-                      {/* Add message — opens full MD editor dialog */}
-                      <div className="mt-3">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-[11px]"
-                          disabled={msgBusy || !fileId}
-                          onClick={() => setAddMsgDialogOpen(true)}
-                        >
-                          Add message
-                        </Button>
-                      </div>
                     </section>
                   </div>
                 </ScrollArea>
@@ -2273,8 +2319,8 @@ export function FileMgmtDetailDialog({
                         Update file
                       </Button>
 
-                      {/* Archive dropdown — same options as folder toolbar */}
-                      {(canArchiveInFolder ||
+                      {/* Archive dropdown — context-aware path vs global */}
+                      {(canArchiveCurrentPath ||
                         canArchiveGlobally ||
                         canRestore) && (
                         <div className="relative shrink-0">
@@ -2310,8 +2356,10 @@ export function FileMgmtDetailDialog({
                                   title="Restore"
                                   description={
                                     fileArchived
-                                      ? "Re-enable search (and restore in this folder if open)."
-                                      : "Restore this file in the current folder."
+                                      ? "Re-enable search (and restore current path if archived)."
+                                      : contextNodeId
+                                        ? "Restore this file's path(s) for the current node."
+                                        : "Restore this file's current path."
                                   }
                                   onClick={() => {
                                     setActionMenu(null)
@@ -2319,14 +2367,18 @@ export function FileMgmtDetailDialog({
                                   }}
                                 />
                               )}
-                              {canArchiveInFolder && (
+                              {canArchiveCurrentPath && (
                                 <ActionMenuItem
                                   icon={<Archive className="h-3.5 w-3.5" />}
-                                  title="Archive in this folder"
-                                  description="Grey out this file in the current folder only."
+                                  title="Archive current path"
+                                  description={
+                                    contextNodeId
+                                      ? "Grey out node-related path(s) only (group + branch). Leaves other mounts active."
+                                      : "Grey out this file on the current folder path only."
+                                  }
                                   onClick={() => {
                                     setActionMenu(null)
-                                    void handleArchiveInFolder()
+                                    void handleArchiveCurrentPath()
                                   }}
                                 />
                               )}
@@ -2375,8 +2427,12 @@ export function FileMgmtDetailDialog({
                             {canRemoveCurrentPath && (
                               <ActionMenuItem
                                 icon={<X className="h-3.5 w-3.5" />}
-                                title="Remove from this folder"
-                                description="Remove this file from the current folder only."
+                                title="Remove current path"
+                                description={
+                                  contextNodeId
+                                    ? "Detach from this node and remove its path(s) (group + branch). Other mounts stay."
+                                    : "Remove this file from the current folder path only."
+                                }
                                 onClick={() => {
                                   setActionMenu(null)
                                   void handleRemoveCurrentPath()
@@ -2471,11 +2527,12 @@ export function FileMgmtDetailDialog({
         }}
         onSelectNode={(nid) => setPreviewNodeId(nid)}
         onOpenAttachment={(fid) => {
+          const fromNode = previewNodeId
           // Close node sheet so nested dialog is not trapped under the sheet
           setPreviewNodeId(null)
           // Already viewing this file — nothing else to open
           if (fid === fileId) return
-          setNestedFileId(fid)
+          setNestedDetail({ fileId: fid, contextNodeId: fromNode })
         }}
         onGoToNode={(nid, chainId) => {
           setPreviewNodeId(null)
@@ -2488,19 +2545,20 @@ export function FileMgmtDetailDialog({
       />
 
       {/* Nested file detail when opening an attachment from node preview */}
-      {nestedFileId && (
+      {nestedDetail && (
         <FileMgmtDetailDialog
           collectionId={collectionId}
-          fileId={nestedFileId}
-          open={!!nestedFileId}
+          fileId={nestedDetail.fileId}
+          open={!!nestedDetail}
           onOpenChange={(v) => {
-            if (!v) setNestedFileId(null)
+            if (!v) setNestedDetail(null)
           }}
           onDeleted={() => {
-            setNestedFileId(null)
+            setNestedDetail(null)
             if (fileId) void loadDetail()
           }}
           onNavigateToFolder={onNavigateToFolder}
+          contextNodeId={nestedDetail.contextNodeId}
         />
       )}
     </>

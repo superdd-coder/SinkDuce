@@ -220,6 +220,147 @@ def test_folder_unarchive_clears_path_archive(collection_id):
         assert again.is_greyed is False
 
 
+def test_archive_by_path_ids_spares_native_and_archives_node_mounts(collection_id):
+    """Node-context archive: path_ids archives group+branch without native mount."""
+    from src.file_mgmt.models import ArchiveToggle
+
+    with patch.object(service, "_validate_collection", lambda _x: None):
+        g, ch, fid, pid_group, pid_branch, _end = _seed_branch_with_file(
+            collection_id
+        )
+        # Native upload path in a different plain folder
+        conn = store.get_db(collection_id)
+        store._ensure_file_paths_archived(conn)
+        plain_id = uuid.uuid4().hex
+        pid_native = uuid.uuid4().hex
+        now = "2026-01-01T00:00:00"
+        conn.execute(
+            "INSERT INTO folders (folder_id, parent_folder_id, name, kind, is_system, "
+            "created_by, created_at, updated_at, version) "
+            "VALUES (?,NULL,'Uploads','plain',0,'local',?, ?,1)",
+            (plain_id, now, now),
+        )
+        conn.execute(
+            "INSERT INTO file_paths (path_id, file_id, folder_id, is_primary, "
+            "source_node_id, created_by, archived) VALUES (?,?,?,0,NULL,'local',0)",
+            (pid_native, fid, plain_id),
+        )
+        conn.commit()
+        conn.close()
+
+        # Simulate file-detail opened from node: archive only node paths
+        r = service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(
+                archived=True,
+                version=1,
+                scope="path",
+                path_ids=[pid_group, pid_branch],
+            ),
+        )
+        assert r.archived is False  # native path still active → no promote
+
+        conn = store.get_db(collection_id)
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_group,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_branch,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_native,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        ver = conn.execute(
+            "SELECT version FROM files WHERE file_id=?", (fid,)
+        ).fetchone()["version"]
+        conn.close()
+
+        # Restore only node paths
+        service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(
+                archived=False,
+                version=ver,
+                path_ids=[pid_group, pid_branch],
+            ),
+        )
+        conn = store.get_db(collection_id)
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_group,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_branch,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        conn.close()
+
+
+def test_archive_path_ids_same_folder_spares_sibling_native(collection_id):
+    """path_ids must not archive a co-located native path in the same folder."""
+    from src.file_mgmt.models import ArchiveToggle
+
+    with patch.object(service, "_validate_collection", lambda _x: None):
+        g, ch, fid, pid_group, pid_branch, _end = _seed_branch_with_file(
+            collection_id
+        )
+        # Native mount shares the group folder with the node-derived path
+        conn = store.get_db(collection_id)
+        store._ensure_file_paths_archived(conn)
+        pid_native = uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO file_paths (path_id, file_id, folder_id, is_primary, "
+            "source_node_id, created_by, archived) VALUES (?,?,?,0,NULL,'local',0)",
+            (pid_native, fid, g.folder_id),
+        )
+        conn.commit()
+        conn.close()
+
+        service.toggle_archive(
+            collection_id,
+            fid,
+            ArchiveToggle(
+                archived=True,
+                version=1,
+                scope="path",
+                path_ids=[pid_group, pid_branch],
+            ),
+        )
+        conn = store.get_db(collection_id)
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_group,)
+            ).fetchone()["archived"]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT archived FROM file_paths WHERE path_id=?", (pid_native,)
+            ).fetchone()["archived"]
+            == 0
+        )
+        # Folder list stays active because native path is still live
+        listed = service.list_files_in_folder(collection_id, g.folder_id)
+        row = next(f for f in listed if f.file_id == fid)
+        assert row.is_greyed is False
+        conn.close()
+
+
 def test_path_and_file_scope_and_unarchive_recovers_all(collection_id):
     """path scope archives folder; file scope greys everywhere; unarchive recovers."""
     from src.file_mgmt.models import ArchiveToggle

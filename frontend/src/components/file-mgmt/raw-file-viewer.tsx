@@ -6,7 +6,14 @@
  * UI: English (en-US), compact density, host Geist font via styleIsolation none.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react"
 import { Download, Loader2 } from "lucide-react"
 import FileViewer from "@file-viewer/react"
 import officePreset from "@file-viewer/preset-office"
@@ -247,12 +254,19 @@ export function resolveRawFilename(
   return "file.bin"
 }
 
-/** Best-effort filename from Content-Disposition / X-File-Name. */
+/** True when name looks like CJK→ASCII mangling (e.g. Word______ 2.docx). */
+function looksAsciiMangled(name: string): boolean {
+  return /_{2,}/.test(name) && !/[^\x00-\x7F]/.test(name)
+}
+
+/**
+ * Best-effort original filename from preview response headers.
+ * Prefer RFC 5987 ``filename*`` (UTF-8) — never prefer ASCII-mangled
+ * ``X-File-Name`` (e.g. ``Word______ 2.docx``) which is only for extension routing.
+ */
 function filenameFromResponseHeaders(res: Response): string | null {
-  const xName = res.headers.get("x-file-name") || res.headers.get("X-File-Name")
-  if (xName && xName.trim()) return xName.trim()
   const cd = res.headers.get("content-disposition") || ""
-  // filename*=UTF-8''... or filename="..."
+  // RFC 5987 UTF-8 filename* first
   const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(cd)
   if (star?.[1]) {
     try {
@@ -262,8 +276,36 @@ function filenameFromResponseHeaders(res: Response): string | null {
     }
   }
   const plain = /filename\s*=\s*("?)([^";]+)\1/i.exec(cd)
-  if (plain?.[2]) return plain[2].trim()
+  if (plain?.[2]) {
+    const p = plain[2].trim()
+    if (p && !looksAsciiMangled(p)) return p
+  }
+  const xName = (
+    res.headers.get("x-file-name") ||
+    res.headers.get("X-File-Name") ||
+    ""
+  ).trim()
+  // X-File-Name is ASCII-safe fallback — skip mangled CJK replacements
+  if (xName && !looksAsciiMangled(xName)) return xName
   return null
+}
+
+/** Prefer a human filename over an ASCII-underscore fallback. */
+function preferDisplayFilename(
+  ...candidates: Array<string | null | undefined>
+): string {
+  const list = candidates
+    .map((c) => (c || "").trim())
+    .filter(Boolean)
+  // Prefer any name with non-ASCII (CJK etc.) and an extension
+  for (const n of list) {
+    if (/[^\x00-\x7F]/.test(n) && n.includes(".")) return n
+  }
+  // Prefer names without long underscore runs (ASCII mangling of CJK)
+  for (const n of list) {
+    if (n.includes(".") && !looksAsciiMangled(n)) return n
+  }
+  return resolveRawFilename(...list)
 }
 
 export interface RawFileViewerProps {
@@ -388,10 +430,14 @@ export function RawFileViewer({
         }
         const buf = await res.arrayBuffer()
         if (cancelled) return
-        // Prefer real on-disk name from preview response (notes/meetings often
-        // have display labels like "Meeting: …" without .md in the client state).
+        // Prefer UTF-8 Content-Disposition / client name over ASCII-mangled headers
+        // so download keeps names like "Word文件版本测试 2.docx".
         const headerName = filenameFromResponseHeaders(res)
-        const finalName = resolveRawFilename(headerName, safeName, filename)
+        const finalName = preferDisplayFilename(
+          headerName,
+          filename,
+          safeName
+        )
         // Prefer server Content-Type, but force a known Office MIME by extension
         // so File Viewer never treats a mislabeled blob as plain text.
         const headerType = (res.headers.get("content-type") || "")
@@ -470,6 +516,41 @@ export function RawFileViewer({
     []
   )
 
+  const downloadName =
+    viewerFile?.name || preferDisplayFilename(filename, safeName)
+
+  const handleDownloadClick = useCallback(
+    async (e: MouseEvent) => {
+      e.preventDefault()
+      const src = downloadUrl || url
+      if (!src) return
+      try {
+        const res = await fetch(src, { credentials: "same-origin" })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const blob = await res.blob()
+        const headerName = filenameFromResponseHeaders(res)
+        const name = preferDisplayFilename(
+          headerName,
+          downloadName,
+          filename,
+          safeName
+        )
+        const objectUrl = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = objectUrl
+        a.download = name
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(objectUrl)
+      } catch {
+        // Fallback: open URL (browser may use Content-Disposition)
+        window.open(src, "_blank", "noopener,noreferrer")
+      }
+    },
+    [downloadUrl, url, downloadName, filename, safeName]
+  )
+
   if (!url) {
     return (
       <div
@@ -495,14 +576,14 @@ export function RawFileViewer({
           Preview not available for this file type
         </p>
         {(downloadUrl || url) && (
-          <a
-            href={downloadUrl || url}
-            download={safeName}
+          <button
+            type="button"
+            onClick={(e) => void handleDownloadClick(e)}
             className="inline-flex items-center h-7 gap-1 rounded-lg border border-border bg-background px-2.5 text-[0.8rem] hover:bg-muted"
           >
             <Download className="h-3.5 w-3.5" />
             Download
-          </a>
+          </button>
         )}
       </div>
     )
@@ -534,14 +615,14 @@ export function RawFileViewer({
           {errorTitle || "Could not load preview"}
         </p>
         {(downloadUrl || url) && (
-          <a
-            href={downloadUrl || url}
-            download={safeName}
+          <button
+            type="button"
+            onClick={(e) => void handleDownloadClick(e)}
             className="inline-flex items-center h-7 gap-1 rounded-lg border border-border bg-background px-2.5 text-[0.8rem] hover:bg-muted"
           >
             <Download className="h-3.5 w-3.5" />
             Download
-          </a>
+          </button>
         )}
       </div>
     )
@@ -558,8 +639,8 @@ export function RawFileViewer({
       <FileViewer
         key={`${viewerFile.name}:${viewerFile.size}:${viewerFile.lastModified}`}
         file={viewerFile}
-        filename={safeName}
-        name={safeName}
+        filename={downloadName}
+        name={downloadName}
         options={viewerOptions}
         style={{ height: "100%", width: "100%", display: "block" }}
       />

@@ -468,10 +468,11 @@ def toggle_file_archive(collection_id: str, file_id: str, req: ArchiveToggle):
     """Archive or unarchive a file (path-level and/or file-level).
 
     - archived=True, scope=file: exclude from search (global)
-    - archived=True, scope=path + folder_id: archive for this folder only
+    - archived=True, scope=path + path_ids: archive those mounts only
+    - archived=True, scope=path + folder_id: archive all mounts in folder
       (auto file-level if no active paths remain)
-    - archived=False: clear file-level; also clear paths in folder_id if set
-      (no folder_id = file-level only, e.g. /Archived view)
+    - archived=False: clear file-level; also clear path_ids or folder_id paths
+      (neither = file-level only, e.g. /Archived view)
     Requires version for optimistic locking.
     """
     return service.toggle_archive(collection_id, file_id, req)

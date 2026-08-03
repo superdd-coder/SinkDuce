@@ -548,6 +548,9 @@ function FolderIconItem({
   onEdit?: () => void
 }) {
   const fullName = folder.name || "Untitled"
+  // Badge = direct files + direct subfolders (not recursive)
+  const itemCount =
+    (folder.file_count || 0) + (folder.children?.length || 0)
   return (
     <Tooltip>
       <TooltipTrigger
@@ -576,9 +579,12 @@ function FolderIconItem({
                   className="h-10 w-10"
                 />
               </span>
-              {folder.file_count > 0 && (
-                <span className="absolute -bottom-0.5 -right-0.5 text-[9px] font-medium bg-muted text-muted-foreground rounded-full px-1 min-w-[14px] text-center">
-                  {folder.file_count}
+              {itemCount > 0 && (
+                <span
+                  className="absolute -bottom-0.5 -right-0.5 text-[9px] font-medium bg-muted text-muted-foreground rounded-full px-1 min-w-[14px] text-center"
+                  title={`${folder.file_count || 0} file(s), ${folder.children?.length || 0} folder(s)`}
+                >
+                  {itemCount}
                 </span>
               )}
               {selected && multiSelectMode && (

@@ -298,14 +298,17 @@ class ArchiveToggle(BaseModel):
     **Archive** (``archived=True``):
     - ``scope="file"``: exclude from search (``files.archived=1``). All folder
       views show the file greyed; no per-path writes required.
-    - ``scope="path"``: archive for this folder only (``file_paths.archived``).
-      Requires ``folder_id``. If every mount path is then archived, auto-promotes
-      to file-level.
+    - ``scope="path"``: archive specific mounts (``file_paths.archived``).
+      Prefer ``path_ids`` (precise, e.g. node group+branch paths without
+      touching a native mount in the same folder). Or pass ``folder_id`` to
+      archive every mount of this file in that folder. If every mount path is
+      then archived, auto-promotes to file-level.
 
     **Unarchive** (``archived=False``):
     - Always clears file-level archive when set.
-    - If ``folder_id`` is set: also clears path archives in that folder only.
-    - If ``folder_id`` is omitted (e.g. /Archived view): file-level only;
+    - If ``path_ids`` is set: clears those path archives only.
+    - Else if ``folder_id`` is set: also clears path archives in that folder only.
+    - If both omitted (e.g. /Archived view): file-level only;
       path archives are left for per-folder Unarchive.
     - Paths that were never path-archived recover automatically once file-level
       is cleared (they were only grey via global file archive).
@@ -315,6 +318,8 @@ class ArchiveToggle(BaseModel):
     version: int
     folder_id: str | None = None
     scope: str = "file"  # "file" | "path" (only used when archived=True)
+    # Precise path-level targets (preferred over folder_id when both set).
+    path_ids: list[str] = []
 
 
 class NodeFileAttach(BaseModel):

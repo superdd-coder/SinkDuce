@@ -2045,6 +2045,33 @@ def _archive_paths_on_folder(
     return path_ids
 
 
+def _archive_paths_by_ids(
+    conn, file_id: str, path_ids: list[str]
+) -> list[str]:
+    """Set archived=1 on specific path rows owned by file_id. Returns touched ids."""
+    touched: list[str] = []
+    for pid in path_ids:
+        pid = (pid or "").strip()
+        if not pid:
+            continue
+        row = conn.execute(
+            """SELECT path_id, COALESCE(archived, 0) AS archived
+               FROM file_paths WHERE path_id=? AND file_id=?""",
+            (pid, file_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                404, f"Path '{pid}' not found for file '{file_id}'"
+            )
+        if int(row["archived"] or 0) == 0:
+            conn.execute(
+                "UPDATE file_paths SET archived=1 WHERE path_id=?",
+                (pid,),
+            )
+            touched.append(pid)
+    return touched
+
+
 def _promote_file_archive_if_needed(conn, collection_id: str, file_id: str) -> bool:
     """If no active paths remain, set files.archived=1 and mark Qdrant.
 
@@ -4540,10 +4567,11 @@ def toggle_archive(
 
     Archive (archived=True):
       scope=file → exclude from search (files.archived=1)
-      scope=path → path-archive in folder_id; auto file-level if no active paths
+      scope=path → path-archive via path_ids (precise) or folder_id;
+                   auto file-level if no active paths remain
 
     Unarchive (archived=False):
-      Always clear file-level when set + clear paths in folder_id when given.
+      Always clear file-level when set + clear paths via path_ids or folder_id.
     """
     scope = (req.scope or "file").strip().lower()
     if scope not in ("file", "path"):
@@ -4568,6 +4596,9 @@ def toggle_archive(
             folder_id = (req.folder_id or "").strip() or None
             if folder_id == "__archived__":
                 folder_id = None
+            req_path_ids = [
+                p.strip() for p in (req.path_ids or []) if (p or "").strip()
+            ]
 
             def _lock_and_bump(set_archived: int | None = None) -> None:
                 """Bump version (and optionally set files.archived) under lock."""
@@ -4591,19 +4622,27 @@ def toggle_archive(
 
             if req.archived:
                 if scope == "path":
-                    if not folder_id:
-                        raise HTTPException(
-                            400, "folder_id is required for path-level archive"
+                    if req_path_ids:
+                        path_ids_touched = _archive_paths_by_ids(
+                            conn, file_id, req_path_ids
                         )
-                    fld = conn.execute(
-                        "SELECT folder_id FROM folders WHERE folder_id=?",
-                        (folder_id,),
-                    ).fetchone()
-                    if not fld:
-                        raise HTTPException(404, f"Folder '{folder_id}' not found")
-                    path_ids_touched = _archive_paths_on_folder(
-                        conn, file_id, folder_id
-                    )
+                    elif folder_id:
+                        fld = conn.execute(
+                            "SELECT folder_id FROM folders WHERE folder_id=?",
+                            (folder_id,),
+                        ).fetchone()
+                        if not fld:
+                            raise HTTPException(
+                                404, f"Folder '{folder_id}' not found"
+                            )
+                        path_ids_touched = _archive_paths_on_folder(
+                            conn, file_id, folder_id
+                        )
+                    else:
+                        raise HTTPException(
+                            400,
+                            "path_ids or folder_id is required for path-level archive",
+                        )
                     need_promote = (
                         not was_file_archived
                         and not _path_has_active_mount(conn, file_id)
@@ -4620,7 +4659,10 @@ def toggle_archive(
                         _lock_and_bump(set_archived=None)
                     else:
                         raise HTTPException(
-                            400, "Already archived for this folder"
+                            400,
+                            "Already archived for the selected path(s)"
+                            if req_path_ids
+                            else "Already archived for this folder",
                         )
                 else:
                     # scope=file: exclude from search
@@ -4636,10 +4678,26 @@ def toggle_archive(
                         pass
             else:
                 # Unarchive:
-                # - with folder_id: clear file-level + this folder's path archives
-                # - without folder_id (e.g. /Archived): clear file-level ONLY
-                #   (path archives stay; restore those in each folder)
-                if folder_id:
+                # - with path_ids: clear those path archives (+ file-level if set)
+                # - with folder_id: clear this folder's path archives
+                # - without either (e.g. /Archived): clear file-level ONLY
+                if req_path_ids:
+                    path_ids_touched = []
+                    for pid in req_path_ids:
+                        row = conn.execute(
+                            """SELECT path_id FROM file_paths
+                               WHERE path_id=? AND file_id=?""",
+                            (pid, file_id),
+                        ).fetchone()
+                        if not row:
+                            raise HTTPException(
+                                404,
+                                f"Path '{pid}' not found for file '{file_id}'",
+                            )
+                    n = _unarchive_paths_by_ids(conn, req_path_ids)
+                    if n:
+                        path_ids_touched = list(req_path_ids)
+                elif folder_id:
                     fld = conn.execute(
                         "SELECT folder_id FROM folders WHERE folder_id=?",
                         (folder_id,),
@@ -4664,8 +4722,8 @@ def toggle_archive(
                         400,
                         "Nothing to unarchive: file is not excluded from search"
                         + (
-                            " and has no path archives in this folder"
-                            if folder_id
+                            " and has no path archives in selection"
+                            if (req_path_ids or folder_id)
                             else " (open a folder to clear path-level archives)"
                         ),
                     )

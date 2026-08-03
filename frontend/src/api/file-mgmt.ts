@@ -236,13 +236,18 @@ export const addFilePath = (collectionId: string, fileId: string, folderId: stri
 export const removeFilePath = (collectionId: string, fileId: string, pathId: string) =>
   req<void>(`/${collectionId}/files/${fileId}/paths/${pathId}`, { method: "DELETE" })
 
-/** scope: "file" = exclude from search; "path" = archive for folder only */
+/** scope: "file" = exclude from search; "path" = archive specific mounts */
 export const toggleFileArchive = (
   collectionId: string,
   fileId: string,
   archived: boolean,
   version: number,
-  opts?: { folderId?: string | null; scope?: "file" | "path" }
+  opts?: {
+    folderId?: string | null
+    /** Precise path rows (preferred over folderId for node context). */
+    pathIds?: string[]
+    scope?: "file" | "path"
+  }
 ) =>
   req<FileSummary>(`/${collectionId}/files/${fileId}/archive`, {
     method: "PATCH",
@@ -252,6 +257,9 @@ export const toggleFileArchive = (
       scope: opts?.scope ?? "file",
       ...(opts?.folderId && opts.folderId !== "__archived__"
         ? { folder_id: opts.folderId }
+        : {}),
+      ...(opts?.pathIds && opts.pathIds.length > 0
+        ? { path_ids: opts.pathIds }
         : {}),
     }),
   })

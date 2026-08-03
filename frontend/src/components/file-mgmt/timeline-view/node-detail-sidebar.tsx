@@ -737,6 +737,7 @@ export function NodeDetailSidebar({
           fetchDetail()
           onNodeUpdated()
         }}
+        contextNodeId={nodeId}
       />
     </div>
   )

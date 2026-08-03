@@ -89,9 +89,36 @@ export function LogMessageDialog({
   onSaved,
   onVersionDeleted,
 }: LogMessageDialogProps) {
+  /**
+   * Keep last payload while closing so exit animation can finish.
+   * Parent often clears `message` in the same tick as `open=false`.
+   */
+  const [held, setHeld] = useState<{
+    message: Message
+    version: FileVersion | null
+    isCurrentVersion: boolean
+  } | null>(null)
+
+  useEffect(() => {
+    if (message) {
+      setHeld({
+        message,
+        version: version ?? null,
+        isCurrentVersion,
+      })
+    }
+  }, [message, version, isCurrentVersion])
+
+  const activeMessage = message ?? held?.message ?? null
+  const activeVersion = message ? version ?? null : held?.version ?? null
+  const activeIsCurrent = message
+    ? isCurrentVersion
+    : (held?.isCurrentVersion ?? false)
+
   const isVersionUpdate =
-    !!message &&
-    ((message.owner_type || "").toLowerCase() === "system_version" || !!version)
+    !!activeMessage &&
+    ((activeMessage.owner_type || "").toLowerCase() === "system_version" ||
+      !!activeVersion)
 
   const [editing, setEditing] = useState(false)
   const [content, setContent] = useState("")
@@ -100,27 +127,27 @@ export function LogMessageDialog({
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
-    if (!open || !message) return
+    if (!open || !activeMessage) return
     setEditing(false)
     setDeleteConfirmOpen(false)
     setContent(
       isVersionUpdate
-        ? versionUpdateBody(message.body)
-        : message.body || ""
+        ? versionUpdateBody(activeMessage.body)
+        : activeMessage.body || ""
     )
-  }, [open, message?.message_id, message?.body, isVersionUpdate])
+  }, [open, activeMessage?.message_id, activeMessage?.body, isVersionUpdate])
 
   const handleSave = useCallback(async () => {
-    if (!message) return
+    if (!activeMessage) return
     const body = isVersionUpdate
       ? versionUpdateBody(content)
       : content.trim()
     if (!body && !isVersionUpdate) return
     setSaving(true)
     try {
-      await updateMessage(collectionId, message.message_id, {
+      await updateMessage(collectionId, activeMessage.message_id, {
         body: body || "version update",
-        version: message.version,
+        version: activeMessage.version,
       })
       toast.success("Message saved")
       setEditing(false)
@@ -132,12 +159,12 @@ export function LogMessageDialog({
     } finally {
       setSaving(false)
     }
-  }, [message, content, isVersionUpdate, collectionId, onSaved])
+  }, [activeMessage, content, isVersionUpdate, collectionId, onSaved])
 
   const handleDeleteVersion = useCallback(async () => {
-    if (!version || isCurrentVersion) return
-    const fileId = version.file_id
-    const versionId = version.version_id
+    if (!activeVersion || activeIsCurrent) return
+    const fileId = activeVersion.file_id
+    const versionId = activeVersion.version_id
     if (!fileId || !versionId) return
     setDeleting(true)
     try {
@@ -154,20 +181,22 @@ export function LogMessageDialog({
       setDeleting(false)
     }
   }, [
-    version,
-    isCurrentVersion,
+    activeVersion,
+    activeIsCurrent,
     collectionId,
     onOpenChange,
     onVersionDeleted,
   ])
 
+  // Enter/exit: keep mounted (portal keepMounted + held payload on close)
   const dialogMotion = cn(
     "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
     "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-3",
-    "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2"
+    "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2",
+    "data-closed:duration-280 data-open:duration-320"
   )
 
-  if (!message) return null
+  if (!activeMessage) return null
 
   // ── Version update: dual pane ──
   if (isVersionUpdate) {
@@ -189,15 +218,15 @@ export function LogMessageDialog({
                 >
                   version update
                 </Badge>
-                {version && (
+                {activeVersion && (
                   <span className="text-xs text-muted-foreground shrink-0">
-                    v{version.version_no}
-                    {version.archived ? " · archived" : ""}
-                    {isCurrentVersion ? " · current" : ""}
+                    v{activeVersion.version_no}
+                    {activeVersion.archived ? " · archived" : ""}
+                    {activeIsCurrent ? " · current" : ""}
                   </span>
                 )}
                 <span className="text-[11px] text-muted-foreground font-normal tabular-nums ml-auto mr-2">
-                  {formatTime(message.created_at)}
+                  {formatTime(activeMessage.created_at)}
                 </span>
               </DialogTitle>
             </DialogHeader>
@@ -208,10 +237,10 @@ export function LogMessageDialog({
                 <VersionFileTabs
                   collectionId={collectionId}
                   docSource={docSource}
-                  version={version}
-                  isCurrentVersion={isCurrentVersion}
+                  version={activeVersion}
+                  isCurrentVersion={activeIsCurrent}
                   onRequestDelete={
-                    !isCurrentVersion && version
+                    !activeIsCurrent && activeVersion
                       ? () => setDeleteConfirmOpen(true)
                       : undefined
                   }
@@ -233,7 +262,7 @@ export function LogMessageDialog({
                         disabled={saving}
                         onClick={() => {
                           setEditing(false)
-                          setContent(versionUpdateBody(message.body))
+                          setContent(versionUpdateBody(activeMessage.body))
                         }}
                       >
                         Cancel
@@ -301,9 +330,9 @@ export function LogMessageDialog({
             <p className="text-sm text-muted-foreground">
               Permanently remove{" "}
               <span className="font-medium text-foreground">
-                v{version?.version_no}
-                {version?.storage_file_id
-                  ? ` (${version.storage_file_id})`
+                v{activeVersion?.version_no}
+                {activeVersion?.storage_file_id
+                  ? ` (${activeVersion.storage_file_id})`
                   : ""}
               </span>
               . This deletes the version blob, its vectors in the database, and
@@ -339,6 +368,14 @@ export function LogMessageDialog({
   }
 
   // ── Normal message: single column, Edit top-right ──
+  // author_id "local" is the single-user default — omit it from chrome
+  const authorLabel =
+    activeMessage.author_id &&
+    activeMessage.author_id !== "local" &&
+    activeMessage.author_id !== "user"
+      ? activeMessage.author_id
+      : null
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -353,16 +390,18 @@ export function LogMessageDialog({
             <Badge variant="secondary" className="text-[9px] shrink-0">
               message
             </Badge>
-            <span className="text-[11px] text-muted-foreground font-normal">
-              {message.author_id || "user"}
-            </span>
-            {message.edited_at && (
+            {authorLabel && (
+              <span className="text-[11px] text-muted-foreground font-normal">
+                {authorLabel}
+              </span>
+            )}
+            {activeMessage.edited_at && (
               <Badge variant="outline" className="text-[9px]">
                 edited
               </Badge>
             )}
             <span className="text-[11px] text-muted-foreground font-normal tabular-nums ml-auto">
-              {formatTime(message.created_at)}
+              {formatTime(activeMessage.created_at)}
             </span>
           </DialogTitle>
           <div className="absolute top-3.5 right-12 z-10 flex items-center gap-1.5">
@@ -374,7 +413,7 @@ export function LogMessageDialog({
                   disabled={saving}
                   onClick={() => {
                     setEditing(false)
-                    setContent(message.body || "")
+                    setContent(activeMessage.body || "")
                   }}
                 >
                   Cancel
@@ -388,7 +427,7 @@ export function LogMessageDialog({
                 </Button>
               </>
             ) : (
-              message.author_type !== "system" && (
+              activeMessage.author_type !== "system" && (
                 <Button
                   type="button"
                   variant="ghost"
