@@ -66,6 +66,62 @@ def err(message: str, **extra: Any) -> dict[str, Any]:
     return payload
 
 
+def mcp_result(data: dict[str, Any]) -> Any:
+    """Return a short text line + structured_content (avoid dual full JSON).
+
+    MCP SDK otherwise puts the entire payload in TextContent *and*
+    structuredContent when tools return a bare dict — doubling large trees
+    or long document text in the model context.
+    """
+    try:
+        from mcp.types import CallToolResult, TextContent
+
+        is_err = bool(data.get("error"))
+        if is_err:
+            summary = f"error: {data.get('error')}"
+            if data.get("extract_status"):
+                summary += f" extract_status={data['extract_status']}"
+            if data.get("hint"):
+                summary += f" | {str(data['hint'])[:120]}"
+        else:
+            bits: list[str] = []
+            if "collection" in data:
+                bits.append(f"collection={data['collection']}")
+            sm = data.get("summary") or {}
+            if isinstance(sm, dict):
+                if "unique_file_count" in sm:
+                    bits.append(f"files={sm['unique_file_count']}")
+                if "folder_count" in sm:
+                    bits.append(f"folders={sm['folder_count']}")
+                if "node_count" in sm:
+                    bits.append(f"nodes={sm['node_count']}")
+                if "detached_branch_count" in sm:
+                    bits.append(f"detached={sm['detached_branch_count']}")
+            if data.get("total") is not None:
+                bits.append(f"total={data['total']}")
+            if data.get("file_id"):
+                bits.append(f"file_id={data['file_id']}")
+            if data.get("extract_status"):
+                bits.append(f"extract_status={data['extract_status']}")
+            if data.get("total_chars") is not None:
+                bits.append(f"chars={data['total_chars']}")
+            if data.get("truncated"):
+                bits.append("truncated=true")
+            summary = "OK " + " ".join(bits) if bits else "OK"
+            if data.get("warnings"):
+                summary += f" warnings={len(data['warnings'])}"
+            if data.get("read_hint"):
+                summary += " | " + str(data["read_hint"])[:120]
+        return CallToolResult(
+            content=[TextContent(type="text", text=summary)],
+            structured_content=data,
+            is_error=is_err,
+        )
+    except Exception:
+        # Fallback: plain dict (SDK will serialize; may dual-encode)
+        return data
+
+
 # ── Resource existence checks ────────────────────────────────
 
 
@@ -185,6 +241,7 @@ __all__ = [
     "to_json",
     "ok",
     "err",
+    "mcp_result",
     "require_collection",
     "require_task",
     "safe_filename",

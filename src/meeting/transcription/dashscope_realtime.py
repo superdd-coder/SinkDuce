@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any, Callable
 
 from src.config import TranscriptionProviderConfig
@@ -12,7 +11,7 @@ from src.meeting.transcription.registry import realtime_transcription_registry
 
 try:
     import dashscope
-    from dashscope.audio.asr import Recognition, RecognitionCallback, VocabularyService
+    from dashscope.audio.asr import Recognition
 
     _HAS_DASHSCOPE = True
 except ImportError:
@@ -21,7 +20,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_WS_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
-_DEFAULT_REALTIME_MODEL = "fun-asr-realtime"
+_DEFAULT_REALTIME_MODEL = "qwen-audio-3.0-asr-flash-streaming"
 
 
 def _require_dashscope() -> None:
@@ -32,17 +31,39 @@ def _require_dashscope() -> None:
         )
 
 
+def _build_instant_vocabulary(hot_words: list | None) -> dict[str, int] | None:
+    """Convert HotWordItem list to DashScope instant vocabulary dict.
+
+    Instant hot words are ``{text: weight}`` with weight in [1, 5] (or 50 for
+    super-hot). App weights are 1–10; map them into the 1–5 range used by the API.
+    """
+    if not hot_words:
+        return None
+    vocab: dict[str, int] = {}
+    for hw in hot_words:
+        text = hw.get("text", "") if isinstance(hw, dict) else getattr(hw, "text", "")
+        weight = hw.get("weight", 4) if isinstance(hw, dict) else getattr(hw, "weight", 4)
+        if not text:
+            continue
+        vocab[str(text)] = min(5, max(1, int(weight) // 2 + 1))
+    return vocab if vocab else None
+
+
 @realtime_transcription_registry.register(
     "dashscope_funasr_realtime",
-    display_name="DashScope FunASR (realtime)",
+    display_name="DashScope Qwen-Audio ASR (realtime)",
 )
 class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
-    """DashScope FunASR real-time streaming transcription via WebSocket.
+    """DashScope Qwen-Audio / Fun-ASR real-time streaming transcription via WebSocket.
 
     Uses the ``dashscope.audio.asr.Recognition`` class with a callback to
     deliver incremental transcription results.  Because the underlying SDK
     is synchronous/blocking, all blocking calls are offloaded to a thread
     via ``asyncio.to_thread``.
+
+    Hot words use the instant ``vocabulary`` dict only (no precompiled vocabulary_id).
+    Semantic sentence segmentation is always enabled (better for meetings).
+    Model is fixed to ``qwen-audio-3.0-asr-flash-streaming`` (no model picker).
     """
 
     supports_hot_words = True
@@ -50,76 +71,17 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
         {"code": "auto", "label": "Auto"},
         {"code": "zh", "label": "Chinese"},
         {"code": "en", "label": "English"},
+        {"code": "ja", "label": "Japanese"},
+        {"code": "ko", "label": "Korean"},
     ]
 
     def __init__(self, config: TranscriptionProviderConfig):
         _require_dashscope()
         self._api_key = config.api_key
-        self._model = config.model or _DEFAULT_REALTIME_MODEL
+        # Fixed model — no UI picker, ignore legacy config.model (e.g. fun-asr-realtime).
+        self._model = _DEFAULT_REALTIME_MODEL
         self._base_ws_url = _DEFAULT_WS_URL
         self._recognition: Any | None = None
-        self._vocab_id: str | None = None
-
-    def _build_vocabulary_items(self, hot_words: list | None) -> list | None:
-        if not hot_words:
-            return None
-        items = []
-        for hw in hot_words:
-            text = hw.get("text", "") if isinstance(hw, dict) else getattr(hw, "text", "")
-            weight = hw.get("weight", 4) if isinstance(hw, dict) else getattr(hw, "weight", 4)
-            lang = hw.get("lang", "") if isinstance(hw, dict) else getattr(hw, "lang", "")
-            if not text:
-                continue
-            item = {"text": text, "weight": min(5, max(1, weight // 2 + 1))}
-            if lang:
-                item["lang"] = lang
-            items.append(item)
-        return items if items else None
-
-    def _create_vocabulary(self, hot_words: list) -> str | None:
-        vocabulary = self._build_vocabulary_items(hot_words)
-        if not vocabulary:
-            return None
-        service = VocabularyService(api_key=self._api_key)
-        prefix = f"tr{int(time.time() * 1000) % 10000000:07d}"  # max 10 chars
-        logger.info("[DashScope RT] Creating vocabulary: prefix=%s model=%s words=%s",
-                     prefix, self._model, vocabulary)
-        try:
-            vocab_id = service.create_vocabulary(
-                target_model=self._model,
-                prefix=prefix,
-                vocabulary=vocabulary,
-            )
-        except Exception as exc:
-            logger.error("[DashScope RT] Failed to create vocabulary: %s", exc)
-            return None
-
-        if not vocab_id:
-            logger.error("[DashScope RT] Empty vocabulary_id returned")
-            return None
-
-        for _ in range(30):
-            try:
-                status_info = service.query_vocabulary(vocab_id)
-                status = status_info[0] if isinstance(status_info, list) else status_info
-                if isinstance(status, dict) and status.get("status") == "OK":
-                    logger.info("[DashScope RT] Vocabulary %s ready with %d hot words", vocab_id, len(vocabulary))
-                    return vocab_id
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-        logger.error("[DashScope RT] Vocabulary %s timed out", vocab_id)
-        self._delete_vocabulary(vocab_id, self._api_key)
-        return None
-
-    @staticmethod
-    def _delete_vocabulary(vocab_id: str, api_key: str | None = None) -> None:
-        try:
-            VocabularyService(api_key=api_key).delete_vocabulary(vocab_id)
-            logger.info("[DashScope RT] Deleted vocabulary %s", vocab_id)
-        except Exception as exc:
-            logger.warning("[DashScope RT] Failed to delete vocabulary %s: %s", vocab_id, exc)
 
     async def start(
         self,
@@ -134,36 +96,44 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
                         recognized chunk. ``key`` is a stable identifier
                         (sentence_id from the SDK, or a fallback) so callers
                         can deduplicate updates for the same sentence.
-            hot_words: Optional list of HotWordItem dicts.
+            hot_words: Optional list of HotWordItem dicts (instant vocabulary).
             language_hints: Optional language hints (e.g. ["zh", "en"]).
         """
         dashscope.api_key = self._api_key
         dashscope.base_websocket_api_url = self._base_ws_url
 
         callback = _RealtimeCallback(on_segment)
-        self._recognition = Recognition(
-            model=self._model,
-            format="pcm",
-            sample_rate=16000,
-            callback=callback,
-        )
 
-        # Create cloud-side hot words vocabulary if needed
-        self._vocab_id = None
-        if hot_words:
-            self._vocab_id = self._create_vocabulary(hot_words)
-            if self._vocab_id:
-                logger.info("[DashScope RT] Using vocabulary_id=%s for realtime transcription", self._vocab_id)
+        recognition_kwargs: dict[str, Any] = {
+            "model": self._model,
+            "format": "pcm",
+            "sample_rate": 16000,
+            # Semantic segmentation: better for meeting / long-form speech
+            # than pure VAD silence thresholds.
+            "semantic_punctuation_enabled": True,
+            "callback": callback,
+        }
+
+        vocabulary = _build_instant_vocabulary(hot_words)
+        if vocabulary:
+            recognition_kwargs["vocabulary"] = vocabulary
+            logger.info(
+                "[DashScope RT] Using instant vocabulary (%d terms) for realtime transcription",
+                len(vocabulary),
+            )
+
+        self._recognition = Recognition(**recognition_kwargs)
 
         start_kwargs: dict[str, Any] = {}
-        if self._vocab_id:
-            start_kwargs["vocabulary_id"] = self._vocab_id
         if language_hints:
             start_kwargs["language_hints"] = language_hints
 
         logger.info(
-            "Starting realtime transcription: model=%s start_kwargs=%s",
-            self._model, start_kwargs,
+            "Starting realtime transcription: model=%s semantic_punctuation=True "
+            "vocabulary_terms=%s start_kwargs=%s",
+            self._model,
+            len(vocabulary) if vocabulary else 0,
+            start_kwargs,
         )
         await asyncio.to_thread(self._recognition.start, **start_kwargs)
 
@@ -174,14 +144,11 @@ class DashScopeRealtimeTranscription(RealtimeTranscriptionProvider):
         await asyncio.to_thread(self._recognition.send_audio_frame, audio_data)
 
     async def stop(self) -> None:
-        """Stop the transcription session and clean up hot words vocabulary."""
+        """Stop the transcription session."""
         if self._recognition is not None:
             await asyncio.to_thread(self._recognition.stop)
             self._recognition = None
             logger.info("Realtime transcription stopped")
-        if self._vocab_id:
-            self._delete_vocabulary(self._vocab_id, self._api_key)
-            self._vocab_id = None
 
 
 class _RealtimeCallback:

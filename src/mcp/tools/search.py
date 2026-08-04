@@ -87,9 +87,20 @@ async def search_direct_chunks(
 ) -> str:
     """Direct chunk retrieval — no LLM answer generation, no agentic decomposition.
 
-    Use this for focused lookups against a specific collection. The agent is
-    expected to read the returned chunks and generate an answer with its own
-    LLM if needed.
+    **When to use**
+    - User has a question but you do **not** know which file holds the answer.
+    - Focused single-collection (or multi-id) lookup without rewrite/decompose.
+
+    **When not to use**
+    - Already know ``file_id`` and need full text → ``get_document_text``.
+    - Already know ``file_id`` and need its index slices → ``get_file_chunks``.
+    - Complex multi-hop / rewrite needed → ``search_agentic_chunks``.
+
+    **After search:** each hit has ``source`` (prefer canonical
+    ``__file__:{file_id}``). Prefer following up with ``file_id`` on
+    get_document_text / get_file_chunks rather than re-searching the same file.
+
+    The agent should read returned chunks and answer with its own LLM if needed.
 
     Args:
         query: The user question / search string.
@@ -155,13 +166,16 @@ async def search_agentic_chunks(
     """Agentic RAG retrieval — full pipeline (rewrite → decompose → retrieve →
     grade → aggregate), then return chunks without LLM answer generation.
 
-    Use this for complex / multi-hop questions where simple direct retrieval
-    isn't enough. The agent receives the same chunk structure as
-    ``search_direct_chunks`` and is expected to format an answer with its
-    own LLM.
+    **When to use**
+    - Complex / multi-hop questions where ``search_direct_chunks`` is not enough.
+    - Need automatic collection discovery (no collection id from the user).
 
-    No collection parameter — the agentic pipeline auto-discovers relevant
-    collections based on the query.
+    **When not to use**
+    - Simple focused lookup in a known collection → ``search_direct_chunks``.
+    - Known file_id → ``get_document_text`` / ``get_file_chunks`` (cheaper).
+
+    Same chunk structure as ``search_direct_chunks``; agent formats the answer
+    with its own LLM. No collection parameter — pipeline auto-discovers targets.
 
     Args:
         query: The user question.

@@ -640,32 +640,76 @@ class TestTranscriptionFactory:
 class TestDashScopeTranscription:
     """DashScope file and realtime transcription implementations."""
 
-    def test_file_transcription_default_model(self):
-        """DashScopeFileTranscription uses 'fun-asr' as default model."""
+    def test_file_transcription_fixed_model(self):
+        """DashScopeFileTranscription always uses fixed Qwen-Audio filetrans model."""
         from src.meeting.transcription.dashscope_file import DashScopeFileTranscription
 
         with patch("src.meeting.transcription.dashscope_file._HAS_DASHSCOPE", True):
-            cfg = TranscriptionProviderConfig(api_key="sk-test")
+            cfg = TranscriptionProviderConfig(api_key="sk-test", model="fun-asr")
             provider = DashScopeFileTranscription(cfg)
-            assert provider._model == "fun-asr"
+            assert provider._model == "qwen-audio-3.0-asr-flash-filetrans"
 
-    def test_file_transcription_custom_model(self):
-        """DashScopeFileTranscription uses custom model when provided."""
-        from src.meeting.transcription.dashscope_file import DashScopeFileTranscription
+    def test_build_instant_vocabulary_file(self):
+        """Instant vocabulary maps app hot-word weights into DashScope 1–5 range."""
+        from src.meeting.transcription.dashscope_file import _build_instant_vocabulary
 
-        with patch("src.meeting.transcription.dashscope_file._HAS_DASHSCOPE", True):
-            cfg = TranscriptionProviderConfig(api_key="sk-test", model="custom-model")
-            provider = DashScopeFileTranscription(cfg)
-            assert provider._model == "custom-model"
+        vocab = _build_instant_vocabulary([
+            {"text": "SinkDuce", "weight": 4},
+            {"text": "Qdrant", "weight": 10},
+            {"text": "", "weight": 5},  # skipped
+        ])
+        assert vocab == {"SinkDuce": 3, "Qdrant": 5}
+        assert _build_instant_vocabulary(None) is None
+        assert _build_instant_vocabulary([]) is None
 
-    def test_realtime_transcription_default_model(self):
-        """DashScopeRealtimeTranscription uses 'fun-asr-realtime' as default model."""
+    def test_realtime_transcription_fixed_model(self):
+        """DashScopeRealtimeTranscription always uses fixed Qwen-Audio streaming model."""
         from src.meeting.transcription.dashscope_realtime import DashScopeRealtimeTranscription
 
         with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True):
+            cfg = TranscriptionProviderConfig(api_key="sk-test", model="fun-asr-realtime")
+            provider = DashScopeRealtimeTranscription(cfg)
+            assert provider._model == "qwen-audio-3.0-asr-flash-streaming"
+
+    def test_realtime_start_uses_instant_vocab_and_semantic_punctuation(self):
+        """Realtime start passes instant vocabulary + semantic_punctuation_enabled."""
+        from src.meeting.transcription.dashscope_realtime import DashScopeRealtimeTranscription
+
+        mock_recognition = MagicMock()
+        mock_recognition_cls = MagicMock(return_value=mock_recognition)
+        mock_ds = MagicMock()
+
+        with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True), \
+             patch(
+                 "src.meeting.transcription.dashscope_realtime.Recognition",
+                 mock_recognition_cls,
+                 create=True,
+             ), \
+             patch(
+                 "src.meeting.transcription.dashscope_realtime.dashscope",
+                 mock_ds,
+                 create=True,
+             ):
             cfg = TranscriptionProviderConfig(api_key="sk-test")
             provider = DashScopeRealtimeTranscription(cfg)
-            assert provider._model == "fun-asr-realtime"
+
+            import asyncio
+
+            async def _run():
+                await provider.start(
+                    on_segment=lambda *a: None,
+                    hot_words=[{"text": "SinkDuce", "weight": 4}],
+                    language_hints=["zh"],
+                )
+
+            asyncio.get_event_loop().run_until_complete(_run())
+
+        mock_recognition_cls.assert_called_once()
+        kwargs = mock_recognition_cls.call_args.kwargs
+        assert kwargs["model"] == "qwen-audio-3.0-asr-flash-streaming"
+        assert kwargs["semantic_punctuation_enabled"] is True
+        assert kwargs["vocabulary"] == {"SinkDuce": 3}
+        mock_recognition.start.assert_called_once_with(language_hints=["zh"])
 
     def test_realtime_send_frame_before_start_raises(self):
         """send_frame raises RuntimeError when session not started."""

@@ -1439,10 +1439,305 @@ def list_nodes(collection_id: str, chain_id: str) -> list[NodeOut]:
             raise HTTPException(404, f"Chain '{chain_id}' not found")
 
         rows = conn.execute(
-            'SELECT * FROM nodes WHERE chain_id=? ORDER BY "order"',
+            'SELECT * FROM nodes WHERE chain_id=? ORDER BY "order", created_at',
             (chain_id,),
         ).fetchall()
         return [_row_to_node(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _node_summary_row(
+    conn,
+    row,
+    *,
+    group_names: dict[str, str],
+    child_branches_by_parent: dict[str, list[dict]],
+    depth: str = "summary",
+) -> dict:
+    """Node dict with group_name, attachment/message counts, child branches.
+
+    Sort key for display: (order, created_at). Same ``order`` uses created_at
+    as secondary sort (stable, documented for agents).
+    """
+    base = _row_to_node(row).model_dump()
+    nid = base["node_id"]
+    gid = base.get("group_id")
+    base["group_name"] = group_names.get(gid) if gid else None
+
+    att = conn.execute(
+        "SELECT COUNT(*) AS c FROM file_nodes WHERE node_id=?", (nid,)
+    ).fetchone()
+    base["attachment_count"] = int(att["c"] or 0)
+
+    msg = conn.execute(
+        """SELECT COUNT(*) AS c FROM messages
+           WHERE owner_type='node' AND owner_id=?""",
+        (nid,),
+    ).fetchone()
+    base["message_count"] = int(msg["c"] or 0)
+
+    # Definitive attachment?
+    def_att = conn.execute(
+        """SELECT 1 FROM file_nodes fn
+           JOIN files f ON f.file_id = fn.file_id
+           WHERE fn.node_id=? AND f.is_definitive=1 LIMIT 1""",
+        (nid,),
+    ).fetchone()
+    base["has_definitive_file"] = def_att is not None
+
+    children = child_branches_by_parent.get(nid) or []
+    base["child_branches"] = children
+    if children:
+        base["child_branch_count"] = len(children)
+
+    # Always include short attachment list so agents need fewer get_node calls
+    att_rows = conn.execute(
+        """SELECT fn.file_id, f.is_definitive, fv.storage_file_id
+           FROM file_nodes fn
+           JOIN files f ON f.file_id = fn.file_id
+           LEFT JOIN file_versions fv ON fv.version_id = f.current_version_id
+           WHERE fn.node_id=?""",
+        (nid,),
+    ).fetchall()
+    base["attachments"] = [
+        {
+            "file_id": a["file_id"],
+            "filename": a["storage_file_id"] or "",
+            "is_definitive": bool(a["is_definitive"]),
+        }
+        for a in att_rows
+    ]
+    if depth == "minimal":
+        # Drop heavy-ish fields
+        base.pop("attachments", None)
+        base.pop("message_count", None)
+    return base
+
+
+def build_timeline(
+    collection_id: str,
+    *,
+    depth: str = "summary",
+) -> dict:
+    """One-shot timeline: main chain + nested branches + enriched nodes.
+
+    ``depth``:
+    - ``minimal``: nodes with ids/titles/group_name/child_branches only
+    - ``summary`` (default): + counts + short attachment filename list
+    - ``full``: same as summary (attachments always included at summary+)
+
+    Nodes are ordered by ``(order ASC, created_at ASC)``.
+
+    Branches whose parent_node is missing or not on the parent chain are
+    returned in ``detached_branches`` (full nodes) so agents never miss them
+    when only walking ``timeline.branches``.
+
+    ``warnings`` lists topology issues.
+    """
+    if depth not in ("minimal", "summary", "full"):
+        raise HTTPException(400, "depth must be 'minimal', 'summary', or 'full'")
+
+    from src.file_mgmt.store import _ensure_chains_merge_node_id
+
+    conn = _open_db(collection_id)
+    try:
+        _ensure_chains_merge_node_id(conn)
+        conn.commit()
+
+        group_names = {
+            r["group_id"]: r["name"]
+            for r in conn.execute("SELECT group_id, name FROM node_groups").fetchall()
+        }
+
+        chain_rows = conn.execute("SELECT * FROM chains").fetchall()
+        chains_meta: dict[str, dict] = {}
+        for r in chain_rows:
+            end = conn.execute(
+                'SELECT 1 FROM nodes WHERE chain_id=? AND node_type="end" LIMIT 1',
+                (r["chain_id"],),
+            ).fetchone()
+            count = conn.execute(
+                "SELECT COUNT(*) AS c FROM nodes WHERE chain_id=?",
+                (r["chain_id"],),
+            ).fetchone()
+            try:
+                merge_raw = r["merge_node_id"]
+            except (KeyError, IndexError):
+                merge_raw = None
+            co = _row_to_chain(
+                r,
+                has_end_node=end is not None or bool(merge_raw),
+                node_count=count["c"],
+            )
+            d = co.model_dump()
+            # Friendly main title
+            if d.get("is_main") and not d.get("title"):
+                d["title"] = "Main"
+            # parent node title (for branches)
+            pnid = d.get("parent_node_id")
+            if pnid:
+                prow = conn.execute(
+                    "SELECT title, chain_id FROM nodes WHERE node_id=?", (pnid,)
+                ).fetchone()
+                if prow:
+                    d["parent_node_title"] = prow["title"]
+                    d["parent_node_chain_id"] = prow["chain_id"]
+                else:
+                    d["parent_node_title"] = None
+                    d["parent_node_chain_id"] = None
+            else:
+                d["parent_node_title"] = None
+                d["parent_node_chain_id"] = None
+            chains_meta[d["chain_id"]] = d
+
+        # Branches keyed by parent_node_id
+        child_branches_by_parent: dict[str, list[dict]] = {}
+        for cid, meta in chains_meta.items():
+            if meta.get("is_main"):
+                continue
+            pnid = meta.get("parent_node_id")
+            if not pnid:
+                continue
+            child_branches_by_parent.setdefault(pnid, []).append(
+                {
+                    "chain_id": cid,
+                    "title": meta.get("title"),
+                    "node_count": meta.get("node_count", 0),
+                    "has_end_node": meta.get("has_end_node", False),
+                    "folder_id": meta.get("folder_id"),
+                    "merge_node_id": meta.get("merge_node_id"),
+                }
+            )
+
+        warnings: list[str] = []
+        main_id = None
+        for cid, meta in chains_meta.items():
+            if meta.get("is_main"):
+                main_id = cid
+                break
+        if not main_id:
+            warnings.append("No main chain (parent_chain_id IS NULL) found")
+
+        nested_ids: set[str] = set()
+
+        def chain_with_nodes(chain_id: str, *, detached: bool = False) -> dict:
+            nested_ids.add(chain_id)
+            meta = dict(chains_meta[chain_id])
+            if detached:
+                meta["detached"] = True
+            rows = conn.execute(
+                'SELECT * FROM nodes WHERE chain_id=? ORDER BY "order", created_at',
+                (chain_id,),
+            ).fetchall()
+            nodes = [
+                _node_summary_row(
+                    conn,
+                    r,
+                    group_names=group_names,
+                    child_branches_by_parent=child_branches_by_parent,
+                    depth=depth,
+                )
+                for r in rows
+            ]
+            meta["nodes"] = nodes
+            # Nested branches that fork from nodes on this chain
+            branches: list[dict] = []
+            for n in nodes:
+                for br in n.get("child_branches") or []:
+                    bid = br["chain_id"]
+                    if bid in chains_meta and bid not in nested_ids:
+                        branches.append(chain_with_nodes(bid, detached=False))
+            meta["branches"] = branches
+            return meta
+
+        # Topology warnings: branch parent_node must exist
+        node_ids_all = {
+            r["node_id"]
+            for r in conn.execute("SELECT node_id FROM nodes").fetchall()
+        }
+        for cid, meta in chains_meta.items():
+            if meta.get("is_main"):
+                continue
+            pnid = meta.get("parent_node_id")
+            if not pnid:
+                warnings.append(
+                    f"Branch chain '{cid}' title={meta.get('title')!r} has no parent_node_id"
+                )
+            elif pnid not in node_ids_all:
+                warnings.append(
+                    f"Branch chain '{cid}' title={meta.get('title')!r} "
+                    f"parent_node_id={pnid!r} does not exist on any chain"
+                )
+            elif meta.get("parent_chain_id"):
+                # parent node should live on parent_chain
+                prow = conn.execute(
+                    "SELECT chain_id FROM nodes WHERE node_id=?", (pnid,)
+                ).fetchone()
+                if prow and prow["chain_id"] != meta["parent_chain_id"]:
+                    warnings.append(
+                        f"Branch '{cid}' parent_node_id is on chain "
+                        f"{prow['chain_id']}, not parent_chain_id={meta['parent_chain_id']}"
+                    )
+
+        timeline = chain_with_nodes(main_id) if main_id else None
+
+        # Branches not reachable from main via parent_node links
+        detached_branches: list[dict] = []
+        for cid, meta in chains_meta.items():
+            if meta.get("is_main"):
+                continue
+            if cid in nested_ids:
+                continue
+            det = chain_with_nodes(cid, detached=True)
+            reason = "unreachable_from_main"
+            pnid = meta.get("parent_node_id")
+            if not pnid:
+                reason = "missing_parent_node_id"
+            elif pnid not in node_ids_all:
+                reason = "parent_node_missing"
+            elif meta.get("parent_node_chain_id") and meta.get("parent_chain_id"):
+                if meta["parent_node_chain_id"] != meta["parent_chain_id"]:
+                    reason = "parent_node_not_on_parent_chain"
+            det["detach_reason"] = reason
+            detached_branches.append(det)
+            warnings.append(
+                f"Detached branch '{cid}' title={meta.get('title')!r} "
+                f"({reason}) — see detached_branches[] for full nodes"
+            )
+
+        # Flat index for agents that prefer non-nested
+        chains_list = [chains_meta[c] for c in chains_meta]
+
+        return {
+            "timeline": timeline,
+            "detached_branches": detached_branches,
+            "chains": chains_list,
+            "groups": [
+                {
+                    "group_id": g["group_id"],
+                    "name": g["name"],
+                    "folder_id": g["folder_id"],
+                }
+                for g in conn.execute(
+                    "SELECT group_id, name, folder_id FROM node_groups ORDER BY name"
+                ).fetchall()
+            ],
+            "depth": depth,
+            "node_order_rule": "ORDER BY order ASC, created_at ASC (same order → older first)",
+            "warnings": warnings,
+            "summary": {
+                "chain_count": len(chains_meta),
+                "branch_count": sum(1 for c in chains_meta.values() if not c.get("is_main")),
+                "detached_branch_count": len(detached_branches),
+                "node_count": len(node_ids_all),
+                "group_count": len(group_names),
+            },
+            "read_hint": (
+                "Walk timeline.branches for attached forks; always also read "
+                "detached_branches (broken parent links) so no nodes are missed."
+            ),
+        }
     finally:
         conn.close()
 
@@ -2217,7 +2512,7 @@ def get_file_detail(collection_id: str, file_id: str) -> FileDetail:
             "SELECT * FROM file_versions WHERE file_id=? ORDER BY version_no",
             (file_id,),
         ).fetchall()
-        versions = [_row_to_file_version(r) for r in ver_rows]
+        versions = [_row_to_file_version(r, collection_id) for r in ver_rows]
 
         # node associations (group + chain labels for file-detail UI)
         node_rows = conn.execute(
@@ -2323,6 +2618,322 @@ def list_files(
         return results
     finally:
         conn.close()
+
+
+def _mounts_for_files(conn, file_ids: list[str]) -> dict[str, list[dict]]:
+    """Map file_id → list of mount dicts (folder_id, name, path, path_id, …)."""
+    if not file_ids:
+        return {}
+    _ensure_path_archive_column(conn)
+    # folder name lookup
+    folder_names = {
+        r["folder_id"]: r["name"]
+        for r in conn.execute("SELECT folder_id, name FROM folders").fetchall()
+    }
+    out: dict[str, list[dict]] = {fid: [] for fid in file_ids}
+    # Batch path rows
+    placeholders = ",".join("?" * len(file_ids))
+    path_rows = conn.execute(
+        f"""SELECT * FROM file_paths
+            WHERE file_id IN ({placeholders})
+            ORDER BY file_id, is_primary DESC""",
+        tuple(file_ids),
+    ).fetchall()
+    for pr in path_rows:
+        fid = pr["file_id"]
+        folder_id = pr["folder_id"]
+        out.setdefault(fid, []).append(
+            {
+                "path_id": pr["path_id"],
+                "folder_id": folder_id,
+                "folder_name": folder_names.get(folder_id) or "",
+                "folder_path": _compute_folder_path(conn, folder_id),
+                "is_primary": bool(pr["is_primary"]),
+                "archived": bool(pr["archived"]) if "archived" in pr.keys() else False,
+                "source_node_id": pr["source_node_id"],
+            }
+        )
+    return out
+
+
+def list_files_with_mounts(
+    collection_id: str,
+    *,
+    folder_id: str | None = None,
+    archived: bool | None = None,
+    is_definitive: bool | None = None,
+    scope: str = "all",
+) -> list[dict]:
+    """List files as plain dicts, each with ``mounts`` and ``folder_ids``.
+
+    ``scope`` (only when ``folder_id`` is None and ``is_definitive`` is None):
+    - ``\"all\"`` (default): every unique file in the collection
+    - ``\"orphans\"``: only files with no ``file_paths`` row (HTTP root view)
+
+    HTTP :func:`list_files` is unchanged (empty folder_id still means orphans).
+    """
+    if scope not in ("all", "orphans"):
+        raise HTTPException(400, "scope must be 'all' or 'orphans'")
+
+    try:
+        from src.file_mgmt.store import _migrate_files_json_import
+
+        _migrate_files_json_import(collection_id)
+    except Exception:
+        logger.debug("files.json migration skipped for mounts list", exc_info=True)
+
+    conn = _open_db(collection_id)
+    try:
+        if is_definitive is not None:
+            rows = conn.execute(
+                """SELECT f.* FROM files f
+                   WHERE f.is_definitive=?
+                   ORDER BY f.file_id""",
+                (1 if is_definitive else 0,),
+            ).fetchall()
+        elif folder_id:
+            rows = conn.execute(
+                """SELECT DISTINCT f.* FROM files f
+                   JOIN file_paths fp ON fp.file_id = f.file_id
+                   WHERE fp.folder_id=?
+                   ORDER BY f.file_id""",
+                (folder_id,),
+            ).fetchall()
+        elif scope == "orphans":
+            rows = conn.execute(
+                """SELECT f.* FROM files f
+                   WHERE f.file_id NOT IN (SELECT file_id FROM file_paths)
+                   ORDER BY f.file_id"""
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT f.* FROM files f ORDER BY f.file_id"
+            ).fetchall()
+
+        idx = _load_file_index(collection_id)
+        filtered = []
+        for r in rows:
+            if archived is not None and bool(r["archived"]) != archived:
+                continue
+            filtered.append(r)
+
+        file_ids = [r["file_id"] for r in filtered]
+        mounts_map = _mounts_for_files(conn, file_ids)
+
+        results: list[dict] = []
+        for r in filtered:
+            fs = _row_to_file_out(r, conn, collection_id, index=idx)
+            fs.is_greyed = bool(r["archived"])
+            d = fs.model_dump()
+            mounts = mounts_map.get(r["file_id"], [])
+            d["mounts"] = mounts
+            d["folder_ids"] = [m["folder_id"] for m in mounts if m.get("folder_id")]
+            # Optimistic-lock field is ``version``; expose ASR-facing current version_no
+            cur_vid = d.get("current_version_id")
+            if cur_vid:
+                vn = conn.execute(
+                    "SELECT version_no FROM file_versions WHERE version_id=?",
+                    (cur_vid,),
+                ).fetchone()
+                d["current_version_no"] = int(vn["version_no"]) if vn else None
+            else:
+                d["current_version_no"] = None
+            # How many version rows exist (including archived history)
+            vc = conn.execute(
+                "SELECT COUNT(*) AS c FROM file_versions WHERE file_id=?",
+                (r["file_id"],),
+            ).fetchone()
+            d["version_count"] = int(vc["c"] or 0)
+            # Rename optimistic lock for agents (keep ``version`` alias for compat)
+            d["lock_version"] = d.get("version")
+            results.append(d)
+        return results
+    finally:
+        conn.close()
+
+
+def _compact_file_ref(f: dict, fields: str) -> dict:
+    """Shrink file dict for tree embedding."""
+    if fields == "minimal":
+        return {
+            "file_id": f.get("file_id"),
+            "filename": f.get("filename") or f.get("display_name"),
+            "display_name": f.get("display_name"),
+            "doc_kind": f.get("doc_kind"),
+            "current_version_no": f.get("current_version_no"),
+            "folder_ids": f.get("folder_ids") or [],
+        }
+    if fields == "summary":
+        return {
+            "file_id": f.get("file_id"),
+            "filename": f.get("filename"),
+            "display_name": f.get("display_name"),
+            "doc_kind": f.get("doc_kind"),
+            "is_definitive": f.get("is_definitive"),
+            "archived": f.get("archived"),
+            "current_version_no": f.get("current_version_no"),
+            "version_count": f.get("version_count"),
+            "lock_version": f.get("lock_version", f.get("version")),
+            "folder_ids": f.get("folder_ids") or [],
+            # mounts once at file level is enough; tree multi-embed skips full mounts
+            "mount_count": len(f.get("mounts") or []),
+        }
+    return f
+
+
+def build_library_tree(
+    collection_id: str,
+    *,
+    max_depth: int | None = None,
+    include_orphans: bool = True,
+    include_archived_files: bool = True,
+    fields: str = "summary",
+) -> dict:
+    """One-shot nested folder tree with files under each folder + orphans.
+
+    ``fields``:
+    - ``minimal``: each embedded file is ``{file_id, filename, doc_kind, …}``
+    - ``summary`` (default): + definitive/version meta, no full mounts[] per embed
+    - ``full``: full file dict with mounts (can be large when multi-mounted)
+
+    Multi-mount files still appear under each folder, but minimal/summary
+    avoids repeating the full mounts[] payload at every mount site.
+
+    Each folder always has **real** ``file_count`` / ``unique_file_count`` /
+    ``mount_count`` (library truth for that folder). ``files`` is the **payload**
+    of this response only:
+
+    - ``max_depth=None`` / unlimited: every folder includes ``files``.
+    - ``max_depth=N``: folders with depth ``>= N`` set ``truncated=true``,
+      ``files=[]``, ``files_omitted=<real unique count>``, but counts stay real.
+      Deeper folder **skeleton** is still returned (grandchildren keep
+      ``truncated`` / real counts) so agents can navigate without mistaking
+      truncated folders for empty ones.
+
+    Root depth is ``0``. Example: ``max_depth=1`` expands files for root
+    folders only; descendants remain as truncated stubs with real counts.
+    """
+    if fields not in ("minimal", "summary", "full"):
+        raise HTTPException(400, "fields must be 'minimal', 'summary', or 'full'")
+
+    try:
+        from src.file_mgmt.store import _migrate_files_json_import
+
+        _migrate_files_json_import(collection_id)
+    except Exception:
+        logger.debug("files.json migration skipped for library tree", exc_info=True)
+
+    tree = get_folder_tree(collection_id)
+    all_mounted = list_files_with_mounts(
+        collection_id,
+        scope="all",
+        archived=None if include_archived_files else False,
+    )
+    # Index files by folder_id for O(1) attach (same file may appear in multiple folders)
+    by_folder: dict[str, list[dict]] = {}
+    for f in all_mounted:
+        for mid in f.get("folder_ids") or []:
+            by_folder.setdefault(mid, []).append(f)
+
+    def attach(nodes: list, depth: int) -> list[dict]:
+        out: list[dict] = []
+        for n in nodes:
+            d = n.model_dump() if hasattr(n, "model_dump") else dict(n)
+            # Drop nested children from model_dump — we rebuild via attach
+            d.pop("children", None)
+            fid = d.get("folder_id")
+            files_here = list(by_folder.get(fid, []))
+            if not include_archived_files:
+                files_here = [x for x in files_here if not x.get("archived")]
+            unique_count = len({x["file_id"] for x in files_here})
+            # Counts are always library truth for this folder
+            d["unique_file_count"] = unique_count
+            d["mount_count"] = len(files_here)
+            d["file_count"] = unique_count
+
+            omit_files = max_depth is not None and depth >= max_depth
+            if omit_files:
+                # Payload only — do not expand files past max_depth
+                d["files"] = []
+                d["files_omitted"] = unique_count
+                d["truncated"] = True
+            else:
+                d["files"] = [_compact_file_ref(x, fields) for x in files_here]
+                d["files_omitted"] = 0
+                d["truncated"] = False
+
+            # Always recurse folder skeleton so agents see grandchildren
+            # (each deeper node still carries real counts + truncated when needed)
+            raw_kids = getattr(n, "children", None) or []
+            d["children"] = attach(raw_kids, depth + 1) if raw_kids else []
+            out.append(d)
+        return out
+
+    folders = attach(tree, 0)
+
+    orphans: list[dict] = []
+    if include_orphans:
+        orphans_raw = list_files_with_mounts(
+            collection_id,
+            scope="orphans",
+            archived=None if include_archived_files else False,
+        )
+        orphans = [_compact_file_ref(x, fields) for x in orphans_raw]
+
+    # Summary over unique file_ids in collection
+    unique_ids = {f["file_id"] for f in all_mounted}
+    by_kind: dict[str, int] = {}
+    for f in all_mounted:
+        k = f.get("doc_kind") or "file"
+        by_kind[k] = by_kind.get(k, 0) + 1
+
+    def count_folders(nodes: list) -> int:
+        n = 0
+        for x in nodes:
+            n += 1
+            n += count_folders(x.get("children") or [])
+        return n
+
+    # Optional flat index: full mounts once (agents resolve multi-mount without fat tree)
+    files_index = None
+    if fields in ("minimal", "summary"):
+        files_index = {
+            f["file_id"]: {
+                "file_id": f["file_id"],
+                "filename": f.get("filename"),
+                "display_name": f.get("display_name"),
+                "doc_kind": f.get("doc_kind"),
+                "current_version_no": f.get("current_version_no"),
+                "version_count": f.get("version_count"),
+                "lock_version": f.get("lock_version", f.get("version")),
+                "mounts": f.get("mounts") or [],
+                "folder_ids": f.get("folder_ids") or [],
+            }
+            for f in all_mounted
+        }
+
+    return {
+        "folders": folders,
+        "orphans": orphans,
+        "files_index": files_index,
+        "fields": fields,
+        "summary": {
+            "folder_count": count_folders(folders),
+            "unique_file_count": len(unique_ids),
+            "orphan_count": len(orphans),
+            "by_doc_kind": by_kind,
+            "files": by_kind.get("file", 0),
+            "notes": by_kind.get("note", 0),
+            "meetings": by_kind.get("meeting", 0),
+        },
+        "read_hint": (
+            "Tree embeds compact file refs under each folder. "
+            "Use files_index[file_id].mounts for full multi-mount detail, "
+            "or list_files / get_file for more."
+            if files_index is not None
+            else "fields=full embeds full file objects (can be large)."
+        ),
+    }
 
 
 def list_files_in_folder(collection_id: str, folder_id: str) -> list[FileSummary]:
@@ -5255,8 +5866,22 @@ def detach_file_from_node(
 # --- Message CRUD ---
 
 
-def _row_to_file_version(row) -> FileVersionOut:
+def _row_to_file_version(row, collection_id: str | None = None) -> FileVersionOut:
     from src.file_mgmt.models import FileVersionOut
+
+    blob_ok = True
+    if collection_id:
+        try:
+            from src.file_mgmt.storage_paths import version_blob_exists
+
+            blob_ok = version_blob_exists(
+                collection_id,
+                row["file_id"],
+                row["version_id"],
+                row["storage_file_id"],
+            )
+        except Exception:
+            blob_ok = False
 
     return FileVersionOut(
         version_id=row["version_id"],
@@ -5267,6 +5892,7 @@ def _row_to_file_version(row) -> FileVersionOut:
         commit_message=row["commit_message"],
         created_by=row["created_by"],
         created_at=row["created_at"],
+        blob_available=blob_ok,
     )
 
 

@@ -12,6 +12,7 @@ from src.mcp.common import (
     decode_base64_content,
     err,
     filter_destructive_fields,
+    mcp_result,
     ok,
     safe_filename,
     to_json,
@@ -53,6 +54,40 @@ class TestOkErr:
     def test_err_can_include_extra(self):
         result = err("bad", code=400, fields=["x"])
         assert result == {"error": "bad", "code": 400, "fields": ["x"]}
+
+
+class TestMcpResult:
+    def test_short_text_plus_structured(self):
+        data = ok(
+            collection="col_1",
+            file_id="f1",
+            extract_status="ok",
+            total_chars=42,
+            content="x" * 42,
+        )
+        result = mcp_result(data)
+        # Prefer CallToolResult; fall back to dict if mcp package missing
+        sc = getattr(result, "structured_content", None)
+        if sc is not None:
+            assert sc["content"] == "x" * 42
+            text = result.content[0].text
+            assert "file_id=f1" in text
+            assert "chars=42" in text
+            assert "x" * 42 not in text  # full body only in structuredContent
+        else:
+            assert result["file_id"] == "f1"
+
+    def test_error_summary_includes_hint(self):
+        data = err(
+            "missing",
+            extract_status="blob_missing",
+            hint="use get_file_chunks",
+        )
+        result = mcp_result(data)
+        if getattr(result, "is_error", None) is True:
+            assert "blob_missing" in result.content[0].text
+            assert "get_file_chunks" in result.content[0].text
+
 
 
 # ── safe_filename ──────────────────────────────────────────────

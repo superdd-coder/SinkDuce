@@ -40,7 +40,7 @@ docker compose up -d --build
 3. 添加 **Embedding 提供商**，创建你的第一个 Collection（知识库）。
 
 > [!TIP]
-> **DashScope 一键配置** — Settings → LLM Providers → OneShot Setting (DashScope API)。输入阿里云 API Key，自动配置 LLM（`deepseek-v4-flash`）、Embedding（`text-embedding-v4`，1024 维）、Reranker（`qwen3-rerank`）以及文件/实时转写（`fun-asr`、`fun-asr-realtime`）。
+> **DashScope 一键配置** — Settings → LLM Providers → OneShot Setting (DashScope API)。输入阿里云 API Key，自动配置 LLM（`deepseek-v4-flash`）、Embedding（`text-embedding-v4`，1024 维）、Reranker（`qwen3-rerank`）以及文件/实时转写（`qwen-audio-3.0-asr-flash-filetrans`、`qwen-audio-3.0-asr-flash-streaming`）。
 
 > [!TIP]
 > **OpenRouter 一键配置** — Settings → LLM Providers → OneShot Setting (OpenRouter API)。输入 Key 后自动拉取模型列表并分类为 LLM、Chat（支持函数调用）、Vision（视觉模型）、Embedding 和 Reranker。

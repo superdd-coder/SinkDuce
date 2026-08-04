@@ -10,7 +10,13 @@ services:
       - QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER=1
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Override if Hub is slow: NODE_IMAGE=node:20-slim etc.
+        NODE_IMAGE: ${NODE_IMAGE:-docker.1ms.run/library/node:20-slim}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-docker.1ms.run/library/python:3.11-slim}
+        UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.6.14}
     ports:
       - "${API_PORT:-18900}:18900"
     volumes:

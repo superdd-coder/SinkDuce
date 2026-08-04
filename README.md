@@ -40,7 +40,7 @@ Open [http://localhost:18900](http://localhost:18900). On first launch:
 3. Add an **Embedding provider** and create your first Collection.
 
 > [!TIP]
-> **DashScope OneShot** — Settings → LLM Providers → OneShot Setting (DashScope API). Enter your Alibaba Cloud API key. Pre-configures LLM (`deepseek-v4-flash`), Embedding (`text-embedding-v4`, 1024d), Reranker (`qwen3-rerank`), and both Transcription providers (`fun-asr`, `fun-asr-realtime`).
+> **DashScope OneShot** — Settings → LLM Providers → OneShot Setting (DashScope API). Enter your Alibaba Cloud API key. Pre-configures LLM (`deepseek-v4-flash`), Embedding (`text-embedding-v4`, 1024d), Reranker (`qwen3-rerank`), and both Transcription providers (`qwen-audio-3.0-asr-flash-filetrans`, `qwen-audio-3.0-asr-flash-streaming`).
 
 > [!TIP]
 > **OpenRouter OneShot** — Settings → LLM Providers → OneShot Setting (OpenRouter API). Enter your key; models are auto-fetched and classified into LLM, Chat (function-calling filtered), Vision, Embedding, and Reranker categories.
@@ -308,7 +308,7 @@ src/
   notes/              Collection Notes: distill, propagate, injection block parsing
   hot_words/          Weighted vocabulary libraries for ASR
   tasks/              Dual-queue async task manager with cooperative cancellation
-  mcp/                MCP server: 43 tools across 8 domains, HTTP Streamable transport
+  mcp/                MCP server: 56 tools across 9 domains (incl. file-mgmt L1), HTTP Streamable transport
   models/             HuggingFace/ModelScope model download manager
 data/                 Runtime data (all gitignored): qdrant/, config.yaml, history/,
                       meetings/, notes/, hot_words/, models/, collections/

@@ -348,9 +348,12 @@ interface TranscriptionProviderCardProps {
 }
 
 function TranscriptionProviderCard({ provider, kind, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
-  const modelLabel = provider.adapter === "dashscope"
-    ? kind === "file" ? "fun-asr" : "fun-asr-realtime"
-    : provider.adapter
+  // DashScope adapters hardcode a single Qwen model (ignore stored config.model).
+  const modelLabel = provider.adapter?.startsWith("dashscope")
+    ? kind === "file"
+      ? "qwen-audio-3.0-asr-flash-filetrans"
+      : "qwen-audio-3.0-asr-flash-streaming"
+    : (provider.model || provider.adapter)
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
   const [testing, setTesting] = useState(false)
   const statusColor = status === "ready" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-muted-foreground/40"

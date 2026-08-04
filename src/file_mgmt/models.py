@@ -188,6 +188,9 @@ class FileVersionOut(BaseModel):
     commit_message: str | None = None
     created_by: str = "local"
     created_at: str
+    # False when the on-disk blob is missing (legacy overwrite / never stored).
+    # Agents should not call get_document_text(version_id=…) when this is False.
+    blob_available: bool = True
 
 
 class FileOut(BaseModel):

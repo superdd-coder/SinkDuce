@@ -115,6 +115,8 @@ export interface FileVersion {
   commit_message: string | null
   created_by: string
   created_at: string
+  /** False when the version blob is missing on disk (Source/extract unavailable). */
+  blob_available?: boolean
 }
 
 /** Non-current version row for All Files collapsible history. */

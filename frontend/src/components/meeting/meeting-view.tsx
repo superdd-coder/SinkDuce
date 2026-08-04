@@ -256,15 +256,18 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }
   }, [])
 
-  // Check for transcription providers on mount
+  // Refresh transcription provider status when Meeting tab becomes active.
+  // Views are keep-alive mounted, so a mount-only check would stay stale after
+  // configuring providers in Settings and navigating back.
   useEffect(() => {
+    if (!active) return
     getRealtimeTranscriptionProviders()
       .then((providers) => setHasRealtimeProvider(providers.some((p) => p.is_active)))
       .catch(() => setHasRealtimeProvider(false))
     getFileTranscriptionProviders()
       .then((providers) => setHasFileProvider(providers.some((p) => p.is_active)))
       .catch(() => setHasFileProvider(false))
-  }, [])
+  }, [active])
 
   // Load meetings and hot words on mount
   useEffect(() => {
