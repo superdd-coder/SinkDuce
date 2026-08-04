@@ -918,6 +918,23 @@ input[type="checkbox"] {
   pointer-events: none;
   animation: sk-check-ring 1.8s cubic-bezier(0.25, 1, 0.5, 1) infinite;
 }
+/* Completed tool-row diamonds: solid fill, no infinite pulse ring */
+.sk-diamond.on.sk-diamond-static::after {
+  content: none;
+  animation: none;
+}
+.sk-diamond.on.sk-diamond-static {
+  box-shadow: none;
+}
+
+/* Tool wrench icon — breathe only while tool is running */
+@keyframes sk-tool-icon-breathe {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+.sk-tool-icon-breathe {
+  animation: sk-tool-icon-breathe 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
 /* When the parent .group is hovered, the green sweep covers the row.
    Diamonds flip to on-green so they stay visible against the green fill:
    · Unchecked → only the border color flips (fill stays transparent)

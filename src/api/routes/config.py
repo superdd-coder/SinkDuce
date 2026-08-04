@@ -105,12 +105,19 @@ async def update_config(req: ConfigUpdateRequest):
 
     # Only allow setting declared Pydantic model fields
     allowed_keys = set(getattr(type(section_data), "model_fields", {}).keys())
-    _int_fields = {"dimensions", "batch_size", "top_k", "rerank_top_k", "max_parallel_queries", "max_parallel_context", "batch_poll_interval"}
+    _int_fields = {
+        "dimensions", "batch_size", "top_k", "rerank_top_k",
+        "max_parallel_queries", "max_parallel_context", "batch_poll_interval",
+        "max_results", "confirm_timeout_sec",
+    }
+    _bool_fields = {"enabled", "is_ocr", "enable_formula", "enable_table", "use_reranker", "use_batch", "meeting_thinking"}
     for key, value in req.data.items():
         if key not in allowed_keys:
             continue
         if key in _int_fields and value is not None:
             value = int(value)
+        if key in _bool_fields and value is not None:
+            value = bool(value)
         setattr(section_data, key, value)
 
     save_config(config)

@@ -1,7 +1,7 @@
-"""ChatboxAgent — conversational agent with AgenticQueryService as a tool.
+"""ChatboxAgent — conversational agent with knowledge-base + structure tools.
 
-Uses function calling to decide whether to search the knowledge base.
-Tool-use internals (rewrite/grading loops) are NOT exposed to the user.
+Uses function calling to decide whether to search, browse the library tree,
+or (rarely) read full document text. Search internals stay hidden from the user.
 """
 
 from __future__ import annotations
@@ -15,155 +15,65 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncGenerator
 
+from src.chatbox.query_tools import (
+    STRUCTURE_TOOL_NAMES,
+    TOOLS,
+    WEB_SEARCH_TOOL_NAME,
+    allowed_tool_names,
+    execute_structure_tool,
+    execute_structure_tool_async,
+    force_collection_args,
+    merge_search_tool_calls,
+    tools_for_mode,
+)
+
 logger = logging.getLogger(__name__)
-
-# ═══════════════════════════════════════════════════════════════════
-# Tool definition
-# ═══════════════════════════════════════════════════════════════════
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_knowledge_base",
-            "description": (
-                "Search the private knowledge base. You are an INFORMATION PLANNER — "
-                "translate the user's question into concrete information needs, then "
-                "decide how to search them.\n\n"
-                "PLANNING RULES:\n"
-                "1. If vague/ambiguous — ask user to clarify first.\n"
-                "2. For chitchat and common knowledge — answer directly.\n"
-                "3. DEFAULT: one call per round. Pack ALL your information needs into it "
-                "with decompose=true. The system handles decomposition and parallel "
-                "search. This is the right choice for comparison, multi-entity, "
-                "multi-facet, and most analytical queries.\n"
-                "4. EXCEPTION: use multiple rounds ONLY when you cannot name a search "
-                "target in round N+1 without seeing round N's results (dependency chain). "
-                "Example: 'What DB does X use? What CVEs does that DB have?' — the second "
-                "question depends on the answer to the first.\n"
-                "5. If unsure, use ONE call with decompose=true."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "raw_query": {
-                        "type": "string",
-                        "description": (
-                            "WHAT information you need to find — NOT the user's original "
-                            "question verbatim. Write a natural phrase naming the entities "
-                            "and what aspects to cover. "
-                            "For a single topic: 'Project X system architecture and security model'. "
-                            "For multiple topics: 'Project X deployment strategy, Project Y cost model'. "
-                            "For dependent needs, describe only what you can search NOW. "
-                            "Expand abbreviations and add context from conversation history."
-                        ),
-                    },
-                    "generate_answer": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "Whether the Query service should generate a preliminary answer. "
-                            "When false (default), the service returns search context for you to "
-                            "synthesize. Set to true only when you want the service to pre-generate."
-                        ),
-                    },
-                    "include_images": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "Set to true to include base64-encoded images in the search results. "
-                            "Only enable when YOUR model supports vision/image input. "
-                            "When false (default), image descriptions in the chunk text suffice."
-                        ),
-                    },
-                    "decompose": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": (
-                            "Set to TRUE to pack MULTIPLE independent search targets "
-                            "into this single call (different entities, topics, or facets). "
-                            "The system decomposes and searches them in parallel — faster "
-                            "and more thorough than making separate calls. "
-                            "Set to FALSE (default) for a SINGLE focused search."
-                        ),
-                    },
-                },
-                "required": ["raw_query"],
-            },
-        },
-    }
-]
-
-LOOKUP_TOOL = [
-    {
-        "type": "function",
-        "function": {
-            "name": "lookup_collection",
-            "description": (
-                "Search the current collection for relevant document chunks. "
-                "Use this to find specific information before answering.\n\n"
-                "RULES:\n"
-                "1. For questions about the collection's content — call this tool FIRST.\n"
-                "2. For chitchat and common knowledge — answer directly.\n"
-                "3. Write a focused search query describing what you need to find.\n"
-                "4. You may make MULTIPLE calls in a conversation for follow-up questions.\n"
-                "5. Base your answers on the retrieved chunks — cite specific details."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "WHAT to search for in the collection. Write a natural "
-                            "phrase describing the information you need. Be specific "
-                            "about entities, topics, or aspects to look up."
-                        ),
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    }
-]
 
 # ═══════════════════════════════════════════════════════════════════
 # Default system prompt
 # ═══════════════════════════════════════════════════════════════════
 
-DEFAULT_SYSTEM_PROMPT = """You are a knowledge base assistant. You can use the search_knowledge_base tool to search the user's private knowledge base.
+DEFAULT_SYSTEM_PROMPT = """You are a knowledge base assistant for ingested documents.
+
+TOOLS:
+- search_knowledge_base — primary tool for factual Q&A over the private knowledge base.
+- Structure tools (list_collections, list_library_tree, list_files, get_file,
+  get_timeline, list_file_versions, …) — browse what exists in the library.
+- get_document_text / get_file_chunks — LOW PRIORITY full-body / index inspection.
+- get_collection_summary / get_doc_summary / get_conflicts — ingested summaries.
+- request_web_search — optional internet search when public/current info is needed.
+  If web_toggle=enabled, CALL it immediately — do not ask the user whether Web is on.
+  If web_toggle=disabled, say the library lacks data and Web is off (briefly).
 
 YOUR ROLE — Information Planner:
-Before calling search_knowledge_base, think about WHAT information you need, not just
-what the user asked. Translate the user's question into concrete information needs.
+Translate the user's question into concrete information needs before calling tools.
 
-DECISION RULES — when to search vs answer directly:
-- BEFORE calling the tool, check the knowledge base reference above. It lists
-  exactly what topics each collection covers. If the user is asking about a
-  project, entity, or topic that does NOT appear in any collection's description
-  or aspects, search will return nothing useful. In that case, tell the user
-  directly: "I don't have information about X in the knowledge base. The available
-  collections cover: [list what IS available]." Do NOT call the tool.
-- DEFAULT (when the topic IS covered): ONE call with decompose=true. Pack ALL
-  information needs into it. The system handles decomposition and parallel search
-  internally. This applies to comparison, multi-entity, multi-facet, and most
-  analytical queries.
-- EXCEPTION — dependency chain: ONLY use multiple rounds when you literally cannot
-  formulate round N+1 until you see round N's results. This is a dependency, not
-  a preference. Example: "What DB does X use? What CVEs does that DB have?" —
-  you cannot name the DB in round 2 until round 1 tells you what it is.
-- If in doubt, use ONE call with decompose=true.
-- For comparison, contrast, and analysis: YOU write the final answer based on
-  search results — the tool provides raw information, you provide insight.
+DECISION RULES:
+- Check the knowledge base reference first. If the topic is not covered by any
+  collection, say so and list what IS available — do not search blindly.
+- DEFAULT for content facts: ONE search_knowledge_base call with decompose=true.
+- Use structure tools when the user asks what files/folders/versions exist, or
+  where something lives in the library — not as a substitute for search.
+- get_document_text / get_file_chunks: ONLY when the user explicitly asks to read
+  a named file / full text / a version, OR you judge that search chunks are
+  insufficient and continuous original text is required. Never call them "just
+  in case". Prefer search first. When reading text: use a character window
+  (default ~32k, hard max ~96k). If search already gave char_offset, start
+  get_document_text there. If has_more and the window is still not enough to
+  answer, page forward with offset=next_offset (like turning pages) until you
+  have sufficient evidence; stop when the answer is complete (do not read
+  whole files by default).
+- Web search: when public/current internet info is needed or KB lacks it, and
+  web_toggle=enabled — CALL request_web_search immediately (do not ask the user
+  about the Web toggle). Prefer KB first. Separate WEB vs KB claims with labels.
+- EXCEPTION — dependency chain: multiple rounds only when round N+1 cannot be
+  formulated without round N results.
+- For comparison and analysis: YOU write the final answer; tools supply evidence.
 
 WRITING raw_query:
-- NEVER pass the user's question verbatim — write WHAT to search for
-- Write a natural phrase describing what information you need and what aspects to
-  cover. "Project X architecture and deployment approach" is good; a keyword dump
-  like "architecture, framework, database" is NOT.
-- For chitchat and common knowledge, answer directly without the tool
-- Expand abbreviations and add context from conversation history in raw_query
-- Base your answers on tool results with source citations
+- NEVER pass the user's question verbatim — write WHAT to search for.
+- Expand abbreviations and add conversation context.
+- Base answers on tool results with source citations.
 
 Formatting:
 - When using markdown tables, ALWAYS put each row on its own line with proper newlines.
@@ -174,19 +84,40 @@ Formatting:
 - Use standard alignment: :--- (left), :---: (center), ---: (right). Never use ::--
 - Keep tables simple. Prefer lists over tables when comparing only 2-3 items."""
 
-QUICK_CHAT_SYSTEM_PROMPT = """You are a quick Q&A assistant for the document collection "%(collection_name)s". You can use the lookup_collection tool to search this collection for relevant information.
+QUICK_CHAT_SYSTEM_PROMPT = """You are a quick Q&A assistant for the document collection "%(collection_name)s".
+
+All collection tools are locked to THIS collection only. You cannot query other collections.
+
+TOOLS:
+- lookup_collection — primary search over this collection's ingested chunks.
+- Structure tools (list_library_tree, list_files, get_file, get_timeline, …) —
+  browse files/folders/versions in this collection.
+- get_document_text / get_file_chunks — LOW PRIORITY; only when the user asks to
+  read a named file/full text, or chunks are clearly insufficient. Prefer
+  search first. get_document_text uses character windows (~32k default;
+  has_more/next_offset). If the current page lacks enough evidence, continue
+  with offset=next_offset or a chunk's char_offset — stop when the answer is
+  complete (do not page entire files by default).
+- get_collection_summary / get_doc_summary / get_conflicts — ingested summaries.
+- request_web_search — internet search when public/current info is needed and
+  web_toggle=enabled. Prefer this collection first. Label WEB results clearly.
 
 YOUR ROLE:
-- Answer questions about the collection's content concisely and accurately.
-- Use lookup_collection to find relevant document chunks before answering factual questions.
-- For chitchat and common knowledge, answer directly without the tool.
+- Answer questions about this collection concisely and accurately.
+- Prefer lookup_collection for factual content questions.
+- Use structure tools for "what files exist / where is X" questions.
+- For chitchat and common knowledge, answer directly without tools.
+- If the collection lacks the answer and web_toggle=enabled: CALL request_web_search
+  immediately. Do NOT ask the user to check the Web toggle or send another message.
+  The system handles Allow/Decline UI after you call the tool.
+- If web_toggle=disabled and the collection lacks data: briefly say Web is off and
+  answer what you can from the collection. Do not invent internet facts.
 
 RULES:
-- Base all factual answers on retrieved chunks — do NOT fabricate information.
-- Cite specific data points (numbers, names, dates) when they appear in the retrieved content.
-- If the collection does not contain relevant information, say so clearly.
-- Keep answers focused and concise — this is a quick Q&A, not a deep research session.
-- You may call lookup_collection multiple times during a conversation to follow up on details.
+- Base factual answers on tool results — do NOT fabricate.
+- Cite specific data points when present.
+- If the collection lacks relevant information, say so clearly.
+- Keep answers focused — quick Q&A, not deep multi-collection research.
 
 Formatting:
 - Use Markdown for readability (headers, lists, bold/italic).
@@ -255,13 +186,20 @@ def _format_current_time() -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 _MAX_TOOL_ROUNDS = 5
+# Legacy row cap (tests / callers may still reference). Context window uses dialogue turns.
 _MAX_HISTORY_MESSAGES = 50
+# LLM history: count user + final-assistant answers (tool rows ride with the turn).
+_MAX_HISTORY_DIALOGUE_MAIN = 32   # ~16 Q&A rounds for agentic Chat
+_MAX_HISTORY_DIALOGUE_QUICK = 20  # aligns with quick warn/trim scale
+_MAX_HISTORY_DIALOGUE_MEETING = 40  # no tools; more room for pure dialogue
 _QUICK_MAX_MESSAGES = 30
 _QUICK_WARN_THRESHOLD = 20
 _QUICK_TRIM_KEEP = 5
 _MEETING_MAX_MESSAGES = 50
 _MEETING_TRIM_KEEP = 10
 _TOTAL_MAX_TOKENS = 128000  # generous ceiling
+# Cap historical tool payloads so old web dumps do not drown newer user intent
+_MAX_HISTORY_TOOL_CHARS = 6000
 
 
 class ChatboxAgent:
@@ -290,34 +228,64 @@ class ChatboxAgent:
 
     # ── helpers ──────────────────────────────────────────────────────
 
-    def _resolve_tools_and_prompt(self, mode: str, session_id: str, collections: list[str] | None = None):
+    def _resolve_tools_and_prompt(
+        self,
+        mode: str,
+        session_id: str,
+        collections: list[str] | None = None,
+        *,
+        web_search_enabled: bool = False,
+    ):
         """Return (tools, system_prompt, catalog_text) for the given mode."""
+        is_meeting = session_id.startswith("meeting_")
         if mode == "direct":
-            # Meeting chat: no tools, no catalog, use meeting-specific prompt
-            if session_id.startswith("meeting_"):
+            if is_meeting:
                 from src.prompts import MEETING_CHAT_SYSTEM_PROMPT
                 return [], MEETING_CHAT_SYSTEM_PROMPT, ""
-            tools = LOOKUP_TOOL
-            # Fold collection context into the system prompt.
-            # Use %s to avoid KeyError if the name contains {} etc.
+            tools = tools_for_mode(
+                "direct", is_meeting=False, web_search_enabled=web_search_enabled,
+            )
             cols = collections or self._get_collections(session_id)
             col_name = cols[0] if cols else "this collection"
             system_prompt = QUICK_CHAT_SYSTEM_PROMPT % {"collection_name": col_name}
             return tools, system_prompt, ""
-        # Agentic mode (default)
         catalog_text = self._build_catalog_text(session_id, collections=collections)
-        return TOOLS, self._system_prompt, catalog_text
+        tools = tools_for_mode(
+            "agentic", is_meeting=False, web_search_enabled=web_search_enabled,
+        )
+        return tools, self._system_prompt, catalog_text
+
+    def _forced_collection(self, mode: str, collections: list[str] | None) -> str | None:
+        if mode != "direct":
+            return None
+        if collections:
+            return collections[0]
+        return None
+
+    def _is_allowed_tool(
+        self,
+        tool_name: str,
+        mode: str,
+        session_id: str,
+        *,
+        web_search_enabled: bool = False,
+    ) -> bool:
+        is_meeting = session_id.startswith("meeting_")
+        return tool_name in allowed_tool_names(
+            mode, is_meeting=is_meeting, web_search_enabled=web_search_enabled,
+        )
 
     def _check_session_truncation(self, session_id: str) -> int | None:
-        """Check and enforce session message limits.
+        """Check and enforce session dialogue limits.
+
+        Counts **user ↔ assistant** dialogue only — tool-call rows and pure
+        function-call placeholders do NOT count as turns.
 
         For quick_ sessions: trim at _QUICK_MAX_MESSAGES, keep _QUICK_TRIM_KEEP.
         For meeting_ sessions: trim at _MEETING_MAX_MESSAGES, keep _MEETING_TRIM_KEEP.
-        Count excludes system messages so transcript context is not counted
-        as conversation turns.
 
-        Returns the current message count BEFORE any truncation, or None if
-        not a quick or meeting session.
+        Returns the current dialogue message count BEFORE any truncation, or
+        None if not a quick or meeting session.
         """
         if session_id.startswith("quick_"):
             max_msgs, trim_keep = _QUICK_MAX_MESSAGES, _QUICK_TRIM_KEEP
@@ -325,12 +293,22 @@ class ChatboxAgent:
             max_msgs, trim_keep = _MEETING_MAX_MESSAGES, _MEETING_TRIM_KEEP
         else:
             return None
-        count = self._store.count_messages(session_id, exclude_system=True)
+        count_fn = getattr(self._store, "count_dialogue_messages", None)
+        if callable(count_fn):
+            count = count_fn(session_id)
+        else:
+            count = self._store.count_messages(session_id, exclude_system=True)
         if count >= max_msgs:
-            logger.info("Session %s hit %d messages, trimming to %d",
-                        session_id, count, trim_keep)
-            self._store.trim_messages(session_id, trim_keep)
-            return trim_keep  # after trim, count = keep_last
+            logger.info(
+                "Session %s hit %d dialogue messages, trimming to %d",
+                session_id, count, trim_keep,
+            )
+            trim_fn = getattr(self._store, "trim_to_dialogue_messages", None)
+            if callable(trim_fn):
+                trim_fn(session_id, trim_keep)
+            else:
+                self._store.trim_messages(session_id, trim_keep)
+            return trim_keep
         return count
 
     def _build_catalog_text(self, session_id: str, *, collections: list[str] | None = None) -> str:
@@ -371,6 +349,39 @@ class ChatboxAgent:
             return session.collections
         return []
 
+    def _history_dialogue_budget(self, session_id: str) -> int:
+        """Max user+final-assistant dialogue units for LLM history by session type."""
+        if session_id.startswith("meeting_"):
+            return _MAX_HISTORY_DIALOGUE_MEETING
+        if session_id.startswith("quick_"):
+            return _MAX_HISTORY_DIALOGUE_QUICK
+        return _MAX_HISTORY_DIALOGUE_MAIN
+
+    def _store_message_to_llm_dict(self, m) -> dict:
+        """Convert a persisted Message into an OpenAI-style dict for the LLM."""
+        meta = m.metadata or {}
+        content = m.content or ""
+        msg: dict = {"role": m.role, "content": content}
+
+        if m.role == "assistant":
+            tool_calls = meta.get("tool_calls")
+            if isinstance(tool_calls, list):
+                msg["tool_calls"] = tool_calls
+                msg["content"] = None
+            rc = meta.get("reasoning_content")
+            if rc:
+                msg["reasoning_content"] = rc
+        elif m.role == "tool":
+            msg["tool_call_id"] = meta.get("tool_call_id", "")
+            # Truncate huge historical tool bodies (e.g. prior WEB dumps).
+            if len(content) > _MAX_HISTORY_TOOL_CHARS:
+                content = (
+                    content[:_MAX_HISTORY_TOOL_CHARS]
+                    + "\n…[truncated historical tool result]"
+                )
+            msg["content"] = content
+        return msg
+
     def _build_messages(
         self,
         session_id: str,
@@ -382,66 +393,115 @@ class ChatboxAgent:
         catalog_text: str | None = None,
         pre_message_context: str | None = None,
     ) -> list[dict]:
-        """Build OpenAI-compatible messages array for the LLM call."""
+        """Build OpenAI-compatible messages for the LLM (three layouts).
+
+        **Meeting** (``meeting_*``)::
+
+            [0] fixed system prompt
+                DB system (transcript) — never dropped by dialogue window
+                recent dialogue history (no tools in practice)
+                speaker mapping (ephemeral — NOT persisted / not history)
+                current user (+ time if re-appended)
+
+        **Quick** (``quick_*``)::
+
+            [0] fixed system prompt
+                recent dialogue + tool trajectory
+                extra_messages (this-turn FC)
+                current user
+
+        **Main Chat** (agentic)::
+
+            [0] fixed system prompt
+                recent dialogue + tool trajectory
+                catalog (ephemeral — NOT persisted / not history; after history)
+                extra_messages (this-turn FC)
+                current user
+
+        History is windowed by **dialogue turns** (user + final assistant) via
+        ``get_messages(limit=N)`` / ``get_context_messages``. System/transcript
+        rows are always kept. Catalog and speaker mapping are injected only here
+        and are never written to the session store.
+        """
+        is_meeting = session_id.startswith("meeting_")
+        is_quick = session_id.startswith("quick_")
+
         messages: list[dict] = []
 
-        # Static system prompt (position 0 — always cache-hit)
+        # ── [0] Static system prompt (always first — cache prefix) ──
         sp = system_prompt if system_prompt is not None else self._system_prompt
         messages.append({"role": "system", "content": sp})
 
-        # Catalog reference as separate message (position 1 — per-session, static within session)
-        ct = catalog_text if catalog_text is not None else self._build_catalog_text(session_id, collections=collections)
-        if ct:
-            messages.append({"role": "system", "content": ct})
+        # ── History only: system (transcript) + last N dialogue turns ──
+        # Declined web searches stay in history so the model knows what was refused.
+        # Catalog / speaker mapping are NOT part of hist (never stored).
+        max_dialogue = self._history_dialogue_budget(session_id)
+        get_ctx = getattr(self._store, "get_context_messages", None)
+        if callable(get_ctx):
+            hist = get_ctx(session_id, max_dialogue=max_dialogue)
+        else:
+            hist = self._store.get_messages(session_id, limit=max_dialogue)
 
-        # Load history (including persisted tool calls and results)
-        hist = self._store.get_messages(session_id, limit=_MAX_HISTORY_MESSAGES)
-        for m in hist:
-            meta = m.metadata or {}
-            msg: dict = {"role": m.role, "content": m.content}
+        system_hist = [m for m in hist if m.role == "system"]
+        dialogue_hist = [m for m in hist if m.role != "system"]
 
-            if m.role == "assistant":
-                tool_calls = meta.get("tool_calls")
-                if isinstance(tool_calls, list):
-                    msg["tool_calls"] = tool_calls
-                    msg["content"] = None
-                rc = meta.get("reasoning_content")
-                if rc:
-                    msg["reasoning_content"] = rc
-            elif m.role == "tool":
-                msg["tool_call_id"] = meta.get("tool_call_id", "")
-                msg["content"] = m.content
+        # Meeting: pin transcript immediately after fixed system for KV cache.
+        for m in system_hist:
+            messages.append(self._store_message_to_llm_dict(m))
 
-            messages.append(msg)
+        for m in dialogue_hist:
+            messages.append(self._store_message_to_llm_dict(m))
 
-        # Extra tool-call messages (injected during tool-use loop)
+        # ── Catalog (main Chat only; ephemeral; after history; never DB) ──
+        if not is_meeting and not is_quick:
+            ct = (
+                catalog_text
+                if catalog_text is not None
+                else self._build_catalog_text(session_id, collections=collections)
+            )
+            if ct:
+                messages.append({"role": "system", "content": ct})
+
+        # ── This-turn tool trajectory (FC loop; persisted separately after turn) ──
         if extra_messages:
             messages.extend(extra_messages)
 
-        # Ephemeral context (e.g. speaker mapping for meeting chat) —
-        # injected after history but before the user message to preserve
-        # KV-cache hit for the prefix (system prompt + transcript + history).
+        # ── Speaker mapping etc. (ephemeral; never persisted as history) ──
         if pre_message_context:
             messages.append({"role": "system", "content": pre_message_context})
 
-        # Current user message — only if not already the last history message
-        # (it was saved before the LLM call and loaded above).
-        # Prepend current time with timezone so the LLM has temporal context
-        # for time-sensitive queries. Not persisted — UI shows original message.
-        if not hist or hist[-1].content != user_message or hist[-1].role != "user":
-            timestamped = f"[Current time: {_format_current_time()}]\n\n{user_message}"
-            messages.append({"role": "user", "content": timestamped})
+        # ── Current user message ──
+        # Saved before the LLM call; usually already last in hist. Re-append with
+        # clock if missing (e.g. empty user_message rebuild) or hist truncated oddly.
+        last = dialogue_hist[-1] if dialogue_hist else None
+        if (
+            last is None
+            or last.role != "user"
+            or (last.content or "") != user_message
+        ):
+            if user_message:
+                timestamped = f"[Current time: {_format_current_time()}]\n\n{user_message}"
+                messages.append({"role": "user", "content": timestamped})
 
         return messages
 
     # ── non-streaming chat ───────────────────────────────────────────
 
-    def chat(self, session_id: str, user_message: str, *, mode: str = "agentic") -> ChatResponse:
+    def chat(
+        self,
+        session_id: str,
+        user_message: str,
+        *,
+        mode: str = "agentic",
+        web_search_enabled: bool = False,
+    ) -> ChatResponse:
         """Non-streaming chat. Returns final answer with sources."""
         if not user_message or not user_message.strip():
             return ChatResponse(answer="")
 
-        _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(mode, session_id)
+        _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
+            mode, session_id, web_search_enabled=web_search_enabled,
+        )
         self._check_session_truncation(session_id)
 
         collections = self._get_collections(session_id)
@@ -482,88 +542,125 @@ class ChatboxAgent:
             response = self._call_llm_with_tools(messages, tools=_tools)
 
             if response.get("tool_calls"):
-                # ── LLM wants to use a tool ──
+                # ── LLM wants to use tools ──
                 tcs = response["tool_calls"]
-                # For agentic mode: merge multiple calls into one decompose=true
                 if mode != "direct" and len(tcs) > 1:
-                    queries = []
-                    for tc in tcs:
-                        try:
-                            a = json.loads(tc["function"]["arguments"])
-                            q = a.get("raw_query", "")
-                            if q:
-                                queries.append(q)
-                        except json.JSONDecodeError:
-                            pass
-                    if queries:
-                        merged = ", ".join(queries)
-                        logger.info("Merged %d tool_calls → 1 decompose=true: %r",
-                                    len(tcs), merged[:200])
-                        tcs = [{
-                            "id": tcs[0].get("id", "call_1"),
-                            "type": "function",
-                            "function": {
-                                "name": "search_knowledge_base",
-                                "arguments": json.dumps({
-                                    "raw_query": merged,
-                                    "decompose": True,
-                                }),
-                            },
-                        }]
+                    tcs = merge_search_tool_calls(tcs)
+                forced_col = self._forced_collection(mode, collections)
+
                 for tc in tcs:
                     tool_name = tc["function"]["name"]
-                    if tool_name not in ("search_knowledge_base", "lookup_collection"):
-                        logger.warning("Unknown tool: %s", tool_name)
+                    if not self._is_allowed_tool(
+                        tool_name, mode, session_id, web_search_enabled=web_search_enabled,
+                    ):
+                        logger.warning("Unknown or disallowed tool: %s", tool_name)
                         continue
 
                     try:
-                        args = json.loads(tc["function"]["arguments"])
+                        args = json.loads(tc["function"]["arguments"] or "{}")
                     except json.JSONDecodeError:
                         args = {"raw_query": user_message, "generate_answer": True} if mode != "direct" else {"query": user_message}
 
                     is_multimodal = False
-                    if mode == "direct":
-                        raw_query = args.get("query", user_message)
-                    else:
-                        raw_query = args.get("raw_query", user_message)
-                    generate_answer = args.get("generate_answer", False) if mode != "direct" else False
-                    include_images = args.get("include_images", False)
+                    tool_content: str | list
 
-                    # Auto-detect: if Chat LLM didn't explicitly request images but is
-                    # vision-capable, enable image stitching automatically.
-                    if not include_images:
-                        model = getattr(self._llm, "_model", "")
-                        from src.config import get_config as _get_cfg
-                        _cfg = _get_cfg()
-                        for _p in _cfg.llm.providers:
-                            if hasattr(_p, "visual_model_ids") and model in _p.visual_model_ids:
-                                include_images = True
-                                logger.info(
-                                    "[Chatbox] AUTO-DETECT VISION: model=%s -> include_images=True",
-                                    model,
-                                )
-                                break
-                        if not include_images:
-                            logger.info(
-                                "[Chatbox] AUTO-DETECT: model=%s NOT in visual_model_ids -> text only",
-                                model,
-                            )
-
-                    decompose = args.get("decompose", True) if mode != "direct" else False
-
-                    if mode == "direct":
-                        if self._direct is None:
-                            tool_content = "Direct retrieval is not configured."
+                    if tool_name == WEB_SEARCH_TOOL_NAME:
+                        from src.chatbox.web_search import WEB_BANNER, has_web_search_api_key
+                        wq = str(args.get("query") or user_message).strip()
+                        if not has_web_search_api_key():
+                            tool_content = "Tavily API key is missing. Add it under Settings → Web Search (Tavily)."
                         else:
-                            query = args.get("query", raw_query)
-                            direct_result = self._direct.retrieve(
-                                query,
-                                collections=collections or [],
-                                top_k=10,
-                                generate_answer=False,
+                            tool_content = (
+                                f"{WEB_BANNER}\n\n"
+                                "Web search requires the streaming Chat UI for user "
+                                f"confirmation (query was: {wq!r}). No internet search was run."
+                            )
+                        total_tool_calls += 1
+                    elif tool_name in STRUCTURE_TOOL_NAMES:
+                        tool_content = execute_structure_tool(
+                            tool_name, args, mode=mode, forced_collection=forced_col,
+                        )
+                        total_tool_calls += 1
+                    else:
+                        # Search facades
+                        if mode == "direct":
+                            raw_query = args.get("query", user_message)
+                        else:
+                            raw_query = args.get("raw_query", user_message)
+                        generate_answer = args.get("generate_answer", False) if mode != "direct" else False
+                        include_images = args.get("include_images", False)
+
+                        if not include_images:
+                            model = getattr(self._llm, "_model", "")
+                            from src.config import get_config as _get_cfg
+                            _cfg = _get_cfg()
+                            for _p in _cfg.llm.providers:
+                                if hasattr(_p, "visual_model_ids") and model in _p.visual_model_ids:
+                                    include_images = True
+                                    break
+
+                        decompose = args.get("decompose", True) if mode != "direct" else False
+
+                        if mode == "direct":
+                            if self._direct is None:
+                                tool_content = "Direct retrieval is not configured."
+                            else:
+                                query = args.get("query", raw_query)
+                                direct_cols = [forced_col] if forced_col else (collections or [])
+                                direct_result = self._direct.retrieve(
+                                    query,
+                                    collections=direct_cols,
+                                    top_k=10,
+                                    generate_answer=False,
+                                )
+                                total_tool_calls += 1
+                                for chunk in direct_result.chunks:
+                                    source = {
+                                        "text": getattr(chunk, "text", "")[:200],
+                                        "score": getattr(chunk, "score", 0.0),
+                                        "metadata": getattr(chunk, "metadata", {}),
+                                    }
+                                    if source not in all_sources:
+                                        all_sources.append(source)
+
+                                if include_images and direct_result.chunks:
+                                    from src.rag.agentic_query import (
+                                        _stitch_images_from_chunks,
+                                        _build_multimodal_context,
+                                    )
+                                    images_payload = _stitch_images_from_chunks(direct_result.chunks)
+                                    if images_payload:
+                                        is_multimodal = True
+                                        tool_content = _build_multimodal_context(
+                                            direct_result.context, images_payload,
+                                        )
+                                    else:
+                                        tool_content = direct_result.context if direct_result.context else "No relevant information found."
+                                else:
+                                    tool_content = direct_result.context if direct_result.context else "No relevant information found."
+                        elif self._agentic is None:
+                            logger.warning("Tool call requested but agentic_service is None")
+                            tool_content = "Knowledge base search is not configured. Please enable Function Calling on an LLM model in Settings."
+                        else:
+                            result = self._agentic.run(
+                                raw_query,
+                                collections=collections or None,
+                                generate_answer=generate_answer,
+                                include_images=include_images,
+                                decompose=decompose,
                             )
                             total_tool_calls += 1
-                            for chunk in direct_result.chunks:
+                            is_multimodal = isinstance(result.answer, list) if result else False
+                            if is_multimodal:
+                                tool_content = result.answer
+                            else:
+                                tool_content_parts = []
+                                if result.answer:
+                                    tool_content_parts.append(result.answer)
+                                elif result.context:
+                                    tool_content_parts.append(result.context)
+                                tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
+                            for chunk in result.all_chunks:
                                 source = {
                                     "text": getattr(chunk, "text", "")[:200],
                                     "score": getattr(chunk, "score", 0.0),
@@ -572,84 +669,13 @@ class ChatboxAgent:
                                 if source not in all_sources:
                                     all_sources.append(source)
 
-                            # Image stitching for vision LLMs (same as agentic path)
-                            if include_images and direct_result.chunks:
-                                from src.rag.agentic_query import (
-                                    _stitch_images_from_chunks,
-                                    _build_multimodal_context,
-                                )
-                                images_payload = _stitch_images_from_chunks(direct_result.chunks)
-                                if images_payload:
-                                    is_multimodal = True
-                                    tool_content = _build_multimodal_context(
-                                        direct_result.context, images_payload,
-                                    )
-                                else:
-                                    tool_content = direct_result.context if direct_result.context else "No relevant information found."
-                            else:
-                                tool_content = direct_result.context if direct_result.context else "No relevant information found."
-                    elif self._agentic is None:
-                        logger.warning("Tool call requested but agentic_service is None")
-                        tool_content = "Knowledge base search is not configured. Please enable Function Calling on an LLM model in Settings."
-                    else:
-                        result = self._agentic.run(
-                            raw_query,
-                            collections=collections or None,
-                            generate_answer=generate_answer,
-                            include_images=include_images,
-                            decompose=decompose,
-                        )
-
-                        total_tool_calls += 1
-
-                        # Build tool result message
-                        # When include_images=True, answer is multimodal list[dict] —
-                        # inject as a user message so the vision LLM can see images.
-                        # Otherwise, inject as a tool message (text only).
-                        is_multimodal = isinstance(result.answer, list) if result else False
-                        if is_multimodal:
-                            logger.info(
-                                "[Chatbox] MULTIMODAL: answer is list[%d], "
-                                "image_parts=%d, images_available=%d",
-                                len(result.answer),
-                                sum(1 for p in result.answer if p.get("type") == "image_url"),
-                                len(result.images),
-                            )
-                        elif result:
-                            logger.info(
-                                "[Chatbox] TEXT-ONLY: answer type=%s len=%d images=%d",
-                                type(result.answer).__name__,
-                                len(result.answer) if result.answer else 0,
-                                len(result.images),
-                            )
-                        if is_multimodal:
-                            tool_content = result.answer
-                        else:
-                            tool_content_parts = []
-                            if result.answer:
-                                tool_content_parts.append(result.answer)
-                            elif result.context:
-                                tool_content_parts.append(result.context)
-                            tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
-
-                        # Collect sources
-                        for chunk in result.all_chunks:
-                            source = {
-                                "text": getattr(chunk, "text", "")[:200],
-                                "score": getattr(chunk, "score", 0.0),
-                                "metadata": getattr(chunk, "metadata", {}),
-                            }
-                            if source not in all_sources:
-                                all_sources.append(source)
-
                     # Inject assistant tool_call + tool result into extra messages
-                    _tn = tc["function"]["name"]
                     tool_call_id = tc.get("id", "call_1")
                     tool_call_data = [{
                         "id": tool_call_id,
                         "type": "function",
                         "function": {
-                            "name": _tn,
+                            "name": tool_name,
                             "arguments": tc["function"]["arguments"],
                         },
                     }]
@@ -663,7 +689,6 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
-                    # Multimodal content is now directly in tool message (line above)
             else:
                 # ── LLM returned text — final answer ──
                 final_answer = response.get("content", "") or ""
@@ -706,6 +731,7 @@ class ChatboxAgent:
         thinking: bool = True, collections: list[str] | None = None,
         mode: str = "agentic",
         provider_id: str | None = None, model: str | None = None,
+        web_search_enabled: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """Streaming chat — yields SSE event dicts."""
         if not user_message or not user_message.strip():
@@ -729,8 +755,35 @@ class ChatboxAgent:
 
         # ── Mode-specific setup ─────────────────────────────────────
         _tools, _sys_prompt, _cat_text = self._resolve_tools_and_prompt(
-            mode, session_id, collections,
+            mode, session_id, collections, web_search_enabled=web_search_enabled,
         )
+        # Explicit toggle state for the model (enabled vs disabled ≠ user Decline)
+        try:
+            from src.chatbox.web_search import web_toggle_label
+
+            _wt = web_toggle_label(web_search_enabled=web_search_enabled)
+            if _wt == "enabled":
+                _sys_prompt = (
+                    f"{_sys_prompt}\n\n"
+                    "[Web search toggle: enabled. "
+                    "When you need public/internet info (or the knowledge base lacks it), "
+                    "CALL request_web_search immediately with a good query. "
+                    "Do NOT ask the user whether Web is on, and do NOT ask them to "
+                    "send another message first. The UI will handle Allow/Decline. "
+                    "Tool results: status=ok|user_declined|disabled; "
+                    "user_declined ≠ disabled.]"
+                )
+            else:
+                _sys_prompt = (
+                    f"{_sys_prompt}\n\n"
+                    "[Web search toggle: disabled. "
+                    "request_web_search will return status=disabled. "
+                    "Do not ask the user to Allow web search in chat text — "
+                    "briefly note that Web is off if internet data is required, "
+                    "and answer from the knowledge base only.]"
+                )
+        except Exception:
+            pass
 
         # Quick-chat truncation check
         msg_count = self._check_session_truncation(session_id)
@@ -754,12 +807,46 @@ class ChatboxAgent:
         thinking_aq_count = 0
         thinking_task_count = 0
         thinking_summary: dict = {"aq_count": 0, "task_count": 0, "tasks": []}
+        # Persisted for UI reload (structure / web / search steps)
+        tool_trace: list[dict] = []
 
         # Save user message
         self._store.add_message(session_id, "user", user_message)
 
         extra_messages: list[dict] = []
         all_sources: list[dict] = []
+        # Engineering control (not prompt-only): web HITL once per user-message stream.
+        # approved → later request_web_search runs without dialog
+        # declined → web tool removed for rest of this stream; no more confirms
+        # next user message starts a fresh stream (Web toggle / Always-allow apply again)
+        web_hitl_decision: str | None = None  # None | "approved" | "declined"
+
+        def _tools_this_round() -> list:
+            """Drop request_web_search after decline so the model cannot re-call it."""
+            if web_hitl_decision != "declined" or not _tools:
+                return _tools or []
+            out = []
+            for t in _tools:
+                fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+                if fn.get("name") == WEB_SEARCH_TOOL_NAME:
+                    continue
+                out.append(t)
+            return out
+
+        def _web_tool_result(
+            *,
+            status: str,
+            query: str = "",
+            message: str = "",
+        ) -> str:
+            from src.chatbox.web_search import format_web_tool_result, web_toggle_label
+
+            return format_web_tool_result(
+                status=status,
+                web_toggle=web_toggle_label(web_search_enabled=web_search_enabled),
+                query=query,
+                message=message,
+            )
 
         for _round in range(_MAX_TOOL_ROUNDS):
             messages = self._build_messages(
@@ -768,6 +855,7 @@ class ChatboxAgent:
                 system_prompt=_sys_prompt, catalog_text=_cat_text,
                 pre_message_context=meeting_speaker_mapping,
             )
+            tools_round = _tools_this_round()
 
             # ── Streaming LLM call (real token-by-token, threaded) ──
             token_queue: sync_queue.Queue = sync_queue.Queue()
@@ -789,15 +877,44 @@ class ChatboxAgent:
                     token_queue.put(("done", {"content": content}))
                     return
 
-                stream_kwargs = dict(
+                stream_kwargs: dict = dict(
                     model=model, messages=messages, temperature=0.1,
-                    tools=_tools, tool_choice="auto", stream=True,
+                    stream=True,
                 )
-                if thinking:
-                    model_lower = (model or "").lower()
-                    # miniMax only supports adaptive|disabled
-                    think_type = "adaptive" if "minimax" in model_lower else "enabled"
-                    stream_kwargs["extra_body"] = {"thinking": {"type": think_type}}
+                # Engineering: omit web tool after decline; force answer if no tools left
+                if tools_round:
+                    stream_kwargs["tools"] = tools_round
+                    stream_kwargs["tool_choice"] = "auto"
+                else:
+                    stream_kwargs["tool_choice"] = "none"
+                # Think toggle: must set enabled/disabled for DeepSeek-class models.
+                # If we omit extra_body when Think is OFF, some models still fill
+                # reasoning_content first and only emit content at the end → no
+                # token-by-token answer stream (one big dump).
+                model_lower = (model or "").lower()
+                base_url = str(getattr(self._llm, "_base_url", "") or "").lower()
+                is_dashscope = "dashscope" in base_url or "aliyuncs" in base_url
+                is_deepseek = "deepseek" in model_lower or "deepseek" in base_url
+                build_extra = getattr(self._llm, "_build_thinking_extra", None)
+                if callable(build_extra):
+                    stream_kwargs["extra_body"] = build_extra(bool(thinking))
+                elif thinking:
+                    if is_dashscope:
+                        stream_kwargs["extra_body"] = {"enable_thinking": True}
+                    elif "minimax" in model_lower:
+                        stream_kwargs["extra_body"] = {
+                            "thinking": {"type": "adaptive"}
+                        }
+                    else:
+                        stream_kwargs["extra_body"] = {
+                            "thinking": {"type": "enabled"}
+                        }
+                elif is_dashscope:
+                    stream_kwargs["extra_body"] = {"enable_thinking": False}
+                elif "minimax" in model_lower or is_deepseek:
+                    stream_kwargs["extra_body"] = {
+                        "thinking": {"type": "disabled"}
+                    }
                 try:
                     mt = getattr(self._llm, "_default_max_tokens", 0)
                     if isinstance(mt, int) and mt > 0:
@@ -808,9 +925,23 @@ class ChatboxAgent:
                 try:
                     stream = client.chat.completions.create(**stream_kwargs)
                 except Exception as e:
-                    logger.exception("LLM streaming call failed")
-                    token_queue.put(("error", str(e)))
-                    return
+                    # Retry once without thinking extra_body if provider rejects it
+                    logger.warning("LLM streaming call failed: %s", e)
+                    if stream_kwargs.get("extra_body") is not None:
+                        try:
+                            stream_kwargs.pop("extra_body", None)
+                            stream = client.chat.completions.create(**stream_kwargs)
+                            logger.warning(
+                                "Retried stream without thinking extra_body after error: %s", e
+                            )
+                        except Exception as e2:
+                            logger.exception("LLM streaming retry failed")
+                            token_queue.put(("error", str(e2)))
+                            return
+                    else:
+                        logger.exception("LLM streaming call failed")
+                        token_queue.put(("error", str(e)))
+                        return
 
                 content = ""
                 tool_calls_acc: dict[int, dict] = {}
@@ -820,6 +951,7 @@ class ChatboxAgent:
                 think_buf = ""      # accumulated text for current segment
                 in_think = False    # inside <think>...</think>
                 all_thinking = ""
+                streamed_answer_chars = 0  # content tokens already pushed to UI
 
                 for chunk in stream:
                     if not chunk.choices:
@@ -832,7 +964,7 @@ class ChatboxAgent:
 
                     if delta.content:
                         text = delta.content
-                        # Parse <think> tags inline
+                        # Parse <think> tags inline (strip always; surface only if Think ON)
                         while text:
                             if not in_think:
                                 idx = text.find("<think>")
@@ -841,23 +973,25 @@ class ChatboxAgent:
                                     partial = _find_partial_tag(text, "<think>")
                                     if partial >= 0:
                                         think_buf = text[partial:]
-                                        text = text[:partial]
+                                        emit = text[:partial]
+                                        if emit:
+                                            content += emit
+                                            token_queue.put(("token", emit))
+                                            streamed_answer_chars += len(emit)
+                                        break
                                     content += text
-                                    if think_buf:
-                                        token_queue.put(("token", text[:-len(think_buf)] if text[:-len(think_buf)] else ""))
-                                    elif text.strip():
+                                    if text:
                                         token_queue.put(("token", text))
+                                        streamed_answer_chars += len(text)
                                     break
                                 else:
                                     # Emit text before <think>
                                     before = text[:idx]
-                                    if before.strip():
+                                    if before:
                                         content += before
                                         token_queue.put(("token", before))
+                                        streamed_answer_chars += len(before)
                                     text = text[idx + len("<think>"):]
-                                    if in_think:
-                                        # Not first <think>
-                                        think_buf += "<think>"
                                     in_think = True
                                     think_buf = ""
                             else:
@@ -865,12 +999,13 @@ class ChatboxAgent:
                                 if idx == -1:
                                     think_buf += text
                                     all_thinking += text
-                                    token_queue.put(("thinking", text))
+                                    if thinking:
+                                        token_queue.put(("thinking", text))
                                     break
                                 else:
                                     think_buf += text[:idx]
                                     all_thinking += text[:idx]
-                                    if think_buf.strip():
+                                    if thinking and think_buf:
                                         token_queue.put(("thinking", think_buf))
                                     text = text[idx + len("</think>"):]
                                     in_think = False
@@ -898,7 +1033,12 @@ class ChatboxAgent:
                         if reasoning is None:
                             reasoning = ""
                         reasoning += delta_reasoning
-                        token_queue.put(("thinking", delta_reasoning))
+                        if thinking:
+                            # Think ON → timeline reasoning (streamed)
+                            token_queue.put(("thinking", delta_reasoning))
+                        # Think OFF: do not dump reasoning into the answer mid-stream;
+                        # rely on thinking:disabled + content tokens. Fallback below
+                        # only if content stayed empty.
 
                 # Build result
                 result: dict = {}
@@ -907,9 +1047,18 @@ class ChatboxAgent:
                         tool_calls_acc[i] for i in sorted(tool_calls_acc)
                     ]
                 else:
-                    # Strip any remaining <think> tags
                     from src.providers.llm.openai_compat import _strip_think
-                    result["content"] = _strip_think(content) or ""
+                    final_text = _strip_think(content) or ""
+                    # Fallback only when no content was streamed at all
+                    if not final_text and (reasoning or all_thinking):
+                        final_text = _strip_think(reasoning or all_thinking) or ""
+                    # Avoid re-sending the whole answer if we already streamed it
+                    if final_text and streamed_answer_chars == 0:
+                        # Chunk large fallback so the UI still paints progressively
+                        step = 24
+                        for i in range(0, len(final_text), step):
+                            token_queue.put(("token", final_text[i : i + step]))
+                    result["content"] = final_text or content
                 if reasoning:
                     result["reasoning_content"] = reasoning
                 elif all_thinking:
@@ -919,12 +1068,14 @@ class ChatboxAgent:
             loop_obj = asyncio.get_event_loop()
             future = loop_obj.run_in_executor(None, _stream_llm)
 
-            # Poll for tokens while LLM is running
+            # Poll for tokens while LLM is running — yield often so SSE flushes
             response = None
             while not future.done() or not token_queue.empty():
+                drained = False
                 while True:
                     try:
                         kind, data = token_queue.get_nowait()
+                        drained = True
                         if kind == "thinking":
                             yield {"type": "thinking", "content": data}
                         elif kind == "token":
@@ -938,8 +1089,11 @@ class ChatboxAgent:
                             return
                     except sync_queue.Empty:
                         break
-                if not future.done():
-                    await asyncio.sleep(0.02)
+                # Let the event loop flush SSE frames to the client
+                if drained:
+                    await asyncio.sleep(0)
+                elif not future.done():
+                    await asyncio.sleep(0.01)
 
             # Ensure future is fully consumed
             try:
@@ -956,110 +1110,244 @@ class ChatboxAgent:
             if response.get("tool_calls"):
                 # ── Tool call path ──
                 tcs = response["tool_calls"]
-                # For agentic mode: merge multiple calls into one decompose=true
                 if mode != "direct" and len(tcs) > 1:
-                    queries = []
-                    for tc in tcs:
-                        try:
-                            a = json.loads(tc["function"]["arguments"])
-                            q = a.get("raw_query", "")
-                            if q:
-                                queries.append(q)
-                        except json.JSONDecodeError:
-                            pass
-                    if queries:
-                        merged = ", ".join(queries)
-                        logger.info("Merged %d tool_calls → 1 decompose=true: %r",
-                                    len(tcs), merged[:200])
-                        tcs = [{
-                            "id": tcs[0].get("id", "call_1"),
-                            "type": "function",
-                            "function": {
-                                "name": "search_knowledge_base",
-                                "arguments": json.dumps({
-                                    "raw_query": merged,
-                                    "decompose": True,
-                                }),
-                            },
-                        }]
+                    tcs = merge_search_tool_calls(tcs)
+                forced_col = self._forced_collection(mode, collections)
+
                 for tc in tcs:
                     tool_name = tc["function"]["name"]
-                    if tool_name not in ("search_knowledge_base", "lookup_collection"):
-                        continue
-
                     try:
-                        args = json.loads(tc["function"]["arguments"])
+                        args = json.loads(tc["function"]["arguments"] or "{}")
                     except json.JSONDecodeError:
-                        args = {"raw_query": user_message} if mode != "direct" else {"query": user_message}
+                        args = (
+                            {"raw_query": user_message}
+                            if mode != "direct"
+                            else {"query": user_message}
+                        )
 
                     is_multimodal = False
-                    if mode == "direct":
+                    tool_content: str | list = ""
+                    _ui_status = "done"
+                    _ui_source_type = None
+                    # Per-tool RAG/web hit count (structure tools omit this)
+                    _sources_this_call: int | None = None
+
+                    if tool_name == WEB_SEARCH_TOOL_NAME:
+                        raw_query = args.get("query", user_message)
+                    elif tool_name in STRUCTURE_TOOL_NAMES:
+                        raw_query = (
+                            args.get("file_id")
+                            or args.get("source")
+                            or args.get("collection")
+                            or tool_name
+                        )
+                    elif mode == "direct":
                         raw_query = args.get("query", user_message)
                     else:
                         raw_query = args.get("raw_query", user_message)
-                    generate_answer = args.get("generate_answer", False) if mode != "direct" else False
-                    include_images = args.get("include_images", False)
 
-                    # Auto-detect: if Chat LLM didn't explicitly request images but is
-                    # vision-capable, enable image stitching automatically.
-                    if not include_images:
-                        model = getattr(self._llm, "_model", "")
-                        from src.config import get_config as _get_cfg
-                        _cfg = _get_cfg()
-                        for _p in _cfg.llm.providers:
-                            if hasattr(_p, "visual_model_ids") and model in _p.visual_model_ids:
-                                include_images = True
-                                logger.info(
-                                    "[Chatbox] AUTO-DETECT VISION: model=%s -> include_images=True",
-                                    model,
-                                )
-                                break
-                        if not include_images:
-                            logger.info(
-                                "[Chatbox] AUTO-DETECT: model=%s NOT in visual_model_ids -> text only",
-                                model,
-                            )
-
-                    decompose = args.get("decompose", True) if mode != "direct" else False
-
-                    # Emit tool_call_start
                     yield {
                         "type": "tool_call_start",
                         "tool": tool_name,
-                        "raw_query": raw_query,
+                        "raw_query": str(raw_query)[:200],
                         "tool_call_id": tc.get("id", ""),
                     }
 
-                    if mode == "direct":
-                        # ── Direct mode: call DirectQueryModule ──
+                    # Disallowed tools (non-web) — return a result so the loop continues
+                    if not self._is_allowed_tool(
+                        tool_name, mode, session_id, web_search_enabled=web_search_enabled,
+                    ):
+                        logger.warning(
+                            "Disallowed tool %s (mode=%s web=%s) — returning error result",
+                            tool_name, mode, web_search_enabled,
+                        )
+                        tool_content = (
+                            f"Tool '{tool_name}' is not available in this context. "
+                            "Continue without it."
+                        )
+                        _ui_status = "error"
+                        total_tool_calls += 1
+                        _skip_exec = True
+                    else:
+                        _skip_exec = False
+
+                    # ── Web search (toggle status + HITL) ──
+                    if not _skip_exec and tool_name == WEB_SEARCH_TOOL_NAME:
+                        from src.chatbox.web_search import (
+                            format_web_results_for_llm,
+                            get_web_search_config,
+                            has_web_search_api_key,
+                            tavily_search,
+                            web_results_to_sources,
+                            web_search_confirm_store,
+                            web_toggle_label,
+                        )
+                        wq = str(args.get("query") or user_message).strip()
+                        toggle = web_toggle_label(web_search_enabled=web_search_enabled)
+
+                        # Toggle OFF or no API key → status=disabled (not a user Decline)
+                        if not web_search_enabled or not has_web_search_api_key():
+                            if not has_web_search_api_key():
+                                msg = (
+                                    "Web search is disabled: Tavily API key is missing "
+                                    "(Settings → Web Search). Answer from knowledge base only."
+                                )
+                            else:
+                                msg = (
+                                    "status=disabled: Web toggle is OFF (not a user Decline). "
+                                    "No internet results. Answer from knowledge base only."
+                                )
+                            tool_content = _web_tool_result(
+                                status="disabled",
+                                query=wq,
+                                message=msg,
+                            )
+                            _ui_status = "declined"
+                            _ui_source_type = "web"
+                        elif web_hitl_decision == "declined":
+                            # User already declined this turn (toggle still enabled)
+                            tool_content = _web_tool_result(
+                                status="user_declined",
+                                query=wq,
+                                message=(
+                                    "User manually declined web search for this turn "
+                                    f"(query={wq[:180]!r}). web_toggle is still enabled — "
+                                    "this is not a disabled toggle. No internet results. "
+                                    "Answer from knowledge base only; do not invent web facts."
+                                ),
+                            )
+                            _ui_status = "declined"
+                            _ui_source_type = "web"
+                        else:
+                            cfg = get_web_search_config()
+                            # First call this turn → HITL; after Allow, skip dialog
+                            if web_hitl_decision != "approved":
+                                confirm_id = web_search_confirm_store.create(wq)
+                                yield {
+                                    "type": "web_search_confirm",
+                                    "confirm_id": confirm_id,
+                                    "query": wq,
+                                    "tool_call_id": tc.get("id", ""),
+                                    "message": (
+                                        "Allow searching the public internet for this "
+                                        "turn? Results are external data, not knowledge base."
+                                    ),
+                                }
+                                timeout = float(
+                                    getattr(cfg, "confirm_timeout_sec", 120) or 120
+                                )
+                                approved = await web_search_confirm_store.wait(
+                                    confirm_id, timeout=timeout
+                                )
+                                if not approved:
+                                    web_hitl_decision = "declined"
+                                    tool_content = _web_tool_result(
+                                        status="user_declined",
+                                        query=wq,
+                                        message=(
+                                            "User manually clicked Decline for this web "
+                                            f"search (query={wq[:180]!r}). "
+                                            f"web_toggle={toggle} (still enabled). "
+                                            "This is a user refusal of this turn's search, "
+                                            "not a disabled toggle. No internet results. "
+                                            "Answer from knowledge base only."
+                                        ),
+                                    )
+                                    _ui_status = "declined"
+                                    _ui_source_type = "web"
+                                    logger.info(
+                                        "[Chatbox] Web search user_declined this turn "
+                                        "(web_toggle=%s) — remove tool for remaining rounds",
+                                        toggle,
+                                    )
+                                else:
+                                    web_hitl_decision = "approved"
+                                    logger.info(
+                                        "[Chatbox] Web search approved this turn "
+                                        "(web_toggle=%s) — further calls skip confirm",
+                                        toggle,
+                                    )
+
+                            if web_hitl_decision == "approved":
+                                yield {
+                                    "type": "searching",
+                                    "query": f"[WEB] {wq[:180]}",
+                                    "tool_call_id": tc.get("id", ""),
+                                    "source_type": "web",
+                                }
+                                loop = asyncio.get_event_loop()
+                                payload = await loop.run_in_executor(
+                                    None,
+                                    lambda: tavily_search(
+                                        wq,
+                                        api_key=cfg.api_key,
+                                        max_results=cfg.max_results,
+                                        search_depth=cfg.search_depth,
+                                    ),
+                                )
+                                body = format_web_results_for_llm(payload)
+                                tool_content = (
+                                    _web_tool_result(
+                                        status="ok",
+                                        query=wq,
+                                        message="Web search completed.",
+                                    )
+                                    + "\n\n"
+                                    + body
+                                )
+                                _web_n = 0
+                                for s in web_results_to_sources(payload):
+                                    if s not in all_sources:
+                                        all_sources.append(s)
+                                    _web_n += 1
+                                _sources_this_call = _web_n
+                                _ui_source_type = "web"
+                        total_tool_calls += 1
+
+                    # ── Structure / summary / full-text ──
+                    elif not _skip_exec and tool_name in STRUCTURE_TOOL_NAMES:
+                        tool_content = await execute_structure_tool_async(
+                            tool_name,
+                            args,
+                            mode=mode,
+                            forced_collection=forced_col,
+                        )
+                        # Structure tools don't produce RAG "sources" for the Sources panel
+                        _sources_this_call = None
+                        total_tool_calls += 1
+
+                    # ── Direct search ──
+                    elif not _skip_exec and mode == "direct":
                         if self._direct is None:
-                            yield {
-                                "type": "tool_result",
-                                "status": "error",
-                                "content": "Direct retrieval is not configured.",
-                            }
                             tool_content = "Direct retrieval is not configured."
+                            _ui_status = "error"
+                            _sources_this_call = 0
                         else:
                             query = args.get("query", raw_query)
-                            # Emit searching event so frontend shows progress
                             yield {
                                 "type": "searching",
-                                "query": query[:200],
+                                "query": str(query)[:200],
                                 "tool_call_id": tc.get("id", ""),
                             }
-
-                            # Run retrieval + image stitching in thread executor
-                            # to avoid blocking the event loop during I/O
+                            include_images = args.get("include_images", False)
+                            if not include_images:
+                                model = getattr(self._llm, "_model", "")
+                                from src.config import get_config as _get_cfg
+                                _cfg = _get_cfg()
+                                for _p in _cfg.llm.providers:
+                                    if hasattr(_p, "visual_model_ids") and model in _p.visual_model_ids:
+                                        include_images = True
+                                        break
+                            direct_cols = [forced_col] if forced_col else (collections or [])
                             _loop = asyncio.get_event_loop()
 
                             def _run_direct_retrieval():
                                 result = self._direct.retrieve(
                                     query,
-                                    collections=collections or [],
+                                    collections=direct_cols,
                                     top_k=10,
                                     generate_answer=False,
                                 )
-                                # Collect sources (done in thread for consistency)
                                 _sources = []
                                 for chunk in result.chunks:
                                     s = {
@@ -1069,63 +1357,57 @@ class ChatboxAgent:
                                     }
                                     if s not in _sources:
                                         _sources.append(s)
-
-                                # Image stitching (I/O-heavy, best in thread)
-                                _images_payload = {}
-                                _multimodal_content = None
+                                _multimodal = None
                                 if include_images and result.chunks:
                                     try:
                                         from src.rag.agentic_query import (
                                             _stitch_images_from_chunks,
                                             _build_multimodal_context,
                                         )
-                                        _images_payload = _stitch_images_from_chunks(result.chunks)
-                                        if _images_payload:
-                                            _multimodal_content = _build_multimodal_context(
-                                                result.context, _images_payload,
+                                        imgs = _stitch_images_from_chunks(result.chunks)
+                                        if imgs:
+                                            _multimodal = _build_multimodal_context(
+                                                result.context, imgs,
                                             )
                                     except Exception:
-                                        logger.exception("[Chatbox] Image stitching failed for direct mode")
-
+                                        logger.exception("[Chatbox] Image stitching failed")
                                 return {
                                     "sources": _sources,
                                     "context": result.context or "No relevant information found.",
-                                    "images_payload": _images_payload,
-                                    "multimodal_content": _multimodal_content,
+                                    "multimodal": _multimodal,
                                 }
 
-                            direct_future = _loop.run_in_executor(None, _run_direct_retrieval)
-                            # Await result — yields control to event loop for other tasks
-                            direct_data = await direct_future
+                            direct_data = await _loop.run_in_executor(None, _run_direct_retrieval)
                             total_tool_calls += 1
-
-                            # Merge sources (dedup)
                             for s in direct_data["sources"]:
                                 if s not in all_sources:
                                     all_sources.append(s)
-
-                            # Use multimodal content if image stitching succeeded
-                            if direct_data["multimodal_content"] is not None:
+                            _sources_this_call = len(direct_data["sources"])
+                            if direct_data["multimodal"] is not None:
                                 is_multimodal = True
-                                tool_content = direct_data["multimodal_content"]
+                                tool_content = direct_data["multimodal"]
                             else:
                                 tool_content = direct_data["context"]
 
-                            yield {
-                                "type": "tool_result",
-                                "status": "done",
-                                "sources_count": len(all_sources),
-                                "tool_call_id": tc.get("id", ""),
-                            }
-                    elif self._agentic is None:
-                        # No agentic service — skip tool execution
-                        yield {
-                            "type": "tool_result",
-                            "status": "error",
-                            "content": "Knowledge base search is not configured.",
-                        }
-                        tool_content = "Knowledge base search is not configured. Please enable Function Calling on an LLM model in Settings."
-                    else:
+                    # ── Agentic search ──
+                    elif not _skip_exec and self._agentic is None:
+                        tool_content = (
+                            "Knowledge base search is not configured. "
+                            "Please enable Function Calling on an LLM model in Settings."
+                        )
+                        _ui_status = "error"
+                    elif not _skip_exec:
+                        generate_answer = args.get("generate_answer", False)
+                        include_images = args.get("include_images", False)
+                        if not include_images:
+                            model = getattr(self._llm, "_model", "")
+                            from src.config import get_config as _get_cfg
+                            _cfg = _get_cfg()
+                            for _p in _cfg.llm.providers:
+                                if hasattr(_p, "visual_model_ids") and model in _p.visual_model_ids:
+                                    include_images = True
+                                    break
+                        decompose = args.get("decompose", True)
 
                         step_queue: sync_queue.Queue = sync_queue.Queue()
 
@@ -1133,13 +1415,11 @@ class ChatboxAgent:
                             if event.get("step") in (
                                 "decompose", "task_start", "aq_start",
                                 "aq_done", "synthesize_task", "synthesize_merge",
-                                # Variant fetcher internals — per-AQ progress
                                 "retrieve", "retrieving", "grading",
                                 "variant_generation", "rewrite_loop_done",
                             ):
                                 step_queue.put(event)
 
-                        # Run agentic service in thread pool (non-blocking)
                         loop = asyncio.get_event_loop()
                         future = loop.run_in_executor(
                             None,
@@ -1152,10 +1432,7 @@ class ChatboxAgent:
                                 decompose=decompose,
                             ),
                         )
-
                         total_tool_calls += 1
-
-                        # Stream events in real-time as they arrive
                         all_thinking_events: list[dict] = []
                         while not future.done() or not step_queue.empty():
                             batch_new = False
@@ -1182,7 +1459,6 @@ class ChatboxAgent:
                                     }
                                 except sync_queue.Empty:
                                     break
-                            # Emit progressive summary after each batch
                             if batch_new:
                                 summary = _build_thinking_summary(all_thinking_events)
                                 yield {"type": "thinking_summary", **summary}
@@ -1213,11 +1489,10 @@ class ChatboxAgent:
                             except sync_queue.Empty:
                                 break
 
-                        # Final summary
                         thinking_summary = _build_thinking_summary(all_thinking_events)
                         yield {"type": "thinking_summary", **thinking_summary}
 
-                        # Collect sources
+                        _chunk_n = 0
                         for chunk in result.all_chunks:
                             source = {
                                 "text": getattr(chunk, "text", "")[:200],
@@ -1226,26 +1501,55 @@ class ChatboxAgent:
                             }
                             if source not in all_sources:
                                 all_sources.append(source)
+                            _chunk_n += 1
+                        _sources_this_call = _chunk_n
 
-                        # Yield tool_result
-                        yield {
-                            "type": "tool_result",
-                            "status": "done",
-                            "sources_count": len(all_sources),
-                            "tool_call_id": tc.get("id", ""),
-                        }
-
-                        # Tool result content: use answer + context
                         is_multimodal = isinstance(result.answer, list)
                         if is_multimodal:
                             tool_content = result.answer
                         else:
-                            tool_content_parts = []
+                            parts = []
                             if result.answer:
-                                tool_content_parts.append(result.answer)
+                                parts.append(result.answer)
                             elif result.context:
-                                tool_content_parts.append(result.context)
-                            tool_content = "\n\n".join(tool_content_parts) if tool_content_parts else "No relevant information found."
+                                parts.append(result.context)
+                            tool_content = "\n\n".join(parts) if parts else "No relevant information found."
+
+                    # UI: tool result with preview for collapsible timeline
+                    _result_preview = _preview_tool_content(tool_content)
+                    _tr: dict = {
+                        "type": "tool_result",
+                        "status": _ui_status,
+                        "content": _result_preview,
+                        "tool": tool_name,
+                        "source_type": _ui_source_type,
+                        "tool_call_id": tc.get("id", ""),
+                    }
+                    # Only search/web tools report sources_count (avoid "0 sources" on list_library_tree)
+                    if _sources_this_call is not None:
+                        _tr["sources_count"] = _sources_this_call
+                    yield _tr
+                    # Record for session reload (frontend timeline is not stored otherwise)
+                    _trace_entry: dict = {
+                        "tool": tool_name,
+                        "toolQuery": str(raw_query)[:300] if raw_query else "",
+                        "toolResult": _result_preview,
+                        "toolStatus": _ui_status,
+                        "sourceType": _ui_source_type,
+                    }
+                    if _sources_this_call is not None:
+                        _trace_entry["sourcesCount"] = _sources_this_call
+                    if (
+                        tool_name == "search_knowledge_base"
+                        and thinking_summary.get("aq_count", 0) > 0
+                    ):
+                        # Snapshot agentic summary for classic retrieval UI
+                        _trace_entry["summary"] = {
+                            "aq_count": thinking_summary.get("aq_count", 0),
+                            "task_count": thinking_summary.get("task_count", 0),
+                            "tasks": list(thinking_summary.get("tasks") or []),
+                        }
+                    tool_trace.append(_trace_entry)
 
                     # Inject assistant tool_call + tool result for next LLM round
                     tool_call_id = tc.get("id", "call_1")
@@ -1270,7 +1574,7 @@ class ChatboxAgent:
                         "tool_call_id": tool_call_id,
                         "content": tool_content,
                     })
-                    # Multimodal content is now directly in tool message (line above)
+
             else:
                 # ── Text response — tokens already streamed, just finalize ──
                 final_content = response.get("content", "") or ""
@@ -1279,6 +1583,8 @@ class ChatboxAgent:
                 meta: dict = {"tool_calls": total_tool_calls}
                 if thinking_summary.get("aq_count", 0) > 0:
                     meta["thinking_summary"] = thinking_summary
+                if tool_trace:
+                    meta["tool_trace"] = tool_trace
                 if response.get("reasoning_content"):
                     meta["reasoning_content"] = response["reasoning_content"]
                 # Persist tool messages for KV cache reuse in future rounds
@@ -1290,8 +1596,8 @@ class ChatboxAgent:
                 )
 
                 logger.info(
-                    "[Chatbox] YIELD done: all_sources=%d total_tool_calls=%d mode=%s",
-                    len(all_sources), total_tool_calls, mode,
+                    "[Chatbox] YIELD done: all_sources=%d total_tool_calls=%d mode=%s tool_trace=%d",
+                    len(all_sources), total_tool_calls, mode, len(tool_trace),
                 )
                 logger.info(
                     "[Chatbox] YIELD done: sources=%d tool_calls=%d mode=%s",
@@ -1304,10 +1610,16 @@ class ChatboxAgent:
                             i, s.get("text", "")[:60], s.get("score", 0),
                             list((s.get("metadata") or {}).keys())[:6],
                         )
+                # Fresh dialogue count after this turn (user + assistant, no tools)
+                _done_count = msg_count
+                if session_id.startswith("quick_") or session_id.startswith("meeting_"):
+                    _cdf = getattr(self._store, "count_dialogue_messages", None)
+                    if callable(_cdf):
+                        _done_count = _cdf(session_id)
                 yield {
                     "type": "done",
                     "sources": all_sources,
-                    "message_count": msg_count,
+                    "message_count": _done_count,
                     "context_warning": _quick_warn,
                 }
                 return
@@ -1332,6 +1644,8 @@ class ChatboxAgent:
             meta_final: dict = {"tool_calls": total_tool_calls}
             if thinking_summary.get("aq_count", 0) > 0:
                 meta_final["thinking_summary"] = thinking_summary
+            if tool_trace:
+                meta_final["tool_trace"] = tool_trace
             self._store.add_message(
                 session_id, "assistant", final_content,
                 sources=all_sources if all_sources else None,
@@ -1342,10 +1656,15 @@ class ChatboxAgent:
                 "[Chatbox] Force generate returned empty — total_tool_calls=%d sources=%d",
                 total_tool_calls, len(all_sources),
             )
+        _done_count = msg_count
+        if session_id.startswith("quick_") or session_id.startswith("meeting_"):
+            _cdf = getattr(self._store, "count_dialogue_messages", None)
+            if callable(_cdf):
+                _done_count = _cdf(session_id)
         yield {
             "type": "done",
             "sources": all_sources,
-            "message_count": msg_count,
+            "message_count": _done_count,
             "context_warning": _quick_warn,
         }
         return
@@ -1439,6 +1758,28 @@ class ChatboxAgent:
         """Yield text in small chunks for SSE streaming."""
         for i in range(0, len(text), chunk_size):
             yield text[i:i + chunk_size]
+
+
+def _preview_tool_content(content, *, max_chars: int = 4000) -> str:
+    """Short plain-text preview of a tool result for Chat timeline UI."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for p in content:
+            if isinstance(p, dict):
+                if p.get("type") == "text":
+                    parts.append(str(p.get("text") or ""))
+                elif p.get("type") == "image_url":
+                    parts.append("[image]")
+            elif isinstance(p, str):
+                parts.append(p)
+        s = "\n".join(x for x in parts if x).strip() or "[multimodal tool result]"
+    else:
+        s = str(content).strip()
+    if len(s) > max_chars:
+        return s[:max_chars] + f"\n…[{len(s)} chars total]"
+    return s
 
 
 def _force_generate_answer(llm, messages: list[dict]) -> str:

@@ -634,8 +634,19 @@ async def get_document_text(
     ``.extracted.txt`` / re-parse / Qdrant stitch).
 
     Returns at most ``limit`` characters (default 10000). Pass ``limit=0``
-    for unlimited. ``offset``/``limit`` are a **character window** into long
-    text (not file-id pagination).
+    for unlimited (MCP clients only; in-app Chat clamps this).
+    ``offset``/``limit`` are a **character window** into the extractable
+    plain text — **not** PDF page numbers.
+
+    Success payload always includes::
+
+        total_chars, offset, limit, returned_chars,
+        truncated, has_more, next_offset (or null),
+        content, file_id, source, …
+
+    When ``has_more`` is true, call again with ``offset=next_offset`` to
+    continue. Prefer starting from a search hit's ``char_offset`` when the
+    agent already retrieved a relevant chunk.
 
     Success structured fields include ``filename`` / ``display_name`` when known.
     Failure: ``extract_status``, ``reason``, ``file_id``, ``source``, ``hint``.
@@ -652,7 +663,9 @@ async def get_document_text(
             ``list_library_tree``.
         source: Optional source key when ``file_id`` is not used.
         version_id: Optional historical version id (current if empty).
-        offset: Character offset to start reading from (default 0).
+        offset: Character offset into extractable text (default 0).
+            Use a chunk's ``char_offset`` from search results to jump near
+            a relevant passage.
         limit: Max characters to return (default 10000; 0 = unlimited).
     """
     from fastapi import HTTPException
@@ -738,8 +751,17 @@ async def get_document_text(
 
         full = result.get("text") or ""
         total_chars = len(full)
-        window = full[offset : offset + limit] if limit > 0 else full[offset:]
-        truncated = bool(limit > 0 and (offset + len(window)) < total_chars)
+        # Character window (not PDF pages)
+        off = max(0, int(offset or 0))
+        lim = int(limit) if limit is not None else 10000
+        if lim < 0:
+            lim = 10000
+        window = full[off : off + lim] if lim > 0 else full[off:]
+        returned_chars = len(window)
+        end_pos = off + returned_chars
+        truncated = bool(end_pos < total_chars)
+        has_more = truncated
+        next_offset = end_pos if has_more else None
         filename, display_name = _lookup_file_names(collection, fid)
 
         payload = ok(
@@ -750,10 +772,15 @@ async def get_document_text(
             extract_status="ok" if full else "empty",
             format=result.get("format"),
             total_chars=total_chars,
-            offset=offset,
-            limit=limit,
+            offset=off,
+            limit=lim,
+            returned_chars=returned_chars,
             truncated=truncated,
+            has_more=has_more,
+            next_offset=next_offset,
             content=window,
+            # Alias for agents that expect "text"
+            text=window,
         )
         if filename:
             payload["filename"] = filename
@@ -765,6 +792,20 @@ async def get_document_text(
             payload["hint"] = (
                 "No extractable text for this version; try get_file_chunks "
                 "(current index only) or open the Raw blob in the UI"
+            )
+        elif has_more:
+            payload["hint"] = (
+                f"Character window [{off}:{end_pos}) of {total_chars} chars; "
+                f"has_more=true. If this page is not enough to answer, call "
+                f"get_document_text again with offset={next_offset} (same file_id) "
+                f"— page forward until evidence is sufficient. Prefer starting from "
+                f"a search hit's char_offset when you already know a relevant passage. "
+                f"Stop when the answer is complete — do not read the entire file by default."
+            )
+        else:
+            payload["hint"] = (
+                f"Character window covers the end of extractable text "
+                f"({total_chars} chars total). No further offset needed."
             )
         return payload
 

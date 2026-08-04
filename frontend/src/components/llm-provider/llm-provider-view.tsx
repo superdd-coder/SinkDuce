@@ -534,6 +534,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const [mineruLanguage, setMineruLanguage] = useState("ch")
   const [showMineruToken, setShowMineruToken] = useState(false)
 
+  // Web search (Tavily) — Settings only stores API key; Chat UI owns the toggle
+  const [webSearchApiKey, setWebSearchApiKey] = useState("")
+  const [showWebSearchKey, setShowWebSearchKey] = useState(false)
+
   // MinerU custom dropdown state
   const [showMineruModelDropdown, setShowMineruModelDropdown] = useState(false)
   const [showMineruLanguageDropdown, setShowMineruLanguageDropdown] = useState(false)
@@ -746,6 +750,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         setMineruFormula(c.mineru.enable_formula !== false)
         setMineruTable(c.mineru.enable_table !== false)
         setMineruLanguage(typeof c.mineru.language === "string" ? c.mineru.language : "ch")
+      }
+      // Load Web Search (Tavily) API key only
+      if (c.web_search) {
+        setWebSearchApiKey(typeof c.web_search.api_key === "string" ? c.web_search.api_key : "")
       }
     }).catch(() => {})
   }, [])
@@ -1145,6 +1153,70 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
             Manage hot word libraries to improve transcription accuracy for domain-specific terms like names, acronyms, and jargon.
           </p>
+        </section>
+
+        {/* ── WEB SEARCH (TAVILY) — API key only; toggle lives in Chat ── */}
+        <section className="pb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-[18px] font-[350] tracking-tight">WEB SEARCH (TAVILY)</h2>
+          </div>
+          <div className="space-y-4">
+            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+              Store your Tavily API key here. Turn web search on/off from the{" "}
+              <strong className="text-foreground">Chat</strong> toolbar (Globe / Web).
+              Even when on, every search still asks for confirmation, and results are labeled WEB
+              (not knowledge base). Meeting chat never uses web search. Get a key at{" "}
+              <a
+                href="https://tavily.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                tavily.com
+              </a>
+              .
+            </p>
+
+            <div className="space-y-2">
+              <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">
+                Tavily API Key
+              </label>
+              <div className="relative">
+                <Input
+                  type={showWebSearchKey ? "text" : "password"}
+                  value={webSearchApiKey}
+                  onChange={(e) => setWebSearchApiKey(e.target.value)}
+                  onBlur={async () => {
+                    try {
+                      await updateConfig("web_search", {
+                        provider: "tavily",
+                        api_key: webSearchApiKey,
+                      })
+                      toast.success(
+                        webSearchApiKey.trim()
+                          ? "Tavily API key saved"
+                          : "Tavily API key cleared",
+                      )
+                    } catch {
+                      toast.error("Failed to save Tavily API key")
+                    }
+                  }}
+                  placeholder="tvly-..."
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowWebSearchKey(!showWebSearchKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showWebSearchKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed">
+                Without a key, the Chat “Web” toggle will have no effect.
+              </p>
+            </div>
+          </div>
         </section>
 
         {/* ── MinerU CLOUD PARSING ── */}

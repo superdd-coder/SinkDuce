@@ -226,14 +226,94 @@ class SessionStore:
             sources=sources, metadata=metadata, created_at=now,
         )
 
-    def get_messages(self, session_id: str, limit: int = 100) -> list[Message]:
+    def _fetch_all_messages(self, session_id: str) -> list[Message]:
+        """Load every row for a session in chronological order (no window)."""
         with self._lock:
             conn = self._get_conn()
             rows = conn.execute(
-                "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
-                (session_id, limit),
+                "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+                (session_id,),
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
+
+    @staticmethod
+    def _is_dialogue_message(m: Message) -> bool:
+        """True for user turns and final assistant answers (not tool placeholders)."""
+        if m.role == "user":
+            return True
+        if m.role == "assistant":
+            content = (m.content or "").strip()
+            meta = m.metadata if isinstance(m.metadata, dict) else {}
+            if not content and meta.get("tool_calls"):
+                return False
+            return bool(content)
+        return False
+
+    def _apply_dialogue_window(
+        self,
+        all_msgs: list[Message],
+        *,
+        max_dialogue: int,
+    ) -> list[Message]:
+        """Keep all system rows + the last *max_dialogue* dialogue units.
+
+        Dialogue unit = ``user`` or final ``assistant`` answer. Tool-call
+        placeholders and ``tool`` rows after the cut stay with those turns.
+        System rows (e.g. meeting transcript) never count toward the budget
+        and are always returned first.
+        """
+        if not all_msgs:
+            return []
+        if max_dialogue <= 0:
+            return list(all_msgs)
+
+        system_msgs = [m for m in all_msgs if m.role == "system"]
+        dialogue_indices = [
+            i for i, m in enumerate(all_msgs) if self._is_dialogue_message(m)
+        ]
+        if len(dialogue_indices) <= max_dialogue:
+            return list(all_msgs)
+
+        keep_from_idx = dialogue_indices[-max_dialogue]
+        tail = [
+            m for i, m in enumerate(all_msgs)
+            if i >= keep_from_idx and m.role != "system"
+        ]
+        return system_msgs + tail
+
+    def get_messages(
+        self,
+        session_id: str,
+        limit: int | None = 100,
+    ) -> list[Message]:
+        """Return messages in chronological order.
+
+        *limit* is the max number of **dialogue units** (each ``user`` message
+        and each final ``assistant`` answer), not raw DB rows. Tool rows that
+        belong to kept turns are included. ``role=system`` (e.g. meeting
+        transcript) is always kept and does not count toward *limit*.
+
+        Pass ``limit=None`` for the full unwindowed history (UI / trim / counts).
+        """
+        all_msgs = self._fetch_all_messages(session_id)
+        if limit is None:
+            return all_msgs
+        return self._apply_dialogue_window(all_msgs, max_dialogue=limit)
+
+    def get_context_messages(
+        self,
+        session_id: str,
+        *,
+        max_dialogue: int = 32,
+        scan_limit: int | None = None,  # retained for call-compat; unused
+    ) -> list[Message]:
+        """LLM context window — same semantics as :meth:`get_messages`(*max_dialogue*).
+
+        Catalog and speaker mapping are **never** stored as session messages;
+        they are injected ephemerally in ``ChatboxAgent._build_messages`` only.
+        """
+        del scan_limit  # noqa: F841 — accepted for backward-compatible kwargs
+        return self.get_messages(session_id, limit=max_dialogue)
 
     def count_messages(self, session_id: str, exclude_system: bool = False) -> int:
         """Count total messages in a session.
@@ -255,6 +335,18 @@ class SessionStore:
                     (session_id,),
                 ).fetchone()
         return row[0] if row else 0
+
+    def count_dialogue_messages(self, session_id: str) -> int:
+        """Count user↔assistant dialogue only (not tool-call rounds).
+
+        Counts:
+        - every ``user`` message
+        - every ``assistant`` message with non-empty content (final answers)
+        Skips: ``system``, ``tool``, and assistant rows that are only function-call
+        placeholders (empty content + tool_calls metadata).
+        """
+        msgs = self.get_messages(session_id, limit=None)
+        return sum(1 for m in msgs if self._is_dialogue_message(m))
 
     def trim_messages(self, session_id: str, keep_last: int) -> int:
         """Delete oldest messages, keeping only the most recent *keep_last*.
@@ -288,4 +380,49 @@ class SessionStore:
             deleted = cur.rowcount
         if deleted:
             logger.info("Trimmed %d messages from session %s, kept %d", deleted, session_id, keep_last)
+        return deleted
+
+    def trim_to_dialogue_messages(self, session_id: str, keep_dialogue: int) -> int:
+        """Trim so only the last *keep_dialogue* dialogue messages remain (with tools).
+
+        Finds the oldest kept user/assistant dialogue message and deletes
+        everything before it (except system). Tool messages tied to kept
+        dialogue stay. Returns number of rows deleted.
+        """
+        if keep_dialogue <= 0:
+            return 0
+        msgs = self.get_messages(session_id, limit=None)
+        dialogue_ids: list[str] = [
+            m.id for m in msgs if self._is_dialogue_message(m)
+        ]
+        if len(dialogue_ids) <= keep_dialogue:
+            return 0
+        keep_from_id = dialogue_ids[-keep_dialogue]
+        # Delete non-system messages before keep_from_id in chronological order
+        cut = False
+        delete_ids: list[str] = []
+        for m in msgs:
+            if m.id == keep_from_id:
+                cut = True
+            if cut:
+                continue
+            if m.role == "system":
+                continue
+            delete_ids.append(m.id)
+        if not delete_ids:
+            return 0
+        with self._lock:
+            conn = self._get_conn()
+            placeholders = ",".join("?" * len(delete_ids))
+            cur = conn.execute(
+                f"DELETE FROM messages WHERE session_id = ? AND id IN ({placeholders})",
+                (session_id, *delete_ids),
+            )
+            conn.commit()
+            deleted = cur.rowcount
+        if deleted:
+            logger.info(
+                "Trimmed %d msgs from session %s to keep %d dialogue messages",
+                deleted, session_id, keep_dialogue,
+            )
         return deleted

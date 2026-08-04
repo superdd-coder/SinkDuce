@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { flushSync } from "react-dom"
-import { Send, Loader2, AlertTriangle } from "lucide-react"
+import { Send, Loader2, AlertTriangle, Globe } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { cn } from "@/lib/utils"
 import { createSession, getSession, deleteSession } from "@/api/client"
+import {
+  loadWebSearchForSession,
+  setSessionWebSearch,
+} from "@/lib/session-web-search"
+import {
+  getWebSearchConfirmAnchor,
+  setWebSearchConfirmAnchor,
+} from "@/lib/web-search-confirm"
 
 // ── Types ──
 
@@ -83,8 +91,13 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
   const [msgCount, setMsgCount] = useState(0)
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
+  // Web toggle remembered per quick session (quick_<collectionId>); default OFF
+  const [webSearch, setWebSearch] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesScrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottom = useRef(true)
+  const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
@@ -98,22 +111,43 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     if (!collectionId) return
     const sid = `${QUICK_SESSION_PREFIX}${collectionId}`
     setSessionId(sid)
+    setWebSearch(loadWebSearchForSession(sid))
     initSession(sid)
   }, [collectionId])
+
+  // When panel closes, drop our web-confirm anchor so main Chat can reclaim it
+  useEffect(() => {
+    if (open) return
+    const cur = getWebSearchConfirmAnchor()
+    if (cur?.dataset.webConfirmHost === "inline") {
+      setWebSearchConfirmAnchor(null)
+    }
+  }, [open])
 
   const initSession = async (sid: string) => {
     setLoadingHistory(true)
     try {
       const detail = await getSession(sid).catch(() => null)
       if (detail?.messages?.length) {
-        const msgs: QAMessage[] = detail.messages.map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          sources: m.sources ?? undefined,
-        }))
+        // Dialogue only: skip tool rows and empty tool-call placeholders
+        const msgs: QAMessage[] = detail.messages
+          .filter((m) => {
+            if (m.role === "user") return true
+            if (m.role === "assistant") {
+              const meta = (m.metadata ?? {}) as Record<string, unknown>
+              if (!m.content && meta.tool_calls) return false
+              return !!(m.content || "").trim()
+            }
+            return false
+          })
+          .map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            sources: m.sources ?? undefined,
+          }))
         setMessages(msgs)
-        setMsgCount(detail.messages.length)
+        setMsgCount(msgs.length)
       } else {
         await createSession(collectionName, [collectionId], sid).catch(() => {})
         setMessages([])
@@ -126,11 +160,44 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     }
   }
 
-  // ── Auto-scroll ──
+  // ── Smart auto-scroll: stick while streaming; unlock on user scroll; re-stick on send ──
+
+  const pinRaf = useRef(0)
+  const pinToBottom = useCallback(() => {
+    if (pinRaf.current) return
+    pinRaf.current = requestAnimationFrame(() => {
+      pinRaf.current = 0
+      const el = messagesScrollRef.current
+      if (!el || !stickToBottom.current) return
+      ignoreScrollEvent.current = true
+      el.scrollTop = el.scrollHeight
+      requestAnimationFrame(() => {
+        ignoreScrollEvent.current = false
+      })
+    })
+  }, [])
+
+  const unlockStick = useCallback(() => {
+    if (ignoreScrollEvent.current) return
+    stickToBottom.current = false
+  }, [])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    const el = messagesScrollRef.current
+    if (!el) return
+    const onWheel = () => unlockStick()
+    const onTouch = () => unlockStick()
+    el.addEventListener("wheel", onWheel, { passive: true })
+    el.addEventListener("touchmove", onTouch, { passive: true })
+    return () => {
+      el.removeEventListener("wheel", onWheel)
+      el.removeEventListener("touchmove", onTouch)
+    }
+  }, [unlockStick, open])
+
+  useEffect(() => {
+    if (stickToBottom.current) pinToBottom()
+  }, [messages, pinToBottom])
 
   // ── Auto-resize textarea ──
 
@@ -185,10 +252,14 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       textareaRef.current.style.height = "auto"
     }
 
+    // New user message → re-stick to bottom for this stream
+    stickToBottom.current = true
+
     const userMsg: QAMessage = { id: crypto.randomUUID(), role: "user", content: text, isNew: true }
     const assistantMsg: QAMessage = { id: crypto.randomUUID(), role: "assistant", content: "", isStreaming: true, isNew: true }
     setMessages((prev) => [...prev, userMsg, assistantMsg])
     setStreaming(true)
+    requestAnimationFrame(() => pinToBottom())
 
     setTimeout(() => {
       setMessages((prev) => prev.map((m) => ({ ...m, isNew: false })))
@@ -206,6 +277,7 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           thinking: true,
           collections: [collectionId],
           mode: "direct",
+          web_search_enabled: webSearch,
         }),
         signal: controller.signal,
       })
@@ -234,12 +306,31 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           } else if (line.startsWith("data: ") && eventType) {
             try {
               const data = JSON.parse(line.slice(6))
-              flushSync(() => {
-                handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
-                if (eventType === "done" && data.message_count != null) {
-                  setMsgCount(data.message_count)
+              if (eventType === "web_search_confirm") {
+                const confirmId = String(data.confirm_id || "")
+                const query = String(data.query || "")
+                if (confirmId) {
+                  const { promptWebSearchConfirm } = await import("@/lib/web-search-confirm")
+                  const { confirmWebSearch } = await import("@/api/client")
+                  const approved = await promptWebSearchConfirm(
+                    confirmId,
+                    query,
+                    sessionId,
+                  )
+                  try {
+                    await confirmWebSearch(confirmId, approved)
+                  } catch (err) {
+                    console.error("[QuickChat] web-search-confirm failed:", err)
+                  }
                 }
-              })
+              } else {
+                flushSync(() => {
+                  handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
+                  if (eventType === "done" && data.message_count != null) {
+                    setMsgCount(data.message_count)
+                  }
+                })
+              }
             } catch (e) {
               console.error("[QuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
             }
@@ -256,7 +347,20 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, sessionId, collectionId])
+  }, [input, streaming, sessionId, collectionId, webSearch, pinToBottom])
+
+  const toggleWebSearch = () => {
+    setWebSearch((prev) => {
+      const next = !prev
+      if (sessionId) setSessionWebSearch(sessionId, next)
+      if (!next && sessionId) {
+        void import("@/lib/web-search-confirm").then((m) =>
+          m.clearWebSearchAlwaysAllow(sessionId),
+        )
+      }
+      return next
+    })
+  }
 
   const handleSSEEvent = (
     assistantId: string, type: string,
@@ -272,15 +376,52 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n🔍 Searching: ${data.query || ""}...` } : m
         ));
         break
-      case "tool_call_start":
+      case "tool_call_start": {
+        const tool = String(data.tool || "tool")
+        const q = data.raw_query || data.query
+        const line = q
+          ? `\n📡 ${tool}: ${String(q).slice(0, 120)}`
+          : `\n📡 ${tool}`
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n📡 Calling ${data.tool || "tool"}...` } : m
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
         ));
         break
-      case "tool_result":
+      }
+      case "searching": {
+        const q = String(data.query || "")
         setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n✅ Found ${data.sources_count || 0} sources` } : m
+          m.id === assistantId
+            ? { ...m, thinkingContent: (m.thinkingContent || "") + (q ? `\n🔍 ${q}` : "\n🔍 Searching…") }
+            : m
         ));
+        break
+      }
+      case "tool_result": {
+        const st = String(data.status || "done")
+        const tool = String(data.tool || "")
+        const n = data.sources_count
+        // Structure tools (list_library_tree, …) are not retrieval — never show "0 sources"
+        const isSearchLike =
+          tool === "lookup_collection" ||
+          tool === "search_knowledge_base" ||
+          tool === "request_web_search"
+        const line =
+          st === "declined"
+            ? tool === "request_web_search"
+              ? "\n⛔ Web search declined / off"
+              : "\n⛔ Tool declined / cancelled"
+            : st === "error"
+              ? "\n❌ Tool failed"
+              : isSearchLike && typeof n === "number"
+                ? `\n✅ Done · ${n} source${n === 1 ? "" : "s"}`
+                : "\n✅ Done"
+        setMessages((prev) => prev.map((m) =>
+          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
+        ));
+        break
+      }
+      case "web_search_confirm":
+        // Handled asynchronously in the stream loop (see send path)
         break
       case "done":
         console.log("[QuickChat] DONE event received — sources:", data.sources, "type:", typeof data.sources, "isArray:", Array.isArray(data.sources))
@@ -342,7 +483,7 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
         <div className="flex items-center gap-2">
           {msgCount >= WARN_THRESHOLD && (
             <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400"
-              title={`${msgCount}/${MAX_MESSAGES} messages`}>
+              title={`${msgCount}/${MAX_MESSAGES} dialogue messages (user + assistant; tool calls not counted)`}>
               <AlertTriangle className="w-3 h-3" />
               {msgCount}/{MAX_MESSAGES}
             </span>
@@ -360,7 +501,16 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       </div>
 
       {/* ── Messages area ── */}
-      <div className={cn(
+      <div
+        ref={messagesScrollRef}
+        onScroll={() => {
+          if (ignoreScrollEvent.current) return
+          const el = messagesScrollRef.current
+          if (!el) return
+          const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+          if (dist > 60) stickToBottom.current = false
+        }}
+        className={cn(
         "flex-1 overflow-y-auto px-3 min-h-0 transition-all duration-500 ease-out",
         hasMessages ? "pb-14" : "pb-24",
         !hasMessages && "flex flex-col items-center justify-center",
@@ -411,7 +561,10 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                 ) : (
                   <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">{msg.content}</p>
                 )}
-                {msg.role === "assistant" && !msg.isStreaming && msg.sources && msg.sources.length > 0 && (
+                {msg.role === "assistant" && !msg.isStreaming && msg.sources && msg.sources.length > 0 && (() => {
+                  const webN = msg.sources!.filter((s) => s.metadata?.source_type === "web").length
+                  const kbN = msg.sources!.length - webN
+                  return (
                   <div className="mt-3 pt-2 border-t border-dashed border-border">
                     <button
                       onClick={() => setExpandedSources((prev) => {
@@ -421,7 +574,11 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                       })}
                       className="flex items-center justify-between w-full text-[10px] font-normal uppercase tracking-[0.12em] text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer mb-2"
                     >
-                      <span>Sources · {msg.sources.length}</span>
+                      <span>
+                        Sources · {msg.sources!.length}
+                        {webN > 0 ? ` · ${webN} web` : ""}
+                        {kbN > 0 && webN > 0 ? ` · ${kbN} kb` : ""}
+                      </span>
                       <svg
                         className={cn("w-3 h-3 transition-transform duration-300", expandedSources.has(msg.id) && "rotate-180")}
                         viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
@@ -440,24 +597,45 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                     >
                       <div className="overflow-hidden">
                         <div className="space-y-1 max-h-32 overflow-y-auto">
-                          {msg.sources.slice(0, 5).map((s, i) => {
+                          {msg.sources!.slice(0, 8).map((s, i) => {
+                            const isWeb = s.metadata?.source_type === "web"
+                            const url = (s.metadata?.url as string) || ""
                             const src = (s.metadata?.source || s.metadata?.filename) as string | undefined
                             const chunkIdx = s.metadata?.chunk_index as number | undefined
-                            const displayName = src ? getDisplayName(src) : "Unknown"
+                            const label = isWeb
+                              ? String(s.metadata?.source_label || s.metadata?.source || url || "Web")
+                              : (src ? getDisplayName(src) : "Unknown")
                             return (
                               <div
                                 key={i}
                                 className={cn(
                                   "text-[10px] text-muted-foreground bg-muted rounded p-1.5 border-b border-dashed border-border/50 last:border-0",
-                                  src && onSourceClick && "cursor-pointer hover:bg-primary/10 hover:text-foreground transition-colors",
+                                  (isWeb && url) || (src && onSourceClick)
+                                    ? "cursor-pointer hover:bg-primary/10 hover:text-foreground transition-colors"
+                                    : "",
+                                  isWeb && "border-l-2 border-l-amber-500/60",
                                 )}
                                 onClick={() => {
+                                  if (isWeb && url) {
+                                    window.open(url, "_blank", "noopener,noreferrer")
+                                    return
+                                  }
                                   if (src && onSourceClick) onSourceClick(src, chunkIdx)
                                 }}
                               >
-                                <div className="truncate font-medium">{displayName}</div>
-                                {chunkIdx != null && (
+                                <div className="flex items-center gap-1 min-w-0">
+                                  {isWeb && (
+                                    <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/40">
+                                      WEB
+                                    </span>
+                                  )}
+                                  <div className="truncate font-medium">{label}</div>
+                                </div>
+                                {!isWeb && chunkIdx != null && (
                                   <div className="text-[9px] opacity-50">Chunk #{chunkIdx}</div>
+                                )}
+                                {isWeb && url && (
+                                  <div className="text-[9px] truncate text-amber-700/80 dark:text-amber-400/80 mt-0.5">{url}</div>
                                 )}
                                 <div className="line-clamp-2 mt-0.5 opacity-70">{s.text}</div>
                               </div>
@@ -467,7 +645,8 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                       </div>
                     </div>
                   </div>
-                )}
+                  )
+                })()}
               </div>
             ))}
             <div ref={messagesEndRef} />
@@ -498,13 +677,23 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
 
       </div>
 
-      {/* Floating input */}
-      <div className="absolute bottom-6 left-0 right-0 z-10 pointer-events-none">
-        <div className="pointer-events-auto">
+      {/* Floating input + web-confirm slot (inside Quick panel, above composer) */}
+      <div className="absolute bottom-6 left-0 right-0 z-20 pointer-events-none px-0">
+        <div className="pointer-events-auto flex flex-col gap-2 w-full">
+          <div
+            ref={(el) => {
+              // Only update when node mounts/unmounts — not every parent re-render
+              if (el && open) setWebSearchConfirmAnchor(el)
+            }}
+            data-web-confirm-host="inline"
+            className="px-3 w-full"
+          />
           <ChatInputBar
             input={input}
             setInput={setInput}
             streaming={streaming}
+            webSearch={webSearch}
+            onToggleWebSearch={toggleWebSearch}
             onSend={send}
             onKeyDown={handleKeyDown}
             textareaRef={textareaRef}
@@ -597,17 +786,43 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
 // ── Chat Input Bar ──
 
 function ChatInputBar({
-  input, setInput, streaming, onSend, onKeyDown, textareaRef,
+  input, setInput, streaming, webSearch, onToggleWebSearch, onSend, onKeyDown, textareaRef,
 }: {
   input: string
   setInput: (v: string) => void
   streaming: boolean
+  webSearch: boolean
+  onToggleWebSearch: () => void
   onSend: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
+  // Web confirm anchors to the panel slot (data-web-confirm-host=inline), not the bar
   return (
     <div className="flex items-center gap-2 w-[88%] mx-auto transition-all duration-300 ease-out">
+      {/* Web search toggle */}
+      <button
+        type="button"
+        onClick={onToggleWebSearch}
+        disabled={streaming}
+        title={
+          webSearch
+            ? "Web search ON — may confirm before searching the internet"
+            : "Web search OFF — collection only (API key in Settings)"
+        }
+        className={cn(
+          "shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all",
+          webSearch ? "text-primary-foreground" : "text-muted-foreground/70 hover:text-primary",
+          streaming && "opacity-50",
+        )}
+        style={{
+          background: webSearch ? "var(--ze-green, #1A5E3D)" : "transparent",
+          border: webSearch ? "none" : "1px solid var(--border)",
+        }}
+      >
+        <Globe className="w-3.5 h-3.5" />
+      </button>
+
       {/* Input pill */}
       <div
         className={cn(

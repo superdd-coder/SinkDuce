@@ -49,11 +49,23 @@ export default defineConfig({
   server: {
     port: UI_PORT,
     proxy: {
+      // SSE: avoid proxy buffering so chat tokens flush incrementally
       "/api/logs/stream": {
         target: API_TARGET,
         changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
       },
-      "/api": API_TARGET,
+      "/api/sessions": {
+        target: API_TARGET,
+        changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+      },
+      "/api": {
+        target: API_TARGET,
+        changeOrigin: true,
+      },
       "/health": API_TARGET,
     },
   },

@@ -80,7 +80,6 @@ export function SessionSidebar() {
       if (id === sessionId) {
         // Don't auto-create — clear session; next message will create one
         useAppStore.getState().setSessionId(null)
-        useAppStore.setState({ messages: [] })
       }
       await refreshList()
       toast.success("Session deleted")

@@ -46,8 +46,19 @@ class TestGetDocumentText:
         assert out["filename"] == "Investment_Memo.docx"
         assert out["display_name"] == "投资备忘录"
         assert out["content"] == ("hello world" * 100)[:20]
+        assert out.get("text") == out["content"]
         assert out["total_chars"] == 1100
         assert out["truncated"] is True
+        assert out["has_more"] is True
+        assert out["next_offset"] == 20
+        assert out["returned_chars"] == 20
+        assert out["offset"] == 0
+        hint = out.get("hint") or ""
+        assert "has_more=true" in hint
+        assert "offset=20" in hint
+        assert "char_offset" in hint
+        # Encourage paging when the current window is insufficient
+        assert "not enough" in hint.lower() or "page" in hint.lower()
         m.assert_called_once()
         assert m.call_args.kwargs.get("collection") == "col_1"
         assert m.call_args.kwargs.get("filename") == "__file__:abc123" or (
@@ -69,6 +80,9 @@ class TestGetDocumentText:
         assert out["file_id"] == "xyz"
         assert out["source"] == "__file__:xyz"
         assert out["content"] == "body"
+        assert out["has_more"] is False
+        assert out["next_offset"] is None
+        assert out["truncated"] is False
         assert m.call_args.kwargs.get("filename") == "__file__:xyz" or (
             m.call_args.args and m.call_args.args[0] == "__file__:xyz"
         )

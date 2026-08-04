@@ -32,12 +32,14 @@ class ChatStreamHandler:
         thinking: bool = True, collections: list[str] | None = None,
         mode: str = "agentic",
         provider_id: str | None = None, model: str | None = None,
+        web_search_enabled: bool = False,
     ) -> AsyncGenerator[str, None]:
         """Yield SSE event strings for the frontend to consume."""
         try:
             async for event in self._agent.chat_stream(
                 session_id, user_message, thinking=thinking, collections=collections,
                 mode=mode, provider_id=provider_id, model=model,
+                web_search_enabled=web_search_enabled,
             ):
                 event_type = event.get("type", "unknown")
                 try:

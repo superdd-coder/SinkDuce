@@ -278,6 +278,16 @@ export const updateConfig = (section: string, data: Record<string, unknown>) =>
     body: JSON.stringify({ section, data }),
   })
 
+/** Approve or deny a pending Chat web-search HITL request. */
+export const confirmWebSearch = (confirmId: string, approved: boolean) =>
+  request<{ ok: boolean; confirm_id: string; approved: boolean }>(
+    "/chat/web-search-confirm",
+    {
+      method: "POST",
+      body: JSON.stringify({ confirm_id: confirmId, approved }),
+    },
+  )
+
 // ── Local model management ──
 
 export interface ModelStatus {

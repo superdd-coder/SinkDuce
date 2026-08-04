@@ -98,7 +98,11 @@ function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
 // ── Task group ──
 
 function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: boolean }) {
-  const [expanded, setExpanded] = useState(true)
+  // Expand while live; fold when the parent stream finishes
+  const [expanded, setExpanded] = useState(isStreaming)
+  useEffect(() => {
+    if (!isStreaming) setExpanded(false)
+  }, [isStreaming])
 
   return (
     <div>
@@ -140,7 +144,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
   const [topExpanded, setTopExpanded] = useState(true)
   useEffect(() => { if (!isStreaming) setTopExpanded(false) }, [isStreaming])
 
-  // Waiting for first events — show spinner
+  // Waiting for first events — show spinner (original Agentic search chrome)
   if (isStreaming && (!summary || (summary.tasks?.length ?? 0) === 0)) {
     return (
       <div className="mt-5 pt-3.5 border-t border-dashed border-border">
