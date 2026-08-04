@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
 import { MessageBubble } from "./message-bubble"
 import { ChatInput } from "./chat-input"
@@ -10,7 +11,29 @@ import { getLLMProviders } from "@/api/client"
 import type { Source } from "@/stores/app-store"
 
 export function ChatView() {
-  const { messages, setProviders, setActiveProvider, setActiveModel, activeProvider, activeModel, sessionId, sessions, isStreaming } = useAppStore()
+  const {
+    messages,
+    setProviders,
+    setActiveProvider,
+    setActiveModel,
+    activeProvider,
+    activeModel,
+    sessionId,
+    sessions,
+    isStreaming,
+  } = useAppStore(
+    useShallow((s) => ({
+      messages: s.messages,
+      setProviders: s.setProviders,
+      setActiveProvider: s.setActiveProvider,
+      setActiveModel: s.setActiveModel,
+      activeProvider: s.activeProvider,
+      activeModel: s.activeModel,
+      sessionId: s.sessionId,
+      sessions: s.sessions,
+      isStreaming: s.isStreaming,
+    }))
+  )
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolledUp = useRef(false)

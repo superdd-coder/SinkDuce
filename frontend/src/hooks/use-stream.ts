@@ -42,18 +42,15 @@ function _syncCacheFromStore(sid: string) {
 }
 
 export function useStreamChat() {
-  const {
-    sessionId, initSession,
-    addMessage, appendToLastMessage, setLastMessageSources,
-    appendTimelineThinking, setTimelineToolSummary, setTimelineToolStatus, startTimelineTool,
-    finishLastMessage, flushLastMessageToThinking, setStreaming, selectedCollections,
-    activeProvider, activeModel,
-  } = useAppStore()
+  // Do NOT subscribe to the whole store — streaming updates `messages` every token
+  // and would re-render every consumer of this hook (ChatInput, etc.).
+  // Read actions/state via getState() inside sendMessage / stopGeneration.
 
   const sendMessage = async (content: string, thinking = true) => {
-    let sid = sessionId
+    const store = useAppStore.getState()
+    let sid = store.sessionId
     if (!sid) {
-      sid = await initSession()
+      sid = await store.initSession()
     }
 
     // Abort previous stream for the SAME session only
@@ -61,13 +58,27 @@ export function useStreamChat() {
     const controller = new AbortController()
     _registerStream(sid, controller)
 
-    addMessage({ id: crypto.randomUUID(), role: "user", content })
+    store.addMessage({ id: crypto.randomUUID(), role: "user", content })
     const assistantId = crypto.randomUUID()
-    addMessage({ id: assistantId, role: "assistant", content: "", isStreaming: true })
-    setStreaming(true)
+    store.addMessage({ id: assistantId, role: "assistant", content: "", isStreaming: true })
+    store.setStreaming(true)
     _syncCacheFromStore(sid)
 
     try {
+      const {
+        selectedCollections,
+        activeProvider,
+        activeModel,
+        appendToLastMessage,
+        setLastMessageSources,
+        appendTimelineThinking,
+        setTimelineToolSummary,
+        setTimelineToolStatus,
+        startTimelineTool,
+        finishLastMessage,
+        flushLastMessageToThinking,
+      } = useAppStore.getState()
+
       const resp = await fetch(`/api/sessions/${sid}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -180,11 +191,12 @@ export function useStreamChat() {
       }
     } catch (err: any) {
       if (err.name === "AbortError") return
-      if (_isActive(sid)) appendToLastMessage(`Error: ${err.message}`)
+      if (_isActive(sid)) useAppStore.getState().appendToLastMessage(`Error: ${err.message}`)
       else _cacheAppend(sid, `Error: ${err.message}`)
     } finally {
       if (_isActive(sid)) {
-        finishLastMessage()
+        useAppStore.getState().finishLastMessage()
+        useAppStore.getState().setStreaming(false)
         _syncCacheFromStore(sid)
       } else {
         _cacheFinishLast(sid)

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react"
 import { createPortal } from "react-dom"
+import { useShallow } from "zustand/react/shallow"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -26,8 +27,24 @@ import type { MediaBarHandle } from "./media-bar"
 import { MeetingQuickChat } from "./meeting-quick-chat"
 import { DEFAULT_LANGUAGE_HINTS } from "./language-hints-selector"
 
-export function MeetingView() {
-  const { activeMeeting, setActiveMeeting, setSidebarView, fetchCollections, collections, setActiveCollection } = useAppStore()
+export function MeetingView({ active = true }: { active?: boolean }) {
+  const {
+    activeMeeting,
+    setActiveMeeting,
+    setSidebarView,
+    fetchCollections,
+    collections,
+    setActiveCollection,
+  } = useAppStore(
+    useShallow((s) => ({
+      activeMeeting: s.activeMeeting,
+      setActiveMeeting: s.setActiveMeeting,
+      setSidebarView: s.setSidebarView,
+      fetchCollections: s.fetchCollections,
+      collections: s.collections,
+      setActiveCollection: s.setActiveCollection,
+    }))
+  )
 
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
@@ -224,26 +241,8 @@ export function MeetingView() {
       setMeeting(m)
       // If a background task is in progress, resume polling.
       // Update meeting on every poll tick so children (MeetingTabs) stay in sync.
-      const busy = m.processing_state && m.processing_state !== "idle"
-      if (busy) {
-        if (pollingRef.current) clearInterval(pollingRef.current)
-        pollingRef.current = setInterval(async () => {
-          try {
-            const updated = await getMeeting(id)
-            // Guard: user may have switched meetings while polling
-            if (fetchMeetingIdRef.current !== id) { clearInterval(pollingRef.current!); return }
-            setMeeting(updated)
-            const stillBusy = updated.processing_state && updated.processing_state !== "idle"
-            if (!stillBusy) {
-              clearInterval(pollingRef.current!)
-              pollingRef.current = null
-              fetchMeetings()
-              // Re-fetch transcript to pick up section_tags from extract
-              fetchTranscript(id)
-            }
-          } catch { /* ignore */ }
-        }, 2000)
-      }
+      // Polling for busy processing is started by the active-view effect below
+      // (avoids network churn while Meeting sidebar is hidden).
     } catch { /* ignore */ }
   }, [])
 
@@ -302,20 +301,44 @@ export function MeetingView() {
     }
   }, [activeMeeting, fetchMeeting, fetchTranscript])
 
-  // Poll for status changes during transcribing
+  // Poll while Meeting sidebar is open and work is in progress
   useEffect(() => {
-    if (meeting?.status === "transcribing" && activeMeeting) {
-      pollingRef.current = setInterval(() => {
-        fetchMeeting(activeMeeting)
-        fetchTranscript(activeMeeting)
-      }, 2000)
-      return () => { if (pollingRef.current) clearInterval(pollingRef.current) }
+    if (!active || !activeMeeting) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+      return
     }
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current)
-      pollingRef.current = null
+    const transcribing = meeting?.status === "transcribing"
+    const processingBusy =
+      !!meeting?.processing_state && meeting.processing_state !== "idle"
+    if (!transcribing && !processingBusy) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+      return
     }
-  }, [meeting?.status, activeMeeting, fetchMeeting, fetchTranscript])
+    if (pollingRef.current) clearInterval(pollingRef.current)
+    pollingRef.current = setInterval(() => {
+      fetchMeeting(activeMeeting)
+      if (transcribing) fetchTranscript(activeMeeting)
+    }, 2000)
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+    }
+  }, [
+    active,
+    activeMeeting,
+    meeting?.status,
+    meeting?.processing_state,
+    fetchMeeting,
+    fetchTranscript,
+  ])
 
   // Fetch transcript when transcription completes
   useEffect(() => {

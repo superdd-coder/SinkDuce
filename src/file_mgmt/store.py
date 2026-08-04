@@ -80,7 +80,8 @@ _CREATE_TABLES = [
       event_time TEXT,
       created_by TEXT NOT NULL DEFAULT 'local',
       created_at TEXT NOT NULL,
-      version    INTEGER NOT NULL DEFAULT 1
+      version    INTEGER NOT NULL DEFAULT 1,
+      external_ref TEXT
     )''',
     # files (circular: current_version_id -> file_versions)
     '''CREATE TABLE files (
@@ -142,6 +143,8 @@ _CREATE_TABLES = [
 _CREATE_INDEXES = [
     'CREATE INDEX idx_nodes_chain_order ON nodes(chain_id, "order")',
     'CREATE INDEX idx_nodes_group       ON nodes(group_id)',
+    # One timeline anchor per external identity (e.g. meeting:{id})
+    'CREATE UNIQUE INDEX idx_nodes_external_ref ON nodes(external_ref) WHERE external_ref IS NOT NULL',
     'CREATE INDEX idx_file_paths_folder ON file_paths(folder_id)',
     'CREATE INDEX idx_file_paths_file   ON file_paths(file_id)',
     'CREATE INDEX idx_file_paths_archived ON file_paths(folder_id, archived)',
@@ -161,7 +164,7 @@ EXPECTED_TABLES = {
 }
 
 EXPECTED_INDEXES = {
-    "idx_nodes_chain_order", "idx_nodes_group",
+    "idx_nodes_chain_order", "idx_nodes_group", "idx_nodes_external_ref",
     "idx_file_paths_folder", "idx_file_paths_file",
     "idx_file_paths_archived",
     "idx_file_nodes_node", "idx_file_nodes_file",
@@ -316,6 +319,26 @@ def _ensure_folders_icon_columns(conn: sqlite3.Connection) -> None:
             if not _is_duplicate_column_error(e):
                 raise
             cols.add(col)
+
+
+def _ensure_nodes_external_ref(conn: sqlite3.Connection) -> None:
+    """Add nodes.external_ref + unique index (meeting/timeline bridge)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(nodes)").fetchall()}
+    if "external_ref" not in cols:
+        try:
+            conn.execute("ALTER TABLE nodes ADD COLUMN external_ref TEXT")
+            logger.info("Added nodes.external_ref column")
+        except sqlite3.OperationalError as e:
+            if not _is_duplicate_column_error(e):
+                raise
+    indexes = {
+        row[1] for row in conn.execute("PRAGMA index_list(nodes)").fetchall()
+    }
+    if "idx_nodes_external_ref" not in indexes:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_external_ref "
+            "ON nodes(external_ref) WHERE external_ref IS NOT NULL"
+        )
 
 
 def _ensure_file_paths_archived(conn: sqlite3.Connection) -> None:
@@ -680,6 +703,7 @@ def init_collection_db(collection_id: str) -> None:
                 _ensure_node_groups_icon_columns(conn_backfill)
                 _ensure_folders_icon_columns(conn_backfill)
                 _ensure_file_paths_archived(conn_backfill)
+                _ensure_nodes_external_ref(conn_backfill)
                 _backfill_system_folders(conn_backfill)
                 _cleanup_uncategorized_folder(conn_backfill)
             _backfill_done.add(collection_id)

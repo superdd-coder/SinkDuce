@@ -159,6 +159,8 @@ class NodeOut(BaseModel):
     created_at: str
     version: int = 1
     has_definitive_file: bool = False  # derived: any attached file is_definitive
+    # External identity for get-or-create anchors (e.g. meeting:{id})
+    external_ref: str | None = None
 
 
 # ════════════════════════════════════════════════════════════════

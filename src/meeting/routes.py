@@ -59,7 +59,9 @@ async def get_meeting(meeting_id: str):
     if not meeting:
         logger.warning("[GET] Meeting %s NOT FOUND", meeting_id)
         return {"error": "Meeting not found"}
-    data = meeting.model_dump()
+    # Trust persisted needs_reingest / ingested_content_hash (set on save & allocate).
+    # Do NOT re-hash every section MD here — that made GET/polling very slow.
+    data = meeting.model_dump(mode="json")
     # Include notes content if available
     notes = store.get_notes(meeting_id)
     if notes is not None:
@@ -67,7 +69,7 @@ async def get_meeting(meeting_id: str):
     # Include transcript if available
     transcript = store.get_transcript(meeting_id)
     if transcript is not None:
-        data["transcript"] = transcript.model_dump()
+        data["transcript"] = transcript.model_dump(mode="json")
     logger.debug(
         "[GET] Meeting %s status=%s has_notes=%s has_transcript=%s audio_path=%s",
         meeting_id, meeting.status.value, notes is not None,
@@ -757,21 +759,33 @@ async def regenerate_section(meeting_id: str, tab_id: str):
 
 @router.post("/meetings/{meeting_id}/sections/{tab_id}/allocate")
 async def allocate_section(meeting_id: str, tab_id: str, body: dict):
-    """Allocate one section's content to a collection (speaker names resolved, refs stripped)."""
+    """Allocate one section's content to a collection (speaker names resolved, refs stripped).
+
+    Response is the meeting dict plus bridge fields: file_id, task_id, node_id, source.
+    """
     collection_id = body.get("collection_id", "")
     if not collection_id:
         return {"error": "collection_id is required"}
     logger.info("[ALLOCATE_SECTION] Meeting %s tab=%s → collection=%s", meeting_id, tab_id, collection_id)
     try:
-        meeting = await meeting_service.allocate_section_to_collection(
+        meeting, bridge = await meeting_service.allocate_section_to_collection(
             meeting_id, tab_id, collection_id,
         )
     except FileNotFoundError as exc:
         return {"error": str(exc)}
     except ValueError as exc:
         return {"error": str(exc)}
-    logger.info("[ALLOCATE_SECTION] Done meeting %s tab=%s", meeting_id, tab_id)
-    return meeting.model_dump()
+    logger.info(
+        "[ALLOCATE_SECTION] Done meeting %s tab=%s file=%s task=%s node=%s",
+        meeting_id,
+        tab_id,
+        (bridge.get("file_id") or "")[:12],
+        bridge.get("task_id"),
+        (bridge.get("node_id") or "")[:12],
+    )
+    out = meeting.model_dump()
+    out.update(bridge)
+    return out
 
 
 @router.delete("/meetings/{meeting_id}/sections/{tab_id}/allocate")
@@ -804,7 +818,11 @@ async def get_section_md_content(meeting_id: str, tab_id: str):
 
 @router.put("/meetings/{meeting_id}/sections/{tab_id}/md")
 async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Body()):
-    """Save edited markdown content for a section tab."""
+    """Save edited markdown content for a section tab.
+
+    If the tab is already allocated to a collection, mark ``needs_reingest``
+    so the UI can offer manual "Update collection" (new file version).
+    """
     content = body.get("content", "")
     path = store.save_section_md(meeting_id, tab_id, content)
     # Invalidate cached meeting→note distillation for this tab
@@ -813,8 +831,43 @@ async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Bod
         invalidate_meeting_distillation(meeting_id, tab_id)
     except Exception:
         pass
-    logger.info("[SAVE-SECTION-MD] Saved %s/%s (%d chars)", meeting_id, tab_id, len(content))
-    return {"ok": True, "path": path}
+
+    # Single meta write: only touch the edited tab (no full-tab MD rehash).
+    needs_reingest = False
+    meeting = store.get_meeting(meeting_id)
+    if meeting and meeting.tabs:
+        updated_tabs: list[dict] = []
+        for t in meeting.tabs:
+            td = dict(t) if isinstance(t, dict) else (
+                t.model_dump() if hasattr(t, "model_dump") else dict(t)
+            )
+            if td.get("tab_id") == tab_id:
+                fid = (td.get("allocated_file_id") or "").strip()
+                if fid:
+                    stored = (td.get("ingested_content_hash") or "").strip()
+                    current = store.section_content_hash(content)
+                    # No hash (legacy allocate): any save after allocate counts as dirty
+                    needs_reingest = (not stored) or (current != stored)
+                    td["needs_reingest"] = needs_reingest
+                else:
+                    td["needs_reingest"] = False
+            updated_tabs.append(td)
+        meeting = store.update_meeting(meeting_id, tabs=updated_tabs)
+
+    logger.info(
+        "[SAVE-SECTION-MD] Saved %s/%s (%d chars) needs_reingest=%s",
+        meeting_id,
+        tab_id,
+        len(content),
+        needs_reingest,
+    )
+    meeting_payload = meeting.model_dump(mode="json") if meeting else None
+    return {
+        "ok": True,
+        "path": path,
+        "needs_reingest": needs_reingest,
+        "meeting": meeting_payload,
+    }
 
 
 @router.get("/meetings/{meeting_id}/sections/{tab_id}/translate/stream")

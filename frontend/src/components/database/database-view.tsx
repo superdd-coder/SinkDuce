@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -57,8 +58,30 @@ function loadInitialDbTab(): DbTab {
   return "info"
 }
 
-export function DatabaseView() {
-  const { activeCollection, setActiveCollection, removeDeletedCollection, pendingCreateCollection, setPendingCreateCollection, pendingOpenFile, setPendingOpenFile, collections, fetchCollections } = useAppStore()
+export function DatabaseView({ active = true }: { active?: boolean }) {
+  const {
+    activeCollection,
+    setActiveCollection,
+    removeDeletedCollection,
+    pendingCreateCollection,
+    setPendingCreateCollection,
+    pendingOpenFile,
+    setPendingOpenFile,
+    collections,
+    fetchCollections,
+  } = useAppStore(
+    useShallow((s) => ({
+      activeCollection: s.activeCollection,
+      setActiveCollection: s.setActiveCollection,
+      removeDeletedCollection: s.removeDeletedCollection,
+      pendingCreateCollection: s.pendingCreateCollection,
+      setPendingCreateCollection: s.setPendingCreateCollection,
+      pendingOpenFile: s.pendingOpenFile,
+      setPendingOpenFile: s.setPendingOpenFile,
+      collections: s.collections,
+      fetchCollections: s.fetchCollections,
+    }))
+  )
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
@@ -214,6 +237,64 @@ export function DatabaseView() {
     return () => window.removeEventListener("open-note-file-in-folder", handler)
   }, [activeCollection, handleTabChange])
 
+  // From Meeting ingest UI: Files tab → Meeting folder → open file detail
+  useEffect(() => {
+    const handler = async (ev: Event) => {
+      const detail = (
+        ev as CustomEvent<{
+          collectionId?: string
+          fileId?: string
+          meetingId?: string
+          tabId?: string
+        }>
+      ).detail
+      const fileId = detail?.fileId
+      if (!fileId) return
+      const col = detail.collectionId || activeCollection
+      if (!col) return
+
+      if (detail.collectionId) {
+        setActiveCollection(detail.collectionId)
+      }
+      handleTabChange("files")
+      try {
+        const store = useFileMgmtStore.getState()
+        await store.fetchFolderTree(col)
+        const tree = useFileMgmtStore.getState().folderTree
+        type TreeN = {
+          name: string
+          is_system?: boolean
+          folder_id: string
+          children?: TreeN[]
+        }
+        const findMeeting = (nodes: TreeN[]): string | null => {
+          for (const n of nodes) {
+            if (n.name === "Meeting" && n.is_system) return n.folder_id
+            const hit = findMeeting(n.children || [])
+            if (hit) return hit
+          }
+          return null
+        }
+        const meetingFolderId = findMeeting(tree as TreeN[])
+        if (meetingFolderId) {
+          await store.selectFolder(col, meetingFolderId)
+        } else {
+          await store.refreshFiles(col, { silent: true })
+        }
+      } catch {
+        /* still open detail */
+      }
+      const source =
+        detail.meetingId && detail.tabId
+          ? `__meeting__:${detail.meetingId}:${detail.tabId}`
+          : `__file__:${fileId}`
+      setDetailOpen({ fileId, source })
+    }
+    window.addEventListener("open-meeting-file-in-folder", handler)
+    return () =>
+      window.removeEventListener("open-meeting-file-in-folder", handler)
+  }, [activeCollection, handleTabChange, setActiveCollection])
+
   const fetchFiles = useCallback(async () => {
     if (!activeCollection) return
     const token = ++filesTokenRef.current
@@ -261,7 +342,15 @@ export function DatabaseView() {
     fetchCollections()
   }, [])
 
+  // Pause network polling while Collection tab is not the active sidebar view
   useEffect(() => {
+    if (!active) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+      return
+    }
     fetchFiles()
     fetchTasks()
     return () => {
@@ -270,7 +359,7 @@ export function DatabaseView() {
         pollingRef.current = null
       }
     }
-  }, [fetchFiles, fetchTasks, activeCollection])
+  }, [fetchFiles, fetchTasks, activeCollection, active])
 
   const handleDeleteFile = async () => {
     if (!deleteFileTarget) return
@@ -439,7 +528,8 @@ export function DatabaseView() {
                         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
                           <TimelineView
                             collectionId={activeCollection}
-                            active={isActive}
+                            // Only "live" when Collection sidebar is open AND Timeline sub-tab is selected
+                            active={active && isActive}
                           />
                         </div>
                       )}

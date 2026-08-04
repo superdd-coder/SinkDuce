@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { cn } from "@/lib/utils"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
 import { Button } from "@/components/ui/button"
@@ -24,7 +25,14 @@ const navItems: Array<{ view: SidebarView; label: string }> = [
 const COLLAPSE_DELAY_MS = 1000
 
 export function Sidebar() {
-  const { sidebarView, setSidebarView, sidebarOpen, setSidebarOpen } = useAppStore()
+  const { sidebarView, setSidebarView, sidebarOpen, setSidebarOpen } = useAppStore(
+    useShallow((s) => ({
+      sidebarView: s.sidebarView,
+      setSidebarView: s.setSidebarView,
+      sidebarOpen: s.sidebarOpen,
+      setSidebarOpen: s.setSidebarOpen,
+    }))
+  )
   const { update, ignored, ignoreVersion, currentVersion } = useUpdateCheck()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [leaving, setLeaving] = useState(false)

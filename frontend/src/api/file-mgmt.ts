@@ -373,6 +373,12 @@ export const reorderNode = (collectionId: string, nodeId: string, newOrder: numb
 export const getNodeDetail = (collectionId: string, nodeId: string) =>
   req<NodeDetail>(`/${collectionId}/nodes/${nodeId}`)
 
+/** Resolve timeline node by external_ref (e.g. meeting:{meetingId}). */
+export const getNodeByExternalRef = (collectionId: string, ref: string) =>
+  req<Node>(
+    `/${collectionId}/nodes/by-external-ref?ref=${encodeURIComponent(ref)}`
+  )
+
 // ── Node Messages ──
 
 export const getNodeMessages = (collectionId: string, nodeId: string) =>

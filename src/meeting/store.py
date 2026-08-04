@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -13,6 +14,41 @@ from .webm_fixer import fix_webm_duration
 
 logger = logging.getLogger("meeting.store")
 MEETINGS_DIR = Path("data").resolve() / "meetings"
+
+
+def section_content_hash(content: str) -> str:
+    """Stable SHA-256 of section markdown (raw editor content on disk)."""
+    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+
+
+def enrich_tabs_needs_reingest(meeting: Meeting) -> Meeting:
+    """Recompute ``needs_reingest`` from disk MD vs ``ingested_content_hash``.
+
+    Survives UI remounts: boolean-only flags can be lost; hash comparison is durable.
+    Mutates a shallow copy of tab dicts on the meeting object.
+    """
+    if not meeting.tabs:
+        return meeting
+    enriched: list[dict] = []
+    for t in meeting.tabs:
+        td = dict(t) if isinstance(t, dict) else (
+            t.model_dump() if hasattr(t, "model_dump") else dict(t)
+        )
+        fid = (td.get("allocated_file_id") or "").strip()
+        stored = (td.get("ingested_content_hash") or "").strip()
+        if fid and stored:
+            tid = td.get("tab_id") or ""
+            md = get_section_md(meeting.id, tid) if tid else None
+            current = section_content_hash(md or "")
+            td["needs_reingest"] = current != stored
+        elif fid and not stored:
+            # Legacy allocate without hash: keep explicit flag if set
+            td.setdefault("needs_reingest", False)
+        else:
+            td["needs_reingest"] = False
+        enriched.append(td)
+    meeting.tabs = enriched
+    return meeting
 
 # Per-meeting file lock to prevent concurrent read-modify-write races
 # when multiple section streams write to the same meta.json.

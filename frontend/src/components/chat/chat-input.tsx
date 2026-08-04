@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react"
 import { createPortal } from "react-dom"
+import { useShallow } from "zustand/react/shallow"
 import { Sparkles } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useStreamChat } from "@/hooks/use-stream"
@@ -31,7 +32,20 @@ export function ChatInput() {
     activeModel,
     setActiveModel,
     providers,
-  } = useAppStore()
+  } = useAppStore(
+    useShallow((s) => ({
+      isStreaming: s.isStreaming,
+      activeCollection: s.activeCollection,
+      collections: s.collections,
+      fetchCollections: s.fetchCollections,
+      selectedCollections: s.selectedCollections,
+      toggleCollection: s.toggleCollection,
+      activeProvider: s.activeProvider,
+      activeModel: s.activeModel,
+      setActiveModel: s.setActiveModel,
+      providers: s.providers,
+    }))
+  )
   const { sendMessage, stopGeneration } = useStreamChat()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)

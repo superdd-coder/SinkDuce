@@ -65,6 +65,8 @@ export interface Node {
   created_at: string
   version: number
   has_definitive_file: boolean
+  /** e.g. meeting:{meetingId} for auto-created anchors */
+  external_ref?: string | null
 }
 
 export interface FileSummary {

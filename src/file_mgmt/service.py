@@ -281,6 +281,8 @@ def _row_to_chain(row, has_end_node: bool = False, node_count: int = 0) -> Chain
 
 
 def _row_to_node(row) -> NodeOut:
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    ext = row["external_ref"] if "external_ref" in keys else None
     return NodeOut(
         node_id=row["node_id"],
         chain_id=row["chain_id"],
@@ -293,6 +295,7 @@ def _row_to_node(row) -> NodeOut:
         created_at=row["created_at"],
         version=row["version"],
         has_definitive_file=False,
+        external_ref=ext,
     )
 
 
@@ -2672,6 +2675,157 @@ def demote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePath
 # ════════════════════════════════════════════════════════════════════
 # Note / Meeting ingest → file-mgmt (immediate, not only lazy migration)
 # ════════════════════════════════════════════════════════════════════
+
+
+def meeting_external_ref(meeting_id: str) -> str:
+    """Canonical nodes.external_ref for a meeting anchor."""
+    return f"meeting:{meeting_id}"
+
+
+def ensure_meeting_anchor_node(
+    collection_id: str,
+    meeting_id: str,
+    *,
+    title: str,
+    event_time: str | None = None,
+) -> str:
+    """Get or create the timeline event node for a meeting in this collection.
+
+    Identity: ``nodes.external_ref = meeting:{meeting_id}`` (unique).
+    Placed on main chain, system Meeting group.
+    """
+    if not meeting_id:
+        raise ValueError("meeting_id is required")
+    ref = meeting_external_ref(meeting_id)
+    node_title = (title or "").strip() or "Untitled meeting"
+    conn = _open_db(collection_id)
+    try:
+        with conn:
+            existing = conn.execute(
+                "SELECT * FROM nodes WHERE external_ref=?", (ref,)
+            ).fetchone()
+            if existing:
+                if (existing["title"] or "") != node_title:
+                    conn.execute(
+                        "UPDATE nodes SET title=?, version=version+1 WHERE node_id=?",
+                        (node_title, existing["node_id"]),
+                    )
+                if event_time and not existing["event_time"]:
+                    conn.execute(
+                        "UPDATE nodes SET event_time=?, version=version+1 WHERE node_id=?",
+                        (event_time, existing["node_id"]),
+                    )
+                return existing["node_id"]
+
+            main_id = _main_chain_id(conn)
+            grp = conn.execute(
+                "SELECT group_id FROM node_groups WHERE name=? LIMIT 1",
+                ("Meeting",),
+            ).fetchone()
+            group_id = grp["group_id"] if grp else None
+
+            max_row = conn.execute(
+                'SELECT COALESCE(MAX("order"), 0) AS m FROM nodes WHERE chain_id=?',
+                (main_id,),
+            ).fetchone()
+            order = (max_row["m"] or 0) + 1
+            node_id = uuid.uuid4().hex
+            now = _now_iso()
+            try:
+                conn.execute(
+                    """INSERT INTO nodes
+                       (node_id, chain_id, group_id, node_type, title,
+                        "order", event_time, created_by, created_at, version,
+                        external_ref)
+                       VALUES (?, ?, ?, 'event', ?, ?, ?, 'local', ?, 1, ?)""",
+                    (
+                        node_id,
+                        main_id,
+                        group_id,
+                        node_title,
+                        order,
+                        event_time,
+                        now,
+                        ref,
+                    ),
+                )
+            except Exception:
+                again = conn.execute(
+                    "SELECT node_id FROM nodes WHERE external_ref=?", (ref,)
+                ).fetchone()
+                if again:
+                    return again["node_id"]
+                raise
+
+        emit_event(
+            "node.created",
+            collection_id,
+            {"node_id": node_id, "external_ref": ref},
+        )
+        return node_id
+    finally:
+        conn.close()
+
+
+def get_node_by_external_ref(
+    collection_id: str, external_ref: str
+) -> NodeOut | None:
+    """Lookup a node by ``external_ref`` (e.g. ``meeting:{id}``)."""
+    ref = (external_ref or "").strip()
+    if not ref:
+        return None
+    conn = _open_db(collection_id)
+    try:
+        row = conn.execute(
+            "SELECT * FROM nodes WHERE external_ref=?", (ref,)
+        ).fetchone()
+        if not row:
+            return None
+        return _row_to_node(row)
+    finally:
+        conn.close()
+
+
+def delete_meeting_anchor_if_empty(
+    collection_id: str, meeting_id: str
+) -> bool:
+    """Delete the meeting anchor node when it has no remaining attachments.
+
+    Returns True if the node was deleted.
+    """
+    if not meeting_id:
+        return False
+    ref = meeting_external_ref(meeting_id)
+    conn = _open_db(collection_id)
+    try:
+        row = conn.execute(
+            "SELECT node_id FROM nodes WHERE external_ref=?", (ref,)
+        ).fetchone()
+        if not row:
+            return False
+        node_id = row["node_id"]
+        has_files = conn.execute(
+            "SELECT 1 FROM file_nodes WHERE node_id=? LIMIT 1", (node_id,)
+        ).fetchone()
+        if has_files:
+            return False
+    finally:
+        conn.close()
+
+    try:
+        delete_node(collection_id, node_id)
+        logger.info(
+            "Deleted empty meeting anchor node=%s ref=%s col=%s",
+            node_id[:12],
+            ref,
+            collection_id,
+        )
+        return True
+    except Exception:
+        logger.warning(
+            "Failed deleting empty meeting anchor %s", ref, exc_info=True
+        )
+        return False
 
 
 def _system_folder_id(conn, name: str) -> str | None:

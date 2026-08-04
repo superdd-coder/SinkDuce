@@ -776,6 +776,10 @@ export interface MeetingTab {
   associated_collection_name: string
   allocated_file_id: string  // v3: UUID after ingest
   is_dirty: boolean  // v3: user edited name/description → true; regenerate resets to false
+  /** Section MD edited after allocate; manual Update collection clears it */
+  needs_reingest?: boolean
+  /** Hash of MD at last allocate — used to restore needs_reingest after reload */
+  ingested_content_hash?: string
   md_file_path: string
   payload_ref: string[]
 }
@@ -1088,8 +1092,17 @@ export const regenerateSection = (meetingId: string, tabId: string) =>
     method: "POST",
   })
 
+/** Meeting after allocate, plus file-mgmt / timeline bridge fields. */
+export type AllocateSectionResult = Meeting & {
+  file_id?: string
+  task_id?: string | null
+  node_id?: string | null
+  source?: string
+  collection_id?: string
+}
+
 export const allocateSection = (meetingId: string, tabId: string, collectionId: string) =>
-  request<Meeting>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
+  request<AllocateSectionResult>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
     method: "POST",
     body: JSON.stringify({ collection_id: collectionId }),
   })
@@ -1104,7 +1117,12 @@ export const getSectionMd = (meetingId: string, tabId: string) =>
     .then((r) => (r.ok ? r.text() : null))
 
 export const saveSectionMd = (meetingId: string, tabId: string, content: string) =>
-  request<{ ok: boolean }>(`/meetings/${meetingId}/sections/${tabId}/md`, {
+  request<{
+    ok: boolean
+    path?: string
+    needs_reingest?: boolean
+    meeting?: Meeting | null
+  }>(`/meetings/${meetingId}/sections/${tabId}/md`, {
     method: "PUT",
     body: JSON.stringify({ content }),
   })

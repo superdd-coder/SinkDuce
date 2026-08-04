@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from src.file_mgmt import service
 from src.file_mgmt.models import (
@@ -214,6 +214,15 @@ def delete_node(collection_id: str, node_id: str):
 @router.post("/{collection_id}/nodes/{node_id}/reorder")
 def reorder_node(collection_id: str, node_id: str, req: NodeReorder):
     return service.reorder_node(collection_id, node_id, req)
+
+
+@router.get("/{collection_id}/nodes/by-external-ref")
+def get_node_by_external_ref(collection_id: str, ref: str):
+    """Resolve a timeline node by external_ref (e.g. meeting:{meeting_id})."""
+    node = service.get_node_by_external_ref(collection_id, ref)
+    if not node:
+        raise HTTPException(404, f"No node with external_ref={ref!r}")
+    return node
 
 
 @router.get("/{collection_id}/nodes/{node_id}")
