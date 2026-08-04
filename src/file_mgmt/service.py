@@ -4828,6 +4828,8 @@ def attach_file_to_node(
     """
     if file_id is None and upload_file is None:
         raise HTTPException(400, "Either file_id or upload_file must be provided")
+    # Preserve async ingest task_id from upload path (row_to_file_out does not store it)
+    upload_task_id: str | None = None
     if file_id is None and upload_file is not None:
         # Phase 4: upload first, then attach
         file_bytes, upload_filename = upload_file  # tuple: (bytes, str)
@@ -4843,7 +4845,7 @@ def attach_file_to_node(
             if node["group_id"]:
                 grp = conn2.execute(
                     "SELECT folder_id FROM node_groups WHERE group_id=?",
-                    (node["group_id"],),
+                    (node["group_id"],)
                 ).fetchone()
                 if grp and grp["folder_id"]:
                     target_folder_id = grp["folder_id"]
@@ -4861,6 +4863,7 @@ def attach_file_to_node(
             collection_id, target_folder_id, file_bytes, upload_filename, source_node_id=node_id
         )
         file_id = result.file_id
+        upload_task_id = result.task_id
 
     # Now file_id is guaranteed to be set — use Phase 3 attach logic
     conn = _open_db(collection_id)
@@ -4903,7 +4906,12 @@ def attach_file_to_node(
             collection_id,
             {"file_id": file_id, "node_id": node_id},
         )
-        return _row_to_file_out(file_row, conn, collection_id)
+        out = _row_to_file_out(file_row, conn, collection_id)
+        # Critical: without this, frontend never starts ingest polling after
+        # node upload (Add Node / node attach), so file detail allows all tabs.
+        if upload_task_id:
+            out.task_id = upload_task_id
+        return out
     finally:
         conn.close()
 

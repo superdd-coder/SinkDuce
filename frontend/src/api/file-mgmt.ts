@@ -406,7 +406,7 @@ export const uploadFileToNode = async (
   })
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`API ${res.status}: ${body}`)
+    throw new FileMgmtApiError(res.status, body)
   }
   return res.json()
 }

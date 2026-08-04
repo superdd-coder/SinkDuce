@@ -17,6 +17,7 @@ import {
   Paperclip,
   Search,
   Square,
+  Upload,
   X,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -284,14 +285,18 @@ export function EndChainDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "max-w-[96vw] sm:max-w-[96vw] h-[85vh] max-h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
-          showSelectPreview ? "w-[min(1100px,96vw)]" : "w-[780px]"
+          "max-w-[98vw] sm:max-w-[98vw] h-[85vh] max-h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
+          // Form body fixed (wider Message); preview is extra width on the left
+          showSelectPreview
+            ? "w-[min(calc(920px+min(calc(85vh*210/297),42vw)),98vw)]"
+            : "w-[920px]"
         )}
       >
         {showSelectPreview && (
           <div
             className={cn(
-              "w-[min(300px,28vw)] shrink-0 border-r border-border min-h-0 flex flex-col",
+              "h-full shrink-0 border-r border-border min-h-0 flex flex-col",
+              "w-[min(calc(85vh*210/297),42vw)] min-w-[280px]",
               "animate-in slide-in-from-left-2 fade-in-0 duration-250"
             )}
           >
@@ -304,7 +309,8 @@ export function EndChainDialog({
           </div>
         )}
 
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 p-4 overflow-hidden">
+        {/* Form body — fixed width so Message stays roomy */}
+        <div className="w-[920px] max-w-full shrink-0 min-h-0 flex flex-col gap-3 p-4 overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle className="text-sm">End Branch Chain</DialogTitle>
         </DialogHeader>
@@ -372,15 +378,15 @@ export function EndChainDialog({
               </div>
             </div>
 
-            {/* Attachments for merge node */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60">
+            {/* Attachments for merge node — compact drop; expand tree on Select */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 truncate">
                   Attachments ({pending.length})
                 </label>
                 <button
                   type="button"
-                  className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
+                  className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1 shrink-0"
                   onClick={() =>
                     setSelectMode(attachMode === "select" ? null : "select")
                   }
@@ -401,68 +407,120 @@ export function EndChainDialog({
               />
               <div
                 className={cn(
-                  "rounded-md border border-dashed p-2 min-h-[56px] text-[10px] text-muted-foreground cursor-pointer",
-                  dragOver && "border-primary bg-primary/5"
+                  "rounded-md border border-dashed p-2 transition-[height,colors] duration-200 overflow-hidden flex flex-col",
+                  attachMode === "select"
+                    ? "h-[min(380px,48vh)]"
+                    : "h-[112px]",
+                  dragOver
+                    ? "border-primary bg-primary/5"
+                    : "border-border bg-muted/10"
                 )}
-                onClick={() => {
-                  if (attachMode !== "select") fileInputRef.current?.click()
-                }}
                 onDragOver={(e: DragEvent) => {
                   e.preventDefault()
-                  setDragOver(true)
+                  e.stopPropagation()
+                  if (e.dataTransfer.types.includes("Files")) setDragOver(true)
                 }}
-                onDragLeave={() => setDragOver(false)}
+                onDragEnter={(e: DragEvent) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  if (e.dataTransfer.types.includes("Files")) setDragOver(true)
+                }}
+                onDragLeave={(e: DragEvent) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  if (e.currentTarget === e.target) setDragOver(false)
+                }}
                 onDrop={(e: DragEvent) => {
                   e.preventDefault()
+                  e.stopPropagation()
                   setDragOver(false)
                   if (e.dataTransfer.files?.length)
                     addUploadFiles(e.dataTransfer.files)
                 }}
               >
-                {pending.length === 0 ? (
-                  <span className="flex items-center gap-1 pointer-events-none">
-                    <Paperclip className="h-3 w-3" /> Drop files or click to
-                    browse
-                  </span>
+                {attachMode === "select" ? (
+                  <div className="flex-1 min-h-0 flex flex-col gap-1 overflow-hidden">
+                    <div className="flex items-center justify-between gap-1 shrink-0">
+                      <span className="text-[10px] text-muted-foreground">
+                        Multi-select · click to select · again to deselect
+                      </span>
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => setSelectMode(null)}
+                        title="Close"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="flex-1 min-h-0 overflow-hidden">
+                      <FileTreePicker
+                        collectionId={collectionId}
+                        selectedIds={
+                          new Set(
+                            pending
+                              .filter((p) => p.kind === "existing")
+                              .map((p) => (p as { file_id: string }).file_id)
+                          )
+                        }
+                        onSelectFile={toggleExistingFile}
+                        onPreviewFile={setSelectPreviewFile}
+                        maxHeightClass="h-full max-h-full"
+                        className="h-full flex flex-col"
+                      />
+                    </div>
+                  </div>
                 ) : (
-                  <ul className="space-y-1">
-                    {pending.map((p) => (
-                      <li key={p.key} className="flex items-center gap-1">
-                        <span className="truncate flex-1">
-                          {p.kind === "upload" ? p.file.name : p.filename}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setPending((prev) =>
-                              prev.filter((x) => x.key !== p.key)
-                            )
-                          }}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                    {pending.length > 0 && (
+                      <div className="space-y-1 mb-1.5 overflow-y-auto max-h-[48%] shrink-0 min-h-0">
+                        {pending.map((p) => (
+                          <div
+                            key={p.key}
+                            className="flex items-center gap-1.5 px-2 py-1 rounded bg-background border border-border/60 text-xs"
+                          >
+                            <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                            <span className="flex-1 truncate min-w-0">
+                              {p.kind === "upload" ? p.file.name : p.filename}
+                            </span>
+                            {p.kind === "upload" && (
+                              <span className="text-[9px] text-muted-foreground shrink-0">
+                                new
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className="text-muted-foreground hover:text-red-500 shrink-0"
+                              title="Remove"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setPending((prev) =>
+                                  prev.filter((x) => x.key !== p.key)
+                                )
+                              }}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="flex-1 flex flex-col items-center justify-center gap-1 text-center px-2 cursor-pointer rounded hover:bg-muted/30 transition-colors min-h-0"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Upload className="h-4 w-4 text-muted-foreground/40" />
+                      <p className="text-[11px] text-muted-foreground/60">
+                        Drag & drop files here
+                      </p>
+                      <p className="text-[10px] text-muted-foreground/40">
+                        or click to browse
+                      </p>
+                    </button>
+                  </div>
                 )}
               </div>
-              {attachMode === "select" && (
-                <div className="mt-2 border rounded-md max-h-40 overflow-hidden">
-                  <FileTreePicker
-                    collectionId={collectionId}
-                    selectedIds={
-                      new Set(
-                        pending
-                          .filter((p) => p.kind === "existing")
-                          .map((p) => (p as { file_id: string }).file_id)
-                      )
-                    }
-                    onSelectFile={toggleExistingFile}
-                    onPreviewFile={setSelectPreviewFile}
-                  />
-                </div>
-              )}
             </div>
 
             {/* Inherit module */}

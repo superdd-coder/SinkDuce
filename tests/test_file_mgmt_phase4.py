@@ -652,6 +652,8 @@ def test_node_upload():
     assert resp.status_code == 201, resp.text
     data = resp.json()
     file_id = data["file_id"]
+    # Must surface ingest task_id so frontend can poll / lock Preview-only tabs
+    assert data.get("task_id"), f"expected task_id on node upload response, got {data!r}"
 
     # Verify file_nodes
     conn = get_db(coll)

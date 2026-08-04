@@ -254,7 +254,8 @@ export function FileTypeIcon({
   return (
     <span
       className={cn(
-        "relative inline-flex items-center justify-center shrink-0 select-none overflow-visible",
+        // Keep badge inside the reserved icon box so tree rows never overlap text
+        "relative inline-flex items-center justify-center shrink-0 select-none overflow-hidden",
         className
       )}
       aria-hidden
@@ -269,6 +270,7 @@ export function FileTypeIcon({
           fontSize: badgeFont,
           height: badgeH,
           minWidth: badgeH,
+          maxWidth: "92%",
           paddingLeft: padX,
           paddingRight: padX,
           // Optical center (slight nudge for bold caps)

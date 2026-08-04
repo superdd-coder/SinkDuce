@@ -81,7 +81,7 @@ export function ChatView() {
   const sessionTitle = currentSession?.title || "New Chat"
 
   return (
-    <div className={`flex flex-col h-full overflow-hidden relative ${isStreaming ? "sk-reasoning-flow" : ""}`} style={isStreaming ? { border: "1.5px solid transparent" } : undefined}>
+    <div className={`flex flex-col h-full overflow-hidden relative ${isStreaming ? "sk-reasoning-flow" : ""}`}>
       <div className="flex-1 flex min-h-0">
         {/* Session sidebar — left */}
         <SessionSidebar />

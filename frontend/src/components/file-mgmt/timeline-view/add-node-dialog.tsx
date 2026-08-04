@@ -17,8 +17,10 @@ import {
   attachFileToNode,
   createNode,
   createNodeMessage,
+  getNameConflict,
   uploadFileToNode,
 } from "@/api/file-mgmt"
+import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { FileTreePicker } from "./file-tree-picker"
 import { GroupFormDialog } from "./group-form-dialog"
 import { listGroups } from "@/api/file-mgmt"
@@ -199,7 +201,20 @@ export function AddNodeDialog({
           await attachFileToNode(collectionId, node.node_id, att.file_id)
         } else {
           // Node upload: writes to group folder + mounts branch path automatically
-          await uploadFileToNode(collectionId, node.node_id, att.file)
+          const result = await uploadFileToNode(
+            collectionId,
+            node.node_id,
+            att.file
+          )
+          if (result.task_id && result.file_id) {
+            useFileMgmtStore
+              .getState()
+              ._startTaskPolling(
+                collectionId,
+                result.task_id,
+                result.file_id
+              )
+          }
         }
       }
 
@@ -217,7 +232,16 @@ export function AddNodeDialog({
       onCreated()
       onOpenChange(false)
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      const conflict = getNameConflict(err)
+      if (conflict) {
+        toast.error(
+          `A file named “${conflict.name}” already exists. Please rename and try again.`
+        )
+      } else {
+        toast.error(
+          `Failed: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
     } finally {
       setSubmitting(false)
     }
@@ -229,15 +253,19 @@ export function AddNodeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "max-w-[96vw] sm:max-w-[96vw] h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
-          showSelectPreview ? "w-[min(1100px,96vw)]" : "w-[780px]"
+          "max-w-[98vw] sm:max-w-[98vw] h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
+          // Form body fixed (wider Message); preview is extra width on the left
+          showSelectPreview
+            ? "w-[min(calc(920px+min(calc(85vh*210/297),42vw)),98vw)]"
+            : "w-[920px]"
         )}
       >
-        {/* Left slide-in preview — dialog grows left / shifts form right */}
+        {/* Left preview ≈ A4 portrait — additive width only */}
         {showSelectPreview && (
           <div
             className={cn(
-              "w-[min(300px,28vw)] shrink-0 border-r border-border min-h-0 flex flex-col",
+              "h-full shrink-0 border-r border-border min-h-0 flex flex-col",
+              "w-[min(calc(85vh*210/297),42vw)] min-w-[280px]",
               "animate-in slide-in-from-left-2 fade-in-0 duration-250"
             )}
           >
@@ -250,15 +278,16 @@ export function AddNodeDialog({
           </div>
         )}
 
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 p-4 overflow-hidden">
+        {/* Form body — fixed width so Message stays roomy */}
+        <div className="w-[920px] max-w-full shrink-0 min-h-0 flex flex-col gap-3 p-4 overflow-hidden">
         <DialogHeader>
           <DialogTitle className="text-sm">Add Node</DialogTitle>
         </DialogHeader>
 
         {/* Left params + Right message editor */}
         <div className="flex-1 min-h-0 flex gap-4">
-          {/* ── Left: form params + attachments (attachments fill remaining height) ── */}
-          <div className="w-[300px] shrink-0 flex flex-col min-h-0 gap-3 pr-1">
+          {/* ── Left: form params + attachments ── */}
+          <div className="w-[280px] shrink-0 flex flex-col min-h-0 gap-3 pr-1">
             <div className="shrink-0">
               <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
                 Title <span className="text-destructive">*</span>
@@ -375,7 +404,7 @@ export function AddNodeDialog({
                   <div className="flex-1 min-h-0 flex flex-col gap-1 overflow-hidden">
                     <div className="flex items-center justify-between gap-1 shrink-0">
                       <span className="text-[10px] text-muted-foreground">
-                        Click to select · click again to deselect
+                        Multi-select · click to select · again to deselect
                       </span>
                       <button
                         type="button"

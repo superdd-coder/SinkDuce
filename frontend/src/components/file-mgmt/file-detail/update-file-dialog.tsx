@@ -210,8 +210,8 @@ export function UpdateFileDialog({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
         className={cn(
-          "w-[min(1100px,92vw)] max-w-[92vw] sm:max-w-[92vw]",
-          "h-[min(720px,88vh)] flex flex-col gap-0 p-0 overflow-hidden"
+          "w-[min(1280px,96vw)] max-w-[96vw] sm:max-w-[96vw]",
+          "h-[min(88vh,900px)] flex flex-col gap-0 p-0 overflow-hidden"
         )}
       >
         <DialogHeader className="px-4 py-3 border-b border-border shrink-0 space-y-1">

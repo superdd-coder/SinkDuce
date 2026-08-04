@@ -1,6 +1,6 @@
 /**
  * Unified file detail dialog (folder / timeline / All Files / Quick Chat).
- * Left: Source / Raw / Summary / Chunks.
+ * Left: Preview / Parse / Summary / Chunks.
  * Right: paths, nodes, version + message timeline (when file-mgmt file_id exists).
  * Bottom: update / promote / archive / permanent delete (managed files only).
  *
@@ -309,7 +309,7 @@ export interface FileMgmtDetailDialogProps {
   source?: string | null
   /**
    * When set, focus this historical version (All Files → Old versions).
-   * Source/Raw/Chunks bind to that version's blob, not the current latest.
+   * Preview/Parse/Chunks bind to that version's blob, not the current latest.
    */
   versionId?: string | null
   /** storage_file_id for the focused version (fallback if version list not yet loaded). */
@@ -355,18 +355,22 @@ export function FileMgmtDetailDialog({
   const fileId = parsedPropId || resolvedFromSource
   /** Has file-mgmt metadata (paths/versions/actions). */
   const isManagedFile = !!fileId
-  const isIngesting = !!(fileId && ingestingFiles[fileId])
-
-  // Block opening detail while this file is still ingesting
-  useEffect(() => {
-    if (!open || !isIngesting) return
-    toast.info("File is still ingesting — open it when the progress finishes.")
-    onOpenChange(false)
-  }, [open, isIngesting, onOpenChange])
-
   const [detail, setDetail] = useState<FileDetail | null>(null)
   const [loading, setLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState("source")
+  /** Default Preview (raw file viewer). */
+  const [activeTab, setActiveTab] = useState("raw")
+
+  /**
+   * While async ingest runs, only Preview is usable (parse/summary/chunks
+   * are not ready yet). Driven by store task polling after upload.
+   */
+  const ingestProgress = fileId ? ingestingFiles[fileId] : undefined
+  const isIngesting = !!ingestProgress
+
+  // Force Preview tab while ingesting; leave other tabs disabled
+  useEffect(() => {
+    if (isIngesting && activeTab !== "raw") setActiveTab("raw")
+  }, [isIngesting, activeTab])
 
   /**
    * Source used for chunks / extracted text / doc summary.
@@ -553,7 +557,7 @@ export function FileMgmtDetailDialog({
       setPreviewContent(null)
       setChunks([])
       setDocSummary(null)
-      setActiveTab("source")
+      setActiveTab("raw")
       setUpdateDialogOpen(false)
       setDeleteConfirm(false)
       setAddMsgDialogOpen(false)
@@ -603,7 +607,7 @@ export function FileMgmtDetailDialog({
         focusVersion.version_id !== detail.current_version_id
   )
 
-  // Storage blob for Source/Raw.
+  // Storage blob for Preview/Parse.
   // Historical open (All Files → Old versions): NEVER fall back to current
   // filename — missing history blobs must 404, not silently show latest.
   const extractStorageFile = isHistoricalFocus
@@ -675,6 +679,13 @@ export function FileMgmtDetailDialog({
     // Wait for detail when managed so we know unsupported before flashing old chunks
     // Historical open can start once we have versionId from props
     if (fileId && !detail && !versionIdProp) return
+    // Ingest in progress: don't fetch (empty/partial) chunks; tabs are Preview-only
+    if (isIngesting) {
+      setChunks([])
+      setChunksTotal(0)
+      setChunksLoading(false)
+      return
+    }
     if (isUnsupported) {
       setChunks([])
       setChunksTotal(0)
@@ -715,6 +726,7 @@ export function FileMgmtDetailDialog({
     isHistoricalFocus,
     focusVersionId,
     versionIdProp,
+    isIngesting,
   ])
 
   // Extracted text for Source — pin to focused version blob (or current)
@@ -780,6 +792,12 @@ export function FileMgmtDetailDialog({
       return
     }
     if (fileId && !detail) return
+    // Ingest in progress: Summary not ready — keep Preview-only
+    if (isIngesting) {
+      setDocSummary(null)
+      setSummaryLoading(false)
+      return
+    }
     if (isUnsupported) {
       setDocSummary(null)
       setSummaryLoading(false)
@@ -812,6 +830,7 @@ export function FileMgmtDetailDialog({
     isUnsupported,
     isHistoricalFocus,
     focusVersionId,
+    isIngesting,
   ])
   // Poll while generating summary
   useEffect(() => {
@@ -907,8 +926,18 @@ export function FileMgmtDetailDialog({
   )
 
   const handleLocate = (chunk: ChunkDetail) => {
+    if (isIngesting) return
     setHighlightOffset(chunk.char_offset)
     setActiveTab("source")
+  }
+
+  const handleTabChange = (tab: string) => {
+    if (isIngesting && tab !== "raw") {
+      toast.info("Still ingesting — only Preview is available for now.")
+      setActiveTab("raw")
+      return
+    }
+    setActiveTab(tab)
   }
 
   const toggleParent = (id: string) => {
@@ -1247,15 +1276,28 @@ export function FileMgmtDetailDialog({
   return (
     <>
       <Dialog
-        open={open && !isIngesting && !!(fileId || source)}
+        open={open && !!(fileId || source)}
         onOpenChange={onOpenChange}
       >
-        <DialogContent className="!max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col p-4 gap-3">
+        <DialogContent className="!max-w-[94vw] !w-[94vw] h-[88vh] flex flex-col p-4 gap-3">
           <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2 min-w-0">
               <span className="truncate font-light" title={titleName}>
                 {titleName}
               </span>
+              {isIngesting && (
+                <Badge
+                  variant="secondary"
+                  className="text-[10px] shrink-0 border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                  title={ingestProgress?.message || "Ingesting…"}
+                >
+                  <Loader2 className="h-3 w-3 animate-spin mr-1 inline" />
+                  Ingesting
+                  {typeof ingestProgress?.progress === "number"
+                    ? ` ${Math.round(ingestProgress.progress)}%`
+                    : ""}
+                </Badge>
+              )}
               {isHistoricalFocus && (
                 <Badge
                   variant="secondary"
@@ -1266,7 +1308,7 @@ export function FileMgmtDetailDialog({
                     : "old version"}
                 </Badge>
               )}
-              {chunksTotal > 0 && (
+              {chunksTotal > 0 && !isIngesting && (
                 <Badge variant="secondary" className="ml-1 shrink-0">
                   {chunksTotal} chunks
                 </Badge>
@@ -1294,40 +1336,58 @@ export function FileMgmtDetailDialog({
             </div>
           ) : (
             <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
-              {/* ── Left 60%: full-height tab content ── */}
-              <div className="w-[60%] flex flex-col min-h-0 min-w-0">
+              {/* ── Left ~68%: Preview / Parse (roomy A4-friendly frame) ── */}
+              <div className="w-[68%] flex flex-col min-h-0 min-w-0">
                 <Tabs
-                  value={activeTab}
-                  onValueChange={setActiveTab}
+                  value={isIngesting ? "raw" : activeTab}
+                  onValueChange={handleTabChange}
                   className="flex flex-col h-full min-h-0"
                 >
                   <div className="flex items-center justify-between gap-2 shrink-0 mb-2">
                     <TabsList variant="line" className="relative">
                       <TabsIndicator renderBeforeHydration />
                       <TabsTrigger
-                        value="source"
-                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary"
-                      >
-                        Source
-                      </TabsTrigger>
-                      <TabsTrigger
                         value="raw"
                         className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary"
                       >
-                        Raw
+                        Preview
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="source"
+                        disabled={isIngesting}
+                        title={
+                          isIngesting
+                            ? "Available after ingest finishes"
+                            : undefined
+                        }
+                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary disabled:opacity-40"
+                      >
+                        Parse
                       </TabsTrigger>
                       <TabsTrigger
                         value="summary"
-                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary"
+                        disabled={isIngesting}
+                        title={
+                          isIngesting
+                            ? "Available after ingest finishes"
+                            : undefined
+                        }
+                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary disabled:opacity-40"
                       >
                         Summary
                       </TabsTrigger>
                       <TabsTrigger
                         value="chunks"
-                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary"
+                        disabled={isIngesting}
+                        title={
+                          isIngesting
+                            ? "Available after ingest finishes"
+                            : undefined
+                        }
+                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary disabled:opacity-40"
                       >
                         Chunks
-                        {chunksTotal > 0 && (
+                        {chunksTotal > 0 && !isIngesting && (
                           <span className="ml-1.5 tabular-nums text-[10px] text-muted-foreground font-normal normal-case tracking-normal">
                             {chunksTotal}
                           </span>
@@ -1346,68 +1406,7 @@ export function FileMgmtDetailDialog({
                     )}
                   </div>
 
-                  {/* Source — full left pane */}
-                  <TabsContent
-                    value="source"
-                    className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
-                  >
-                    <div className="h-full min-h-0 overflow-hidden rounded-lg border border-border">
-                      {previewLoading ||
-                      (!isUnsupported && chunksLoading && !previewContent) ? (
-                        <div className="flex items-center justify-center h-full text-muted-foreground">
-                          <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                          Loading…
-                        </div>
-                      ) : isUnsupported ? (
-                        <div className="flex flex-col items-center justify-center h-full text-sm text-muted-foreground p-6 text-center gap-2">
-                          <p>No source text for this version (unsupported type).</p>
-                        </div>
-                      ) : previewContent ? (
-                        <ScrollArea className="h-full">
-                          <div className="p-4">
-                            <TiptapEditor
-                              value={transformImageBlocks(
-                                previewContent,
-                                collectionId,
-                                // Empty file_id: in extract blocks → use managed id
-                                fileId || undefined
-                              )}
-                              readonly
-                              showToolbar={false}
-                              onEditorReady={(e) => {
-                                sourceEditorRef.current = e
-                              }}
-                            />
-                          </div>
-                        </ScrollArea>
-                      ) : chunks.length > 0 ? (
-                        /* Fallback: chunks for *this* focusVersionId / current only */
-                        <ScrollArea className="h-full">
-                          <div className="p-4 space-y-2">
-                            {isHistoricalFocus ? (
-                              <p className="text-[10px] text-muted-foreground mb-2">
-                                Source reconstructed from this version’s chunks
-                              </p>
-                            ) : null}
-                            {chunks.map((chunk, i) => (
-                              <p
-                                key={chunk.id || i}
-                                className="text-sm leading-relaxed whitespace-pre-wrap"
-                              >
-                                {chunk.text}
-                              </p>
-                            ))}
-                          </div>
-                        </ScrollArea>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-sm text-muted-foreground p-4 text-center gap-2">
-                          <p>No extracted text for this version.</p>
-                        </div>
-                      )}
-                    </div>
-                  </TabsContent>
-
-                  {/* Raw — browser-native File Viewer (PDF / Office / md / txt) */}
+                  {/* Preview — original file (PDF / Office / md / txt) */}
                   <TabsContent
                     value="raw"
                     className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
@@ -1436,6 +1435,67 @@ export function FileMgmtDetailDialog({
                       downloadUrl={downloadUrl}
                       className="h-full"
                     />
+                  </TabsContent>
+
+                  {/* Parse — extracted / parsed text */}
+                  <TabsContent
+                    value="source"
+                    className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+                  >
+                    <div className="h-full min-h-0 overflow-hidden rounded-lg border border-border">
+                      {previewLoading ||
+                      (!isUnsupported && chunksLoading && !previewContent) ? (
+                        <div className="flex items-center justify-center h-full text-muted-foreground">
+                          <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                          Loading…
+                        </div>
+                      ) : isUnsupported ? (
+                        <div className="flex flex-col items-center justify-center h-full text-sm text-muted-foreground p-6 text-center gap-2">
+                          <p>No parse text for this version (unsupported type).</p>
+                        </div>
+                      ) : previewContent ? (
+                        <ScrollArea className="h-full">
+                          <div className="p-4">
+                            <TiptapEditor
+                              value={transformImageBlocks(
+                                previewContent,
+                                collectionId,
+                                // Empty file_id: in extract blocks → use managed id
+                                fileId || undefined
+                              )}
+                              readonly
+                              showToolbar={false}
+                              onEditorReady={(e) => {
+                                sourceEditorRef.current = e
+                              }}
+                            />
+                          </div>
+                        </ScrollArea>
+                      ) : chunks.length > 0 ? (
+                        /* Fallback: chunks for *this* focusVersionId / current only */
+                        <ScrollArea className="h-full">
+                          <div className="p-4 space-y-2">
+                            {isHistoricalFocus ? (
+                              <p className="text-[10px] text-muted-foreground mb-2">
+                                Parse text reconstructed from this version’s chunks
+                              </p>
+                            ) : null}
+                            {chunks.map((chunk, i) => (
+                              <p
+                                key={chunk.id || i}
+                                className="text-sm leading-relaxed whitespace-pre-wrap"
+                              >
+                                {chunk.text}
+                              </p>
+                            ))}
+                          </div>
+                        </ScrollArea>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-sm text-muted-foreground p-4 text-center gap-2">
+                          <p>No extracted text for this version.</p>
+                        </div>
+                      )}
+                    </div>
                   </TabsContent>
 
                   {/* Summary */}
@@ -1623,7 +1683,7 @@ export function FileMgmtDetailDialog({
                               </p>
                               <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
                                 {isHistoricalFocus
-                                  ? "Chunks are stored per version_id. Older uploads may predate version tracking, or this blob was never ingested. Source/Raw still show the original file when available."
+                                  ? "Chunks are stored per version_id. Older uploads may predate version tracking, or this blob was never ingested. Preview/Parse still show the original file when available."
                                   : isUnsupported
                                     ? "Unsupported types skip RAG ingest. Previous version chunks are kept in history (All Files → Old versions / Log) and are not mixed into this view."
                                     : "Upload or re-ingest a supported file to create chunks for search and this tab."}

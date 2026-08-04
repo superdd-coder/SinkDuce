@@ -39,7 +39,11 @@ function FolderRowIcon({
   boundGroup?: NodeGroup | null
 }) {
   return (
-    <FolderIconView folder={node} boundGroup={boundGroup} className="h-3 w-3" />
+    <FolderIconView
+      folder={node}
+      boundGroup={boundGroup}
+      className="h-3.5 w-3.5 shrink-0"
+    />
   )
 }
 
@@ -222,16 +226,21 @@ function FolderRow({
         </button>
         <button
           type="button"
-          className="flex-1 min-w-0 flex items-center gap-1 py-0.5 text-left"
+          className="flex-1 min-w-0 flex items-center gap-1.5 py-0.5 text-left"
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
             if (expandable) onToggle(node.folder_id)
           }}
         >
-          <FolderRowIcon node={node} boundGroup={boundGroup} />
-          <span className="truncate font-medium">{node.name}</span>
-          <span className="text-muted-foreground/50 shrink-0 ml-auto tabular-nums pr-1">
+          {/* Fixed icon slot — prevents emoji/lucide from overlapping the name */}
+          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden">
+            <FolderRowIcon node={node} boundGroup={boundGroup} />
+          </span>
+          <span className="min-w-0 flex-1 truncate font-medium text-left">
+            {node.name}
+          </span>
+          <span className="text-muted-foreground/50 shrink-0 tabular-nums pr-1">
             {node.files.length || node.file_count || childFileCount || 0}
           </span>
         </button>
@@ -301,17 +310,20 @@ function FileRow({
         onSelect(file)
       }}
     >
-      <FileTypeIcon
-        source={{
-          filename: file.filename,
-          original_ext: file.original_ext,
-          unsupported: file.unsupported,
-          source: file.source,
-          kind: resolveDocKind(file),
-        }}
-        className="h-3 w-3"
-      />
-      <span className="truncate">
+      {/* Fixed slot so type badges (NOTE/MEET/PDF) cannot cover the filename */}
+      <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
+        <FileTypeIcon
+          source={{
+            filename: file.filename,
+            original_ext: file.original_ext,
+            unsupported: file.unsupported,
+            source: file.source,
+            kind: resolveDocKind(file),
+          }}
+          className="h-3.5 w-3.5"
+        />
+      </span>
+      <span className="min-w-0 flex-1 truncate">
         {file.display_name || file.filename}
       </span>
       {(file.archived || file.is_greyed) && (
@@ -438,7 +450,10 @@ export function FileTreePicker({
   )
 
   return (
-    <div className={cn("space-y-2 min-h-0 flex flex-col", className)}>
+    <div
+      data-file-select-tree
+      className={cn("space-y-2 min-h-0 flex flex-col", className)}
+    >
       <input
         className="w-full text-[10px] border rounded px-2 py-1 bg-background shrink-0"
         placeholder="Search folders or files..."

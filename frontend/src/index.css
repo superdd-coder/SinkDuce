@@ -942,30 +942,31 @@ input[type="checkbox"] {
   animation: sk-diamond-breathe 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
-/* ── AI-COMP-120 · reasoning flow · 4-edge marquee via background dual-layer ── */
-/* Uses background-clip: padding-box / border-box with a transparent border.
-   No mask-composite needed — works in all browsers. */
-@keyframes sk-reasoning-flow {
-  0%   { background-position: 0 0, 100% 0; }
-  100% { background-position: 0 0, -100% 0; }
+/* ── AI-COMP-120 · reasoning flow · quiet ring + soft brightness lobe ── */
+@property --sk-flow-a {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes sk-flow-orbit {
+  to { --sk-flow-a: 360deg; }
 }
 .sk-reasoning-flow {
   position: relative;
   border: 1.5px solid transparent;
   background:
-    /* inner fill — uses project --ze-bg token (with hex fallback) */
     linear-gradient(var(--ze-bg, #FAFAF7), var(--ze-bg, #FAFAF7)) padding-box,
-    /* moving green highlight on the border */
-    linear-gradient(115deg,
-      transparent 0%,
-      transparent 30%,
-      var(--ze-green) 50%,
-      transparent 70%,
-      transparent 100%) border-box;
-  background-size: 100% 100%, 200% 100%;
-  background-repeat: no-repeat, no-repeat;
-  background-position: 0 0, 100% 0;
-  animation: sk-reasoning-flow 2.2s linear infinite;
+    conic-gradient(
+      from var(--sk-flow-a),
+      oklch(0.38 0.08 160 / 0.12) 0deg,
+      oklch(0.38 0.08 160 / 0.12) 250deg,
+      oklch(0.38 0.08 160 / 0.18) 290deg,
+      oklch(0.38 0.08 160 / 0.30) 320deg,
+      oklch(0.38 0.08 160 / 0.40) 340deg,
+      oklch(0.38 0.08 160 / 0.22) 352deg,
+      oklch(0.38 0.08 160 / 0.12) 360deg
+    ) border-box;
+  animation: sk-flow-orbit 3.2s linear infinite;
 }
 
 /* ── AI-COMP-060 · thinking state · full-body green flow ── */

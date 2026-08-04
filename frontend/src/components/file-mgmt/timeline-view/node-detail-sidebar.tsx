@@ -35,7 +35,7 @@ import { NodeFileAttach } from "./node-file-attach"
 import { MessageCard } from "../message-card"
 import { MessageEditorDialog } from "../folder-view/message-editor-dialog"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
-import { FileSelectPreviewPanel } from "@/components/file-mgmt/file-select-preview-panel"
+import { FileSelectPreviewFloating } from "@/components/file-mgmt/file-select-preview-panel"
 
 /** Format ISO timestamp as yyyy/mm/dd HH:mm:ss (24h local). */
 function formatCreatedAt(iso: string): string {
@@ -89,8 +89,7 @@ export function NodeDetailSidebar({
   const [newGroupId, setNewGroupId] = useState<string | null>(null)
   const [eventTime, setEventTime] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
-  const [msgTab, setMsgTab] = useState<"all" | "node" | "files">("all")
-  const [attachOpen, setAttachOpen] = useState(true)
+  const [msgTab, setMsgTab] = useState<"all" | "node">("all")
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [msgDialogOpen, setMsgDialogOpen] = useState(false)
   const [editingMsg, setEditingMsg] = useState<Message | null>(null)
@@ -100,43 +99,56 @@ export function NodeDetailSidebar({
   /** External left preview while Select existing is open. */
   const [selectPreviewFile, setSelectPreviewFile] =
     useState<FileSummary | null>(null)
+  const sidebarPanelRef = useRef<HTMLDivElement>(null)
   const dateInputRef = useRef<HTMLInputElement>(null)
 
-  const fetchDetail = useCallback(async () => {
-    if (!nodeId) {
-      setDetail(null)
-      setMessages([])
-      setEventTime("")
-      return
-    }
-    setLoading(true)
-    try {
-      const d = await getNodeDetail(collectionId, nodeId)
-      const nodeMsgs = await getNodeMessages(collectionId, nodeId)
-      const fileMsgLists = await Promise.all(
-        (d.attachments ?? []).map((a) =>
-          getFileMessages(collectionId, a.file_id).catch(() => [] as Message[])
+  /**
+   * @param opts.silent Keep current UI mounted (no full-panel Loading).
+   *   Required when refreshing after multi-select attach — otherwise the
+   *   file tree unmounts and select mode is lost.
+   */
+  const fetchDetail = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!nodeId) {
+        setDetail(null)
+        setMessages([])
+        setEventTime("")
+        return
+      }
+      const silent = !!opts?.silent
+      if (!silent) setLoading(true)
+      try {
+        const d = await getNodeDetail(collectionId, nodeId)
+        const nodeMsgs = await getNodeMessages(collectionId, nodeId)
+        const fileMsgLists = await Promise.all(
+          (d.attachments ?? []).map((a) =>
+            getFileMessages(collectionId, a.file_id).catch(() => [] as Message[])
+          )
         )
-      )
-      const fileMsgs = fileMsgLists.flat()
-      const merged = [...nodeMsgs, ...fileMsgs].sort((a, b) =>
-        (b.created_at || "").localeCompare(a.created_at || "")
-      )
-      setDetail(d)
-      setMessages(merged)
-      setEventTime(toDateInputValue(d.event_time))
-    } catch (err) {
-      toast.error(`Failed to load node: ${err instanceof Error ? err.message : String(err)}`)
-      setDetail(null)
-      setEventTime("")
-    } finally {
-      setLoading(false)
-    }
-  }, [collectionId, nodeId])
+        const fileMsgs = fileMsgLists.flat()
+        const merged = [...nodeMsgs, ...fileMsgs].sort((a, b) =>
+          (b.created_at || "").localeCompare(a.created_at || "")
+        )
+        setDetail(d)
+        setMessages(merged)
+        setEventTime(toDateInputValue(d.event_time))
+      } catch (err) {
+        toast.error(
+          `Failed to load node: ${err instanceof Error ? err.message : String(err)}`
+        )
+        if (!silent) {
+          setDetail(null)
+          setEventTime("")
+        }
+      } finally {
+        if (!silent) setLoading(false)
+      }
+    },
+    [collectionId, nodeId]
+  )
 
   useEffect(() => {
     fetchDetail()
-    setAttachOpen(true)
     setDeleteConfirm(false)
     setEditingTitle(false)
     setEditingGroupId(false)
@@ -329,23 +341,16 @@ export function NodeDetailSidebar({
 
   return (
     <div className="relative h-full w-full min-h-0">
-      {/* Slide-in preview: same height as node detail, to the left */}
-      {selectPreviewFile && (
-        <div
-          className={cn(
-            "absolute right-full top-0 bottom-0 z-20 w-[min(320px,36vw)] mr-2",
-            "animate-in slide-in-from-right-2 fade-in-0 duration-200"
-          )}
-        >
-          <FileSelectPreviewPanel
-            collectionId={collectionId}
-            file={selectPreviewFile}
-            onClose={() => setSelectPreviewFile(null)}
-            className="h-full"
-          />
-        </div>
-      )}
+      {/* Portaled fixed preview — not clipped by overflow-hidden parents */}
+      <FileSelectPreviewFloating
+        collectionId={collectionId}
+        file={selectPreviewFile}
+        open={!!selectPreviewFile}
+        anchorRef={sidebarPanelRef}
+        onClose={() => setSelectPreviewFile(null)}
+      />
     <div
+      ref={sidebarPanelRef}
       data-node-detail-sidebar
       className="h-full w-full min-h-0 border border-border rounded-xl bg-background shadow-lg flex flex-col overflow-hidden"
     >
@@ -371,8 +376,10 @@ export function NodeDetailSidebar({
           <p className="text-sm">Node not found</p>
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-          <div className="p-4 pb-8 space-y-4">
+        <div className="flex-1 min-h-0 flex flex-col">
+          {/* Scrollable body */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+          <div className="p-4 space-y-4">
             {/* Basic info — Title left; Group + Type on the right */}
             <div className="space-y-3">
               <div className="flex items-start gap-3">
@@ -505,34 +512,18 @@ export function NodeDetailSidebar({
               </div>
             </div>
 
-            {/* Attachments — drop/search first (fixed size); list scrolls below */}
+            {/* Attachments — drop/search first; list below */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60">
-                  Attachments ({detail.attachments?.length ?? 0})
-                </label>
-                <button
-                  className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
-                  onClick={() => {
-                    const next = !attachOpen
-                    setAttachOpen(next)
-                    if (!next) setSelectPreviewFile(null)
-                  }}
-                >
-                  <Paperclip className="h-3 w-3" />
-                  {attachOpen ? "Hide" : "Add"}
-                </button>
-              </div>
-
               {/* Drop / Select zone always above the list so it is never pushed away */}
-              {attachOpen && (
-                <div className="shrink-0">
+              <div className="shrink-0">
                   <NodeFileAttach
                     collectionId={collectionId}
                     nodeId={detail.node_id}
+                    title={`Attachments (${detail.attachments?.length ?? 0})`}
                     attachedIds={(detail.attachments ?? []).map((a) => a.file_id)}
                     onAttached={() => {
-                      fetchDetail()
+                      // Silent: do not unmount the file tree / kill multi-select
+                      void fetchDetail({ silent: true })
                       onNodeUpdated()
                     }}
                     onPreviewFile={setSelectPreviewFile}
@@ -540,8 +531,7 @@ export function NodeDetailSidebar({
                       if (!open) setSelectPreviewFile(null)
                     }}
                   />
-                </div>
-              )}
+              </div>
 
               {detail.attachments && detail.attachments.length > 0 ? (
                 <div className="max-h-[88px] overflow-y-auto space-y-1.5 pr-0.5">
@@ -600,13 +590,11 @@ export function NodeDetailSidebar({
                   ))}
                 </div>
               ) : (
-                !attachOpen && (
-                  <p className="text-xs text-muted-foreground/50">No files attached</p>
-                )
+                <p className="text-xs text-muted-foreground/50">No files attached</p>
               )}
             </div>
 
-            {/* Messages — node + file with tabs */}
+            {/* Messages — All (node + attached files) | Node only */}
             <div className="rounded-lg border border-border/40 bg-background/50 overflow-hidden">
               <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border/40">
                 <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -616,9 +604,7 @@ export function NodeDetailSidebar({
                   {
                     (msgTab === "all"
                       ? messages
-                      : msgTab === "node"
-                        ? messages.filter((m) => m.owner_type === "node")
-                        : messages.filter((m) => m.owner_type === "file")
+                      : messages.filter((m) => m.owner_type === "node")
                     ).length
                   }
                 </span>
@@ -634,7 +620,7 @@ export function NodeDetailSidebar({
                 </div>
               </div>
               <div className="flex gap-1 px-2 pt-1.5 border-b border-border/30">
-                {(["all", "node", "files"] as const).map((tab) => (
+                {(["all", "node"] as const).map((tab) => (
                   <button
                     key={tab}
                     type="button"
@@ -656,9 +642,7 @@ export function NodeDetailSidebar({
                   const filtered =
                     msgTab === "all"
                       ? messages
-                      : msgTab === "node"
-                        ? messages.filter((m) => m.owner_type === "node")
-                        : messages.filter((m) => m.owner_type === "file")
+                      : messages.filter((m) => m.owner_type === "node")
                   if (filtered.length === 0) {
                     return (
                       <div className="text-center text-xs text-muted-foreground/50 py-8 px-3">
@@ -706,56 +690,58 @@ export function NodeDetailSidebar({
               }
               readonly={msgDialogReadonly}
             />
+          </div>
+          </div>
 
-            {/* Footer: Delete left · Created right */}
-            <div className="pt-2 border-t">
-              {deleteConfirm ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground">
-                    Delete this node? Derived file paths will be removed.
-                  </p>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-[10px] h-7"
-                        onClick={() => setDeleteConfirm(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="text-[10px] h-7"
-                        onClick={handleDeleteNode}
-                      >
-                        Delete Node
-                      </Button>
-                    </div>
-                    <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0">
-                      {formatCreatedAt(detail.created_at)}
-                    </span>
+          {/* Sticky footer: Delete left · Created right */}
+          <div className="shrink-0 border-t border-border px-4 py-2.5 bg-background">
+            {deleteConfirm ? (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Delete this node? Derived file paths will be removed.
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-[10px] h-7"
+                      onClick={() => setDeleteConfirm(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="text-[10px] h-7"
+                      onClick={handleDeleteNode}
+                    >
+                      Delete Node
+                    </Button>
                   </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-3">
-                  <button
-                    className="text-[10px] font-medium text-red-500/70 hover:text-red-500 flex items-center gap-1 shrink-0"
-                    onClick={() => setDeleteConfirm(true)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    Delete Node
-                  </button>
-                  <span
-                    className="text-[10px] text-muted-foreground/70 tabular-nums text-right"
-                    title="Created"
-                  >
+                  <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0">
                     {formatCreatedAt(detail.created_at)}
                   </span>
                 </div>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  className="text-[10px] font-medium text-red-500/70 hover:text-red-500 flex items-center gap-1 shrink-0"
+                  onClick={() => setDeleteConfirm(true)}
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Delete Node
+                </button>
+                <span
+                  className="text-[10px] text-muted-foreground/70 tabular-nums text-right"
+                  title="Created"
+                >
+                  {formatCreatedAt(detail.created_at)}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}

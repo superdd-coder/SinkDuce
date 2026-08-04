@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from "react"
+import { useEffect, useRef, useState, type DragEvent } from "react"
 import { Search, Upload, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -6,12 +6,15 @@ import type { FileSummary } from "@/types/file-mgmt"
 import {
   attachFileToNode,
   detachFileFromNode,
+  getNameConflict,
   uploadFileToNode,
 } from "@/api/file-mgmt"
+import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { FileTreePicker } from "./file-tree-picker"
 
-/** Fixed drop-zone height so Select/tree does not grow the box. */
-const DROP_ZONE_H = "h-[200px]"
+/** Drop zone compact; expand when Select existing shows the file tree. */
+const DROP_ZONE_H = "h-[112px]"
+const SELECT_TREE_H = "h-[min(420px,55vh)]"
 
 interface NodeFileAttachProps {
   collectionId: string
@@ -23,6 +26,11 @@ interface NodeFileAttachProps {
   onPreviewFile?: (file: FileSummary | null) => void
   /** Notify parent when select mode opens/closes (clear preview on close). */
   onSelectOpenChange?: (open: boolean) => void
+  /**
+   * Optional section title (e.g. "Attachments (3)"). Shown on the same row
+   * as the Select existing control.
+   */
+  title?: string
 }
 
 export function NodeFileAttach({
@@ -32,13 +40,25 @@ export function NodeFileAttach({
   onAttached,
   onPreviewFile,
   onSelectOpenChange,
+  title,
 }: NodeFileAttachProps) {
   const [selectOpen, setSelectOpen] = useState(false)
   const [dragOver, setDragOver] = useState(false)
-  const [loading, setLoading] = useState(false)
+  /** Optimistic selection so multi-click works before server refresh. */
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(attachedIds)
+  )
+  /** Per-file in-flight toggles — tree stays interactive. */
+  const busyRef = useRef<Set<string>>(new Set())
+  const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const attachedSet = new Set(attachedIds)
+  // Sync from server when attachment list actually changes (not every render)
+  const attachedKey = [...attachedIds].sort().join(",")
+  useEffect(() => {
+    setSelectedIds(new Set(attachedIds))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when ids change
+  }, [attachedKey])
 
   const setSelect = (open: boolean) => {
     setSelectOpen(open)
@@ -46,44 +66,87 @@ export function NodeFileAttach({
     if (!open) onPreviewFile?.(null)
   }
 
-  /** Toggle: attach if not yet on node; detach if already attached. */
+  /**
+   * Multi-select: click to attach, click again to detach.
+   * Optimistic UI — tree never unmounts / blocks for the whole list.
+   */
   const toggleExisting = async (file: FileSummary) => {
-    setLoading(true)
+    const fid = file.file_id
+    if (busyRef.current.has(fid)) return
+    busyRef.current.add(fid)
+
+    const wasSelected = selectedIds.has(fid)
+    // Optimistic toggle
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (wasSelected) next.delete(fid)
+      else next.add(fid)
+      return next
+    })
+
     try {
-      if (attachedSet.has(file.file_id)) {
-        await detachFileFromNode(collectionId, nodeId, file.file_id)
+      if (wasSelected) {
+        await detachFileFromNode(collectionId, nodeId, fid)
         toast.success(`Detached “${file.display_name || file.filename}”`)
       } else {
-        await attachFileToNode(collectionId, nodeId, file.file_id)
+        await attachFileToNode(collectionId, nodeId, fid)
         toast.success(`Attached “${file.display_name || file.filename}”`)
       }
+      // Parent should silent-refresh attachments (no full-panel Loading)
       onAttached()
     } catch (err) {
+      // Roll back optimistic state
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (wasSelected) next.add(fid)
+        else next.delete(fid)
+        return next
+      })
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
-      setLoading(false)
+      busyRef.current.delete(fid)
     }
   }
 
   const uploadAndAttach = async (files: FileList | File[]) => {
     const list = Array.from(files)
     if (list.length === 0) return
-    setLoading(true)
+    setUploading(true)
     try {
+      let started = 0
       for (const file of list) {
-        await uploadFileToNode(collectionId, nodeId, file)
+        const result = await uploadFileToNode(collectionId, nodeId, file)
+        // Track ingest so file detail can lock to Preview-only while processing
+        if (result.task_id && result.file_id) {
+          useFileMgmtStore
+            .getState()
+            ._startTaskPolling(collectionId, result.task_id, result.file_id)
+          started += 1
+        }
       }
       toast.success(
         list.length === 1
-          ? `Uploaded and attached “${list[0].name}”`
-          : `Uploaded and attached ${list.length} files`
+          ? started
+            ? `Uploaded “${list[0].name}” — ingesting…`
+            : `Uploaded and attached “${list[0].name}”`
+          : `Uploaded ${list.length} file(s)` +
+              (started ? ` · ${started} ingesting` : "")
       )
       setSelect(false)
       onAttached()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      const conflict = getNameConflict(err)
+      if (conflict) {
+        toast.error(
+          `A file named “${conflict.name}” already exists. Please rename and try again.`
+        )
+      } else {
+        toast.error(
+          `Failed: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
     } finally {
-      setLoading(false)
+      setUploading(false)
     }
   }
 
@@ -110,12 +173,19 @@ export function NodeFileAttach({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        {title ? (
+          <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 truncate min-w-0">
+            {title}
+          </label>
+        ) : (
+          <span />
+        )}
         <button
           type="button"
-          className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1"
+          className="text-[10px] font-medium text-primary hover:underline flex items-center gap-1 shrink-0"
           onClick={() => setSelect(!selectOpen)}
-          disabled={loading}
+          disabled={uploading}
         >
           <Search className="h-3 w-3" />
           {selectOpen ? "Close select" : "Select existing"}
@@ -134,11 +204,12 @@ export function NodeFileAttach({
       />
 
       <div
+        data-file-select-zone
         className={cn(
-          DROP_ZONE_H,
-          "rounded border border-dashed p-2 transition-colors overflow-hidden flex flex-col",
+          selectOpen ? SELECT_TREE_H : DROP_ZONE_H,
+          "rounded border border-dashed p-2 transition-[height,colors] duration-200 overflow-hidden flex flex-col",
           dragOver ? "border-primary bg-primary/5" : "border-border bg-muted/10",
-          loading && "opacity-60 pointer-events-none"
+          uploading && !selectOpen && "opacity-60 pointer-events-none"
         )}
         onDragOver={handleDragOver}
         onDragEnter={handleDragOver}
@@ -150,11 +221,11 @@ export function NodeFileAttach({
             type="button"
             className="flex-1 flex flex-col items-center justify-center gap-1.5 text-center px-3 cursor-pointer rounded hover:bg-muted/30 transition-colors"
             onClick={() => fileInputRef.current?.click()}
-            disabled={loading}
+            disabled={uploading}
           >
             <Upload className="h-5 w-5 text-muted-foreground/40" />
             <p className="text-[11px] text-muted-foreground/60">
-              {loading ? "Uploading..." : "Drag & drop files here"}
+              {uploading ? "Uploading..." : "Drag & drop files here"}
             </p>
             <p className="text-[10px] text-muted-foreground/40">
               or click to browse
@@ -164,7 +235,7 @@ export function NodeFileAttach({
           <div className="flex-1 min-h-0 flex flex-col gap-1 overflow-hidden">
             <div className="flex items-center justify-between gap-1 shrink-0">
               <span className="text-[10px] text-muted-foreground">
-                Click to attach · click again to detach
+                Multi-select · click to attach · click again to detach
               </span>
               <button
                 type="button"
@@ -178,7 +249,7 @@ export function NodeFileAttach({
             <div className="flex-1 min-h-0 overflow-hidden">
               <FileTreePicker
                 collectionId={collectionId}
-                selectedIds={attachedIds}
+                selectedIds={selectedIds}
                 onSelectFile={(file) => void toggleExisting(file)}
                 onPreviewFile={(file) => onPreviewFile?.(file)}
                 maxHeightClass="h-full max-h-full"

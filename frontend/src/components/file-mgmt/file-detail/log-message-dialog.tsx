@@ -1,7 +1,7 @@
 /**
  * Log message detail from file detail:
  * - Normal message: single-column view + Edit top-right
- * - Version update: left = Source/Raw/Summary/Chunks for that version;
+ * - Version update: left = Preview/Parse/Summary/Chunks for that version;
  *   right = message body with Edit inside the message panel
  * - Non-current versions: Delete on left tab bar (blob + Qdrant + log link)
  */
@@ -232,7 +232,7 @@ export function LogMessageDialog({
             </DialogHeader>
 
             <div className="flex-1 min-h-0 flex overflow-hidden">
-              {/* Left: version file Source / Raw / Summary / Chunks */}
+              {/* Left: version file Preview / Parse / Summary / Chunks */}
               <div className="flex-[1.35] min-w-0 min-h-0 flex flex-col border-r border-border p-3">
                 <VersionFileTabs
                   collectionId={collectionId}
@@ -465,7 +465,7 @@ export function LogMessageDialog({
   )
 }
 
-// ── Left pane: Source / Raw / Summary / Chunks for a version ──
+// ── Left pane: Preview / Parse / Summary / Chunks for a version ──
 
 function VersionFileTabs({
   collectionId,
@@ -481,7 +481,7 @@ function VersionFileTabs({
   /** When set (non-current only), show Delete on the tab bar right */
   onRequestDelete?: () => void
 }) {
-  const [tab, setTab] = useState("source")
+  const [tab, setTab] = useState("raw")
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [chunks, setChunks] = useState<ChunkDetail[]>([])
@@ -605,7 +605,14 @@ function VersionFileTabs({
     >
       <div className="shrink-0 flex items-center gap-1 border-b border-border">
         <TabsList className="h-8 flex-1 min-w-0 justify-start bg-transparent p-0 gap-1 rounded-none border-0">
-          {(["source", "raw", "summary", "chunks"] as const).map((v) => (
+          {(
+            [
+              { value: "raw", label: "Preview" },
+              { value: "source", label: "Parse" },
+              { value: "summary", label: "Summary" },
+              { value: "chunks", label: "Chunks" },
+            ] as const
+          ).map(({ value: v, label }) => (
             <TabsTrigger
               key={v}
               value={v}
@@ -613,7 +620,7 @@ function VersionFileTabs({
             >
               {v === "chunks" ? (
                 <>
-                  Chunks
+                  {label}
                   {chunksTotal > 0 && (
                     <span className="ml-1 tabular-nums text-[10px] text-muted-foreground">
                       {chunksTotal}
@@ -621,7 +628,7 @@ function VersionFileTabs({
                   )}
                 </>
               ) : (
-                v
+                label
               )}
             </TabsTrigger>
           ))}
@@ -673,10 +680,10 @@ function VersionFileTabs({
                 <>
                   <p>No parsed text for this version.</p>
                   <p className="text-xs max-w-sm">
-                    Source shows text after parse/ingest. If this version was
+                    Parse shows text after parse/ingest. If this version was
                     never ingested (or the parse cache is missing), use{" "}
-                    <span className="font-medium text-foreground">Raw</span> for
-                    the original file
+                    <span className="font-medium text-foreground">Preview</span>{" "}
+                    for the original file
                     {isPdf ? " (PDF preview)" : ""}.
                   </p>
                 </>
