@@ -121,11 +121,19 @@
   html {
     @apply font-sans;
     background-color: var(--pm-canvas, #f6f5f1);
+    /* Below app min-width: scroll horizontally instead of crushing layout */
+    overflow-x: auto;
   }
   body {
     @apply text-foreground;
     margin: 0;
     background-color: var(--pm-canvas, #f6f5f1);
+    /*
+     * Floor for Premium shell (nav + collections + stage).
+     * Extreme narrow windows get horizontal scroll — no stacked overlap.
+     */
+    min-width: 1120px;
+    overflow-x: auto;
   }
 }
 
@@ -2393,7 +2401,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   height: 100%;
   max-height: 100%;
   min-height: 0;
-  min-width: 0;
+  /* dual-column floor — do not collapse into overlapping stack */
+  min-width: 720px;
   box-sizing: border-box;
   align-items: stretch;
   overflow: visible;
@@ -2756,34 +2765,11 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   }
 }
 
-@media (max-width: 1023px) {
-  .pm-overview {
-    --pm-overview-fab-pad: 40px;
-    grid-template-columns: 1fr;
-    height: auto;
-    max-height: none;
-    min-height: 100%;
-  }
-  .pm-overview-left {
-    overflow: visible;
-    max-height: none;
-  }
-  .pm-overview-left-scroll {
-    overflow: visible;
-    flex: none;
-    padding-bottom: 16px;
-  }
-  .pm-overview-right {
-    min-height: min(72vh, 640px);
-    max-height: none;
-  }
-  .pm-todo-fixed {
-    min-height: 160px;
-  }
-  .pm-rail-lower {
-    min-height: 240px;
-  }
-}
+/*
+ * No responsive collapse for Overview dual-column.
+ * App min-width (1120px) keeps dual layout; smaller viewports scroll X.
+ * (Previous max-width:1023 stack caused overlap with float shell.)
+ */
 
 /* Collection pill tabs — sliding soft pill via TabsIndicator */
 .pm-tabs[role="tablist"],
@@ -2878,9 +2864,13 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-shell-root {
   background-color: var(--pm-canvas, #f6f5f1);
   -webkit-font-smoothing: antialiased;
+  /* Match body floor — layout never compresses below this */
+  min-width: 1120px;
+  width: 100%;
 }
 .pm-shell-main {
   background-color: var(--pm-canvas, #f6f5f1);
+  /* allow flex grow but not crush under floor (body scrolls) */
   min-width: 0;
   isolation: isolate;
 }
@@ -2888,13 +2878,16 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background-color: transparent;
   box-sizing: border-box;
   overflow: visible;
+  /* nav(72) is outside; collections(228) + gap + stage floor */
+  min-width: 1000px;
 }
 .pm-shell-stage-slot {
   overflow: visible;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  min-width: 0;
+  min-width: 640px;
+  flex: 1 1 auto;
 }
 
 /* ── Header — same canvas as page / Navigate ── */

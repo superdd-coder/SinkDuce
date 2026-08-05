@@ -100,7 +100,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
 
   const fetchDefinitiveFiles = useCallback(async (opts?: { silent?: boolean }) => {
     if (!collection) return
-    const silent = opts?.silent && hasLoadedRef.current
+    const silent = opts?.silent === true
     if (!silent) setDefinitiveLoading(true)
     try {
       const files = await getDefinitiveFiles(collection)
@@ -116,7 +116,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
 
   const fetchSummary = useCallback(async (opts?: { silent?: boolean }) => {
     if (!collection) return
-    const silent = opts?.silent && hasLoadedRef.current
+    const silent = opts?.silent === true
     if (!silent) setSummaryLoading(true)
     try {
       const res = await getCollectionSummary(collection)
@@ -203,12 +203,13 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
     fetchStats,
   ])
 
-  // ── Collection switch: soft refresh (keep previous paint until new data) ─
-  // Wiping summary/stats to null caused a hard white flash on every switch.
+  // ── Collection switch / first load
+  // First paint: may show Loading. Later switches: silent — keep previous UI
+  // until new data replaces it (no opacity-0 white flash, no empty wipe).
 
   useEffect(() => {
-    // Keep stale paint while fetching the next collection (no blank frame).
-    const keepStalePaint = hasLoadedRef.current
+    if (!collection) return
+    const silent = hasLoadedRef.current
     wasConsolidatingRef.current = false
     wasBusyRef.current = false
     setDefinitiveOpen(false)
@@ -226,15 +227,13 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
           wasConsolidatingRef.current = true
         }
       } catch { /* ignore */ }
-      // First open: loud load. Later switches: silent so no Loading… flash.
       if (!cancelled) {
-        await refreshAll({ silent: keepStalePaint })
+        await refreshAll({ silent })
         if (!cancelled) hasLoadedRef.current = true
       }
     })()
 
     return () => { cancelled = true }
-    // Only re-run on collection change — refreshAll is stable enough via deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collection])
 

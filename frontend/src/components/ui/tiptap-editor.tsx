@@ -3059,7 +3059,9 @@ export function TiptapEditor({
     name: "tableEnhancement",
   })).current
 
-  // Prevent deletion of distill blocks and images in readonly mode
+  // Prevent deletion of distill blocks and images in readonly mode.
+  // Must tolerate setContent / full-doc replace (collection switch, prop updates)
+  // — naive nodesBetween(from,to) on intermediate docs throws nodeSize on undefined.
   const ReadonlyProtectExt = useRef(Extension.create({
     name: "readonlyProtect",
     addProseMirrorPlugins() {
@@ -3067,32 +3069,29 @@ export function TiptapEditor({
         key: new PluginKey("readonlyProtect"),
         filterTransaction: (tr) => {
           if (!_readonlyRef.current) return true
-          for (const step of tr.steps) {
-            const map = (step as any).getMap?.()
-            if (!map) continue
-            // Check if any deleted range contains a distill-block or image
-            const from = (step as any).from
-            const to = (step as any).to
-            if (from == null || to == null) continue
-            tr.doc.nodesBetween(from, Math.min(to, tr.doc.nodeSize - 1), (node) => {
-              if (node.type.name === "distillBlock" || node.type.name === "resizableImage") {
-                throw new Error("BLOCKED")
-              }
-            })
-            try {
-              tr.before.nodesBetween(from, Math.min(to, (tr as any).before.nodeSize - 1), (node: any) => {
-                if (node.type.name === "distillBlock" || node.type.name === "resizableImage") {
-                  throw new Error("CHECK_DELETED")
-                }
-              })
-            } catch (e: any) {
-              if (e.message === "CHECK_DELETED") {
-                // Node existed before but exists now too — check if it's being deleted
-                const beforeCount = countNodes(tr.before, "distillBlock") + countNodes(tr.before, "resizableImage")
-                const afterCount = countNodes(tr.doc, "distillBlock") + countNodes(tr.doc, "resizableImage")
-                if (afterCount < beforeCount) return false
+          if (!tr.docChanged) return true
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const before = (tr as any).before as { content?: { size: number }; descendants?: (fn: (n: any) => void) => void } | undefined
+            const after = tr.doc
+            if (!before?.content || !after?.content) return true
+
+            // Full document replace (TipTap setContent) — always allow
+            const beforeSize = before.content.size
+            for (const step of tr.steps) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const s = step as any
+              if (typeof s.from === "number" && typeof s.to === "number" && s.from === 0 && s.to >= beforeSize) {
+                return true
               }
             }
+
+            const beforeProtected = countProtectedNodes(before)
+            const afterProtected = countProtectedNodes(after)
+            // Block only when protected nodes are removed (user delete)
+            if (afterProtected < beforeProtected) return false
+          } catch {
+            return true
           }
           return true
         },
@@ -3100,11 +3099,19 @@ export function TiptapEditor({
     },
   })).current
 
-  function countNodes(doc: any, typeName: string): number {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function countProtectedNodes(doc: any): number {
     let count = 0
-    doc.nodesBetween(0, doc.nodeSize, (node: any) => {
-      if (node.type.name === typeName) count++
-    })
+    try {
+      if (!doc?.descendants) return 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      doc.descendants((node: any) => {
+        const n = node?.type?.name
+        if (n === "distillBlock" || n === "resizableImage") count++
+      })
+    } catch {
+      /* ignore corrupt/partial docs during apply */
+    }
     return count
   }
 
@@ -3204,21 +3211,26 @@ export function TiptapEditor({
     if (!shouldReload) return
     externalUpdateRef.current = true
     const { processed } = preprocessDistillBlocks(enriched)
-    editor.commands.setContent(processed)
+    try {
+      // emitUpdate: false avoids cascading onUpdate during external reload
+      editor.commands.setContent(processed, { emitUpdate: false })
+    } catch (err) {
+      // Fallback: destroy-range replace can throw on corrupt intermediate state
+      console.warn("[TiptapEditor] setContent failed, retry empty then content", err)
+      try {
+        editor.commands.clearContent(false)
+        editor.commands.setContent(processed, { emitUpdate: false })
+      } catch (err2) {
+        console.error("[TiptapEditor] setContent recovery failed", err2)
+      }
+    }
     // Use enriched as lastEmitted so the next render cycle sees that the
     // injected content is already applied and doesn't re-trigger setContent.
     lastEmitted.current = enriched
-    // setContent triggers onUpdate, but onUpdate skips onChange while
-    // externalUpdateRef is true. We must call onChange manually so that:
-    // 1. React state (content) is updated with the enriched markdown
-    // 2. handleContentChange schedules auto-save to persist to server
-    // Without this, the injected description only lives in the editor DOM
-    // and is lost on the next note switch.
+    // setContent with emitUpdate:false skips onUpdate — call onChange when
+    // AI description injection changed the markdown so state + save stay in sync.
     if (enriched !== value) {
       onChange?.(enriched)
-      // Also immediately flush the save to server — don't wait for the
-      // 800ms auto-save timer, because the user might switch notes before
-      // it fires. This mirrors how distill blocks flush-save before async ops.
       try { _flushSaveBeforeGenerate?.() } catch { /* best-effort */ }
     }
     requestAnimationFrame(() => { externalUpdateRef.current = false })

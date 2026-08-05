@@ -158,35 +158,14 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
   }, [timelineNavRequest, handleTabChange])
 
   /**
-   * Collection switch: soft opacity fade (no key-remount hard cut).
-   * Keep the stage tree mounted; only dim → data updates → restore.
+   * Collection switch: keep stage + tab panels mounted (no opacity-0, no
+   * visitedTabs wipe — that remounted InfoPanel and flashed white).
+   * Children update via collection / collectionId props.
    */
-  const [collectionFade, setCollectionFade] = useState<"in" | "out">("in")
-  const collectionFadeGen = useRef(0)
-  const collectionFadeSkipFirst = useRef(true)
-  const COL_FADE_OUT_MS = 140
-
   useEffect(() => {
-    // Reset tab keep-alive for the new collection (avoid stale visited set)
-    setVisitedTabs(new Set([activeTab]))
     setStageTab(activeTab)
     setStagePhase("shown")
     panelMotionGen.current += 1
-
-    // First paint / empty→select: no blink
-    if (collectionFadeSkipFirst.current) {
-      collectionFadeSkipFirst.current = false
-      return
-    }
-    if (!activeCollection) return
-
-    const gen = ++collectionFadeGen.current
-    setCollectionFade("out")
-    const t = window.setTimeout(() => {
-      if (collectionFadeGen.current !== gen) return
-      setCollectionFade("in")
-    }, COL_FADE_OUT_MS)
-    return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
   }, [activeCollection])
 
@@ -539,11 +518,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
           <div className="pm-stage pm-float-surface h-full min-h-0 flex flex-col overflow-hidden">
             {/* Collection header — title left, Settings ⋮ far right (not in tab bar) */}
             <header
-              className={cn(
-                "pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3",
-                "pm-collection-soft-fade",
-                collectionFade === "out" && "is-faded"
-              )}
+              className="pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3"
               style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
             >
               <div className="min-w-0">
@@ -572,13 +547,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               </button>
             </header>
 
-            <div
-              className={cn(
-                "pm-collection-body flex-1 flex flex-col min-h-0 min-w-0",
-                "pm-collection-soft-fade",
-                collectionFade === "out" && "is-faded"
-              )}
-            >
+            <div className="pm-collection-body flex-1 flex flex-col min-h-0 min-w-0">
               {/*
                 Single always-mounted tab bar (Overview | Files | Timeline).
                 Must NOT move between InfoPanel chrome and this shell — remounting
