@@ -14,8 +14,9 @@ import { TextStyle } from "@tiptap/extension-text-style"
 import Color from "@tiptap/extension-color"
 import { Markdown } from "tiptap-markdown"
 import { Node, mergeAttributes, Extension, type Editor } from "@tiptap/core"
-import { Plugin, PluginKey } from "@tiptap/pm/state"
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state"
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model"
+import type { EditorView } from "@tiptap/pm/view"
 import {
   Bold, Italic, Strikethrough, Highlighter,
   List, ListOrdered, ListTodo, Heading1, Heading2, Heading3,
@@ -23,6 +24,34 @@ import {
 } from "lucide-react"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * Click below the last content block (tall min-height ProseMirror pad) →
+ * place caret at end of document (Typora / Notes style).
+ */
+function placeCaretAtEndIfClickBelowContent(
+  view: EditorView,
+  event: MouseEvent
+): boolean {
+  if (event.button !== 0) return false
+  const last = view.dom.lastElementChild as HTMLElement | null
+  if (!last) {
+    // Empty-ish doc: still focus end
+    const sel = TextSelection.atEnd(view.state.doc)
+    view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
+    if (!view.hasFocus()) view.focus()
+    return true
+  }
+  // Only when click is clearly below the last block (not between lines)
+  const bottom = last.getBoundingClientRect().bottom
+  if (event.clientY <= bottom + 2) return false
+
+  event.preventDefault()
+  const sel = TextSelection.atEnd(view.state.doc)
+  view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
+  if (!view.hasFocus()) view.focus()
+  return true
+}
 
 // ──────────────────────────────────────────────
 // Markdown Syntax Hover Plugin
@@ -1383,11 +1412,12 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           dom.style.cursor = "default"
         }
 
-        // Header
+        // Header: title truncates as width shrinks so ✕ delete stays visible
         const header = document.createElement("div")
         header.style.cssText = `
           display: flex; align-items: center; gap: 6px; padding: 6px 10px;
-          background: rgba(26,94,61,0.06); border-bottom: 1px solid rgba(26,94,61,0.12); font-size: 12px;
+          background: rgba(26,94,61,0.06); border-bottom: 1px solid rgba(26,94,61,0.12);
+          font-size: 12px; min-width: 0;
         `
 
         const handle = document.createElement("span")
@@ -1395,15 +1425,21 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
         // Disable drag for loading blocks — dragging a loading placeholder
         // moves it to a new position, so the distill result can't find it.
         handle.style.cssText = node.attrs.loading
-          ? `cursor: not-allowed; color: #bbb; font-size: 14px; user-select: none;`
-          : `cursor: grab; color: #666; font-size: 14px; user-select: none;`
+          ? `cursor: not-allowed; color: #bbb; font-size: 14px; user-select: none; flex-shrink: 0;`
+          : `cursor: grab; color: #666; font-size: 14px; user-select: none; flex-shrink: 0;`
         if (node.attrs.loading) {
           handle.addEventListener("dragstart", (e) => { e.preventDefault(); e.stopPropagation() })
         }
 
         const link = document.createElement("span")
-        link.textContent = `📎 ${node.attrs.sourceTitle}`
-        link.style.cssText = `color: #1A5E3D; text-decoration: none; flex: 1; font-weight: 500; cursor: pointer;`
+        const sourceTitle = (node.attrs.sourceTitle as string) || "source"
+        link.textContent = `📎 ${sourceTitle}`
+        link.title = sourceTitle
+        link.style.cssText = `
+          color: #1A5E3D; text-decoration: none; font-weight: 500; cursor: pointer;
+          flex: 1 1 0%; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+          white-space: nowrap;
+        `
         link.addEventListener("click", (e) => {
           e.preventDefault()
           e.stopPropagation()
@@ -1424,13 +1460,17 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
         badge.style.cssText = `
           background: #1A5E3D; color: white; border-radius: 2px;
           padding: 1px 5px; font-size: 10px; font-weight: 600;
+          flex-shrink: 0; max-width: 4.5rem; overflow: hidden; text-overflow: ellipsis;
         `
 
         const delBtn = document.createElement("button")
+        delBtn.type = "button"
         delBtn.textContent = "✕"
+        delBtn.title = "Remove distill block"
         delBtn.style.cssText = `
           background: none; border: none; cursor: pointer; color: #999;
           font-size: 14px; padding: 0 2px; line-height: 1;
+          flex-shrink: 0; flex-grow: 0;
         `
         delBtn.addEventListener("click", () => {
           if (typeof getPos === "function") {
@@ -1598,7 +1638,9 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
               updatedNode.attrs.sourceTitle || "source",
             )
 
-            link.textContent = `📎 ${updatedNode.attrs.sourceTitle}`
+            const t = (updatedNode.attrs.sourceTitle as string) || "source"
+            link.textContent = `📎 ${t}`
+            link.title = t
             badge.textContent = updatedNode.attrs.sourceNoteId?.slice(-3) || "?"
             dom.setAttribute("data-block-id", updatedNode.attrs.blockId)
             dom.setAttribute("data-loading", updatedNode.attrs.loading ? "true" : "false")
@@ -2618,6 +2660,11 @@ interface MarkdownEditorProps {
   onDistillNavigate?: (noteId: string) => void // Add this for distill block navigation
   /** Called when the editor instance is ready. Passes back the Tiptap editor. */
   onEditorReady?: (editor: any) => void
+  /**
+   * Fired after ProseMirror has taken focus (and click selection is applied).
+   * Prefer this over parent mousedown for dual-pane focus — avoids select-all thrash.
+   */
+  onEditorFocus?: () => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
   /** Top offset for sticky toolbar (px). */
@@ -3027,6 +3074,7 @@ export const MESSAGE_EDITOR_PLACEHOLDER =
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
+  onEditorFocus,
   showToolbar = true,
   stickyToolbarOffset, toolbarActions,
   flush = false,
@@ -3036,6 +3084,9 @@ export function TiptapEditor({
   const editorRef = useRef<any>(null)
   const _readonlyRef = useRef(readonly)
   _readonlyRef.current = readonly
+  // Stable focus callback — avoid re-creating useEditor on parent re-renders
+  const onEditorFocusRef = useRef(onEditorFocus)
+  onEditorFocusRef.current = onEditorFocus
   // Placeholder extension is configured once; read latest text via ref so
   // prop updates / HMR are not stuck on the first mount string.
   const placeholderRef = useRef(placeholder || MESSAGE_EDITOR_PLACEHOLDER)
@@ -3149,9 +3200,23 @@ export function TiptapEditor({
       lastEmitted.current = processed
       if (!externalUpdateRef.current) onChange?.(processed)
     },
+    onFocus: () => {
+      // After PM applied the click caret/selection — notify pane chrome.
+      // Double-rAF so we don't re-render (distill rail, etc.) mid-gesture.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          onEditorFocusRef.current?.()
+        })
+      })
+    },
     editorProps: {
       attributes: { class: "focus:outline-none" },
       handleDOMEvents: {
+        // Empty pad under last line → caret at end (not stuck mid-void)
+        mousedown: (view, event) => {
+          if (_readonlyRef.current) return false
+          return placeCaretAtEndIfClickBelowContent(view, event as MouseEvent)
+        },
         contextmenu: (_view, event) => {
           const target = event.target as HTMLElement
           const table = target.closest("table")
@@ -3211,9 +3276,33 @@ export function TiptapEditor({
     if (!shouldReload) return
     externalUpdateRef.current = true
     const { processed } = preprocessDistillBlocks(enriched)
+    // Preserve cursor — setContent often collapses to select-all / doc start
+    const prevSel = editor.state.selection
+    const hadFocus = editor.isFocused
     try {
       // emitUpdate: false avoids cascading onUpdate during external reload
       editor.commands.setContent(processed, { emitUpdate: false })
+      // Restore selection; never leave a full-doc selection after reload
+      try {
+        const maxPos = editor.state.doc.content.size
+        let from = Math.min(Math.max(prevSel.from, 0), maxPos)
+        let to = Math.min(Math.max(prevSel.to, 0), maxPos)
+        if (maxPos > 2 && to - from >= maxPos - 2) {
+          // Collapse accidental all-select from setContent
+          from = Math.min(Math.max(from, 1), maxPos)
+          to = from
+        }
+        if (from !== to) {
+          editor.commands.setTextSelection({ from, to })
+        } else if (maxPos > 0) {
+          editor.commands.setTextSelection(Math.min(Math.max(from, 1), maxPos))
+        }
+        if (!hadFocus) {
+          editor.commands.blur()
+        }
+      } catch {
+        /* ignore selection restore */
+      }
     } catch (err) {
       // Fallback: destroy-range replace can throw on corrupt intermediate state
       console.warn("[TiptapEditor] setContent failed, retry empty then content", err)
@@ -3273,26 +3362,23 @@ export function TiptapEditor({
         const noteId = distillBlock.getAttribute("data-source-note-id")
         if (noteId) onNoteLinkClick?.(noteId)
       }
-      // If clicked outside ProseMirror content area (empty editor space),
-      // focus the editor and place cursor at the nearest content position.
-      const pmEl = editorRef.current?.view?.dom as HTMLElement | undefined
-      if (pmEl && !pmEl.contains(target)) {
-        const editor = editorRef.current
-        if (editor && !editor.isDestroyed) {
-          // Use posAtCoords to find the nearest valid document position
-          // for the click coordinates, then place the cursor there.
-          const pos = editor.view.posAtCoords({
-            left: e.clientX,
-            top: e.clientY,
-          })
-          if (pos) {
-            editor.commands.setTextSelection(pos.pos)
-          }
-          editor.commands.focus()
+      // Click on editor chrome / padding outside .ProseMirror (or below content):
+      // put caret at end of last line — same as empty pad under min-height body.
+      const editor = editorRef.current
+      if (!editor || editor.isDestroyed || readonly) return
+      const pmEl = editor.view.dom as HTMLElement
+      const last = pmEl.lastElementChild as HTMLElement | null
+      const belowContent =
+        !last || e.clientY > last.getBoundingClientRect().bottom + 2
+      const outsidePm = !pmEl.contains(target)
+      if (outsidePm || (belowContent && (target === pmEl || pmEl.contains(target)))) {
+        if (outsidePm || belowContent) {
+          e.preventDefault()
+          editor.chain().focus("end").run()
         }
       }
     },
-    [onNoteLinkClick]
+    [onNoteLinkClick, readonly]
   )
 
   useEffect(() => {

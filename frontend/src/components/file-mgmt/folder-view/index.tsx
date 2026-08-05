@@ -63,6 +63,18 @@ export function FolderView({
 
   const msgCollapsed = !messageSidebarOpen
   const msgCount = currentFolderMessages.length
+  const setMessageSidebarOpen = useFileMgmtStore((s) => s.setMessageSidebarOpen)
+
+  /*
+   * Quick Chat portals into [data-pm-rail-anchor] on .pm-files-right.
+   * When Messages is collapsed the track is width:0 + pointer-events:none —
+   * QC cannot paint or receive clicks. Expand the rail whenever QC covers it.
+   */
+  useEffect(() => {
+    if (railCovered && !messageSidebarOpen) {
+      setMessageSidebarOpen(true)
+    }
+  }, [railCovered, messageSidebarOpen, setMessageSidebarOpen])
 
   return (
     <div

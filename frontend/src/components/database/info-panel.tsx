@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { ChevronRight, Loader2, RefreshCw, Star } from "lucide-react"
 import { toast } from "sonner"
+import { Button } from "@/components/ui/button"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import { onInfoRefresh, triggerInfoRefresh } from "@/lib/info-refresh"
@@ -421,11 +422,12 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                   Updating
                 </span>
               )}
-              <button
+              <Button
                 type="button"
+                variant="default"
+                size="xs"
                 onClick={handleConsolidate}
                 disabled={consolidating}
-                className="pm-btn-pri"
               >
                 {consolidating ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -433,7 +435,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                   <RefreshCw className="h-3 w-3" />
                 )}
                 Consolidate
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -654,26 +656,28 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                 <span className="pm-count-pill">{notesCount}</span>
               </button>
               <div className="pm-collapse-h-actions">
-                <button
+                <Button
                   type="button"
-                  className="pm-btn-ghost pm-btn-xs"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => {
                     ensureNotesOpen()
                     requestAnimationFrame(() => notesCardRef.current?.openImport())
                   }}
                 >
                   Import
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className="pm-btn-pri pm-btn-xs"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => {
                     ensureNotesOpen()
                     requestAnimationFrame(() => notesCardRef.current?.create())
                   }}
                 >
                   New
-                </button>
+                </Button>
               </div>
             </div>
             {/* Always mounted for smooth height + imperative Import/New */}

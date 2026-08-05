@@ -333,6 +333,8 @@ interface FileMgmtState {
   // UI
   setViewMode: (mode: "folder" | "timeline") => void
   toggleMessageSidebar: () => void
+  /** Explicit open/close — e.g. expand rail when Quick Chat opens */
+  setMessageSidebarOpen: (open: boolean) => void
   setMessageIncludeFiles: (on: boolean) => void
   setMessageRecursive: (on: boolean) => void
   setMessageIncludeNodes: (on: boolean) => void
@@ -1340,6 +1342,10 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   toggleMessageSidebar: () => {
     set((s) => ({ messageSidebarOpen: !s.messageSidebarOpen }))
+  },
+
+  setMessageSidebarOpen: (open: boolean) => {
+    set({ messageSidebarOpen: open })
   },
 
   setMessageIncludeFiles: (on: boolean) => {

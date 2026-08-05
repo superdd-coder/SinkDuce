@@ -425,7 +425,6 @@ export function LogMessageDialog({
                 </Button>
                 <Button
                   size="xs"
-                  className="pm-btn-pri"
                   disabled={saving || !content.trim()}
                   onClick={() => void handleSave()}
                 >

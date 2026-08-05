@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import { Button } from "@/components/ui/button"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { FieldLabel } from "@/components/ui/field-label"
+import { Input } from "@/components/ui/input"
 import {
   Dialog,
   DialogContent,
@@ -320,30 +323,31 @@ export function AddNodeDialog({
             </div>
 
             <div className="shrink-0">
-              <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                Group <span className="text-destructive">*</span>
-              </label>
-              <select
-                className="w-full text-xs border rounded px-2 py-1.5 bg-background"
+              <FieldLabel>
+                Group <span className="text-[var(--pm-danger)]">*</span>
+              </FieldLabel>
+              <DropdownSelect
+                size="sm"
                 value={groupSlug}
-                onChange={(e) => {
-                  if (e.target.value === "__add_group__") {
+                onChange={(v) => {
+                  if (v === "__add_group__") {
                     setGroupFormOpen(true)
                     return
                   }
-                  setGroupSlug(e.target.value)
+                  setGroupSlug(v)
                 }}
-              >
-                {localGroups.length === 0 && (
-                  <option value="">Select a group</option>
-                )}
-                {localGroups.map((g) => (
-                  <option key={g.group_id} value={g.group_id}>
-                    {g.name}
-                  </option>
-                ))}
-                <option value="__add_group__">+ Add group…</option>
-              </select>
+                placeholder="Select a group"
+                options={[
+                  ...(localGroups.length === 0
+                    ? [{ value: "", label: "Select a group" }]
+                    : []),
+                  ...localGroups.map((g) => ({
+                    value: g.group_id,
+                    label: g.name,
+                  })),
+                  { value: "__add_group__", label: "+ Add group…" },
+                ]}
+              />
             </div>
 
             <div className="shrink-0">

@@ -265,7 +265,6 @@ export function MessageEditorDialog({
                   </Button>
                   <Button
                     size="xs"
-                    className="pm-btn-pri"
                     onClick={() => void handleSave()}
                     disabled={!content.trim() || saving}
                   >
@@ -352,7 +351,6 @@ export function MessageEditorDialog({
                     </Button>
                     <Button
                       size="xs"
-                      className="pm-btn-pri"
                       onClick={() => void handleSave()}
                       disabled={!content.trim() || saving}
                     >

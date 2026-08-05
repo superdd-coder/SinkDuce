@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { cn } from "@/lib/utils"
 import { listChains, updateTodo } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
@@ -157,59 +158,50 @@ export function TodoDetailDialog({
         </DialogHeader>
         <div className="space-y-3 py-1">
           {readonly && (
-            <p className="text-[11px] text-muted-foreground rounded-md bg-muted/50 px-2 py-1.5">
+            <p className="pm-meta rounded-[var(--pm-r-sm)] bg-[var(--pm-green-wash)] px-2.5 py-1.5 text-[var(--pm-muted)]">
               Completed todos are read-only.
             </p>
           )}
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              TODO
-            </label>
+            <label className="pm-field-label">Todo</label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               disabled={readonly}
-              className="mt-1 w-full text-sm px-3 py-2 rounded-md border border-border bg-background disabled:opacity-70"
+              className="pm-field"
             />
           </div>
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              Description
-            </label>
+            <label className="pm-field-label">Description</label>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
               disabled={readonly}
               rows={5}
               placeholder={readonly ? "No description" : "Details…"}
-              className="mt-1 w-full text-sm px-3 py-2 rounded-md border border-border bg-background resize-y min-h-[100px] disabled:opacity-70"
+              className="pm-field min-h-[100px]"
             />
           </div>
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              Chain
-            </label>
-            <select
+            <label className="pm-field-label">Chain</label>
+            <DropdownSelect
+              size="sm"
               value={selectedChainId}
-              onChange={(e) => setSelectedChainId(e.target.value)}
+              onChange={setSelectedChainId}
               disabled={readonly || loadingChains}
-              className="mt-1 w-full text-sm px-3 py-2 rounded-md border border-border bg-background disabled:opacity-70"
-            >
-              {sortedChains.map((c) => (
-                <option key={c.chain_id} value={c.chain_id}>
-                  {chainOptionLabel(c)}
-                </option>
-              ))}
-            </select>
+              placeholder={loadingChains ? "Loading chains…" : "Select chain"}
+              options={sortedChains.map((c) => ({
+                value: c.chain_id,
+                label: chainOptionLabel(c),
+              }))}
+            />
           </div>
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              Deadline
-            </label>
-            <div className="mt-1 relative flex items-center gap-1">
+            <label className="pm-field-label">Deadline</label>
+            <div className="relative flex items-center gap-1">
               {!ddl && !readonly && (
                 <span
-                  className="pointer-events-none absolute left-3 text-sm text-muted-foreground/50"
+                  className="pointer-events-none absolute left-3 pm-meta"
                   aria-hidden
                 >
                   No deadline
@@ -224,8 +216,8 @@ export function TodoDetailDialog({
                 onFocus={openDdlPicker}
                 disabled={readonly}
                 className={cn(
-                  "w-full text-sm px-3 py-2 rounded-md border border-border bg-background cursor-pointer disabled:cursor-default disabled:opacity-70",
-                  ddl ? "text-foreground" : "text-transparent",
+                  "pm-field cursor-pointer disabled:cursor-default",
+                  ddl ? "text-[var(--pm-text)]" : "text-transparent",
                   !ddl &&
                     "[&::-webkit-datetime-edit]:text-transparent [&::-webkit-datetime-edit-fields-wrapper]:opacity-0"
                 )}
@@ -233,7 +225,7 @@ export function TodoDetailDialog({
               {ddl && !readonly && (
                 <button
                   type="button"
-                  className="shrink-0 p-1 text-muted-foreground hover:text-foreground"
+                  className="shrink-0 p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] transition-colors"
                   title="Clear deadline"
                   onClick={() => setDdl("")}
                 >
@@ -243,11 +235,10 @@ export function TodoDetailDialog({
             </div>
           </div>
         </div>
-        <DialogFooter className="!border-t-0 !bg-transparent">
+        <DialogFooter className="gap-2 sm:gap-2">
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             onClick={() => onOpenChange(false)}
           >
             {readonly ? "Close" : "Cancel"}
@@ -255,7 +246,6 @@ export function TodoDetailDialog({
           {!readonly && (
             <Button
               type="button"
-              size="sm"
               onClick={() => void handleSave()}
               disabled={saving || !dirty || !title.trim()}
             >

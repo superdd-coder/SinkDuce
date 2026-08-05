@@ -602,7 +602,6 @@ export function IconGrid({
             </Button>
             <Button
               size="xs"
-              className="pm-btn-pri"
               onClick={() => void handleSaveEdit()}
               disabled={
                 editSaving ||

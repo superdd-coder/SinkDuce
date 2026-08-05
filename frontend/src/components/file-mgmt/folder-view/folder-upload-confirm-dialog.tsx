@@ -93,15 +93,12 @@ export function FolderUploadConfirmDialog() {
         <DialogFooter className="gap-2 sm:gap-2">
           <Button
             variant="ghost"
-            size="sm"
             disabled={busy}
             onClick={() => cancelFolderUploadConfirm()}
           >
             Cancel
           </Button>
           <Button
-            size="sm"
-            className="pm-btn-pri"
             disabled={busy || stats.keep === 0}
             onClick={() => void handleConfirm()}
           >

@@ -493,15 +493,17 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       </Tabs>
       {/* Files tab only: All Files flat list */}
       {activeTab === "files" && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
           onClick={() => setClassicFilesOpen(true)}
           title="All Files"
-          className="pm-btn-ghost pm-btn-xs shrink-0"
+          className="shrink-0 gap-1"
         >
           <List className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">All Files</span>
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -690,7 +692,13 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
             activeCollection
           }
           open={quickChatOpen}
-          onOpen={() => setQuickChatOpen(true)}
+          onOpen={() => {
+            // Files: Messages curtain may be width-0 — expand before QC portals in
+            if (activeTab === "files") {
+              useFileMgmtStore.getState().setMessageSidebarOpen(true)
+            }
+            setQuickChatOpen(true)
+          }}
           onClose={() => setQuickChatOpen(false)}
           /* Rail float cover only where right rail exists */
           railActive={activeTab === "info" || activeTab === "files"}
@@ -769,10 +777,16 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
             ? This will remove all its chunks from the database.
           </p>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setDeleteFileTarget(null)}>
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteFileTarget(null)}
+            >
               Cancel
             </Button>
-            <Button variant="destructive" size="sm" onClick={handleDeleteFile}>
+            <Button
+              variant="destructive-solid"
+              onClick={handleDeleteFile}
+            >
               Delete
             </Button>
           </div>

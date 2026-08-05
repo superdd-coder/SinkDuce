@@ -41,8 +41,8 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
           <DialogTitle>Delete Collection</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          <p className="text-[13px] leading-relaxed text-[var(--pm-muted)]">
+        <div className="space-y-3 py-1">
+          <p className="pm-dialog-body">
             Type{" "}
             <span className="t-mono-family font-medium text-[var(--pm-ink)]">
               {collectionName}
@@ -53,13 +53,13 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
             value={confirmName}
             onChange={(e) => setConfirmName(e.target.value)}
             placeholder="Type collection name"
+            className="h-8"
           />
         </div>
 
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end gap-2 pt-1">
           <Button
             variant="ghost"
-            size="sm"
             onClick={() => {
               setConfirmName("")
               onOpenChange(false)
@@ -68,8 +68,7 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
             Cancel
           </Button>
           <Button
-            variant="destructive"
-            size="sm"
+            variant="destructive-solid"
             onClick={handleDelete}
             disabled={confirmName !== collectionName || deleting}
           >

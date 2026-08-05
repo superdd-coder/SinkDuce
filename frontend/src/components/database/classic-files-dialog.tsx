@@ -566,14 +566,12 @@ export function ClassicFilesDialog({
           <div className="flex justify-end gap-2 pt-2">
             <Button
               variant="ghost"
-              size="sm"
               onClick={() => setDeleteFileTarget(null)}
             >
               Cancel
             </Button>
             <Button
-              variant="destructive"
-              size="sm"
+              variant="destructive-solid"
               onClick={() => void handleDeleteFile()}
             >
               Delete

@@ -1300,23 +1300,27 @@ input[type="checkbox"] {
   letter-spacing: 0.04em;
 }
 
-/* ── @file-viewer Raw panel: SinkDuce design language ──
+/* ── @file-viewer Raw panel: Premium v1 chrome ──
    Requires styleIsolation: 'none' on FileViewer options.
-   Font: Geist · weight 300–400 · primary green for chrome text.
-   Toolbar sits as a top strip (position: top) so it never overlays pages. */
+   Soft float toolbar · Geist label · --pm-* only (no hard grid chrome). */
 .sinkduce-file-viewer {
-  --fv-green: var(--ze-green, #1a5e3d);
-  --fv-green-soft: color-mix(in oklch, var(--fv-green) 12%, transparent);
-  --fv-muted: var(--muted-foreground, oklch(0.5 0.02 160));
-  --fv-border: var(--border, oklch(0.9 0.01 160));
-  --fv-bg: var(--background, #fff);
-  --fv-surface: var(--muted, oklch(0.97 0.005 160));
-  font-family: var(--font-sans, "Geist Variable", system-ui, sans-serif) !important;
-  font-size: 12px !important;
-  font-weight: 300 !important;
-  line-height: 1.45 !important;
-  color: inherit;
-  letter-spacing: 0.01em;
+  --fv-green: var(--pm-green, #1a5e3d);
+  --fv-green-soft: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
+  --fv-green-wash: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+  --fv-muted: var(--pm-faint, #969c96);
+  --fv-text: var(--pm-text, #2a2e2a);
+  --fv-ink: var(--pm-ink, #121410);
+  --fv-border: color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+  --fv-bg: #ffffff;
+  --fv-surface: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 70%, #ffffff);
+  --fv-r: var(--pm-r-sm, 8px);
+  --fv-r-pill: 999px;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 1.35 !important;
+  color: var(--fv-text);
+  letter-spacing: 0.02em;
 }
 .sinkduce-file-viewer,
 .sinkduce-file-viewer * {
@@ -1324,7 +1328,7 @@ input[type="checkbox"] {
 }
 
 /* ── Global chrome toolbar (search / zoom / download / print) ──
-   Compact right-aligned strip — not full-width "pill" spanning the pane. */
+   Soft float pill — hug content, right-aligned; matches Premium ghost chrome. */
 .sinkduce-file-viewer .file-viewer-web-toolbar {
   display: flex !important;
   justify-content: flex-end !important;
@@ -1333,38 +1337,42 @@ input[type="checkbox"] {
   width: auto !important;
   max-width: 100% !important;
   margin-left: auto !important;
+  border: 1px solid var(--fv-border) !important;
   border-bottom: 1px solid var(--fv-border) !important;
-  background: var(--fv-bg) !important;
-  box-shadow: none !important;
+  background: #ffffff !important;
+  box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
   backdrop-filter: none !important;
-  min-height: 32px !important;
-  padding: 3px 8px !important;
+  min-height: 36px !important;
+  padding: 4px 8px !important;
   gap: 6px !important;
-  /* overflow-x:auto was clipping the search field; allow full chrome */
+  border-radius: var(--fv-r-pill) !important;
   overflow: visible !important;
 }
-/* Shell toolbar row: hug content, leave room for search text */
+/* Shell toolbar row: floating pill, not full-bleed bar */
 .sinkduce-file-viewer .file-viewer-web-shell > .file-viewer-web-toolbar {
   align-self: flex-end !important;
   width: fit-content !important;
   max-width: min(100%, 640px) !important;
-  border-radius: 0 0 0 8px !important;
+  margin: 8px 10px 0 auto !important;
+  border-radius: var(--fv-r-pill) !important;
 }
+/* Group chips: soft wash, no hard 1px grid cages */
 .sinkduce-file-viewer .file-viewer-web-toolbar-group {
-  border: 1px solid var(--fv-border) !important;
-  background: transparent !important;
-  border-radius: 6px !important;
-  padding: 1px 3px !important;
-  gap: 1px !important;
+  border: none !important;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
+  border-radius: var(--fv-r-pill) !important;
+  padding: 2px 4px !important;
+  gap: 2px !important;
   box-shadow: none !important;
   flex-shrink: 0 !important;
 }
 .sinkduce-file-viewer .file-viewer-web-search {
-  gap: 2px !important;
+  gap: 4px !important;
   flex-shrink: 0 !important;
   overflow: visible !important;
+  align-items: center !important;
 }
-/* Full "Search document" placeholder — no white clip */
+/* Full "Search document" placeholder — soft field */
 .sinkduce-file-viewer .file-viewer-web-search input {
   width: 148px !important;
   min-width: 148px !important;
@@ -1378,21 +1386,27 @@ input[type="checkbox"] {
 .sinkduce-file-viewer .file-viewer-web-toolbar select,
 .sinkduce-file-viewer .file-viewer-web-toolbar .file-viewer-web-zoom-meter,
 .sinkduce-file-viewer .file-viewer-web-toolbar .file-viewer-web-search-count {
-  font-size: 11px !important;
-  font-weight: 300 !important;
-  letter-spacing: 0.03em !important;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
   color: var(--fv-green) !important;
   text-transform: none !important;
 }
 .sinkduce-file-viewer .file-viewer-web-toolbar button {
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   min-width: auto !important;
-  height: 24px !important;
-  padding: 0 6px !important;
-  border-radius: 4px !important;
+  height: 26px !important;
+  padding: 0 8px !important;
+  border: none !important;
+  border-radius: var(--fv-r-pill) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
 }
 .sinkduce-file-viewer .file-viewer-web-toolbar button:hover:not(:disabled) {
-  background: var(--fv-green-soft) !important;
+  background: var(--fv-green-wash) !important;
   color: var(--fv-green) !important;
 }
 .sinkduce-file-viewer .file-viewer-web-toolbar button:disabled {
@@ -1401,22 +1415,34 @@ input[type="checkbox"] {
 }
 .sinkduce-file-viewer .file-viewer-web-toolbar input {
   border: 1px solid var(--fv-border) !important;
-  background: var(--fv-bg) !important;
-  color: var(--foreground, inherit) !important;
-  font-weight: 300 !important;
-  border-radius: 4px !important;
-  height: 24px !important;
+  background: #ffffff !important;
+  color: var(--fv-text) !important;
+  font-weight: 400 !important;
+  border-radius: var(--fv-r-pill) !important;
+  height: 26px !important;
+  padding: 0 10px !important;
+  box-shadow: none !important;
+  outline: none !important;
+  transition:
+    border-color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
+}
+.sinkduce-file-viewer .file-viewer-web-toolbar input:focus {
+  border-color: color-mix(in srgb, var(--fv-green) 42%, transparent) !important;
+  box-shadow: 0 0 0 3px var(--fv-green-wash) !important;
 }
 .sinkduce-file-viewer .file-viewer-web-toolbar input::placeholder {
   color: var(--fv-muted) !important;
-  font-weight: 300 !important;
+  font-weight: 400 !important;
   opacity: 1 !important;
 }
-.sinkduce-file-viewer .file-viewer-web-zoom-meter--readonly {
-  font-weight: 300 !important;
+.sinkduce-file-viewer .file-viewer-web-zoom-meter--readonly,
+.sinkduce-file-viewer .file-viewer-web-search-count {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
   font-variant-numeric: tabular-nums;
   color: var(--fv-green) !important;
   min-width: 36px !important;
+  opacity: 0.9;
 }
 
 /* Hide HTML export / dark-mode / 1:1 reset */
@@ -1477,17 +1503,22 @@ input[type="checkbox"] {
 }
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-shell > .file-viewer-web-toolbar {
   display: flex !important;
-  width: 100% !important;
-  max-width: 100% !important;
-  align-self: stretch !important;
+  width: fit-content !important;
+  max-width: min(100%, 720px) !important;
+  align-self: flex-end !important;
   align-items: center !important;
   justify-content: flex-end !important;
   gap: 6px !important;
-  border-radius: 0 !important;
+  /* Soft float pill — not full-bleed bar */
+  margin: 8px 10px 4px auto !important;
+  border-radius: var(--fv-r-pill) !important;
+  border: 1px solid var(--fv-border) !important;
   border-bottom: 1px solid var(--fv-border) !important;
+  background: #ffffff !important;
+  box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
   /* Left slot for zoom/rotate when single-row mode */
-  padding-left: min(200px, 32%) !important;
-  padding-right: 10px !important;
+  padding-left: min(188px, 34%) !important;
+  padding-right: 8px !important;
   height: 36px !important;
   min-height: 36px !important;
   box-sizing: border-box !important;
@@ -1524,19 +1555,20 @@ input[type="checkbox"] {
   background: var(--fv-bg) !important;
 }
 
-/* Zoom/rotate: sit in the left slot of the Search row (wide only) */
+/* Zoom/rotate: sit in the left slot of the Search pill (wide only) */
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] {
   display: flex !important;
   flex-wrap: nowrap !important;
   align-items: center !important;
   justify-content: flex-start !important;
-  gap: 6px !important;
+  gap: 4px !important;
   width: auto !important;
   max-width: min(190px, 30%) !important;
   min-height: 36px !important;
   height: 36px !important;
-  padding: 4px 8px 4px 10px !important;
-  margin: -36px 0 0 0 !important; /* sit on search row */
+  padding: 4px 6px 4px 10px !important;
+  /* Align into the floating pill row (margin top of toolbar ≈ 8px + height 36) */
+  margin: calc(-36px - 4px) 0 0 10px !important;
   border: none !important;
   background: transparent !important;
   box-shadow: none !important;
@@ -1554,9 +1586,9 @@ input[type="checkbox"] {
   min-height: 26px !important;
   padding: 0 4px !important;
   gap: 2px !important;
-  border: 1px solid var(--fv-border) !important;
-  border-radius: 6px !important;
-  background: var(--fv-bg) !important;
+  border: none !important;
+  border-radius: var(--fv-r-pill) !important;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
   box-shadow: none !important;
   flex-shrink: 0 !important;
   visibility: visible !important;
@@ -1576,12 +1608,17 @@ input[type="checkbox"] {
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-rotation-meter {
   height: 22px !important;
   min-width: 22px !important;
-  font-size: 11px !important;
-  font-weight: 300 !important;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
   color: var(--fv-green) !important;
   border: none !important;
   background: transparent !important;
+  border-radius: var(--fv-r-pill) !important;
   padding: 0 5px !important;
+}
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-icon-button:hover,
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-scale-button:hover {
+  background: var(--fv-green-wash) !important;
 }
 .sinkduce-file-viewer:has(.pdf-shell) .pdf-content {
   flex: 1 1 auto !important;
@@ -1595,13 +1632,17 @@ input[type="checkbox"] {
  */
 @container fv-shell (max-width: 720px) {
   .file-viewer-web-toolbar {
-    padding-left: 10px !important;
+    padding-left: 8px !important;
     justify-content: flex-start !important;
     flex-wrap: wrap !important;
     row-gap: 4px !important;
     height: auto !important;
     min-height: 36px !important;
     overflow: visible !important;
+    width: calc(100% - 20px) !important;
+    max-width: none !important;
+    margin: 8px 10px 4px !important;
+    align-self: stretch !important;
   }
   .file-viewer-web-search {
     flex: 1 1 120px !important;
@@ -1609,14 +1650,16 @@ input[type="checkbox"] {
     min-width: 64px !important;
   }
   .pdf-toolbar[data-sinkduce-bar="top-left"] {
-    margin: 0 !important;
-    max-width: 100% !important;
-    width: 100% !important;
+    margin: 0 10px 0 !important;
+    max-width: calc(100% - 20px) !important;
+    width: calc(100% - 20px) !important;
     height: 32px !important;
     min-height: 32px !important;
     padding: 2px 8px !important;
-    border-bottom: 1px solid var(--fv-border) !important;
-    background: var(--fv-surface, var(--fv-bg)) !important;
+    border: none !important;
+    border-radius: var(--fv-r-pill) !important;
+    background: #ffffff !important;
+    box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
     z-index: 1 !important;
   }
 }
@@ -1626,18 +1669,24 @@ input[type="checkbox"] {
   .sinkduce-file-viewer:has(.pdf-shell)
     .file-viewer-web-shell
     > .file-viewer-web-toolbar {
-    padding-left: 10px !important;
+    padding-left: 8px !important;
     justify-content: flex-start !important;
     flex-wrap: wrap !important;
     height: auto !important;
     overflow: visible !important;
+    width: calc(100% - 20px) !important;
+    max-width: none !important;
+    margin: 8px 10px 4px !important;
+    align-self: stretch !important;
   }
   .sinkduce-file-viewer:has(.pdf-shell) .pdf-toolbar[data-sinkduce-bar="top-left"] {
-    margin: 0 !important;
-    max-width: 100% !important;
-    width: 100% !important;
-    border-bottom: 1px solid var(--fv-border) !important;
-    background: var(--fv-surface, var(--fv-bg)) !important;
+    margin: 0 10px !important;
+    max-width: calc(100% - 20px) !important;
+    width: calc(100% - 20px) !important;
+    border: none !important;
+    border-radius: var(--fv-r-pill) !important;
+    background: #ffffff !important;
+    box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
   }
 }
 
@@ -1659,7 +1708,7 @@ input[type="checkbox"] {
   min-width: 120px !important;
   max-width: 160px !important;
   border-right: 1px solid var(--fv-border) !important;
-  background: var(--fv-surface) !important;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #ffffff) !important;
   box-shadow: none !important;
 }
 .sinkduce-file-viewer .pdf-nav-tabs {
@@ -1690,13 +1739,13 @@ input[type="checkbox"] {
 }
 /* Compact sidebar toggle in nav head */
 .sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button {
-  width: 22px !important;
-  min-width: 22px !important;
-  height: 22px !important;
+  width: 24px !important;
+  min-width: 24px !important;
+  height: 24px !important;
   padding: 0 !important;
-  border: 1px solid var(--fv-border) !important;
-  border-radius: 4px !important;
-  background: transparent !important;
+  border: none !important;
+  border-radius: var(--fv-r-pill) !important;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
   color: var(--fv-green) !important;
   box-shadow: none !important;
   flex-shrink: 0 !important;
@@ -1711,19 +1760,19 @@ input[type="checkbox"] {
   transform: scale(0.85);
 }
 .sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button:hover {
-  background: var(--fv-green-soft) !important;
+  background: var(--fv-green-wash) !important;
 }
 /* Compact page group (‹ 1/24 ›) in nav head */
 .sinkduce-file-viewer .pdf-nav-head > .pdf-toolbar-group {
   display: inline-flex !important;
   align-items: center !important;
-  height: 22px !important;
-  min-height: 22px !important;
+  height: 24px !important;
+  min-height: 24px !important;
   gap: 1px !important;
-  padding: 0 2px !important;
-  border: 1px solid var(--fv-border) !important;
-  border-radius: 4px !important;
-  background: transparent !important;
+  padding: 0 4px !important;
+  border: none !important;
+  border-radius: var(--fv-r-pill) !important;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
   box-shadow: none !important;
   flex: 1 1 auto !important;
   min-width: 0 !important;
@@ -1736,14 +1785,15 @@ input[type="checkbox"] {
   font-size: 11px !important;
   padding: 0 !important;
   border: none !important;
+  border-radius: var(--fv-r-pill) !important;
   color: var(--fv-green) !important;
   background: transparent !important;
 }
 .sinkduce-file-viewer .pdf-nav-head .pdf-page-meter,
 .sinkduce-file-viewer .pdf-nav-head .pdf-page-meter strong,
 .sinkduce-file-viewer .pdf-nav-head .pdf-page-meter span {
-  font-size: 10px !important;
-  font-weight: 300 !important;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
   letter-spacing: 0.02em !important;
   min-width: 0 !important;
   color: var(--fv-green) !important;
@@ -1754,6 +1804,7 @@ input[type="checkbox"] {
   font-weight: 400 !important;
 }
 
+/* Pages / Outline — soft segment like pm-ws-seg */
 .sinkduce-file-viewer .pdf-nav-tabs {
   display: flex !important;
   gap: 4px !important;
@@ -1761,21 +1812,27 @@ input[type="checkbox"] {
 }
 .sinkduce-file-viewer .pdf-nav-tabs button {
   flex: 1 1 auto !important;
-  height: 24px !important;
+  height: 26px !important;
   border: none !important;
-  border-radius: 0 !important;
-  border-bottom: 1px solid transparent !important;
+  border-radius: var(--fv-r-pill) !important;
+  border-bottom: none !important;
   background: transparent !important;
   color: var(--fv-muted) !important;
-  font-size: 11px !important;
-  font-weight: 300 !important;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
   letter-spacing: 0.04em !important;
   box-shadow: none !important;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
 }
-.sinkduce-file-viewer .pdf-nav-tabs button:hover,
+.sinkduce-file-viewer .pdf-nav-tabs button:hover {
+  color: var(--fv-green) !important;
+  background: var(--fv-green-wash) !important;
+}
 .sinkduce-file-viewer .pdf-nav-tabs button.active {
-  border-bottom-color: var(--fv-green) !important;
-  background: transparent !important;
+  border-bottom-color: transparent !important;
+  background: var(--fv-green-wash) !important;
   color: var(--fv-green) !important;
 }
 .sinkduce-file-viewer .pdf-page-list,
@@ -1797,20 +1854,23 @@ input[type="checkbox"] {
   width: 100% !important;
   box-sizing: border-box !important;
   border: none !important;
-  border-radius: 4px !important;
+  border-radius: var(--fv-r, 8px) !important;
   background: transparent !important;
-  color: inherit !important;
-  font-size: 12px !important;
-  font-weight: 300 !important;
-  letter-spacing: 0.02em !important;
-  min-height: 28px !important;
+  color: var(--fv-text) !important;
+  font: var(--pm-t-title, 400 13px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.01em !important;
+  min-height: 30px !important;
   height: auto !important;
-  padding: 5px 8px !important;
+  padding: 6px 10px !important;
   margin: 0 !important;
   box-shadow: none !important;
   text-align: left !important;
   gap: 0 !important;
-  line-height: 1.3 !important;
+  line-height: 1.35 !important;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
 }
 /* Hide the number square (pdf-page-thumb); keep only "Page N" label */
 .sinkduce-file-viewer .pdf-page-button > .pdf-page-thumb,
@@ -1822,20 +1882,19 @@ input[type="checkbox"] {
   display: block !important;
   flex: 1 1 auto !important;
   min-width: 0 !important;
-  font-size: 12px !important;
-  font-weight: 300 !important;
+  font: inherit !important;
   color: inherit !important;
-  line-height: 1.3 !important;
+  line-height: inherit !important;
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
 }
 .sinkduce-file-viewer .pdf-page-button:hover,
 .sinkduce-file-viewer .pdf-outline-button:hover {
-  background: var(--fv-green-soft) !important;
+  background: var(--fv-green-wash) !important;
   color: var(--fv-green) !important;
 }
-/* Single full-width selected row — no floating box offset */
+/* Selected row — green wash + left inset (Collections language) */
 .sinkduce-file-viewer .pdf-page-button--active,
 .sinkduce-file-viewer .pdf-page-button.pdf-page-button--active {
   background: var(--fv-green-soft) !important;
@@ -2150,30 +2209,38 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border: none;
 }
 
-/* Primary / ghost buttons (Overview chrome) */
-.pm-btn-pri {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  font: var(--pm-t-label);
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  color: var(--pm-on);
-  background: var(--pm-green);
-  border: none;
-  border-radius: var(--pm-r-sm);
-  padding: 7px 12px;
-  cursor: pointer;
+/* Primary / ghost buttons (Overview chrome + dialog actions)
+ * !important on type: ui/Button ships text-sm font-medium which otherwise wins. */
+.pm-btn-pri,
+.pm-btn-ghost {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  height: auto !important;
+  min-height: 0 !important;
+  border: none !important;
+  border-radius: var(--pm-r-sm) !important;
   white-space: nowrap;
-  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.06);
+  cursor: pointer;
+  box-shadow: none;
   transition:
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
+.pm-btn-pri {
+  gap: 6px;
+  padding: 7px 12px !important;
+  color: var(--pm-on) !important;
+  background: var(--pm-green) !important;
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.06);
+}
 .pm-btn-pri:hover:not(:disabled) {
-  background: var(--pm-green-deep);
+  background: var(--pm-green-deep) !important;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
   transform: translateY(-1px);
 }
@@ -2188,31 +2255,59 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   transform: none;
 }
 .pm-btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   gap: 4px;
-  font: var(--pm-t-label);
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  color: var(--pm-text);
-  background: rgba(18, 20, 16, 0.05);
-  border: none;
-  border-radius: var(--pm-r-sm);
-  padding: 6px 10px;
-  cursor: pointer;
-  transition: background 160ms var(--pm-ease);
+  padding: 6px 10px !important;
+  color: var(--pm-text) !important;
+  background: rgba(18, 20, 16, 0.05) !important;
 }
 .pm-btn-ghost:hover:not(:disabled) {
-  background: rgba(18, 20, 16, 0.08);
+  background: rgba(18, 20, 16, 0.08) !important;
+  color: var(--pm-ink) !important;
 }
 .pm-btn-xs {
-  padding: 3px 8px;
-  font-size: 10px;
-  line-height: 1.3;
+  padding: 3px 8px !important;
+  font-size: 10px !important;
+  line-height: 1.3 !important;
 }
 .pm-btn-danger {
-  color: var(--pm-danger);
+  color: var(--pm-danger) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.pm-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-danger) 8%, transparent) !important;
+  color: var(--pm-danger) !important;
+}
+/* Confirm-dialog solid danger (Delete) */
+.pm-btn-danger-solid {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 7px 12px !important;
+  color: #fff !important;
+  background: var(--pm-danger) !important;
+  border: none !important;
+  border-radius: var(--pm-r-sm) !important;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.06);
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-btn-danger-solid:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-danger) 88%, #000) !important;
+}
+.pm-btn-danger-solid:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 /* Stats cells (matrix cards) */
@@ -3375,8 +3470,21 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-ink);
 }
 .pm-dialog [data-slot="dialog-footer"] {
-  background: transparent;
-  border-top: none;
+  background: transparent !important;
+  border-top: none !important;
+  /* strip default DialogFooter muted bar */
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  margin-bottom: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+/* Action row inside soft dialogs: always label role (Geist 11px / 400) */
+.pm-dialog [data-slot="dialog-footer"] [data-slot="button"],
+.pm-dialog [data-slot="dialog-footer"] button {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
 }
 /* Soft body copy / field chrome inside pm-dialog */
 .pm-dialog .pm-dialog-body {
@@ -3384,14 +3492,167 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-muted);
   line-height: 1.5;
 }
+/* Field label — global control (also under .pm-dialog) */
+.pm-field-label,
 .pm-dialog .pm-field-label {
   display: block;
   margin-bottom: 6px;
-  font: var(--pm-t-label);
-  font-weight: 400;
-  letter-spacing: 0.06em;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
   text-transform: uppercase;
   color: var(--pm-faint);
+}
+/* Nested pane — global white card shell */
+.pm-nested {
+  border-radius: var(--pm-r-sm, 8px);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 6%, transparent);
+  box-shadow: none;
+}
+/*
+ * Soft float action menu — surface shared; motion via SoftMenu (.pm-menu--soft).
+ * Enter/exit: opacity + slight Y + scale (same language as .pm-select-menu).
+ */
+.pm-menu {
+  --pm-menu-ms: 180ms;
+  --pm-menu-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  min-width: 180px;
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  border-radius: var(--pm-r-sm, 8px);
+  background: #ffffff;
+  color: var(--pm-ink);
+  box-shadow: var(--pm-shadow);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+}
+/* SoftMenu only — default .pm-menu stays fully visible for legacy callers */
+.pm-menu.pm-menu--soft {
+  transform-origin: top right;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  pointer-events: none;
+  transition:
+    opacity var(--pm-menu-ms) var(--pm-menu-ease),
+    transform var(--pm-menu-ms) var(--pm-menu-ease);
+  will-change: opacity, transform;
+}
+.pm-menu.pm-menu--soft.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.pm-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font: var(--pm-t-body);
+  font-weight: 400 !important;
+  color: var(--pm-text);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--pm-r-sm, 8px) - 2px);
+  cursor: pointer;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-menu-item:hover:not(:disabled) {
+  background: var(--pm-green-wash);
+  color: var(--pm-ink);
+}
+.pm-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pm-menu-item.is-on {
+  background: var(--pm-green-soft);
+  color: var(--pm-green);
+}
+.pm-menu-item.is-danger {
+  color: var(--pm-danger);
+}
+.pm-menu-item.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-danger) 8%, transparent);
+  color: var(--pm-danger);
+}
+.pm-menu-item svg {
+  color: inherit;
+  opacity: 0.72;
+}
+.pm-menu-item.is-danger svg {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-menu.pm-menu--soft {
+    --pm-menu-ms: 1ms;
+    transition-duration: 1ms !important;
+  }
+}
+.pm-dialog .pm-field {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  font: var(--pm-t-body);
+  color: var(--pm-text);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  border-radius: var(--pm-r-sm);
+  outline: none;
+  transition:
+    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-dialog .pm-field::placeholder {
+  color: var(--pm-faint);
+}
+.pm-dialog .pm-field:focus {
+  border-color: color-mix(in srgb, var(--pm-green) 42%, transparent);
+  box-shadow: 0 0 0 3px var(--pm-green-wash);
+}
+.pm-dialog .pm-field:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.pm-dialog textarea.pm-field {
+  resize: vertical;
+  min-height: 88px;
+}
+.pm-dialog select.pm-field {
+  cursor: pointer;
+  appearance: auto;
+}
+/* Toggle chips (allowed file types, filters) */
+.pm-dialog .pm-field-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--pm-muted);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  border-radius: var(--pm-r-sm);
+  cursor: pointer;
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-dialog .pm-field-chip:hover {
+  background: color-mix(in srgb, var(--pm-ink) 4%, transparent);
+}
+.pm-dialog .pm-field-chip.is-on {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+  border-color: transparent;
 }
 .pm-dialog .pm-soft-rule {
   border-color: color-mix(in srgb, var(--pm-ink) 8%, transparent);
@@ -3401,6 +3662,1207 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: #ffffff;
   box-shadow: none;
   border: 1px solid color-mix(in srgb, var(--pm-ink) 6%, transparent);
+}
+/* Conflict quote / alert callout — soft left rail, no amber accent */
+.pm-dialog .pm-dialog-callout {
+  font: var(--pm-t-body);
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--pm-text);
+  white-space: pre-wrap;
+  border-left: 2px solid color-mix(in srgb, var(--pm-green) 55%, transparent);
+  padding-left: 12px;
+  background: var(--pm-green-wash);
+  border-radius: 0 var(--pm-r-sm) var(--pm-r-sm) 0;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-right: 10px;
+}
+
+/* ── Soft select (DropdownSelect) — no native OS blue ── */
+.pm-select-trigger {
+  box-sizing: border-box;
+  font: var(--pm-t-body);
+  color: var(--pm-text);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  border-radius: var(--pm-r-sm);
+  outline: none;
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-select-trigger--md {
+  min-height: 40px;
+  padding: 8px 12px;
+}
+.pm-select-trigger--sm {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+.pm-select-trigger:hover:not(.is-disabled) {
+  background: color-mix(in srgb, var(--pm-ink) 2%, #ffffff);
+}
+.pm-select-trigger.is-open,
+.pm-select-trigger:focus-visible {
+  border-color: color-mix(in srgb, var(--pm-green) 42%, transparent);
+  box-shadow: 0 0 0 3px var(--pm-green-wash);
+}
+.pm-select-trigger.is-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+/*
+ * Soft select menu motion — open/close symmetric (ENGINEERING §4).
+ * Enter/exit: opacity + slight Y + scale; origin top; no hard mount cut.
+ */
+.pm-select-menu {
+  --pm-select-ms: 180ms;
+  --pm-select-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  padding: 4px 0;
+  border: none;
+  border-radius: var(--pm-r-sm);
+  background: #ffffff;
+  color: var(--pm-ink);
+  box-shadow: var(--pm-shadow);
+  transform-origin: top center;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  pointer-events: none;
+  transition:
+    opacity var(--pm-select-ms) var(--pm-select-ease),
+    transform var(--pm-select-ms) var(--pm-select-ease);
+  will-change: opacity, transform;
+}
+.pm-select-menu.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.pm-select-chev {
+  transition: transform var(--pm-select-ms, 180ms) var(--pm-select-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  transform-origin: 50% 50%;
+}
+.pm-select-chev.is-open {
+  transform: rotate(180deg);
+}
+.pm-select-opt {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  text-align: left;
+  font: var(--pm-t-body);
+  color: var(--pm-text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-select-opt:hover {
+  background: var(--pm-green-wash);
+}
+.pm-select-opt.is-on {
+  background: var(--pm-green-soft);
+  color: var(--pm-green);
+}
+.pm-select-opt.is-empty {
+  cursor: default;
+  color: var(--pm-faint);
+  font: var(--pm-t-meta);
+}
+.pm-select-opt.is-empty:hover {
+  background: transparent;
+}
+.pm-select-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 18%, transparent);
+  background: transparent;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    border-color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-select-dot.is-on {
+  background: var(--pm-green);
+  border-color: var(--pm-green);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-select-menu {
+    --pm-select-ms: 1ms;
+    transition: none;
+  }
+  .pm-select-chev {
+    transition: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Premium · Workspace dialogs (Note editor + File detail)
+   Soft float shell already via .pm-dialog; this is inner chrome.
+   Type map (SPEC §2):
+     chrome (tab/btn/list/meta) → Geist  · label/title/body/meta
+     页标题 / 文档名 / 长文        → Source Serif · display-lite / prose
+   ═══════════════════════════════════════════════════════════════════ */
+
+.pm-workspace {
+  /* Default chrome face; kill DialogContent text-sm / medium inheritance */
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--pm-text);
+  /* Beige stage — nested white cards float like Files Messages */
+  background: var(--pm-canvas, #f6f5f1) !important;
+  letter-spacing: normal;
+}
+/* Dialog title slot is often a row of chips + name — don't force Geist title */
+.pm-workspace [data-slot="dialog-title"] {
+  font: inherit !important;
+  font-weight: 400 !important;
+  letter-spacing: normal !important;
+}
+/* Buttons / tabs inside workspace stay Geist even if parent is serif */
+.pm-workspace [data-slot="button"],
+.pm-workspace button:not(.ProseMirror button) {
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+}
+/* Editor chrome (TipTap toolbar pill) */
+.pm-workspace .ProseMirror-menubar,
+.pm-workspace [class*="rounded-full"].sticky {
+  font-family: var(--pm-ff) !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+}
+/* Top chrome bar — no hard rule; soft spacing only */
+.pm-ws-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  flex-shrink: 0;
+  border-bottom: none;
+  background: transparent;
+}
+.pm-ws-icon-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 28px !important;
+  width: 28px !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: var(--pm-r-sm) !important;
+  color: var(--pm-muted) !important;
+  background: transparent !important;
+  cursor: pointer;
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-icon-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-ink) 6%, transparent) !important;
+  color: var(--pm-ink) !important;
+}
+.pm-ws-icon-btn.is-danger:hover:not(:disabled) {
+  color: var(--pm-danger) !important;
+  background: color-mix(in srgb, var(--pm-danger) 8%, transparent) !important;
+}
+/*
+ * Workspace body — beige stage + nested white cards
+ * Card surface matches Files Messages .pm-files-msg-panel
+ */
+.pm-ws-body {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  gap: 10px;
+  /* Extra inset so card float shadows aren't clipped by the stage */
+  padding: 4px 14px 14px;
+  box-sizing: border-box;
+  background: transparent;
+  /* visible: let soft shadows breathe; scrolling lives inside cards */
+  overflow: visible;
+}
+/* Nested white card — same language as Messages rail (NOT interactive tiles) */
+.pm-ws-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  /* Match outer dialog / stage card (--pm-r-lg), not smaller nested radius */
+  border-radius: var(--pm-r-lg, 20px);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 4.5%, transparent);
+  box-shadow: var(--pm-shadow-sm);
+  /* Clip only inner content to radius — shadow paints outside (parents must allow) */
+  overflow: hidden;
+  /* no hover wash — deck cards are surfaces, not list tiles */
+  transition:
+    box-shadow 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    border-color 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-card--rail {
+  width: 17.5rem;
+  flex: 0 0 17.5rem;
+  animation: pm-ws-card-in 340ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+/*
+ * Pane group = editor card + optional distill rail as ONE flex unit.
+ *
+ * Principal:
+ *  - Split (source has distill): source group stays focused → narrows left,
+ *    distill rides with it; new group emerges on the right.
+ *  - Close (group has distill): whole group collapses together (rail never orphans).
+ *  - Focus switch (both have distill): rail open state transfers between groups.
+ *  - Editor cards stay equal width: has-rail group gets extra flex-basis for the
+ *    rail so the rail is “added on top” of an equal pane share, not carved out.
+ */
+.pm-ws-panes {
+  --pm-ws-pane-ms: 420ms;
+  --pm-ws-pane-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --pm-ws-rail-r-w: 13rem;
+  --pm-ws-rail-r-gap: 10px;
+  --pm-ws-rail-r-ms: 360ms;
+  --pm-ws-rail-r-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Extra basis so equal grow leaves equal editor widths when one rail is open */
+  --pm-ws-rail-r-extra: calc(var(--pm-ws-rail-r-w) + var(--pm-ws-rail-r-gap));
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  gap: 12px;
+  align-items: stretch;
+  /* Room for float shadows around cards */
+  padding: 2px 2px 6px;
+  box-sizing: border-box;
+  overflow: visible;
+}
+.pm-ws-pane-group {
+  display: flex;
+  flex-direction: row;
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0%;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  /* visible: card box-shadow must not clip; only collapse states hide overflow */
+  overflow: visible;
+  opacity: 1;
+  transition:
+    flex-grow var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
+    flex-basis var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
+    max-width var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
+    opacity 280ms var(--pm-ws-pane-ease);
+}
+/*
+ * Rail open: this group is wider by the rail, so both groups still give their
+ * editor slots the same free-space share (equal window widths).
+ */
+.pm-ws-pane-group.has-rail {
+  flex-basis: var(--pm-ws-rail-r-extra);
+}
+/* New split group: collapsed → expands (original group auto-narrows) */
+.pm-ws-pane-group.is-entering {
+  flex-grow: 0.001;
+  max-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden; /* only while collapsing width */
+}
+.pm-ws-pane-group.is-entering.is-prep {
+  transition: none !important;
+}
+.pm-ws-pane-group.is-entering .pm-ws-card--pane {
+  transform: translateX(20px);
+  opacity: 0;
+}
+.pm-ws-pane-group:not(.is-entering) .pm-ws-card--pane {
+  transform: translateX(0);
+  opacity: 1;
+  transition:
+    transform var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
+    opacity 280ms var(--pm-ws-pane-ease),
+    box-shadow 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    border-color 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Close: whole unit (pane + open distill) collapses; sibling group grows */
+.pm-ws-pane-group.is-exiting {
+  flex-grow: 0.001 !important;
+  flex-basis: 0% !important;
+  max-width: 0 !important;
+  min-width: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.pm-ws-pane-group.is-exiting .pm-ws-card--pane {
+  transform: translateX(12px);
+  opacity: 0;
+}
+/* Editor slot fills remaining group width beside rail */
+.pm-ws-pane-slot {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  /* visible so pane card float shadow is not cut by the slot */
+  overflow: visible;
+}
+.pm-ws-pane-slot > .pm-ws-card--pane {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+}
+.pm-ws-card--pane {
+  flex: 1 1 0;
+  width: 100%;
+  height: 100%;
+}
+/*
+ * Focus treatment — dual-pane only (.is-focused is never set when alone).
+ *  - Unfocused sibling: softer float, quieter title
+ *  - Focused: green ring + soft bloom + stronger lift
+ *  - Single pane: plain card (no ring, no dimming)
+ */
+.pm-ws-pane-group:not(.is-focused) .pm-ws-card--pane {
+  box-shadow: var(--pm-shadow-sm);
+  border-color: color-mix(in srgb, var(--pm-ink, #121410) 4.5%, transparent);
+}
+/* Dim non-focus only when a sibling exists (parent has at least one is-focused) */
+.pm-ws-panes:has(.pm-ws-pane-group.is-focused)
+  .pm-ws-pane-group:not(.is-focused)
+  .pm-ws-card--pane {
+  opacity: 0.94;
+}
+.pm-ws-panes:has(.pm-ws-pane-group.is-focused)
+  .pm-ws-pane-group:not(.is-focused)
+  .pm-ws-pane-title {
+  color: var(--pm-faint);
+}
+.pm-ws-pane-group.is-focused .pm-ws-card--pane {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 38%, transparent);
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--pm-green, #1a5e3d) 32%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, transparent),
+    var(--pm-shadow);
+  opacity: 1;
+}
+.pm-ws-pane-group.is-focused .pm-ws-card--rail-r {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 7%, transparent),
+    var(--pm-shadow-sm);
+}
+
+/* Large workspace dialog — silk open/close */
+.pm-ws-dialog[data-slot="dialog-content"] {
+  transform-origin: center center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-ws-dialog {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+/*
+ * Distill rail — width curtain *inside* the group (after the editor card).
+ * Opens/closes without leaving the group; group flex carries position.
+ */
+.pm-ws-rail-r-host {
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  margin-left: 0;
+  align-self: stretch;
+  min-height: 0;
+  /* Clip width curtain, but open state uses overflow visible for shadow */
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    width var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
+    max-width var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
+    flex-basis var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
+    margin-left var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
+    opacity 260ms var(--pm-ws-rail-r-ease);
+}
+.pm-ws-rail-r-host.is-open {
+  flex: 0 0 var(--pm-ws-rail-r-w);
+  width: var(--pm-ws-rail-r-w);
+  max-width: var(--pm-ws-rail-r-w);
+  margin-left: var(--pm-ws-rail-r-gap, 10px);
+  opacity: 1;
+  pointer-events: auto;
+  overflow: visible; /* distill card float shadow */
+}
+.pm-ws-card--rail-r {
+  width: var(--pm-ws-rail-r-w, 13rem);
+  min-width: var(--pm-ws-rail-r-w, 13rem);
+  max-width: var(--pm-ws-rail-r-w, 13rem);
+  flex: none;
+  height: 100%;
+  transform: translateX(10px);
+  opacity: 0.9;
+  transition:
+    transform var(--pm-ws-rail-r-ms, 360ms) var(--pm-ws-rail-r-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    opacity 260ms var(--pm-ws-rail-r-ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.pm-ws-rail-r-host.is-open .pm-ws-card--rail-r {
+  transform: translateX(0);
+  opacity: 1;
+}
+/* When group is exiting, kill rail's own opacity/transform fight — group owns fade */
+.pm-ws-pane-group.is-exiting .pm-ws-rail-r-host,
+.pm-ws-pane-group.is-exiting .pm-ws-card--rail-r {
+  transition-duration: 1ms !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+@keyframes pm-ws-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-ws-pane-group,
+  .pm-ws-rail-r-host,
+  .pm-ws-card--rail-r,
+  .pm-ws-pane-group .pm-ws-card--pane {
+    transition-duration: 1ms !important;
+  }
+}
+/* Inner rail fills the card; no extra bg/shadow (card owns surface) */
+.pm-ws-rail {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.pm-ws-rail-r {
+  width: 100%;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+/* Doc surface inside pane card — soft content enter on note switch */
+.pm-ws-doc-surface {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Soft note-switch: body fades/slides in when document identity changes */
+.pm-ws-doc-body.is-doc-swap,
+.pm-ws-doc-surface.is-doc-swap {
+  animation: pm-ws-doc-in 340ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+@keyframes pm-ws-doc-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.pm-ws-doc-body {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-ws-pane-slot,
+  .pm-ws-pane-slot.is-entering,
+  .pm-ws-pane-slot.is-exiting,
+  .pm-ws-doc-body.is-doc-swap,
+  .pm-ws-doc-surface.is-doc-swap,
+  .pm-ws-card--rail,
+  .pm-ws-card--rail-r {
+    animation: none !important;
+    transition-duration: 1ms !important;
+  }
+}
+.pm-ws-main-stage {
+  background: transparent;
+  min-height: 0;
+}
+/* Segmented Notes | Meetings — sliding soft pill */
+.pm-ws-seg {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 10px 8px;
+  flex-shrink: 0;
+  border-bottom: none;
+  min-height: 44px;
+}
+.pm-ws-seg-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-ink) 4.5%, transparent);
+}
+.pm-ws-seg-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--pm-ink) 6%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--pm-ink) 4%, transparent);
+  transition:
+    transform 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    width 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  pointer-events: none;
+  z-index: 0;
+}
+.pm-ws-seg-btn {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 0;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+  background: transparent;
+  cursor: pointer;
+  transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-seg-btn:hover {
+  color: var(--pm-muted);
+}
+.pm-ws-seg-btn.is-on {
+  color: var(--pm-green);
+  background: transparent; /* pill is the sliding indicator */
+}
+/* + lives inside Notes segment — only rendered when Notes tab is on */
+.pm-ws-seg-btn--notes {
+  padding-inline: 8px 6px;
+  gap: 8px; /* more space between NOTES label and + */
+}
+.pm-ws-seg-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  border-radius: 999px;
+  color: inherit;
+  flex-shrink: 0;
+  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-seg-add:hover {
+  background: var(--pm-green-wash);
+  color: var(--pm-green);
+}
+/* List host — dual panels, soft crossfade */
+.pm-ws-list-host {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.pm-ws-list-panel {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity 240ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 240ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-list-panel.is-active {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  z-index: 1;
+}
+/* List rows — soft wash only, no dashed rules */
+.pm-ws-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font: var(--pm-t-title) !important;
+  font-weight: 400 !important;
+  color: var(--pm-text);
+  background: transparent;
+  border: none;
+  border-bottom: none;
+  border-radius: var(--pm-r-sm);
+  cursor: pointer;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-item:hover {
+  background: var(--pm-green-wash);
+  color: var(--pm-green);
+}
+.pm-ws-item.is-active {
+  background: var(--pm-green-wash);
+  color: var(--pm-green);
+}
+.pm-ws-item.is-focus {
+  background: var(--pm-green-soft);
+  color: var(--pm-green);
+  font-weight: 400 !important;
+}
+.pm-ws-item-icon {
+  flex-shrink: 0;
+  color: var(--pm-faint);
+}
+.pm-ws-item.is-active .pm-ws-item-icon,
+.pm-ws-item.is-focus .pm-ws-item-icon {
+  color: var(--pm-green);
+}
+.pm-ws-item-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--pm-green);
+  flex-shrink: 0;
+}
+.pm-ws-empty {
+  font: var(--pm-t-meta) !important;
+  color: var(--pm-faint);
+  text-align: center;
+  padding: 16px 12px;
+}
+/*
+ * Pane header — quiet chrome. Focus is carried by the card ring/lift,
+ * not a green wash band (reads cheaper on dual-pane).
+ */
+.pm-ws-pane-h {
+  flex-shrink: 0;
+  border-bottom: none;
+  background: transparent;
+  font-family: var(--pm-ff);
+  position: relative;
+  transition: background 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Hairline under title row — soft structure, not a hard grid rule */
+.pm-ws-pane-h::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--pm-ink) 5%, transparent);
+  pointer-events: none;
+  transition: background 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-pane-h.is-focus::after {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pm-green) 48%, transparent),
+    color-mix(in srgb, var(--pm-green) 18%, transparent) 36%,
+    color-mix(in srgb, var(--pm-ink) 5%, transparent) 72%,
+    color-mix(in srgb, var(--pm-ink) 4%, transparent)
+  );
+}
+.pm-ws-pane-h.is-focus {
+  /* Very light green wash — quieter than the old full band, still readable */
+  background: color-mix(in srgb, var(--pm-green) 4.5%, transparent);
+}
+/* Open document name — Source Serif, light (reading title, not chrome) */
+.pm-ws-pane-title {
+  font: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-weight: 300 !important;
+  letter-spacing: -0.01em;
+  color: var(--pm-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-pane-h.is-focus .pm-ws-pane-title {
+  color: var(--pm-ink);
+}
+/* Toolbar action (Delete / Export / Ingest …) */
+.pm-ws-action {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  height: 28px !important;
+  padding: 0 8px !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  color: var(--pm-muted) !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: var(--pm-r-sm) !important;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-action:hover:not(:disabled) {
+  background: rgba(18, 20, 16, 0.05) !important;
+  color: var(--pm-green) !important;
+}
+.pm-ws-action.is-on {
+  background: var(--pm-green-wash) !important;
+  color: var(--pm-green) !important;
+}
+.pm-ws-action.is-danger:hover:not(:disabled) {
+  color: var(--pm-danger) !important;
+  background: color-mix(in srgb, var(--pm-danger) 8%, transparent) !important;
+}
+.pm-ws-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pm-ws-icon-btn.is-on {
+  background: var(--pm-green-wash) !important;
+  color: var(--pm-green) !important;
+}
+.pm-ws-status {
+  display: inline-flex;
+  align-items: center;
+  font: var(--pm-t-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+  border-radius: var(--pm-r-sm);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.pm-ws-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font: var(--pm-t-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+  border-bottom: none;
+  background: color-mix(in srgb, var(--pm-ink) 2%, transparent);
+}
+.pm-ws-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  border-radius: var(--pm-r-sm);
+  border: 2px dashed color-mix(in srgb, var(--pm-green) 40%, transparent);
+  background: var(--pm-green-wash);
+  color: var(--pm-green);
+  font: var(--pm-t-title);
+}
+.pm-ws-split {
+  border-right: none;
+  box-shadow: inset -12px 0 16px -16px color-mix(in srgb, var(--pm-ink) 8%, transparent);
+}
+.pm-ws-editor {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* match float beige — not a white paper island */
+  background: transparent;
+}
+/* Long reading — Source Serif prose (overrides Dialog text-sm + editor defaults) */
+.pm-ws-editor .ProseMirror,
+.pm-ws-editor [data-slot="editor"],
+.pm-ws-nested .ProseMirror,
+.pm-ws-nested .tiptap,
+.pm-ws-nested .prose {
+  font: var(--pm-t-prose) !important;
+  font-weight: 300 !important;
+  color: var(--pm-text) !important;
+  max-width: none;
+}
+.pm-ws-editor .ProseMirror p,
+.pm-ws-nested .ProseMirror p,
+.pm-ws-editor .ProseMirror li,
+.pm-ws-nested .ProseMirror li {
+  font: inherit !important;
+  font-weight: inherit !important;
+}
+.pm-ws-editor .ProseMirror h1,
+.pm-ws-editor .ProseMirror h2,
+.pm-ws-editor .ProseMirror h3,
+.pm-ws-nested .ProseMirror h1,
+.pm-ws-nested .ProseMirror h2,
+.pm-ws-nested .ProseMirror h3 {
+  font-family: var(--pm-ff-prose) !important;
+  font-weight: 400 !important;
+  color: var(--pm-ink);
+  letter-spacing: -0.01em;
+}
+.pm-ws-editor .ProseMirror code,
+.pm-ws-nested .ProseMirror code {
+  font-family: var(--font-mono, ui-monospace, monospace) !important;
+  font-size: 0.92em;
+}
+
+/* File detail workspace — body uses shared .pm-ws-body; main/side layout only */
+.pm-ws-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 68%;
+  min-width: 0;
+  min-height: 0;
+}
+.pm-ws-side {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 32%;
+  min-width: 260px;
+  max-width: 420px;
+  min-height: 0;
+  gap: 12px;
+}
+.pm-ws-nested {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 7%, transparent);
+  box-shadow: none;
+}
+/* RawFileViewer inside nested shell — no double border / grey pad */
+.pm-ws-nested > .sinkduce-file-viewer {
+  border: none !important;
+  border-radius: inherit !important;
+  background: #ffffff !important;
+}
+.pm-ws-section-label {
+  margin: 0 0 8px;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+}
+/* Primary section title (e.g. Metadata) — brand green */
+.pm-ws-section-label.is-accent {
+  color: var(--pm-green) !important;
+}
+/* Message log body — markdown prose (Geist chrome + Serif reading) */
+.pm-ws-msg-md {
+  font: var(--pm-t-prose) !important;
+  font-weight: 300 !important;
+  color: var(--pm-text) !important;
+  max-width: none !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.pm-ws-msg-md p,
+.pm-ws-msg-md li {
+  font: inherit !important;
+  color: inherit !important;
+}
+.pm-ws-msg-md h1,
+.pm-ws-msg-md h2,
+.pm-ws-msg-md h3 {
+  font-family: var(--pm-ff-prose) !important;
+  font-weight: 400 !important;
+  color: var(--pm-ink) !important;
+  letter-spacing: -0.01em;
+}
+.pm-ws-msg-md code,
+.pm-ws-msg-md pre {
+  font-family: var(--font-mono, ui-monospace, monospace) !important;
+  font-size: 0.9em;
+}
+.pm-ws-msg-md a {
+  color: var(--pm-green);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pm-ws-msg-md strong {
+  font-weight: 600;
+  color: var(--pm-ink);
+}
+.pm-ws-meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font: var(--pm-t-meta) !important;
+  color: var(--pm-text);
+}
+.pm-ws-meta-grid dt {
+  color: var(--pm-faint);
+}
+.pm-ws-meta-grid dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/*
+ * Interactive list tiles (file-detail chunks / log items) — NOT deck surfaces.
+ * Deck float cards stay on .pm-ws-card (Messages language).
+ */
+.pm-ws-tile {
+  border-radius: var(--pm-r-sm);
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  background: #ffffff;
+  padding: 12px;
+  transition:
+    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-tile:hover {
+  background: var(--pm-green-wash);
+}
+.pm-ws-tile.is-on {
+  border-color: color-mix(in srgb, var(--pm-green) 40%, transparent);
+  background: var(--pm-green-wash);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green) 18%, transparent);
+}
+.pm-ws-tab {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: var(--pm-faint) !important;
+}
+.pm-ws-tab[data-state="active"],
+.pm-ws-tab[data-active],
+.pm-ws-tab[aria-selected="true"] {
+  color: var(--pm-green) !important;
+}
+.pm-ws-tab:disabled {
+  opacity: 0.4;
+}
+.pm-ws-link {
+  font: var(--pm-t-label);
+  letter-spacing: 0.04em;
+  color: var(--pm-green);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: opacity 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-link:hover {
+  opacity: 0.8;
+}
+/* Chunks / summary bullets — reading face (Serif prose), not UI body */
+.pm-ws-prose-item {
+  font: var(--pm-t-prose) !important;
+  font-weight: 300 !important;
+  color: var(--pm-text);
+  white-space: pre-wrap;
+  max-width: none;
+}
+.pm-ws-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  font: var(--pm-t-meta) !important;
+  color: var(--pm-faint);
+}
+.pm-ws-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: var(--pm-t-meta) !important;
+  font-weight: 300 !important;
+  color: var(--pm-muted);
+  background: rgba(18, 20, 16, 0.05);
+  border: none;
+  border-radius: 999px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}
+.pm-ws-badge.is-live {
+  color: var(--pm-green);
+  background: var(--pm-green-soft);
+}
+/* File / page name in dialog header — Source Serif light */
+.pm-ws-title {
+  font: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-weight: 300 !important;
+  color: var(--pm-ink);
+  letter-spacing: -0.015em;
+}
+.pm-ws-menu {
+  min-width: 220px;
+  padding: 4px 0;
+  border: none;
+  border-radius: var(--pm-r-sm);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow);
+}
+.pm-ws-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-menu-item:hover {
+  background: var(--pm-green-wash);
+}
+.pm-ws-menu-item.is-danger:hover {
+  background: color-mix(in srgb, var(--pm-danger) 8%, transparent);
+}
+.pm-ws-menu-item-title {
+  display: block;
+  font: var(--pm-t-title) !important;
+  font-weight: 400 !important;
+  color: var(--pm-ink);
+}
+.pm-ws-menu-item.is-danger .pm-ws-menu-item-title {
+  color: var(--pm-danger);
+}
+.pm-ws-menu-item-desc {
+  display: block;
+  margin-top: 2px;
+  font: var(--pm-t-meta) !important;
+  color: var(--pm-faint);
+  line-height: 1.35;
+}
+.pm-ws-path-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--pm-r-sm);
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 7%, transparent);
+  background: #ffffff;
+  font: var(--pm-t-meta) !important;
+  color: var(--pm-text);
+}
+.pm-ws-path-row button {
+  font: inherit;
+  color: inherit;
+}
+.pm-ws-path-row button:hover {
+  color: var(--pm-green);
+}
+.pm-ws-scope {
+  display: inline-flex;
+  border-radius: var(--pm-r-sm);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  background: #ffffff;
+}
+.pm-ws-scope-btn {
+  padding: 4px 10px;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em;
+  color: var(--pm-faint);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+/* Workspace utility: ensure .pm-label / .pm-meta stay Geist when nested */
+.pm-workspace .pm-label {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+}
+.pm-workspace .pm-meta {
+  font: var(--pm-t-meta) !important;
+  font-weight: 300 !important;
+}
+.pm-workspace .pm-title {
+  font: var(--pm-t-title) !important;
+  font-weight: 400 !important;
+}
+/* Rename input in note pane — same serif doc title while editing */
+.pm-ws-pane-h input.pm-ws-pane-title {
+  font: 300 15px/1.3 var(--pm-ff-prose) !important;
+  font-weight: 300 !important;
+  color: var(--pm-ink);
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.pm-ws-scope-btn + .pm-ws-scope-btn {
+  border-left: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+}
+.pm-ws-scope-btn.is-on {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+.pm-ws-scope-btn:hover:not(.is-on) {
+  background: color-mix(in srgb, var(--pm-ink) 3%, transparent);
 }
 
 /* ═══════════════════════════════════════════════════════════════════

@@ -25,6 +25,8 @@ interface MarkdownEditorProps {
   onDistillNavigate?: (noteId: string) => void
   /** Called when the Tiptap editor instance is ready. */
   onEditorReady?: (editor: any) => void
+  /** Called when the editor gains focus (after click selection is applied). */
+  onEditorFocus?: () => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
   /** Top offset for sticky toolbar (px). Default 0. */
@@ -48,6 +50,7 @@ function TyporaEditor({
   onDistill,
   onDistillNavigate,
   onEditorReady,
+  onEditorFocus,
   showToolbar,
   stickyToolbarOffset,
   toolbarActions,
@@ -65,6 +68,7 @@ function TyporaEditor({
       onDistill={onDistill}
       onDistillNavigate={onDistillNavigate}
       onEditorReady={onEditorReady}
+      onEditorFocus={onEditorFocus}
       showToolbar={showToolbar}
       stickyToolbarOffset={stickyToolbarOffset}
       toolbarActions={toolbarActions}

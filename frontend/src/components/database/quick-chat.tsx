@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react"
 import { createPortal } from "react-dom"
 import { Send, Loader2, AlertTriangle, Globe, MessageCircle } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { createSession, getSession, deleteSession } from "@/api/client"
@@ -234,22 +235,33 @@ export function QuickChat({
       setRailHost(null)
       return
     }
+    /**
+     * Prefer active panel rail. Skip zero-width hosts (Files Messages collapsed
+     * — curtain clip track is 0px + pointer-events:none). FolderView expands
+     * the rail when QC opens; re-poll through the expand animation.
+     */
     const find = () => {
-      const active =
-        (document.querySelector(
+      const candidates = [
+        document.querySelector(
           `.pm-panel-fade.is-active ${RAIL_ANCHOR_SEL}`
-        ) as HTMLElement | null) ||
-        (document.querySelector(RAIL_ANCHOR_SEL) as HTMLElement | null)
-      setRailHost(active)
+        ) as HTMLElement | null,
+        document.querySelector(RAIL_ANCHOR_SEL) as HTMLElement | null,
+      ]
+      const usable = candidates.find((el) => {
+        if (!el) return false
+        const w = el.getBoundingClientRect().width
+        return w >= 48
+      })
+      setRailHost(usable ?? null)
     }
     find()
-    const t = window.setTimeout(find, 0)
-    const t2 = window.setTimeout(find, 50)
-    const t3 = window.setTimeout(find, 200)
+    // Cover Files rail expand (~420ms) so float attaches after track has width
+    const delays = open
+      ? [0, 50, 120, 220, 360, 480, 600]
+      : [0, 50, 200]
+    const timers = delays.map((ms) => window.setTimeout(find, ms))
     return () => {
-      window.clearTimeout(t)
-      window.clearTimeout(t2)
-      window.clearTimeout(t3)
+      timers.forEach((t) => window.clearTimeout(t))
     }
   }, [railActive, railKey, collectionId, open])
 
@@ -729,14 +741,15 @@ export function QuickChat({
               {msgCount}/{MAX_MESSAGES}
             </span>
           )}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={clearContext}
-            className="pm-btn-ghost pm-btn-xs"
             title="Clear conversation"
           >
             Clear
-          </button>
+          </Button>
         </div>
       </header>
 

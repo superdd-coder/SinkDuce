@@ -225,20 +225,22 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
             <div className="flex items-center gap-1.5 mb-2.5 justify-between">
               <div className="pm-label">Notes · {notes.length}</div>
               <div className="flex items-center gap-1.5 ml-auto">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={openImport}
-                  className="pm-btn-ghost pm-btn-xs"
                 >
                   Import
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => void handleCreate()}
-                  className="pm-btn-pri pm-btn-xs"
                 >
                   New
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -328,24 +330,22 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
             <DialogHeader className="!gap-1">
               <DialogTitle>Delete Note</DialogTitle>
             </DialogHeader>
-            <p className="text-[13px] leading-relaxed text-[var(--pm-muted)]">
+            <p className="pm-dialog-body">
               Are you sure you want to delete{" "}
               <span className="font-medium text-[var(--pm-ink)]">
                 &ldquo;{deleteTarget?.title}&rdquo;
               </span>
               ? This cannot be undone.
             </p>
-            <DialogFooter className="!border-t-0 !bg-transparent !-mx-0 !-mb-0 !p-0 !rounded-none gap-2">
+            <DialogFooter className="gap-2">
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={() => setDeleteTarget(null)}
               >
                 Cancel
               </Button>
               <Button
-                variant="destructive"
-                size="sm"
+                variant="destructive-solid"
                 onClick={handleDeleteConfirm}
               >
                 Delete

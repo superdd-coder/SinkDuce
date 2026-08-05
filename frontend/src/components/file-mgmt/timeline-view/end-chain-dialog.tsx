@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import { Button } from "@/components/ui/button"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { FieldLabel } from "@/components/ui/field-label"
+import { Input } from "@/components/ui/input"
 import {
   Dialog,
   DialogContent,
@@ -332,21 +335,23 @@ export function EndChainDialog({
             </div>
 
             <div>
-              <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                Group <span className="text-destructive">*</span>
-              </label>
-              <select
-                className="w-full text-xs border rounded px-2 py-1.5 bg-background"
+              <FieldLabel>
+                Group <span className="text-[var(--pm-danger)]">*</span>
+              </FieldLabel>
+              <DropdownSelect
+                size="sm"
                 value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-              >
-                {groups.length === 0 && <option value="">No groups</option>}
-                {groups.map((g) => (
-                  <option key={g.group_id} value={g.group_id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setGroupId}
+                placeholder="No groups"
+                options={
+                  groups.length === 0
+                    ? [{ value: "", label: "No groups" }]
+                    : groups.map((g) => ({
+                        value: g.group_id,
+                        label: g.name,
+                      }))
+                }
+              />
             </div>
 
             <div>

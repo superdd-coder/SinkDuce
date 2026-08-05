@@ -1146,7 +1146,6 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
             </Button>
             <Button
               size="sm"
-              className="pm-btn-pri"
               onClick={() => void handleCreateFolder()}
               disabled={
                 !newFolderName.trim() ||
@@ -1260,7 +1259,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               className={
                 confirmAction === "delete" || confirmAction === "deleteFolder"
                   ? undefined
-                  : "pm-btn-pri"
+                  : ""
               }
               onClick={async () => {
                 if (confirmAction === "delete")

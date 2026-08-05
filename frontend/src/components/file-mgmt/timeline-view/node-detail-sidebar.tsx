@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { FieldLabel } from "@/components/ui/field-label"
 import {
   X,
   Calendar,
@@ -426,28 +428,25 @@ export function NodeDetailSidebar({
                 </div>
 
                 {/* Group */}
-                <div className="shrink-0 max-w-[120px]">
-                  <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                    Group
-                  </label>
+                <div className="shrink-0 max-w-[140px]">
+                  <FieldLabel className="!mb-1">Group</FieldLabel>
                   {editingGroupId ? (
                     <div className="flex items-center gap-1">
-                      <select
-                        className="w-full max-w-[110px] text-xs border rounded px-1.5 py-1 bg-background"
+                      <DropdownSelect
+                        size="sm"
+                        className="min-w-0 max-w-[110px] flex-1"
                         value={newGroupId ?? detail.group_id ?? ""}
-                        onChange={(e) =>
-                          setNewGroupId(e.target.value || null)
-                        }
-                      >
-                        <option value="">No Group</option>
-                        {groups.map((g) => (
-                          <option key={g.group_id} value={g.group_id}>
-                            {g.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button onClick={handleSaveGroup}>
-                        <Check className="h-3.5 w-3.5 text-emerald-500" />
+                        onChange={(v) => setNewGroupId(v || null)}
+                        options={[
+                          { value: "", label: "No Group" },
+                          ...groups.map((g) => ({
+                            value: g.group_id,
+                            label: g.name,
+                          })),
+                        ]}
+                      />
+                      <button type="button" onClick={handleSaveGroup}>
+                        <Check className="h-3.5 w-3.5 text-[var(--pm-green)]" />
                       </button>
                     </div>
                   ) : (

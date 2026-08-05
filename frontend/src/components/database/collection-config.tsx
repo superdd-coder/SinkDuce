@@ -2,6 +2,8 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { FieldLabel } from "@/components/ui/field-label"
 import { Lock, RefreshCw } from "lucide-react"
 import { getCollectionConfig, updateCollectionConfig, triggerSparseRecalc, getConfig, getEmbeddingProviders, type EmbeddingProvider } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
@@ -170,7 +172,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
     <div className="space-y-6">
       {/* ── Dimensions & Mode ── */}
       <div className="space-y-3">
-        <h3 className="text-base font-semibold">Dimensions & Mode</h3>
+        <h3 className="pm-title">Dimensions & Mode</h3>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <TooltipLabel label="Dimensions" tooltip="Vector dimensions for embeddings. Locked at creation time." />
@@ -193,7 +195,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
       {/* ── Chunking ── */}
       <div className="space-y-3">
-        <h3 className="text-base font-semibold">Chunking</h3>
+        <h3 className="pm-title">Chunking</h3>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <TooltipLabel label="Buffer Ratio" tooltip="Controls how aggressively paragraphs are merged. 0.5 = merge until 50% of max_tokens." />
@@ -202,15 +204,16 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           {chunkMode === "parent_child" && (
             <div className="space-y-1.5">
               <TooltipLabel label="Parent Strategy" tooltip="How parent chunks are created." />
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              <DropdownSelect
+                size="sm"
                 value={parentStrategy}
-                onChange={(e) => setParentStrategy(e.target.value)}
-              >
-                <option value="paragraph">Paragraph</option>
-                <option value="fixed_token">Fixed Token</option>
-                <option value="heading">Heading</option>
-              </select>
+                onChange={setParentStrategy}
+                options={[
+                  { value: "paragraph", label: "Paragraph" },
+                  { value: "fixed_token", label: "Fixed Token" },
+                  { value: "heading", label: "Heading" },
+                ]}
+              />
             </div>
           )}
         </div>
@@ -255,19 +258,25 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
       {/* ── Embedding Model ── */}
       <div className="space-y-3">
-        <h3 className="text-base font-semibold">Embedding Model</h3>
+        <h3 className="pm-title">Embedding Model</h3>
         <div className="space-y-1.5">
           <TooltipLabel label="Provider" tooltip="Select embedding provider for this collection." />
-          <select
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          <DropdownSelect
+            size="sm"
             value={embeddingProviderId}
-            onChange={(e) => setEmbeddingProviderId(e.target.value)}
-          >
-            <option value="">Global default{globalEmbModel ? ` (${globalEmbModel})` : ""}</option>
-            {embeddingProviders.map((p) => (
-              <option key={p.id} value={p.id}>{p.name || p.model}</option>
-            ))}
-          </select>
+            onChange={setEmbeddingProviderId}
+            placeholder={`Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`}
+            options={[
+              {
+                value: "",
+                label: `Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`,
+              },
+              ...embeddingProviders.map((p) => ({
+                value: p.id,
+                label: p.name || p.model || p.id,
+              })),
+            ]}
+          />
         </div>
         {embeddingModel && (
           <div className="space-y-1.5">
@@ -281,8 +290,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
       {/* ── Allowed File Types ── */}
       <div className="space-y-3">
-        <h3 className="text-base font-semibold">Allowed File Types</h3>
-        <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">Restrict which file types can be uploaded. Leave empty to allow all.</p>
+        <h3 className="pm-title">Allowed File Types</h3>
+        <p className="pm-meta leading-relaxed">Restrict which file types can be uploaded. Leave empty to allow all.</p>
         <div className="flex flex-wrap gap-2">
           {FILE_TYPES.map((ft) => (
             <label
@@ -311,8 +320,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
       {/* ── Contextual Enrichment ── */}
       <div className="space-y-3">
-        <h3 className="text-base font-semibold">Contextual Enrichment</h3>
-        <label className="flex items-center gap-2 text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground cursor-pointer">
+        <h3 className="pm-title">Contextual Enrichment</h3>
+        <label className="flex items-center gap-2 pm-label cursor-pointer">
           <input type="checkbox" checked={contextualEnabled} onChange={(e) => setContextualEnabled(e.target.checked)} className="rounded" />
           Enable Contextual Enrichment
         </label>
@@ -322,7 +331,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
               <TooltipLabel label="Context Window" tooltip="Surrounding chunks on each side used for context." />
               <Input value={contextualWindow} onChange={(e) => setContextualWindow(e.target.value)} placeholder="1" />
             </div>
-            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+            <p className="pm-meta leading-relaxed">
               Contextual enrichment uses an LLM to generate background information for each chunk, improving retrieval quality.
             </p>
           </>
@@ -333,42 +342,49 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
       {/* ── Enriching LLM ── */}
       <div className="space-y-3">
-        <h3 className="text-base font-semibold">Enriching LLM</h3>
-        <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+        <h3 className="pm-title">Enriching LLM</h3>
+        <p className="pm-meta leading-relaxed">
           LLM used for contextual enrichment during document ingestion. Leave empty to use the global default.
         </p>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Provider</label>
-            <select
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            <FieldLabel>Provider</FieldLabel>
+            <DropdownSelect
+              size="sm"
               value={enrichingLlmProvider}
-              onChange={(e) => {
-                setEnrichingLlmProvider(e.target.value)
-                const prov = readyProviders.find((p) => p.id === e.target.value)
-                const defaultM = prov?.default_model || prov?.selected_models?.[0] || prov?.model || ""
+              onChange={(id) => {
+                setEnrichingLlmProvider(id)
+                const prov = readyProviders.find((p) => p.id === id)
+                const defaultM =
+                  prov?.default_model ||
+                  prov?.selected_models?.[0] ||
+                  prov?.model ||
+                  ""
                 setEnrichingLlmModel(defaultM)
               }}
-            >
-              <option value="">Global default</option>
-              {readyProviders.map((p) => (
-                <option key={p.id} value={p.id}>{p.name || p.model}</option>
-              ))}
-            </select>
+              placeholder="Global default"
+              options={[
+                { value: "", label: "Global default" },
+                ...readyProviders.map((p) => ({
+                  value: p.id,
+                  label: p.name || p.model || p.id,
+                })),
+              ]}
+            />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Model</label>
-            <select
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            <FieldLabel>Model</FieldLabel>
+            <DropdownSelect
+              size="sm"
               value={enrichingLlmModel}
-              onChange={(e) => setEnrichingLlmModel(e.target.value)}
+              onChange={setEnrichingLlmModel}
               disabled={!enrichingLlmProvider}
-            >
-              <option value="">Select model</option>
-              {enrichingModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+              placeholder="Select model"
+              options={[
+                { value: "", label: "Select model" },
+                ...enrichingModels.map((m) => ({ value: m, label: m })),
+              ]}
+            />
           </div>
         </div>
       </div>
@@ -379,16 +395,16 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
       {mineruGloballyEnabled && (
         <>
           <div className="space-y-3">
-            <h3 className="text-base font-semibold">Cloud Parsing (MinerU)</h3>
-            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+            <h3 className="pm-title">Cloud Parsing (MinerU)</h3>
+            <p className="pm-meta leading-relaxed">
               Use MinerU cloud API for document parsing. Produces higher quality Markdown output with better table, formula, and layout preservation.
             </p>
-            <label className="flex items-center gap-2 text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground cursor-pointer">
+            <label className="flex items-center gap-2 pm-label cursor-pointer">
               <input type="checkbox" checked={cloudParsing} onChange={(e) => setCloudParsing(e.target.checked)} className="rounded" />
               Enable Cloud Parsing for this Collection
             </label>
             {cloudParsing && (
-              <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+              <p className="pm-meta leading-relaxed">
                 When enabled, uploaded documents will be parsed by MinerU's cloud API and chunked using a Markdown-aware strategy.
               </p>
             )}
@@ -399,8 +415,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
 
       {/* ── Sparse Vocabulary ── */}
       <div className="space-y-3">
-        <h3 className="text-base font-semibold">Sparse Vocabulary (BM25)</h3>
-        <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
+        <h3 className="pm-title">Sparse Vocabulary (BM25)</h3>
+        <p className="pm-meta leading-relaxed">
           BM25 statistics drift as documents are added or removed. The vocabulary is rebuilt automatically when changes reach the threshold.
         </p>
         <div className="grid grid-cols-2 gap-4">
@@ -443,7 +459,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
             <RefreshCw className={`h-4 w-4 mr-1.5 ${recalcRunning ? "animate-spin" : ""}`} />
             {recalcRunning ? "Running..." : "Recalculate Now"}
           </Button>
-          <span className="text-[12px] text-muted-foreground">
+          <span className="pm-meta">
             {sparseRecalcCounter >= parseInt(sparseRecalcThreshold || "5000")
               ? "Threshold reached — auto-rebuild pending."
               : `${sparseRecalcCounter} / ${sparseRecalcThreshold || "5000"} changes`}

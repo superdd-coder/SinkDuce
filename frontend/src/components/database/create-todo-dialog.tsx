@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { cn } from "@/lib/utils"
 import { createTodo, listChains } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
@@ -138,7 +139,7 @@ export function CreateTodoDialog({
         </DialogHeader>
         <div className="space-y-3 py-1">
           <div>
-            <label className="pm-label">TODO</label>
+            <label className="pm-field-label">Todo</label>
             <input
               autoFocus
               value={title}
@@ -148,52 +149,51 @@ export function CreateTodoDialog({
                 if (e.key === "Enter") e.preventDefault()
               }}
               placeholder="What needs to be done?"
-              className="mt-1 w-full text-sm px-3 py-2 rounded-md border border-border bg-background"
+              className="pm-field"
             />
           </div>
           <div>
-            <label className="pm-label">Description (optional)</label>
+            <label className="pm-field-label">Description (optional)</label>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
               rows={4}
               placeholder="Details, context, acceptance criteria…"
-              className="mt-1 w-full text-sm px-3 py-2 rounded-md border border-border bg-background resize-y min-h-[88px]"
+              className="pm-field"
             />
           </div>
           <div>
-            <label className="pm-label">Chain</label>
-            <div className="mt-1 relative">
-              <select
+            <label className="pm-field-label">Chain</label>
+            <div className="relative">
+              <DropdownSelect
+                size="sm"
                 value={selectedChainId}
-                onChange={(e) => setSelectedChainId(e.target.value)}
+                onChange={setSelectedChainId}
                 disabled={loadingChains || sortedChains.length === 0}
-                className="w-full text-sm px-3 py-2 rounded-md border border-border bg-background text-foreground disabled:opacity-60"
-              >
-                {loadingChains && (
-                  <option value="">Loading chains…</option>
-                )}
-                {!loadingChains && sortedChains.length === 0 && (
-                  <option value="">No chains</option>
-                )}
-                {sortedChains.map((c) => (
-                  <option key={c.chain_id} value={c.chain_id}>
-                    {chainOptionLabel(c)}
-                  </option>
-                ))}
-              </select>
+                placeholder={
+                  loadingChains
+                    ? "Loading chains…"
+                    : sortedChains.length === 0
+                      ? "No chains"
+                      : "Select chain"
+                }
+                options={sortedChains.map((c) => ({
+                  value: c.chain_id,
+                  label: chainOptionLabel(c),
+                }))}
+              />
               {loadingChains && (
-                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground pointer-events-none" />
+                <Loader2 className="absolute right-8 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-[var(--pm-faint)] pointer-events-none" />
               )}
             </div>
           </div>
           <div>
-            <label className="pm-label">Deadline (optional)</label>
-            <div className="mt-1 relative flex items-center gap-1">
+            <label className="pm-field-label">Deadline (optional)</label>
+            <div className="relative flex items-center gap-1">
               {/* Empty: hide browser yyyy/mm/dd ghost text; click opens calendar */}
               {!ddl && (
                 <span
-                  className="pointer-events-none absolute left-3 text-sm text-muted-foreground/50"
+                  className="pointer-events-none absolute left-3 pm-meta"
                   aria-hidden
                 >
                   No deadline
@@ -207,8 +207,8 @@ export function CreateTodoDialog({
                 onClick={openDdlPicker}
                 onFocus={openDdlPicker}
                 className={cn(
-                  "w-full text-sm px-3 py-2 rounded-md border border-border bg-background cursor-pointer",
-                  ddl ? "text-foreground" : "text-transparent",
+                  "pm-field cursor-pointer",
+                  ddl ? "text-[var(--pm-text)]" : "text-transparent",
                   !ddl &&
                     "[&::-webkit-datetime-edit]:text-transparent [&::-webkit-datetime-edit-fields-wrapper]:opacity-0 [&::-webkit-datetime-edit-text]:opacity-0"
                 )}
@@ -216,7 +216,7 @@ export function CreateTodoDialog({
               {ddl && (
                 <button
                   type="button"
-                  className="shrink-0 p-1 text-muted-foreground hover:text-foreground"
+                  className="shrink-0 p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] transition-colors"
                   title="Clear deadline"
                   onClick={(e) => {
                     e.preventDefault()
@@ -230,11 +230,10 @@ export function CreateTodoDialog({
             </div>
           </div>
         </div>
-        <DialogFooter className="!border-t-0 !bg-transparent">
+        <DialogFooter className="gap-2 sm:gap-2">
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             onClick={() => onOpenChange(false)}
             disabled={submitting}
           >
@@ -242,7 +241,6 @@ export function CreateTodoDialog({
           </Button>
           <Button
             type="button"
-            size="sm"
             onClick={() => void handleSubmit()}
             disabled={
               submitting || !title.trim() || !selectedChainId || loadingChains

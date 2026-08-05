@@ -148,15 +148,12 @@ export function NameConflictDialog() {
         <DialogFooter className="gap-2 pt-1 flex-wrap">
           <Button
             variant="ghost"
-            size="sm"
             onClick={() => cancelNameConflict()}
             disabled={submitting}
           >
             Cancel
           </Button>
           <Button
-            size="sm"
-            className="pm-btn-pri"
             onClick={() => void handleConfirm()}
             disabled={!value.trim() || submitting}
           >

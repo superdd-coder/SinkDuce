@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { createCollection } from "@/api/client"
 import { toast } from "sonner"
 import { ChevronDown } from "lucide-react"
@@ -76,42 +77,48 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
           <DialogTitle>Create Collection</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          {/* Name — always visible */}
-          <div className="space-y-1.5">
-            <label className="pm-label">Name</label>
+        <div className="space-y-4 py-1">
+          <div>
+            <label className="pm-field-label">Name</label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="my-collection"
+              className="h-8"
             />
           </div>
 
-          {/* Advance toggle */}
           <button
             type="button"
-            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="pm-meta flex items-center gap-2 hover:text-[var(--pm-ink)] transition-colors"
             onClick={() => setAdvancedOpen(!advancedOpen)}
           >
-            <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${advancedOpen ? "rotate-0" : "-rotate-90"}`} />
-            ADVANCED
+            <ChevronDown
+              className={`h-3 w-3 transition-transform duration-200 ${
+                advancedOpen ? "rotate-0" : "-rotate-90"
+              }`}
+            />
+            Advanced
           </button>
 
-          {/* Collapsible advanced section */}
-          <div className={`grid transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-            advancedOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-          }`}>
+          <div
+            className={`grid transition-all duration-300 ease-[cubic-bezier(0.45,0.05,0.55,0.95)] ${
+              advancedOpen
+                ? "grid-rows-[1fr] opacity-100"
+                : "grid-rows-[0fr] opacity-0"
+            }`}
+          >
             <div className="overflow-hidden">
               <div className="space-y-4 pt-1">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Allowed File Types</label>
-                  <p className="text-xs text-muted-foreground">Leave empty to allow all types.</p>
+                <div>
+                  <label className="pm-field-label">Allowed File Types</label>
+                  <p className="pm-meta mb-2">Leave empty to allow all types.</p>
                   <div className="flex flex-wrap gap-2">
                     {FILE_TYPES.map((ft) => (
                       <label
                         key={ft.ext}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs cursor-pointer transition-colors ${
-                          allowedTypes.includes(ft.ext) ? "bg-primary text-primary-foreground border-primary" : "bg-background border-input hover:bg-accent"
+                        className={`pm-field-chip ${
+                          allowedTypes.includes(ft.ext) ? "is-on" : ""
                         }`}
                       >
                         <input
@@ -120,7 +127,9 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                           checked={allowedTypes.includes(ft.ext)}
                           onChange={() =>
                             setAllowedTypes((prev) =>
-                              prev.includes(ft.ext) ? prev.filter((t) => t !== ft.ext) : [...prev, ft.ext]
+                              prev.includes(ft.ext)
+                                ? prev.filter((t) => t !== ft.ext)
+                                : [...prev, ft.ext]
                             )
                           }
                         />
@@ -130,75 +139,106 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Dimensions</label>
-                    <select
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="pm-field-label">Dimensions</label>
+                    <DropdownSelect
+                      size="sm"
                       value={dimensions}
-                      onChange={(e) => setDimensions(e.target.value)}
-                    >
-                      {[64, 128, 256, 512, 768, 1024, 1536, 2048, 3072].map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
+                      onChange={setDimensions}
+                      options={[64, 128, 256, 512, 768, 1024, 1536, 2048, 3072].map(
+                        (d) => ({ value: String(d), label: String(d) })
+                      )}
+                    />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Chunk Mode</label>
-                    <select
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  <div>
+                    <label className="pm-field-label">Chunk Mode</label>
+                    <DropdownSelect
+                      size="sm"
                       value={chunkMode}
-                      onChange={(e) => setChunkMode(e.target.value)}
-                    >
-                      <option value="normal">Normal</option>
-                      <option value="parent_child">Parent-Child</option>
-                    </select>
+                      onChange={setChunkMode}
+                      options={[
+                        { value: "normal", label: "Normal" },
+                        { value: "parent_child", label: "Parent-Child" },
+                      ]}
+                    />
                   </div>
                 </div>
 
                 {chunkMode === "normal" ? (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Chunk Size</label>
-                      <Input value={chunkSize} onChange={(e) => setChunkSize(e.target.value)} placeholder="512" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="pm-field-label">Chunk Size</label>
+                      <Input
+                        value={chunkSize}
+                        onChange={(e) => setChunkSize(e.target.value)}
+                        placeholder="512"
+                        className="h-8"
+                      />
                     </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Chunk Overlap</label>
-                      <Input value={chunkOverlap} onChange={(e) => setChunkOverlap(e.target.value)} placeholder="64" />
+                    <div>
+                      <label className="pm-field-label">Chunk Overlap</label>
+                      <Input
+                        value={chunkOverlap}
+                        onChange={(e) => setChunkOverlap(e.target.value)}
+                        placeholder="64"
+                        className="h-8"
+                      />
                     </div>
                   </div>
                 ) : (
                   <>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Parent Strategy</label>
-                      <select
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    <div>
+                      <label className="pm-field-label">Parent Strategy</label>
+                      <DropdownSelect
+                        size="sm"
                         value={parentStrategy}
-                        onChange={(e) => setParentStrategy(e.target.value)}
-                      >
-                        <option value="paragraph">Paragraph</option>
-                        <option value="fixed_token">Fixed Token</option>
-                        <option value="heading">Heading</option>
-                      </select>
+                        onChange={setParentStrategy}
+                        options={[
+                          { value: "paragraph", label: "Paragraph" },
+                          { value: "fixed_token", label: "Fixed Token" },
+                          { value: "heading", label: "Heading" },
+                        ]}
+                      />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium">Parent Chunk Size</label>
-                        <Input value={parentChunkSize} onChange={(e) => setParentChunkSize(e.target.value)} placeholder="1024" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="pm-field-label">Parent Chunk Size</label>
+                        <Input
+                          value={parentChunkSize}
+                          onChange={(e) => setParentChunkSize(e.target.value)}
+                          placeholder="1024"
+                          className="h-8"
+                        />
                       </div>
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium">Parent Chunk Overlap</label>
-                        <Input value={parentChunkOverlap} onChange={(e) => setParentChunkOverlap(e.target.value)} placeholder="128" />
+                      <div>
+                        <label className="pm-field-label">Parent Chunk Overlap</label>
+                        <Input
+                          value={parentChunkOverlap}
+                          onChange={(e) => setParentChunkOverlap(e.target.value)}
+                          placeholder="128"
+                          className="h-8"
+                        />
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium">Child Chunk Size</label>
-                        <Input value={childChunkSize} onChange={(e) => setChildChunkSize(e.target.value)} placeholder="256" />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="pm-field-label">Child Chunk Size</label>
+                        <Input
+                          value={childChunkSize}
+                          onChange={(e) => setChildChunkSize(e.target.value)}
+                          placeholder="256"
+                          className="h-8"
+                        />
                       </div>
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium">Child Chunk Overlap</label>
-                        <Input value={childChunkOverlap} onChange={(e) => setChildChunkOverlap(e.target.value)} placeholder="32" />
+                      <div>
+                        <label className="pm-field-label">Child Chunk Overlap</label>
+                        <Input
+                          value={childChunkOverlap}
+                          onChange={(e) => setChildChunkOverlap(e.target.value)}
+                          placeholder="32"
+                          className="h-8"
+                        />
                       </div>
                     </div>
                   </>
@@ -208,11 +248,17 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+          >
             Cancel
           </Button>
-          <Button size="sm" onClick={handleCreate} disabled={saving || !name.trim()}>
+          <Button
+            onClick={handleCreate}
+            disabled={saving || !name.trim()}
+          >
             {saving ? "Creating..." : "Create"}
           </Button>
         </div>

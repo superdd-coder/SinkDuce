@@ -375,7 +375,6 @@ export function UpdateFileDialog({
           <Button
             type="button"
             size="sm"
-            className="pm-btn-pri"
             disabled={busy || !pendingFile}
             onClick={() => void handleConfirmUpload()}
           >

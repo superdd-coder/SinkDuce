@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react"
 import { toast } from "sonner"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { onTodoRefresh, triggerTodoRefresh } from "@/lib/todo-refresh"
 import {
@@ -398,14 +399,15 @@ export function TodoCard({
           >
             <Layers className="h-3.5 w-3.5" />
           </button>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => setCreateOpen(true)}
-            className="pm-btn-ghost pm-btn-xs"
             title="Add todo"
           >
             Add
-          </button>
+          </Button>
         </div>
       </div>
 

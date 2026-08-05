@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Loader2, Pencil, Eye } from "lucide-react"
+import { Loader2, Pencil, Eye, Columns2, X, Download } from "lucide-react"
 import { toast } from "sonner"
 import {
   getMeeting,
@@ -10,6 +10,7 @@ import {
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { Button } from "@/components/ui/button"
 import { SummaryMarkdownViewer } from "@/components/meeting/summary-markdown-viewer"
+import { cn } from "@/lib/utils"
 
 const SAVE_DELAY = 800
 
@@ -72,6 +73,19 @@ interface MeetingSummaryPanelProps {
   /** ``tab_general`` or a section tab id — one file at a time */
   tabId: string
   onMeetingLoaded?: (meeting: Meeting, sectionTitle: string) => void
+  /**
+   * Note-editor dual-pane chrome — same two-row header as NotePane:
+   * row1 meeting title · Split · close; row2 section name only · Edit.
+   */
+  paneChrome?: {
+    focused: boolean
+    /** Promote this meeting pane without requiring a prior body click */
+    onFocus?: () => void
+    showSplit?: boolean
+    onSplit?: () => void
+    showClose?: boolean
+    onClose?: () => void
+  }
 }
 
 /**
@@ -85,6 +99,7 @@ export function MeetingSummaryPanel({
   meetingId,
   tabId,
   onMeetingLoaded,
+  paneChrome,
 }: MeetingSummaryPanelProps) {
   const [loading, setLoading] = useState(true)
   /**
@@ -229,41 +244,142 @@ export function MeetingSummaryPanel({
     )
   }
 
+  const claimFocus = () => {
+    if (paneChrome && !paneChrome.focused) paneChrome.onFocus?.()
+  }
+
+  const handleDownload = () => {
+    claimFocus()
+    const body =
+      mode === "edit"
+        ? restoreCitationsFromTiptap(editContent)
+        : rawContent
+    const blob = new Blob([body || ""], {
+      type: "text/markdown;charset=utf-8",
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    const safeMeet = (meetingTitle || "meeting").replace(/[\\/:*?"<>|]+/g, "-")
+    const safeSec = (sectionTitle || "summary").replace(/[\\/:*?"<>|]+/g, "-")
+    a.download = `${safeMeet} - ${safeSec}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success("Downloaded")
+  }
+
+  const downloadBtn = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="pm-ws-icon-btn"
+      onClick={handleDownload}
+      title="Download"
+      aria-label="Download"
+    >
+      <Download className="h-3.5 w-3.5" />
+    </Button>
+  )
+
+  const editToggle = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="pm-ws-action shrink-0"
+      onClick={() => {
+        claimFocus()
+        if (mode === "view") enterEdit()
+        else exitEdit()
+      }}
+      title={
+        mode === "view"
+          ? "Edit with Tiptap (citations protected)"
+          : "Back to Meeting-style preview"
+      }
+    >
+      {mode === "view" ? (
+        <>
+          <Pencil className="h-3.5 w-3.5" />
+          Edit
+        </>
+      ) : (
+        <>
+          <Eye className="h-3.5 w-3.5" />
+          Preview
+        </>
+      )}
+    </Button>
+  )
+
+  /** Title for row 1 — meeting name (not section) */
+  const headerMeetingTitle = meetingTitle || "Meeting"
+
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground shrink-0">
-          {tabId === "tab_general" ? "General" : "Section"}
-        </span>
-        <span className="text-xs text-foreground truncate flex-1">
-          {tabId === "tab_general"
-            ? meetingTitle || sectionTitle
-            : `${meetingTitle || "Meeting"} · ${sectionTitle}`}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-[10px] uppercase tracking-[0.1em] text-muted-foreground hover:text-primary gap-1"
-          onClick={() => (mode === "view" ? enterEdit() : exitEdit())}
-          title={
-            mode === "view"
-              ? "Edit with Tiptap (citations protected)"
-              : "Back to Meeting-style preview"
-          }
+      {paneChrome ? (
+        /* Same two-row chrome language as NotePane */
+        <div
+          className={cn("pm-ws-pane-h", paneChrome.focused && "is-focus")}
+          onMouseDown={(e) => e.stopPropagation()}
         >
-          {mode === "view" ? (
-            <>
-              <Pencil className="h-3 w-3" />
-              Edit raw
-            </>
-          ) : (
-            <>
-              <Eye className="h-3 w-3" />
-              Preview
-            </>
-          )}
-        </Button>
-      </div>
+          <div className="flex items-center gap-1 px-2.5 pt-2 pb-0.5 min-h-8">
+            <span
+              className="pm-ws-pane-title flex-1"
+              onClick={claimFocus}
+            >
+              {headerMeetingTitle}
+            </span>
+            {paneChrome.showSplit && paneChrome.onSplit && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-action"
+                onClick={() => {
+                  claimFocus()
+                  paneChrome.onSplit?.()
+                }}
+                title="Split into second page"
+              >
+                <Columns2 className="h-3.5 w-3.5" />
+                Split
+              </Button>
+            )}
+            {paneChrome.showClose && paneChrome.onClose && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-icon-btn !h-6 !w-6"
+                onClick={() => paneChrome.onClose?.()}
+                title="Close page"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+          {/* Row 2: section name · Download · Edit/Preview */}
+          <div className="flex flex-nowrap items-center gap-0.5 px-2 pb-2 min-w-0">
+            <span
+              className="pm-meta truncate flex-1 min-w-0 text-[var(--pm-muted)]"
+              title={sectionTitle}
+            >
+              {sectionTitle}
+            </span>
+            {downloadBtn}
+            {editToggle}
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-2.5 pb-2 pt-1.5 min-w-0 shrink-0">
+          <span
+            className="pm-meta truncate flex-1 min-w-0 text-[var(--pm-muted)]"
+            title={sectionTitle}
+          >
+            {sectionTitle}
+          </span>
+          {downloadBtn}
+          {editToggle}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
         {mode === "view" ? (
