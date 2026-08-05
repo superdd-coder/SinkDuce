@@ -55,13 +55,7 @@ from __future__ import annotations
 
 import logging
 
-# MCP Python SDK: public surface is FastMCP (mcp.server.fastmcp).
-# Some forks/docs refer to MCPServer; accept either so local pytest and
-# Docker images with different package layouts both import.
-try:
-    from mcp.server.mcpserver import MCPServer as _MCPCls  # type: ignore
-except ImportError:  # pragma: no cover
-    from mcp.server.fastmcp import FastMCP as _MCPCls
+from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +89,12 @@ SinkDuce MCP — use **collection IDs** (from list_collections), never display n
 Write tools (upload_*, delete_*, create_*) change data — confirm intent before destructive calls.
 """.strip()
 
-# FastMCP accepts name + instructions; ignore extra kwargs if a custom class differs.
-try:
-    mcp = _MCPCls(
-        name="sinkduce",
-        instructions=_MCP_INSTRUCTIONS,
-    )
-except TypeError:  # pragma: no cover
-    mcp = _MCPCls(name="sinkduce")
+# Pinned to mcp>=1.26,<2 (see pyproject.toml). Do not switch to MCPServer
+# unless the whole monorepo upgrades mcp major in a dedicated PR.
+mcp = FastMCP(
+    name="sinkduce",
+    instructions=_MCP_INSTRUCTIONS,
+)
 
 # ── Resolve base URL for docs that mention the HTTP API ──────
 from src.config import get_config as _get_config
