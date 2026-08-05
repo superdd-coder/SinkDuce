@@ -492,15 +492,15 @@ def test_end_to_end():
     assert resp.status_code == 200, resp.text
     assert resp.json()["group_id"] == gid2
 
-    # 6. delete the node
+    # 6. delete the last node on the branch — empty branch is auto-removed
     resp = client.delete(f"/api/file-mgmt/p2-12/nodes/{node['node_id']}")
     assert resp.status_code == 204
 
-    # 7. delete the branch chain
-    resp = client.delete(f"/api/file-mgmt/p2-12/chains/{chain_id}")
-    assert resp.status_code == 204
-
-    # chain should be gone
+    # 7. chain already gone (delete last node cascades empty branch)
     resp = client.get("/api/file-mgmt/p2-12/chains")
+    assert resp.status_code == 200
     chains = resp.json()
     assert all(c["chain_id"] != chain_id for c in chains)
+    # idempotent delete of missing chain → 404 is expected if called
+    resp = client.delete(f"/api/file-mgmt/p2-12/chains/{chain_id}")
+    assert resp.status_code == 404

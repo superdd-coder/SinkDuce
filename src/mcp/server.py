@@ -55,7 +55,13 @@ from __future__ import annotations
 
 import logging
 
-from mcp.server.mcpserver import MCPServer
+# MCP Python SDK: public surface is FastMCP (mcp.server.fastmcp).
+# Some forks/docs refer to MCPServer; accept either so local pytest and
+# Docker images with different package layouts both import.
+try:
+    from mcp.server.mcpserver import MCPServer as _MCPCls  # type: ignore
+except ImportError:  # pragma: no cover
+    from mcp.server.fastmcp import FastMCP as _MCPCls
 
 logger = logging.getLogger(__name__)
 
@@ -89,16 +95,14 @@ SinkDuce MCP — use **collection IDs** (from list_collections), never display n
 Write tools (upload_*, delete_*, create_*) change data — confirm intent before destructive calls.
 """.strip()
 
-mcp = MCPServer(
-    name="sinkduce",
-    title="SinkDuce",
-    description=(
-        "SinkDuce RAG + file-management MCP. "
-        "Prefer list_library_tree / get_timeline / get_document_text(file_id) / "
-        "search_direct_chunks. See server instructions for the full tool map."
-    ),
-    instructions=_MCP_INSTRUCTIONS,
-)
+# FastMCP accepts name + instructions; ignore extra kwargs if a custom class differs.
+try:
+    mcp = _MCPCls(
+        name="sinkduce",
+        instructions=_MCP_INSTRUCTIONS,
+    )
+except TypeError:  # pragma: no cover
+    mcp = _MCPCls(name="sinkduce")
 
 # ── Resolve base URL for docs that mention the HTTP API ──────
 from src.config import get_config as _get_config
