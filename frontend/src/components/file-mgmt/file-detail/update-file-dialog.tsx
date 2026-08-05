@@ -210,13 +210,13 @@ export function UpdateFileDialog({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
         className={cn(
-          "w-[min(1280px,96vw)] max-w-[96vw] sm:max-w-[96vw]",
+          "pm-dialog w-[min(1280px,96vw)] max-w-[96vw] sm:max-w-[96vw]",
           "h-[min(88vh,900px)] flex flex-col gap-0 p-0 overflow-hidden"
         )}
       >
-        <DialogHeader className="px-4 py-3 border-b border-border shrink-0 space-y-1">
-          <DialogTitle className="text-sm">Update file</DialogTitle>
-          <DialogDescription className="text-[11px]">
+        <DialogHeader className="px-4 py-3 shrink-0 space-y-1 shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
+          <DialogTitle>Update file</DialogTitle>
+          <DialogDescription className="pm-meta">
             {currentFilename
               ? `New version of “${currentFilename}”. Preview is local only — nothing is saved or ingested until you click Upload version.`
               : "Preview is local only — nothing is saved or ingested until you click Upload version."}
@@ -225,7 +225,7 @@ export function UpdateFileDialog({
 
         <div className="flex-1 min-h-0 flex overflow-hidden">
           {/* Left: select + preview (no title bar) */}
-          <div className="flex-[1.15] min-w-0 flex flex-col border-r border-border overflow-hidden p-3 gap-3">
+          <div className="flex-[1.15] min-w-0 flex flex-col shadow-[inset_-1px_0_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)] overflow-hidden p-3 gap-3">
             <input
               ref={inputRef}
               type="file"
@@ -362,12 +362,11 @@ export function UpdateFileDialog({
           </div>
         </div>
 
-        <div className="shrink-0 border-t border-border px-4 py-3 flex items-center justify-end gap-2">
+        <div className="shrink-0 px-4 py-3 flex items-center justify-end gap-2 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
-            className="h-8 text-xs"
             disabled={busy}
             onClick={() => handleClose(false)}
           >
@@ -376,7 +375,7 @@ export function UpdateFileDialog({
           <Button
             type="button"
             size="sm"
-            className="h-8 text-xs"
+            className="pm-btn-pri"
             disabled={busy || !pendingFile}
             onClick={() => void handleConfirmUpload()}
           >

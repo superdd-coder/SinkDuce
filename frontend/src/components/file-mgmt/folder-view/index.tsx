@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { PanelRight } from "lucide-react"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { Breadcrumb } from "./breadcrumb"
 import { IconGrid } from "./icon-grid"
@@ -7,14 +8,33 @@ import { NameConflictDialog } from "./name-conflict-dialog"
 import { FolderUploadConfirmDialog } from "./folder-upload-confirm-dialog"
 import { Toolbar } from "./toolbar"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
+import { cn } from "@/lib/utils"
 
-export function FolderView({ collectionId }: { collectionId: string }) {
+/**
+ * Files surface — dual column when Messages open (Overview geometry).
+ *
+ * Soft rail collapse (ENGINEERING §4.5) — curtain clip:
+ * - Right track width animates; panel keeps fixed width + pin-right
+ * - overflow:hidden clips without content reflow (no half-size squish)
+ * - Reopen pill on .pm-files top-right
+ */
+export function FolderView({
+  collectionId,
+  railCovered = false,
+}: {
+  collectionId: string
+  /** Quick Chat open — fade message stack in place (same as Overview rail). */
+  railCovered?: boolean
+}) {
   const {
     fetchFolderTree,
     navigateToRoot,
     selectFolder,
     perCollectionFolderCache,
     hydrateFolderFileSort,
+    messageSidebarOpen,
+    toggleMessageSidebar,
+    currentFolderMessages,
   } = useFileMgmtStore()
 
   /** Phase 8: file detail dialog (local — does not touch folder grid layout). */
@@ -41,31 +61,69 @@ export function FolderView({ collectionId }: { collectionId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectionId])
 
-  return (
-    <div className="flex flex-col h-full min-h-0 gap-0">
-      {/* z-20 so toolbar dropdowns paint above the icon grid (grid is later in DOM) */}
-      <div className="relative z-20 shrink-0">
-        <Toolbar collectionId={collectionId} />
-      </div>
+  const msgCollapsed = !messageSidebarOpen
+  const msgCount = currentFolderMessages.length
 
-      {/*
-        overflow-visible so message-panel shadow is not clipped.
-        Scroll containment stays on the left grid only (overflow-hidden there).
-      */}
-      <div className="relative z-0 flex-1 flex min-h-0 gap-1.5 overflow-visible pt-0.5">
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden transition-[flex-basis] duration-300">
+  return (
+    <div
+      className={cn("pm-files", msgCollapsed && "is-msg-collapsed")}
+    >
+      {/* LEFT — flex-grows as right track shrinks */}
+      <div className="pm-files-left">
+        <div className="relative z-20 shrink-0">
+          <Toolbar collectionId={collectionId} />
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="flex-1 min-h-0 overflow-hidden">
             <IconGrid
               collectionId={collectionId}
               onOpenFile={(fileId) => setDetailFileId(fileId)}
             />
           </div>
-          <div className="shrink-0 border-t border-border/30">
+          <div className="shrink-0">
             <Breadcrumb collectionId={collectionId} />
           </div>
         </div>
-        <MessageSidebar collectionId={collectionId} />
       </div>
+
+      {/*
+        RIGHT — fixed open width, animates to 0. Panel inside stays full open
+        width and is clipped (curtain), not squashed.
+      */}
+      <aside
+        className={cn(
+          "pm-files-right pm-overview-right relative",
+          msgCollapsed && "is-collapsed",
+          railCovered && "is-qc-covered"
+        )}
+        data-pm-rail-anchor
+      >
+        <div
+          className={cn(
+            "pm-rail-stack h-full min-h-0",
+            railCovered && "pointer-events-none"
+          )}
+        >
+          <MessageSidebar collectionId={collectionId} />
+        </div>
+      </aside>
+
+      {/* Reopen pill — .pm-files top-right; visible only when collapsed */}
+      <button
+        type="button"
+        onClick={toggleMessageSidebar}
+        title="Show messages"
+        className="pm-files-msg-reopen"
+        tabIndex={msgCollapsed ? 0 : -1}
+        aria-hidden={!msgCollapsed}
+      >
+        <PanelRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span>Messages</span>
+        {msgCount > 0 && (
+          <span className="pm-files-msg-count">{msgCount}</span>
+        )}
+      </button>
+
       <NameConflictDialog />
       <FolderUploadConfirmDialog />
 

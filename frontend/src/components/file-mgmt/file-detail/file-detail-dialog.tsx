@@ -1288,7 +1288,7 @@ export function FileMgmtDetailDialog({
               {isIngesting && (
                 <Badge
                   variant="secondary"
-                  className="text-[10px] shrink-0 border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                  className="pm-meta shrink-0 border-transparent bg-[var(--pm-green-soft)] text-[var(--pm-green)]"
                   title={ingestProgress?.message || "Ingesting…"}
                 >
                   <Loader2 className="h-3 w-3 animate-spin mr-1 inline" />
@@ -1301,7 +1301,7 @@ export function FileMgmtDetailDialog({
               {isHistoricalFocus && (
                 <Badge
                   variant="secondary"
-                  className="text-[10px] shrink-0 border-transparent bg-muted text-muted-foreground"
+                  className="pm-meta shrink-0 border-transparent bg-[rgba(18,20,16,0.05)] text-[var(--pm-muted)]"
                 >
                   {focusVersion
                     ? `v${focusVersion.version_no} · old version`
@@ -1309,22 +1309,31 @@ export function FileMgmtDetailDialog({
                 </Badge>
               )}
               {chunksTotal > 0 && !isIngesting && (
-                <Badge variant="secondary" className="ml-1 shrink-0">
+                <Badge
+                  variant="secondary"
+                  className="ml-1 shrink-0 pm-meta border-transparent bg-[rgba(18,20,16,0.05)] text-[var(--pm-muted)]"
+                >
                   {chunksTotal} chunks
                 </Badge>
               )}
               {detail?.archived && (
-                <Badge variant="secondary" className="shrink-0 text-[10px]">
+                <Badge
+                  variant="secondary"
+                  className="shrink-0 pm-meta border-transparent bg-[rgba(18,20,16,0.05)] text-[var(--pm-muted)]"
+                >
                   archived
                 </Badge>
               )}
               {detail?.unsupported && !isHistoricalFocus && (
-                <Badge variant="outline" className="shrink-0 text-[10px]">
+                <Badge
+                  variant="outline"
+                  className="shrink-0 pm-meta border-[color-mix(in_srgb,var(--pm-ink)_12%,transparent)] text-[var(--pm-muted)]"
+                >
                   unsupported
                 </Badge>
               )}
               {detail?.is_definitive && (
-                <Star className="h-3.5 w-3.5 shrink-0 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
+                <Star className="h-3.5 w-3.5 shrink-0 text-[var(--pm-green)] fill-[var(--pm-green)]" />
               )}
             </DialogTitle>
           </DialogHeader>
@@ -1397,8 +1406,7 @@ export function FileMgmtDetailDialog({
                     {goToLabel && (
                       <button
                         type="button"
-                        className="text-[10px] font-medium uppercase tracking-[0.1em] text-primary hover:opacity-80 transition-opacity cursor-pointer t-sans-family shrink-0"
-                        style={{ background: "none", border: "none" }}
+                        className="pm-label text-[var(--pm-green)] hover:opacity-80 transition-opacity cursor-pointer shrink-0 bg-transparent border-0"
                         onClick={handleGoToSource}
                       >
                         {goToLabel}

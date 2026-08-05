@@ -216,12 +216,12 @@ export function MessageEditorDialog({
   }, [nodeMsgs])
 
   // Enter/exit must stay mounted (portal keepMounted + no key flip on close)
+  // Symmetric open/close durations (Premium motion)
   const dialogMotion = cn(
-    "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-    "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-3",
+    "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+    "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-2",
     "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2",
-    // Slightly longer exit so close feels less abrupt
-    "data-closed:duration-280 data-open:duration-320"
+    "data-closed:duration-300 data-open:duration-300"
   )
 
   // Non-node: single-column dialog; Edit / Cancel / Save sit top-right
@@ -230,20 +230,20 @@ export function MessageEditorDialog({
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
           className={cn(
-            "w-[1200px] max-w-[90vw] sm:max-w-[90vw] h-[85vh] flex flex-col overflow-hidden",
+            "pm-dialog w-[1200px] max-w-[90vw] sm:max-w-[90vw] h-[85vh] flex flex-col overflow-hidden",
             dialogMotion
           )}
         >
           <DialogHeader className="shrink-0">
-            <DialogTitle className="text-sm flex items-center gap-2 min-w-0 pr-28">
+            <DialogTitle className="flex items-center gap-2 min-w-0 pr-28">
               <span className="shrink-0">{title}</span>
               {sourceTag && (
                 <span
                   className={cn(
-                    "text-[10px] font-normal px-1.5 py-0.5 rounded truncate max-w-[12rem]",
+                    "pm-meta px-1.5 py-0.5 rounded truncate max-w-[12rem]",
                     sourceTag.isCurrentFolder
-                      ? "text-primary bg-primary/15 ring-1 ring-primary/30"
-                      : "text-muted-foreground bg-muted/50"
+                      ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+                      : "text-[var(--pm-muted)] bg-[rgba(18,20,16,0.05)]"
                   )}
                   title={sourceTag.full}
                 >
@@ -256,7 +256,7 @@ export function MessageEditorDialog({
               {editing ? (
                 <>
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="xs"
                     onClick={handleCancelEdit}
                     disabled={saving}
@@ -265,6 +265,7 @@ export function MessageEditorDialog({
                   </Button>
                   <Button
                     size="xs"
+                    className="pm-btn-pri"
                     onClick={() => void handleSave()}
                     disabled={!content.trim() || saving}
                   >
@@ -278,7 +279,7 @@ export function MessageEditorDialog({
                     type="button"
                     variant="ghost"
                     size="xs"
-                    className="gap-1 h-7 px-2 text-muted-foreground hover:text-foreground"
+                    className="gap-1 h-7 px-2 text-[var(--pm-muted)] hover:text-[var(--pm-ink)]"
                     onClick={() => setEditing(true)}
                   >
                     <Pencil className="h-3 w-3" />
@@ -298,10 +299,10 @@ export function MessageEditorDialog({
                 showToolbar={false}
               />
             ) : (
-              <div className="p-4 text-sm leading-relaxed flex-1 overflow-auto">
+              <div className="p-4 pm-prose max-w-none flex-1 overflow-auto">
                 <MessageBody
                   body={activeMsg?.body || initialContent}
-                  className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed break-words [&_p]:my-2"
+                  className="prose prose-sm max-w-none leading-relaxed break-words [&_p]:my-2"
                 />
               </div>
             )}
@@ -316,16 +317,16 @@ export function MessageEditorDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className={cn(
-          "w-[1200px] max-w-[92vw] sm:max-w-[92vw] h-[88vh] flex flex-col gap-0 p-0 overflow-hidden",
+          "pm-dialog w-[1200px] max-w-[92vw] sm:max-w-[92vw] h-[88vh] flex flex-col gap-0 p-0 overflow-hidden",
           dialogMotion
         )}
       >
-        <DialogHeader className="px-4 py-3 border-b border-border/50 shrink-0">
-          <DialogTitle className="text-sm flex items-center gap-2 min-w-0 pr-8">
+        <DialogHeader className="px-4 py-3 shrink-0 shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
+          <DialogTitle className="flex items-center gap-2 min-w-0 pr-8">
             <span className="shrink-0">{title}</span>
             {sourceTag && (
               <span
-                className="text-[10px] font-normal text-[var(--ze-green,#1A5E3D)] bg-[var(--ze-green,#1A5E3D)]/10 px-1.5 py-0.5 rounded truncate max-w-[14rem]"
+                className="pm-meta text-[var(--pm-green)] bg-[var(--pm-green-soft)] px-1.5 py-0.5 rounded truncate max-w-[14rem]"
                 title={sourceTag.full}
               >
                 {sourceTag.label}
@@ -335,14 +336,14 @@ export function MessageEditorDialog({
         </DialogHeader>
 
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <div className="flex-1 min-h-0 flex border-b border-border/40 overflow-hidden">
+          <div className="flex-1 min-h-0 flex shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)] overflow-hidden">
             {/* Left: active message preview / edit */}
-            <div className="flex-[1.4] min-w-0 min-h-0 flex flex-col border-r border-border/40 overflow-hidden relative">
+            <div className="flex-[1.4] min-w-0 min-h-0 flex flex-col shadow-[inset_-1px_0_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)] overflow-hidden relative">
               <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
                 {editing ? (
                   <>
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="xs"
                       onClick={handleCancelEdit}
                       disabled={saving}
@@ -351,6 +352,7 @@ export function MessageEditorDialog({
                     </Button>
                     <Button
                       size="xs"
+                      className="pm-btn-pri"
                       onClick={() => void handleSave()}
                       disabled={!content.trim() || saving}
                     >
@@ -363,7 +365,7 @@ export function MessageEditorDialog({
                       type="button"
                       variant="ghost"
                       size="xs"
-                      className="gap-1 h-7 px-2 text-muted-foreground hover:text-foreground"
+                      className="gap-1 h-7 px-2 text-[var(--pm-muted)] hover:text-[var(--pm-ink)]"
                       onClick={() => setEditing(true)}
                     >
                       <Pencil className="h-3 w-3" />
@@ -389,10 +391,10 @@ export function MessageEditorDialog({
                       />
                     </div>
                   ) : (
-                    <div className="p-4 pt-10 pr-16 text-sm leading-relaxed">
+                    <div className="p-4 pt-10 pr-16 pm-prose max-w-none">
                       <MessageBody
                         body={activeMsg?.body || ""}
-                        className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed break-words [&_p]:my-2"
+                        className="prose prose-sm max-w-none leading-relaxed break-words [&_p]:my-2"
                       />
                     </div>
                   )}
@@ -401,65 +403,51 @@ export function MessageEditorDialog({
             </div>
 
             {/* Right: node meta + clickable message list */}
-            <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-muted/10 overflow-hidden">
-              <div className="shrink-0 p-4 space-y-3 border-b border-border/40">
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground/60 font-medium">
-                  Node detail
-                </p>
+            <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-[var(--pm-green-wash)] overflow-hidden">
+              <div className="shrink-0 p-4 space-y-3 shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
+                <p className="pm-label">Node detail</p>
                 {nodeLoading ? (
                   <div className="flex justify-center py-4">
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
                   </div>
                 ) : !nodeDetail ? (
-                  <p className="text-xs text-muted-foreground">Node not found</p>
+                  <p className="pm-meta">Node not found</p>
                 ) : (
                   <>
                     <div>
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground/50 mb-0.5">
-                        Title
-                      </p>
-                      <p className="text-sm font-medium">
-                        {nodeDetail.title || "Untitled"}
-                      </p>
+                      <p className="pm-field-label mb-0.5">Title</p>
+                      <p className="pm-title">{nodeDetail.title || "Untitled"}</p>
                     </div>
                     <div className="flex gap-4">
                       <div>
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground/50 mb-0.5">
-                          Group
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {groupName}
-                        </p>
+                        <p className="pm-field-label mb-0.5">Group</p>
+                        <p className="pm-meta">{groupName}</p>
                       </div>
                       <div>
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground/50 mb-0.5">
-                          Type
-                        </p>
-                        <p className="text-xs uppercase text-muted-foreground">
-                          {nodeDetail.node_type}
-                        </p>
+                        <p className="pm-field-label mb-0.5">Type</p>
+                        <p className="pm-meta uppercase">{nodeDetail.node_type}</p>
                       </div>
                     </div>
                     {nodeDetail.event_time && (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1.5 pm-meta">
                         <Calendar className="h-3 w-3" />
                         {nodeDetail.event_time.slice(0, 10)}
                       </div>
                     )}
                     <div>
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground/50 mb-1">
+                      <p className="pm-field-label mb-1">
                         Attachments ({nodeDetail.attachments?.length ?? 0})
                       </p>
                       {(nodeDetail.attachments?.length ?? 0) === 0 ? (
-                        <p className="text-xs text-muted-foreground/50">None</p>
+                        <p className="pm-meta">None</p>
                       ) : (
                         <ul className="space-y-1">
                           {nodeDetail.attachments.map((a) => (
                             <li
                               key={a.file_id}
-                              className="flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-muted/30"
+                              className="flex items-center gap-1.5 pm-meta px-2 py-1 rounded-[var(--pm-r-sm)] bg-white"
                             >
-                              <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                              <Paperclip className="h-3 w-3 text-[var(--pm-faint)] shrink-0" />
                               <span className="truncate">
                                 {a.filename || a.file_id}
                               </span>
@@ -474,11 +462,11 @@ export function MessageEditorDialog({
 
               {/* Message list fills remaining height; fixed row height */}
               <div className="flex-1 min-h-0 flex flex-col p-3 pt-2.5">
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground/60 font-medium shrink-0 mb-1.5">
+                <p className="pm-label shrink-0 mb-1.5">
                   Node messages ({sortedNodeMsgs.length})
                 </p>
                 {nodeLoading ? null : sortedNodeMsgs.length === 0 ? (
-                  <p className="text-xs text-muted-foreground/50">None</p>
+                  <p className="pm-meta">None</p>
                 ) : (
                   <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-0.5">
                     {sortedNodeMsgs.map((m) => {
@@ -489,11 +477,11 @@ export function MessageEditorDialog({
                           type="button"
                           onClick={() => handleSelectNodeMessage(m)}
                           className={cn(
-                            "w-full text-left rounded-md border px-2.5 py-2 transition-colors",
-                            "hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                            "w-full text-left rounded-[var(--pm-r-sm)] px-2.5 py-2 transition-colors duration-150",
+                            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--pm-green-soft)]",
                             selected
-                              ? "border-[var(--ze-green,#1A5E3D)]/50 bg-[var(--ze-green,#1A5E3D)]/10 shadow-sm"
-                              : "border-border/50 bg-background/60"
+                              ? "bg-[var(--pm-green-soft)] shadow-sm"
+                              : "bg-white/80 hover:bg-white"
                           )}
                         >
                           {/* Render markdown + Tiptap HTML colors (not raw source) */}
@@ -501,13 +489,11 @@ export function MessageEditorDialog({
                             {(m.body || "").trim() ? (
                               <MessagePreview body={m.body || ""} lines={2} />
                             ) : (
-                              <span className="text-[11px] text-muted-foreground/50 italic">
-                                (empty)
-                              </span>
+                              <span className="pm-meta italic">(empty)</span>
                             )}
                           </div>
                           {m.created_at && (
-                            <p className="text-[9px] text-muted-foreground/50 mt-1 tabular-nums">
+                            <p className="pm-meta mt-1 tabular-nums">
                               {m.created_at.slice(0, 16).replace("T", " ")}
                               {m.edited_at ? " · edited" : ""}
                             </p>
@@ -521,12 +507,10 @@ export function MessageEditorDialog({
             </div>
           </div>
 
-          <div className="h-[32%] min-h-[140px] shrink-0 bg-muted/5 overflow-hidden">
+          <div className="h-[32%] min-h-[140px] shrink-0 overflow-hidden">
             <div className="px-3 pt-1.5 flex items-center justify-between">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground/60 font-medium">
-                Timeline
-              </p>
-              <p className="text-[9px] text-muted-foreground/50">
+              <p className="pm-label">Timeline</p>
+              <p className="pm-meta">
                 Click a node to open Timeline view
               </p>
             </div>

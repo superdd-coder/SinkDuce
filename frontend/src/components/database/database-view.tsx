@@ -191,9 +191,15 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     }
   }, [activeTab, stageTab, stagePhase])
 
-  // Quick Chat float is sized to Overview right rail — close when leaving Overview
+  // Close float when leaving rail tabs; always close on Config (FAB hidden there)
   useEffect(() => {
-    if (activeTab !== "info" && quickChatOpen) setQuickChatOpen(false)
+    if (
+      quickChatOpen &&
+      (activeTab === "config" ||
+        (activeTab !== "info" && activeTab !== "files"))
+    ) {
+      setQuickChatOpen(false)
+    }
   }, [activeTab, quickChatOpen])
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
@@ -547,7 +553,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               </button>
             </header>
 
-            <div className="pm-collection-body flex-1 flex flex-col min-h-0 min-w-0">
+            {/* overflow-visible: QC fab park sits top: -40px above panel */}
+            <div className="pm-collection-body flex-1 flex flex-col min-h-0 min-w-0 overflow-visible">
               {/*
                 Single always-mounted tab bar (Overview | Files | Timeline).
                 Must NOT move between InfoPanel chrome and this shell — remounting
@@ -565,8 +572,11 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                 Keep-alive surfaces + sequential fade (out → swap → in).
                 Same motion for Overview / Files / Timeline / Config.
               */}
-              {/* transparent — never paint canvas gray over .pm-stage cream */}
-              <div className="relative flex-1 min-h-0 min-w-0 bg-transparent isolate">
+              {/*
+                overflow-visible so QC diamond park (top: -40px) is not clipped.
+                transparent — never paint canvas gray over .pm-stage cream
+              */}
+              <div className="relative flex-1 min-h-0 min-w-0 bg-transparent isolate overflow-visible">
                 {(
                   [
                     ["info", visitedTabs.has("info")] as const,
@@ -593,8 +603,13 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                       className={cn(
                         "absolute inset-0 flex flex-col bg-transparent",
                         "pm-panel pm-panel-fade",
-                        /* Overview needs overflow visible so card drop-shadows paint */
-                        tab === "info" ? "overflow-visible" : "overflow-hidden",
+                        /*
+                         * Overview + Files: overflow visible so rail card shadows paint.
+                         * Diamond is parked outside panels (data-pm-qc-fab-anchor).
+                         */
+                        tab === "info" || tab === "files"
+                          ? "overflow-visible"
+                          : "overflow-hidden",
                         phaseClass,
                         !isInteractive && "pointer-events-none"
                       )}
@@ -610,8 +625,11 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                         </div>
                       )}
                       {tab === "files" && (
-                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                          <FolderView collectionId={activeCollection} />
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
+                          <FolderView
+                            collectionId={activeCollection}
+                            railCovered={quickChatOpen}
+                          />
                         </div>
                       )}
                       {tab === "timeline" && (
@@ -638,6 +656,16 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                     </div>
                   )
                 })}
+
+                {/*
+                  Stable QC diamond park — same top-right of content for
+                  Overview / Files / Timeline. Config hides the icon (fabVisible).
+                */}
+                <div
+                  className="pm-qc-fab-park"
+                  data-pm-qc-fab-anchor
+                  aria-hidden
+                />
               </div>
             </div>
           </div>
@@ -651,8 +679,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       </div>
 
       {/*
-        Quick Chat: float card sized to Overview right rail (covers To-do/Notes/Meetings).
-        Not a layout-pushing sidebar. FAB always mounted.
+        Quick Chat: FAB parks on stage (stable). Float still fills right rail
+        on Overview/Files. Hidden on Config.
       */}
       {activeCollection && (
         <QuickChat
@@ -664,7 +692,11 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
           open={quickChatOpen}
           onOpen={() => setQuickChatOpen(true)}
           onClose={() => setQuickChatOpen(false)}
-          railActive={activeTab === "info"}
+          /* Rail float cover only where right rail exists */
+          railActive={activeTab === "info" || activeTab === "files"}
+          railKey={activeTab}
+          /* Hide diamond on Collection Settings */
+          fabVisible={activeTab !== "config"}
           files={files}
           onSourceClick={(source) => {
             // Open file detail only — do not switch away from Overview (or current tab)
@@ -729,9 +761,9 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
           <DialogHeader>
             <DialogTitle>Delete File</DialogTitle>
           </DialogHeader>
-          <p className="pm-meta" style={{ color: "var(--pm-muted)", fontSize: 13, lineHeight: 1.5 }}>
+          <p className="pm-dialog-body">
             Are you sure you want to delete{" "}
-            <span className="font-medium text-foreground truncate max-w-[200px] inline-block align-bottom">
+            <span className="font-medium text-[var(--pm-ink)] truncate max-w-[200px] inline-block align-bottom">
               {deleteFileDisplay}
             </span>
             ? This will remove all its chunks from the database.

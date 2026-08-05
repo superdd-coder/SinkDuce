@@ -3378,6 +3378,683 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: transparent;
   border-top: none;
 }
+/* Soft body copy / field chrome inside pm-dialog */
+.pm-dialog .pm-dialog-body {
+  font: var(--pm-t-body);
+  color: var(--pm-muted);
+  line-height: 1.5;
+}
+.pm-dialog .pm-field-label {
+  display: block;
+  margin-bottom: 6px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+}
+.pm-dialog .pm-soft-rule {
+  border-color: color-mix(in srgb, var(--pm-ink) 8%, transparent);
+}
+.pm-dialog .pm-nested-pane {
+  border-radius: var(--pm-r-sm);
+  background: #ffffff;
+  box-shadow: none;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 6%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Premium v1 · Collection Files surface
+   Soft icon grid + message rail; mirrors Overview nested-white language.
+   See ENGINEERING §5.3 · SPEC gap (Files).
+   ═══════════════════════════════════════════════════════════════════ */
+
+/*
+ * Files dual-column + Soft rail collapse — curtain clip (ENGINEERING §4.5)
+ *
+ * Silk motion: right track width tweens; panel keeps FIXED open width and
+ * pins to the right edge. overflow:hidden clips → content never reflows
+ * into a squashed “half card”.
+ */
+.pm-files {
+  /* open rail width (panel + track share this) */
+  --pm-files-rail-w: clamp(272px, 30vw, 360px);
+  --pm-files-rail-ms: 420ms;
+  /* smooth decelerate — feels like soft material, not linear squeeze */
+  --pm-files-rail-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 18px;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  min-width: 720px;
+  box-sizing: border-box;
+  overflow: visible;
+  padding: 2px;
+  font-family: var(--pm-ff);
+  color: var(--pm-text);
+  background: transparent;
+  transition: gap var(--pm-files-rail-ms) var(--pm-files-rail-ease);
+}
+.pm-files.is-msg-collapsed {
+  gap: 0;
+}
+.pm-files-left {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.pm-files-right {
+  flex: 0 0 var(--pm-files-rail-w);
+  width: var(--pm-files-rail-w);
+  min-width: var(--pm-files-rail-w);
+  max-width: var(--pm-files-rail-w);
+  min-height: 0;
+  height: auto;
+  align-self: stretch;
+  padding: 0;
+  box-sizing: border-box;
+  /* curtain aperture — clips the fixed-width panel */
+  overflow: hidden;
+  transition:
+    flex-basis var(--pm-files-rail-ms) var(--pm-files-rail-ease),
+    width var(--pm-files-rail-ms) var(--pm-files-rail-ease),
+    min-width var(--pm-files-rail-ms) var(--pm-files-rail-ease),
+    max-width var(--pm-files-rail-ms) var(--pm-files-rail-ease);
+}
+.pm-files.is-msg-collapsed .pm-files-right {
+  flex-basis: 0;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  /* no absolute jump mid-anim — stay in flow, just zero width */
+  pointer-events: none;
+}
+.pm-files.is-msg-collapsed .pm-files-right .pm-rail-stack {
+  overflow: visible;
+}
+/* Nested white panel — fixed open width, pin to right so clip wipes left→right */
+.pm-files-msg-panel {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: var(--pm-files-rail-w);
+  min-width: var(--pm-files-rail-w);
+  max-width: var(--pm-files-rail-w);
+  height: 100%;
+  min-height: 0;
+  margin-left: auto; /* stick to right edge of shrinking track */
+  overflow: hidden;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 4.5%, transparent);
+  box-shadow: var(--pm-shadow-sm);
+  opacity: 1;
+  transition: opacity calc(var(--pm-files-rail-ms) * 0.45) var(--pm-files-rail-ease);
+}
+/* Only fade near the end of retract / start of expand — primary motion is width clip */
+.pm-files-msg-panel.is-collapsed {
+  opacity: 0;
+  pointer-events: none;
+  transition-delay: 0ms;
+}
+.pm-files:not(.is-msg-collapsed) .pm-files-msg-panel {
+  transition-delay: calc(var(--pm-files-rail-ms) * 0.15);
+}
+/*
+ * Reopen pill — .pm-files top-right. Fades in after curtain mostly closed.
+ */
+.pm-files-msg-reopen {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.96);
+  pointer-events: none;
+  transform-origin: 100% 50%;
+  transition:
+    opacity 220ms var(--pm-files-rail-ease),
+    transform 220ms var(--pm-files-rail-ease),
+    color 160ms var(--pm-files-rail-ease),
+    box-shadow 160ms var(--pm-files-rail-ease);
+}
+.pm-files.is-msg-collapsed .pm-files-msg-reopen {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+  transition-delay: calc(var(--pm-files-rail-ms) * 0.55);
+}
+.pm-files:not(.is-msg-collapsed) .pm-files-msg-reopen {
+  transition-delay: 0ms;
+}
+.pm-files-msg-reopen:hover {
+  color: var(--pm-green);
+  box-shadow: var(--pm-shadow);
+}
+.pm-files-msg-reopen .pm-files-msg-count {
+  margin-left: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-files,
+  .pm-files-right,
+  .pm-files-msg-panel,
+  .pm-files-msg-reopen {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+}
+
+.pm-files-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 2px 4px;
+  min-height: 28px;
+}
+
+.pm-files-tb-btn {
+  height: 24px !important;
+  gap: 4px !important;
+  padding: 0 6px !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  line-height: 1 !important;
+  color: var(--pm-muted) !important;
+  border-radius: var(--pm-r-sm) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transition:
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-files-tb-btn:hover:not(:disabled) {
+  color: var(--pm-ink) !important;
+  background: rgba(18, 20, 16, 0.05) !important;
+}
+.pm-files-tb-btn.is-on,
+.pm-files-tb-btn[data-state="open"] {
+  color: var(--pm-green) !important;
+  background: var(--pm-green-wash) !important;
+}
+.pm-files-tb-btn.is-danger {
+  color: var(--pm-danger) !important;
+}
+.pm-files-tb-btn.is-danger:hover:not(:disabled) {
+  color: var(--pm-danger) !important;
+  background: color-mix(in srgb, var(--pm-danger) 10%, transparent) !important;
+}
+.pm-files-tb-btn.is-accent {
+  color: var(--pm-green) !important;
+  background: var(--pm-green-soft) !important;
+}
+.pm-files-tb-btn.is-accent:hover:not(:disabled) {
+  background: var(--pm-green-soft) !important;
+  color: var(--pm-green-deep) !important;
+}
+.pm-files-tb-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.pm-files-tb-icon {
+  width: 24px !important;
+  height: 24px !important;
+  padding: 0 !important;
+  color: var(--pm-muted) !important;
+  border-radius: var(--pm-r-sm) !important;
+  background: transparent !important;
+  transition:
+    color 160ms var(--pm-ease),
+    background 160ms var(--pm-ease);
+}
+.pm-files-tb-icon:hover:not(:disabled) {
+  color: var(--pm-ink) !important;
+  background: rgba(18, 20, 16, 0.05) !important;
+}
+.pm-files-tb-icon:disabled {
+  opacity: 0.35;
+}
+.pm-files-tb-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pm-files-tb-label {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 4px;
+  font: var(--pm-t-meta);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--pm-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.pm-files-tb-label.is-accent {
+  color: color-mix(in srgb, var(--pm-green) 75%, var(--pm-muted));
+}
+
+.pm-files-tb-div {
+  width: 1px;
+  height: 12px;
+  margin: 0 2px;
+  align-self: center;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--pm-ink) 10%, transparent);
+}
+
+/* Dropdown menus (Move / Archive / Sort) — nested white + soft shadow */
+.pm-files-menu {
+  z-index: 50;
+  min-width: 220px;
+  padding: 4px 0;
+  border: none;
+  border-radius: var(--pm-r-sm);
+  background: #ffffff;
+  color: var(--pm-ink);
+  box-shadow: var(--pm-shadow);
+}
+.pm-files-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease);
+}
+.pm-files-menu-item:hover {
+  background: var(--pm-green-wash);
+}
+.pm-files-menu-item.is-danger:hover {
+  background: color-mix(in srgb, var(--pm-danger) 8%, transparent);
+}
+.pm-files-menu-item-title {
+  display: block;
+  font: var(--pm-t-title);
+  color: var(--pm-ink);
+}
+.pm-files-menu-item.is-danger .pm-files-menu-item-title {
+  color: var(--pm-danger);
+}
+.pm-files-menu-item-desc {
+  display: block;
+  margin-top: 2px;
+  font: var(--pm-t-meta);
+  color: var(--pm-faint);
+  line-height: 1.35;
+}
+.pm-files-menu-opt {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  text-align: left;
+  font: var(--pm-t-meta);
+  color: var(--pm-text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease), color 140ms var(--pm-ease);
+}
+.pm-files-menu-opt:hover {
+  background: var(--pm-green-wash);
+}
+.pm-files-menu-opt.is-on {
+  background: var(--pm-green-soft);
+  color: var(--pm-green);
+}
+
+/* Icon grid cells */
+.pm-files-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 88px;
+  flex-shrink: 0;
+  padding: 8px;
+  border-radius: var(--pm-r-sm);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 160ms var(--pm-ease),
+    box-shadow 160ms var(--pm-ease);
+}
+.pm-files-item:hover:not(.is-busy) {
+  background: rgba(18, 20, 16, 0.04);
+}
+.pm-files-item.is-selected:not(.is-busy) {
+  background: var(--pm-green-wash);
+  box-shadow: inset 0 0 0 1px var(--pm-green-soft);
+}
+.pm-files-item.is-archived {
+  opacity: 0.42;
+}
+.pm-files-item.is-busy {
+  cursor: default;
+  background: var(--pm-green-wash);
+  box-shadow: inset 0 0 0 1px var(--pm-green-soft);
+}
+.pm-files-item-name {
+  width: 100%;
+  text-align: center;
+  font: var(--pm-t-meta);
+  color: var(--pm-muted);
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-files-item.is-archived .pm-files-item-name {
+  color: var(--pm-faint);
+}
+.pm-files-item-meta {
+  font: var(--pm-t-meta);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+  font-variant-numeric: tabular-nums;
+}
+.pm-files-item-meta.is-busy {
+  color: var(--pm-green);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.pm-files-item-badge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font: var(--pm-t-meta);
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--pm-muted);
+  background: color-mix(in srgb, var(--pm-ink) 6%, #ffffff);
+  font-variant-numeric: tabular-nums;
+  transform: scale(0.92);
+  transform-origin: bottom right;
+}
+.pm-files-item-check {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--pm-green);
+  color: var(--pm-on);
+}
+.pm-files-empty {
+  width: 100%;
+  padding: 32px 12px;
+  text-align: center;
+  font: var(--pm-t-body);
+  color: var(--pm-faint);
+}
+
+/* Breadcrumb strip — soft top rule, no hard grid */
+.pm-files-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 6px 10px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  font: var(--pm-t-meta);
+  border-top: 1px solid color-mix(in srgb, var(--pm-ink) 6%, transparent);
+}
+.pm-files-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 160px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pm-muted);
+  font: var(--pm-t-meta);
+  cursor: pointer;
+  transition:
+    color 140ms var(--pm-ease),
+    background 140ms var(--pm-ease);
+}
+.pm-files-crumb:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.05);
+}
+.pm-files-crumb.is-current {
+  color: var(--pm-ink);
+  font-weight: 400;
+  cursor: default;
+}
+.pm-files-crumb.is-current:hover {
+  background: transparent;
+}
+.pm-files-crumb-sep {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--pm-faint);
+  opacity: 0.55;
+}
+
+/* Title band — spacing only; identity via type + green count, not fills */
+.pm-files-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 14px 14px 6px;
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+/* Message list — separate by gap + soft hover chips, never lines */
+.pm-files-msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 10px 14px;
+}
+.pm-msg-card {
+  padding: 10px 10px 11px;
+  font: var(--pm-t-body);
+  color: var(--pm-text);
+  background: transparent;
+  border: none;
+  border-radius: var(--pm-r-sm, 8px);
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-msg-card:hover {
+  background: var(--pm-green-wash);
+}
+.pm-msg-card.is-active {
+  background: var(--pm-green-soft);
+  box-shadow: none;
+}
+.pm-files-msg-title {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+}
+.pm-files-msg-count {
+  font: var(--pm-t-meta);
+  color: var(--pm-green);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--pm-green-wash);
+}
+.pm-files-scope-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 4px 10px 8px;
+}
+.pm-files-scope-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 5px 4px;
+  border: none;
+  border-radius: var(--pm-r-sm);
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--pm-muted);
+  /* no grey slab — transparent + wash only */
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 160ms var(--pm-ease),
+    background 160ms var(--pm-ease);
+}
+.pm-files-scope-btn:hover {
+  color: var(--pm-ink);
+  background: color-mix(in srgb, var(--pm-ink) 3.5%, transparent);
+}
+.pm-files-scope-btn.is-on {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+.pm-files-scope-hint {
+  padding: 0 10px 8px;
+  font: var(--pm-t-meta);
+  color: var(--pm-faint);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-files-msg-toggle {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--pm-r-sm);
+  color: var(--pm-muted);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  cursor: pointer;
+  transition:
+    color 160ms var(--pm-ease),
+    background 160ms var(--pm-ease),
+    box-shadow 160ms var(--pm-ease);
+}
+.pm-files-msg-toggle:hover {
+  color: var(--pm-ink);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow);
+}
+
+/* All Files list rows */
+.pm-files-list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  font: var(--pm-t-body);
+  color: var(--pm-text);
+  border-bottom: 1px dashed color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease), opacity 140ms var(--pm-ease);
+}
+.pm-files-list-row:hover {
+  background: var(--pm-green-wash);
+}
+.pm-files-list-row.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pm-files-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.35;
+  color: var(--pm-green);
+  background: var(--pm-green-soft);
+}
+.pm-files-coverage {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-radius: var(--pm-r-sm);
+  font: var(--pm-t-meta);
+  line-height: 1.5;
+  color: var(--pm-muted);
+  background: var(--pm-green-wash);
+  border: 1px dashed color-mix(in srgb, var(--pm-green) 18%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-files-item,
+  .pm-files-tb-btn,
+  .pm-files-scope-btn,
+  .pm-files-menu-item,
+  .pm-files-menu-opt,
+  .pm-files-crumb,
+  .pm-files-msg-toggle,
+  .pm-files-list-row {
+    transition: none;
+  }
+}
 
 /*
  * Web-search HITL confirm — Premium soft card (main chat + Quick Chat)
@@ -3677,10 +4354,40 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
  * Diamond FAB — above To-do card (top-right of right rail).
  * Hint bubble: left of diamond, slightly elevated (左边偏上) — see quick-chat.tsx.
  */
+/*
+ * QC diamond park — stage content top-right (below tabs).
+ * Same coordinates on Overview / Files / Timeline so the icon never jumps.
+ * Config hides the FAB via fabVisible=false.
+ */
+.pm-qc-fab-park {
+  position: absolute;
+  /* Align with former rail-top diamond (above right rail / content top) */
+  top: -40px;
+  right: 4px;
+  width: 40px;
+  height: 40px;
+  z-index: 50;
+  pointer-events: none;
+  overflow: visible;
+}
+.pm-qc-fab-park > * {
+  pointer-events: auto;
+}
 .pm-qc-fab {
   z-index: 50;
   overflow: visible;
 }
+/* Portaled into [data-pm-qc-fab-anchor] — fill the park box */
+.pm-qc-fab--park {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: visible;
+}
+/* Legacy: rail-relative FAB (float still uses rail host) */
 .pm-qc-fab--rail {
   position: absolute;
   top: -44px;

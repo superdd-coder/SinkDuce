@@ -349,13 +349,11 @@ export function MessageCard({
   return (
     <div
       className={cn(
-        "rounded-md p-2 text-xs group cursor-pointer hover:bg-accent/60 transition-colors relative min-w-0 max-w-full overflow-x-hidden",
-        isVersionUpdate
-          ? "bg-muted/20 border border-border/50"
-          : isSystem
-            ? "bg-muted/30 border border-border/30"
-            : "bg-background",
-        isActive && "bg-primary/10 ring-1 ring-primary/40 hover:bg-primary/15",
+        /* No fill — soft hairline separates cards (see .pm-msg-card) */
+        "pm-msg-card group relative min-w-0 max-w-full overflow-x-hidden cursor-pointer",
+        isVersionUpdate && "is-version",
+        isSystem && !isVersionUpdate && "is-system",
+        isActive && "is-active",
       )}
       onClick={() => onView(msg)}
     >

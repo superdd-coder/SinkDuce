@@ -246,21 +246,21 @@ export function ClassicFilesDialog({
           )}
         >
           <DialogHeader className="shrink-0 pr-8">
-            <DialogTitle className="flex items-center gap-2 text-base font-normal">
-              <List className="h-4 w-4 text-muted-foreground" />
+            <DialogTitle className="flex items-center gap-2">
+              <List className="h-4 w-4 text-[var(--pm-muted)]" />
               All Files
             </DialogTitle>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="pm-meta">
               Flat list of every document in this collection.
             </p>
           </DialogHeader>
 
           {coverage ? (
-            <div className="shrink-0 text-[11px] leading-relaxed px-3 py-2 border border-dashed border-border bg-muted/30 t-sans-family">
-              <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground/70">
+            <div className="pm-files-coverage">
+              <span className="pm-label" style={{ display: "inline" }}>
                 Coverage ·{" "}
               </span>
-              <span className="text-muted-foreground">{coverage}</span>
+              <span>{coverage}</span>
             </div>
           ) : null}
 
@@ -268,12 +268,12 @@ export function ClassicFilesDialog({
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
               {initialLoading && files.length === 0 ? (
-                <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                <div className="flex items-center gap-2 py-6 pm-meta">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Loading…
                 </div>
               ) : files.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-6">No files yet</p>
+                <p className="pm-meta py-6">No files yet</p>
               ) : (
                 <div className="space-y-0">
                   {files.map((file) => {
@@ -283,12 +283,9 @@ export function ClassicFilesDialog({
                     <div
                       key={file.source}
                       className={cn(
-                        "flex items-center gap-3 py-2.5 text-sm border-b border-dashed border-border text-foreground transition-opacity group",
-                        ingesting
-                          ? "opacity-50 cursor-not-allowed"
-                          : "cursor-pointer",
-                        deletingSource === file.source &&
-                          "opacity-50 pointer-events-none"
+                        "pm-files-list-row group",
+                        (ingesting || deletingSource === file.source) &&
+                          "is-disabled"
                       )}
                       onClick={() => {
                         if (ingesting) {
@@ -311,42 +308,23 @@ export function ClassicFilesDialog({
                           style={{ width: "72px" }}
                         >
                           {file.file_type === "note" && (
-                            <span
-                              className="text-[10px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
-                              style={{
-                                background: "rgba(37,99,235,0.08)",
-                                color: "hsl(217.2 91.2% 59.8%)",
-                                borderRadius: "2px",
-                              }}
-                            >
-                              Note
-                            </span>
+                            <span className="pm-files-tag">Note</span>
                           )}
                           {file.has_meeting && (
-                            <span
-                              className="text-[10px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
-                              style={{
-                                background: "rgba(217,119,6,0.08)",
-                                color: "hsl(32.2 94.6% 43.7%)",
-                                borderRadius: "2px",
-                              }}
-                            >
-                              Meeting
-                            </span>
+                            <span className="pm-files-tag">Meeting</span>
                           )}
                         </span>
-                        <span className="truncate text-xs">
+                        <span className="truncate pm-title">
                           {file.display_name || file.source}
                         </span>
                       </div>
-                      <span className="text-[10px] font-medium text-muted-foreground tabular-nums">
+                      <span className="pm-meta tabular-nums">
                         {file.chunk_count} chunks
                       </span>
                       {file.has_summary !== null && (
                         <button
                           type="button"
-                          className="shrink-0 flex items-center gap-1.5 cursor-pointer"
-                          style={{ background: "none", border: "none" }}
+                          className="shrink-0 flex items-center gap-1.5 cursor-pointer bg-transparent border-0"
                           onClick={(e) => void handleToggleDefinitive(file, e)}
                           title={
                             file.include_in_summary !== false
@@ -355,14 +333,15 @@ export function ClassicFilesDialog({
                           }
                         >
                           {generatingSummaries.has(file.source) ? (
-                            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                            <Loader2 className="h-3 w-3 animate-spin text-[var(--pm-faint)]" />
                           ) : (
                             <span
-                              className={`flex items-center justify-center w-3.5 h-3.5 rounded-sm border transition-colors ${
+                              className={cn(
+                                "flex items-center justify-center w-3.5 h-3.5 rounded-sm border transition-colors",
                                 file.include_in_summary !== false
-                                  ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-muted-foreground/30 bg-transparent"
-                              }`}
+                                  ? "border-[var(--pm-green)] bg-[var(--pm-green)] text-[var(--pm-on)]"
+                                  : "border-[var(--pm-faint)] bg-transparent"
+                              )}
                             >
                               {file.include_in_summary !== false && (
                                 <svg
@@ -382,11 +361,12 @@ export function ClassicFilesDialog({
                             </span>
                           )}
                           <span
-                            className={`text-[10px] font-medium uppercase tracking-[0.1em] ${
+                            className={cn(
+                              "pm-label",
                               file.include_in_summary !== false
-                                ? "text-foreground"
-                                : "text-muted-foreground"
-                            }`}
+                                ? "text-[var(--pm-ink)]"
+                                : "text-[var(--pm-faint)]"
+                            )}
                           >
                             Definitive
                           </span>
@@ -394,8 +374,7 @@ export function ClassicFilesDialog({
                       )}
                       <button
                         type="button"
-                        className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
-                        style={{ background: "none", border: "none" }}
+                        className="pm-meta opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-[var(--pm-danger)] bg-transparent border-0"
                         onClick={(e) => {
                           e.stopPropagation()
                           setDeleteFileTarget(file.source)
@@ -410,32 +389,30 @@ export function ClassicFilesDialog({
             </div>
 
             {/* Pinned bottom: collapsible old versions (version history, not Archive folder) */}
-            <div className="shrink-0 border-t border-border bg-background pt-2 relative z-10">
+            <div className="shrink-0 pt-2 relative z-10 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
               <button
                 type="button"
                 aria-expanded={oldVersionsOpen}
-                className="w-full shrink-0 flex items-center gap-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className="w-full shrink-0 flex items-center gap-2 py-1.5 text-left pm-meta hover:text-[var(--pm-ink)] transition-colors"
                 onClick={() => setOldVersionsOpen((v) => !v)}
               >
                 <ChevronRight
                   className={cn(
-                    "h-3.5 w-3.5 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+                    "h-3.5 w-3.5 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                     oldVersionsOpen && "rotate-90"
                   )}
                 />
                 <History className="h-3.5 w-3.5 shrink-0" />
-                <span className="font-medium uppercase tracking-[0.08em] text-[10px]">
-                  Old versions
-                </span>
-                <span className="tabular-nums text-[10px] text-muted-foreground/80">
+                <span className="pm-label">Old versions</span>
+                <span className="pm-meta tabular-nums">
                   {oldVersionsLoading ? "…" : oldVersions.length}
                 </span>
               </button>
 
-              {/* Height animate via grid 0fr → 1fr (keeps exit animation smooth) */}
+              {/* Height animate via grid 0fr → 1fr (open/close same duration) */}
               <div
                 className={cn(
-                  "grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+                  "grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                   oldVersionsOpen
                     ? "grid-rows-[1fr] opacity-100"
                     : "grid-rows-[0fr] opacity-0"
@@ -443,23 +420,17 @@ export function ClassicFilesDialog({
               >
                 <div className="min-h-0 overflow-hidden">
                   <div
-                    className={cn(
-                      "overflow-y-auto overscroll-contain pb-1 bg-background max-h-[min(32vh,260px)]",
-                      "transition-[transform] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-                      oldVersionsOpen
-                        ? "translate-y-0"
-                        : "-translate-y-1"
-                    )}
+                    className="overflow-y-auto overscroll-contain pb-1 max-h-[min(32vh,260px)]"
                     // Keep panel non-interactive while collapsed
                     inert={!oldVersionsOpen ? true : undefined}
                   >
                     {oldVersionsLoading ? (
-                      <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-2 py-3 pm-meta">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         Loading…
                       </div>
                     ) : oldVersions.length === 0 ? (
-                      <p className="text-xs text-muted-foreground py-2 pl-6">
+                      <p className="pm-meta py-2 pl-6">
                         No archived versions yet. Updating a file keeps the
                         previous blob as an old version (not moved into Archive).
                       </p>
@@ -471,7 +442,7 @@ export function ClassicFilesDialog({
                           <div
                             key={ov.version_id}
                             className={cn(
-                              "flex items-center gap-2.5 py-2 pl-1 pr-1 text-xs border-b border-dashed border-border/70 cursor-pointer hover:bg-muted/40 transition-colors bg-background",
+                              "pm-files-list-row",
                               blobMissing && "opacity-70"
                             )}
                             onClick={() =>
@@ -495,24 +466,24 @@ export function ClassicFilesDialog({
                                 filename: ov.filename,
                                 original_ext: ov.original_ext,
                               }}
-                              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                              className="h-3.5 w-3.5 shrink-0 text-[var(--pm-muted)]"
                             />
                             <div className="flex-1 min-w-0">
-                              <div className="truncate text-foreground/90">
+                              <div className="truncate pm-title">
                                 {/* Always this history row's blob — never current label */}
-                                <span className="text-muted-foreground tabular-nums mr-1.5">
+                                <span className="pm-meta tabular-nums mr-1.5">
                                   v{ov.version_no}
                                 </span>
                                 {ov.filename ||
                                   ov.storage_file_id ||
                                   `version ${ov.version_no}`}
                                 {blobMissing ? (
-                                  <span className="ml-1.5 text-[10px] text-amber-600 dark:text-amber-500">
+                                  <span className="ml-1.5 pm-meta text-[var(--pm-danger)]">
                                     · blob missing
                                   </span>
                                 ) : null}
                               </div>
-                              <div className="truncate text-[10px] text-muted-foreground">
+                              <div className="truncate pm-meta">
                                 history of{" "}
                                 {ov.current_display_name ||
                                   ov.current_filename ||
@@ -522,7 +493,7 @@ export function ClassicFilesDialog({
                                   : ""}
                               </div>
                             </div>
-                            <span className="shrink-0 text-[10px] text-muted-foreground/80 tabular-nums hidden sm:inline">
+                            <span className="shrink-0 pm-meta tabular-nums hidden sm:inline">
                               {formatTime(ov.created_at)}
                             </span>
                           </div>
@@ -585,22 +556,24 @@ export function ClassicFilesDialog({
           <DialogHeader>
             <DialogTitle>Delete File</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
+          <p className="pm-dialog-body">
             Are you sure you want to delete{" "}
-            <span className="font-medium text-foreground truncate max-w-[200px] inline-block align-bottom">
+            <span className="font-medium text-[var(--pm-ink)] truncate max-w-[200px] inline-block align-bottom">
               {deleteFileDisplay}
             </span>
             ? This will remove all its chunks from the database.
           </p>
           <div className="flex justify-end gap-2 pt-2">
             <Button
-              variant="outline"
+              variant="ghost"
+              size="sm"
               onClick={() => setDeleteFileTarget(null)}
             >
               Cancel
             </Button>
             <Button
               variant="destructive"
+              size="sm"
               onClick={() => void handleDeleteFile()}
             >
               Delete

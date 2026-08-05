@@ -61,14 +61,14 @@ export function FolderUploadConfirmDialog() {
         if (!v && !busy) cancelFolderUploadConfirm()
       }}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-sm">Upload folder?</DialogTitle>
+          <DialogTitle>Upload folder?</DialogTitle>
         </DialogHeader>
-        <div className="text-xs text-muted-foreground">
+        <div className="pm-dialog-body">
           <p>
             Upload{" "}
-            <span className="font-medium text-foreground tabular-nums">
+            <span className="font-medium text-[var(--pm-ink)] tabular-nums">
               {stats.keep}
             </span>{" "}
             file{stats.keep === 1 ? "" : "s"}
@@ -76,7 +76,7 @@ export function FolderUploadConfirmDialog() {
               <>
                 {" "}
                 from{" "}
-                <span className="font-medium text-foreground">
+                <span className="font-medium text-[var(--pm-ink)]">
                   {stats.topNames.join(", ")}
                   {stats.topNames.length >= 3 ? "…" : ""}
                 </span>
@@ -85,14 +85,14 @@ export function FolderUploadConfirmDialog() {
             .
           </p>
           {stats.keep === 0 && (
-            <p className="mt-2 text-amber-600 dark:text-amber-400">
+            <p className="mt-2 text-[var(--pm-danger)]">
               No uploadable files found in the selection.
             </p>
           )}
         </div>
         <DialogFooter className="gap-2 sm:gap-2">
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             disabled={busy}
             onClick={() => cancelFolderUploadConfirm()}
@@ -101,6 +101,7 @@ export function FolderUploadConfirmDialog() {
           </Button>
           <Button
             size="sm"
+            className="pm-btn-pri"
             disabled={busy || stats.keep === 0}
             onClick={() => void handleConfirm()}
           >

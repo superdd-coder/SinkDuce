@@ -31,6 +31,8 @@ const MAX_MESSAGES = 30
 /** Slide duration — keep in sync with CSS --pm-qc-motion if added */
 const ANIM_DURATION = 320
 const RAIL_ANCHOR_SEL = "[data-pm-rail-anchor]"
+/** Stable diamond park on stage — same top-right for all content tabs */
+const FAB_ANCHOR_SEL = "[data-pm-qc-fab-anchor]"
 
 /** Count Q&A turns: 1 user message = 1 round (request + reply). */
 function countTurns(msgs: { role: string; content: string }[]): number {
@@ -145,10 +147,20 @@ interface QuickChatProps {
   files?: { source: string; display_name?: string }[]
   className?: string
   /**
-   * When true, size/position the float card to Overview right rail
-   * (To-do + Notes + Meetings). When false, use a viewport fallback.
+   * When true, size the float card to the active right rail
+   * (Overview To-do stack or Files Messages). When false, viewport fallback.
    */
   railActive?: boolean
+  /**
+   * Tab / surface key so we re-bind the float rail host when switching
+   * Overview ↔ Files.
+   */
+  railKey?: string
+  /**
+   * Show the diamond FAB. False on Config (Settings) — icon stays parked
+   * elsewhere; do not use fixed fallback that drifts.
+   */
+  fabVisible?: boolean
 }
 
 export function QuickChat({
@@ -161,6 +173,8 @@ export function QuickChat({
   files,
   className,
   railActive = true,
+  railKey,
+  fabVisible = true,
 }: QuickChatProps) {
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
@@ -191,10 +205,29 @@ export function QuickChat({
   const diamondSettleRafRef = useRef<number | null>(null)
   const diamondSettleAnimsRef = useRef<Animation[]>([])
   /**
-   * Portal host = Overview right rail. Absolute inset-0 always matches
-   * To-do/Notes/Meetings column — no getBoundingClientRect height drift.
+   * Float host = active panel's right rail (cover To-do / Messages).
+   * Prefer `.pm-panel-fade.is-active` so idle keep-alive rails are ignored.
    */
   const [railHost, setRailHost] = useState<HTMLElement | null>(null)
+  /**
+   * FAB host = stage-level park — same coordinates on Overview / Files / Timeline.
+   * Never use fixed viewport fallback for the diamond (Timeline/Config looked wrong).
+   */
+  const [fabHost, setFabHost] = useState<HTMLElement | null>(null)
+
+  useLayoutEffect(() => {
+    const findFab = () => {
+      const el = document.querySelector(FAB_ANCHOR_SEL) as HTMLElement | null
+      setFabHost(el)
+    }
+    findFab()
+    const t = window.setTimeout(findFab, 0)
+    const t2 = window.setTimeout(findFab, 50)
+    return () => {
+      window.clearTimeout(t)
+      window.clearTimeout(t2)
+    }
+  }, [collectionId, railKey, fabVisible])
 
   useLayoutEffect(() => {
     if (!railActive) {
@@ -202,18 +235,23 @@ export function QuickChat({
       return
     }
     const find = () => {
-      const el = document.querySelector(RAIL_ANCHOR_SEL) as HTMLElement | null
-      setRailHost(el)
+      const active =
+        (document.querySelector(
+          `.pm-panel-fade.is-active ${RAIL_ANCHOR_SEL}`
+        ) as HTMLElement | null) ||
+        (document.querySelector(RAIL_ANCHOR_SEL) as HTMLElement | null)
+      setRailHost(active)
     }
     find()
-    // InfoPanel may mount one frame later when switching collection / tab
     const t = window.setTimeout(find, 0)
     const t2 = window.setTimeout(find, 50)
+    const t3 = window.setTimeout(find, 200)
     return () => {
       window.clearTimeout(t)
       window.clearTimeout(t2)
+      window.clearTimeout(t3)
     }
-  }, [railActive, collectionId, open])
+  }, [railActive, railKey, collectionId, open])
 
   // ── Init session ──
 
@@ -983,18 +1021,7 @@ export function QuickChat({
   )
 
   const fabBlock = (
-    <div
-      className={cn(
-        "pm-qc-fab",
-        railHost ? "pm-qc-fab--rail" : "pm-qc-fab--fallback"
-      )}
-      style={
-        /* Inline wins over stale CSS: diamond above To-do card */
-        railHost
-          ? { top: -44, right: 0, position: "absolute", zIndex: 50, overflow: "visible" }
-          : { top: 92, right: 28, position: "fixed", zIndex: 50, overflow: "visible" }
-      }
-    >
+    <div className="pm-qc-fab pm-qc-fab--park">
       {/*
         Row: bubble LEFT of diamond, nudged slightly UP (左边偏上).
         Shared bob on the group.
@@ -1048,21 +1075,15 @@ export function QuickChat({
   return (
     <>
       {/*
-        Panel + FAB portaled into right rail when on Overview:
-        - float fills rail (covers To-do / Notes / Meetings)
-        - diamond sits above the To-do card (top of rail)
+        Float: portal into right rail when Overview/Files (covers To-do/Messages).
+        Fallback: fixed column when no rail (Timeline).
+        FAB: always stage park — same top-right for all content tabs.
       */}
-      {railHost ? (
-        <>
-          {createPortal(floatPanel, railHost)}
-          {createPortal(fabBlock, railHost)}
-        </>
-      ) : (
-        <>
-          {floatPanel}
-          {fabBlock}
-        </>
-      )}
+      {railHost
+        ? createPortal(floatPanel, railHost)
+        : floatPanel}
+      {fabVisible &&
+        (fabHost ? createPortal(fabBlock, fabHost) : null)}
     </>
   )
 }

@@ -190,10 +190,10 @@ export function LogMessageDialog({
 
   // Enter/exit: keep mounted (portal keepMounted + held payload on close)
   const dialogMotion = cn(
-    "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-    "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-3",
+    "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+    "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-2",
     "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2",
-    "data-closed:duration-280 data-open:duration-320"
+    "data-closed:duration-300 data-open:duration-300"
   )
 
   if (!activeMessage) return null
@@ -205,27 +205,27 @@ export function LogMessageDialog({
         <Dialog open={open} onOpenChange={onOpenChange}>
           <DialogContent
             className={cn(
-              "w-[min(1200px,94vw)] max-w-[94vw] sm:max-w-[94vw]",
+              "pm-dialog w-[min(1200px,94vw)] max-w-[94vw] sm:max-w-[94vw]",
               "h-[min(88vh,820px)] flex flex-col gap-0 p-0 overflow-hidden",
               dialogMotion
             )}
           >
-            <DialogHeader className="px-4 py-3 border-b border-border shrink-0">
-              <DialogTitle className="text-sm flex items-center gap-2 min-w-0 pr-8">
+            <DialogHeader className="px-4 py-3 shrink-0 shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
+              <DialogTitle className="flex items-center gap-2 min-w-0 pr-8">
                 <Badge
                   variant="secondary"
-                  className="text-[9px] shrink-0 border-transparent bg-[var(--ze-green,#1A5E3D)]/15 text-[var(--ze-green,#1A5E3D)]"
+                  className="pm-meta shrink-0 border-transparent bg-[var(--pm-green-soft)] text-[var(--pm-green)]"
                 >
                   version update
                 </Badge>
                 {activeVersion && (
-                  <span className="text-xs text-muted-foreground shrink-0">
+                  <span className="pm-meta shrink-0">
                     v{activeVersion.version_no}
                     {activeVersion.archived ? " · archived" : ""}
                     {activeIsCurrent ? " · current" : ""}
                   </span>
                 )}
-                <span className="text-[11px] text-muted-foreground font-normal tabular-nums ml-auto mr-2">
+                <span className="pm-meta tabular-nums ml-auto mr-2">
                   {formatTime(activeMessage.created_at)}
                 </span>
               </DialogTitle>
@@ -233,7 +233,7 @@ export function LogMessageDialog({
 
             <div className="flex-1 min-h-0 flex overflow-hidden">
               {/* Left: version file Preview / Parse / Summary / Chunks */}
-              <div className="flex-[1.35] min-w-0 min-h-0 flex flex-col border-r border-border p-3">
+              <div className="flex-[1.35] min-w-0 min-h-0 flex flex-col shadow-[inset_-1px_0_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)] p-3">
                 <VersionFileTabs
                   collectionId={collectionId}
                   docSource={docSource}
@@ -323,13 +323,13 @@ export function LogMessageDialog({
             if (!deleting) setDeleteConfirmOpen(v)
           }}
         >
-          <DialogContent className="max-w-sm">
+          <DialogContent className="pm-dialog max-w-sm">
             <DialogHeader>
               <DialogTitle>Delete this version?</DialogTitle>
             </DialogHeader>
-            <p className="text-sm text-muted-foreground">
+            <p className="pm-dialog-body">
               Permanently remove{" "}
-              <span className="font-medium text-foreground">
+              <span className="font-medium text-[var(--pm-ink)]">
                 v{activeVersion?.version_no}
                 {activeVersion?.storage_file_id
                   ? ` (${activeVersion.storage_file_id})`
@@ -340,7 +340,8 @@ export function LogMessageDialog({
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <Button
-                variant="outline"
+                variant="ghost"
+                size="sm"
                 disabled={deleting}
                 onClick={() => setDeleteConfirmOpen(false)}
               >
@@ -380,27 +381,31 @@ export function LogMessageDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "w-[min(900px,92vw)] max-w-[92vw] sm:max-w-[92vw]",
+          "pm-dialog w-[min(900px,92vw)] max-w-[92vw] sm:max-w-[92vw]",
           "h-[min(80vh,700px)] flex flex-col overflow-hidden",
           dialogMotion
         )}
       >
         <DialogHeader className="shrink-0">
-          <DialogTitle className="text-sm flex items-center gap-2 min-w-0 pr-28">
-            <Badge variant="secondary" className="text-[9px] shrink-0">
+          <DialogTitle className="flex items-center gap-2 min-w-0 pr-28">
+            <Badge
+              variant="secondary"
+              className="pm-meta shrink-0 border-transparent bg-[var(--pm-green-soft)] text-[var(--pm-green)]"
+            >
               message
             </Badge>
             {authorLabel && (
-              <span className="text-[11px] text-muted-foreground font-normal">
-                {authorLabel}
-              </span>
+              <span className="pm-meta">{authorLabel}</span>
             )}
             {activeMessage.edited_at && (
-              <Badge variant="outline" className="text-[9px]">
+              <Badge
+                variant="outline"
+                className="pm-meta border-[color-mix(in_srgb,var(--pm-ink)_12%,transparent)] text-[var(--pm-muted)]"
+              >
                 edited
               </Badge>
             )}
-            <span className="text-[11px] text-muted-foreground font-normal tabular-nums ml-auto">
+            <span className="pm-meta tabular-nums ml-auto">
               {formatTime(activeMessage.created_at)}
             </span>
           </DialogTitle>
@@ -408,7 +413,7 @@ export function LogMessageDialog({
             {editing ? (
               <>
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="xs"
                   disabled={saving}
                   onClick={() => {
@@ -420,6 +425,7 @@ export function LogMessageDialog({
                 </Button>
                 <Button
                   size="xs"
+                  className="pm-btn-pri"
                   disabled={saving || !content.trim()}
                   onClick={() => void handleSave()}
                 >
@@ -432,7 +438,7 @@ export function LogMessageDialog({
                   type="button"
                   variant="ghost"
                   size="xs"
-                  className="gap-1 h-7 px-2 text-muted-foreground hover:text-foreground"
+                  className="gap-1 h-7 px-2 text-[var(--pm-muted)] hover:text-[var(--pm-ink)]"
                   onClick={() => setEditing(true)}
                 >
                   <Pencil className="h-3 w-3" />
