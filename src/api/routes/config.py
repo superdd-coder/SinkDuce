@@ -105,12 +105,19 @@ async def update_config(req: ConfigUpdateRequest):
 
     # Only allow setting declared Pydantic model fields
     allowed_keys = set(getattr(type(section_data), "model_fields", {}).keys())
-    _int_fields = {"dimensions", "batch_size", "top_k", "rerank_top_k", "max_parallel_queries", "max_parallel_context", "batch_poll_interval"}
+    _int_fields = {
+        "dimensions", "batch_size", "top_k", "rerank_top_k",
+        "max_parallel_queries", "max_parallel_context", "batch_poll_interval",
+        "max_results", "confirm_timeout_sec",
+    }
+    _bool_fields = {"enabled", "is_ocr", "enable_formula", "enable_table", "use_reranker", "use_batch", "meeting_thinking"}
     for key, value in req.data.items():
         if key not in allowed_keys:
             continue
         if key in _int_fields and value is not None:
             value = int(value)
+        if key in _bool_fields and value is not None:
+            value = bool(value)
         setattr(section_data, key, value)
 
     save_config(config)
@@ -857,7 +864,7 @@ async def test_file_transcription_provider(provider_id: str):
             return cached_provider(cache_key, lambda: create_file_transcription_provider(provider))
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _test)
+        instance = await loop.run_in_executor(None, _test)
 
         # Connectivity check for remote providers with base_url
         if provider.base_url:
@@ -873,10 +880,18 @@ async def test_file_transcription_provider(provider_id: str):
             except Exception as e:
                 return {"success": False, "error": f"Connectivity check failed: {e}"}
 
-        _log.info("Test file transcription passed: %s (%s)", provider.name, provider.adapter)
+        # Prefer the model the adapter will actually use (may differ from config.model).
+        effective_model = getattr(instance, "_model", None) or provider.model or "(default)"
+        _log.info(
+            "Test file transcription passed: %s (adapter=%s model=%s)",
+            provider.name, provider.adapter, effective_model,
+        )
         return {
             "success": True,
-            "message": f"Adapter '{provider.adapter}' loaded successfully",
+            "message": (
+                f"OK — adapter '{provider.adapter}', model '{effective_model}' "
+                f"(load check only; does not call ASR)"
+            ),
         }
     except Exception as e:
         _log.warning("Test file transcription failed: %s (%s) - %s", provider.name, provider.adapter, e)
@@ -1019,11 +1034,20 @@ async def test_realtime_transcription_provider(provider_id: str):
         from src.meeting.transcription import create_realtime_transcription_provider
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, create_realtime_transcription_provider, provider)
-        _log.info("Test realtime transcription passed (direct): %s (%s)", provider.name, provider.adapter)
+        instance = await loop.run_in_executor(
+            None, create_realtime_transcription_provider, provider
+        )
+        effective_model = getattr(instance, "_model", None) or provider.model or "(default)"
+        _log.info(
+            "Test realtime transcription passed (direct): %s (adapter=%s model=%s)",
+            provider.name, provider.adapter, effective_model,
+        )
         return {
             "success": True,
-            "message": f"Adapter '{provider.adapter}' initialized successfully",
+            "message": (
+                f"OK — adapter '{provider.adapter}', model '{effective_model}' "
+                f"(load check only; does not call ASR)"
+            ),
         }
     except Exception as e:
         _log.warning("Test realtime transcription failed (direct): %s (%s) - %s", provider.name, provider.adapter, e)

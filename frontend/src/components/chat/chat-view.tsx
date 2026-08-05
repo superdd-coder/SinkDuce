@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
 import { MessageBubble } from "./message-bubble"
 import { ChatInput } from "./chat-input"
@@ -10,10 +11,41 @@ import { getLLMProviders } from "@/api/client"
 import type { Source } from "@/stores/app-store"
 
 export function ChatView() {
-  const { messages, setProviders, setActiveProvider, setActiveModel, activeProvider, activeModel, sessionId, sessions, isStreaming } = useAppStore()
+  const {
+    messages,
+    setProviders,
+    setActiveProvider,
+    setActiveModel,
+    activeProvider,
+    activeModel,
+    sessionId,
+    sessionHydratedId,
+    sessionLoading,
+    sessions,
+    isStreaming,
+    loadSessionMessages,
+  } = useAppStore(
+    useShallow((s) => ({
+      messages: s.messages,
+      setProviders: s.setProviders,
+      setActiveProvider: s.setActiveProvider,
+      setActiveModel: s.setActiveModel,
+      activeProvider: s.activeProvider,
+      activeModel: s.activeModel,
+      sessionId: s.sessionId,
+      sessionHydratedId: s.sessionHydratedId,
+      sessionLoading: s.sessionLoading,
+      sessions: s.sessions,
+      isStreaming: s.isStreaming,
+      loadSessionMessages: s.loadSessionMessages,
+    }))
+  )
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const userScrolledUp = useRef(false)
+  /** Stick to bottom while streaming until user intentionally scrolls. */
+  const stickToBottom = useRef(true)
+  /** Ignore scroll events caused by our own programmatic scroll. */
+  const ignoreScrollEvent = useRef(false)
   const [selectedSource, setSelectedSource] = useState<Source | null>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
 
@@ -38,34 +70,131 @@ export function ChatView() {
     loadProviders()
   }, [])
 
+  // Restore history whenever the active session is not yet hydrated
+  // (sessionId is persisted; messages are not — blank UI used to reuse an old session).
   useEffect(() => {
-    const { sessionId, loadSessionMessages, messages } = useAppStore.getState()
-    // Only load from backend if we don't already have messages for this session
-    if (sessionId && messages.length === 0) {
-      loadSessionMessages(sessionId)
+    if (!sessionId) return
+    if (sessionHydratedId === sessionId) return
+    if (sessionLoading) return
+    void loadSessionMessages(sessionId)
+  }, [sessionId, sessionHydratedId, sessionLoading, loadSessionMessages])
+
+  // Open / switch session → jump to bottom once history is hydrated
+  useEffect(() => {
+    if (!sessionId || sessionHydratedId !== sessionId || sessionLoading) return
+    stickToBottom.current = true
+    setShowScrollBtn(false)
+    // Wait for message DOM after hydrate
+    const t = window.setTimeout(() => {
+      const el = scrollRef.current
+      if (!el) return
+      ignoreScrollEvent.current = true
+      el.scrollTop = el.scrollHeight
+      requestAnimationFrame(() => {
+        ignoreScrollEvent.current = false
+      })
+    }, 50)
+    return () => clearTimeout(t)
+  }, [sessionId, sessionHydratedId, sessionLoading])
+
+  const pinRaf = useRef(0)
+  const pinToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const el = scrollRef.current
+    if (!el) return
+    // Coalesce rapid stream updates into one scroll per frame (prevents main-thread freeze)
+    if (behavior !== "smooth") {
+      if (pinRaf.current) return
+      pinRaf.current = requestAnimationFrame(() => {
+        pinRaf.current = 0
+        const box = scrollRef.current
+        if (!box || !stickToBottom.current) return
+        ignoreScrollEvent.current = true
+        box.scrollTop = box.scrollHeight
+        requestAnimationFrame(() => {
+          ignoreScrollEvent.current = false
+        })
+      })
+      return
     }
+    ignoreScrollEvent.current = true
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        ignoreScrollEvent.current = false
+      })
+    })
   }, [])
 
-  // Track scroll position — only auto-scroll if user is near bottom
+  const unlockStick = useCallback(() => {
+    if (ignoreScrollEvent.current) return
+    if (!stickToBottom.current) return
+    stickToBottom.current = false
+    setShowScrollBtn(true)
+  }, [])
+
+  // User wheel / touch → stop auto-follow for this stream
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = () => unlockStick()
+    const onTouch = () => unlockStick()
+    el.addEventListener("wheel", onWheel, { passive: true })
+    el.addEventListener("touchmove", onTouch, { passive: true })
+    return () => {
+      el.removeEventListener("wheel", onWheel)
+      el.removeEventListener("touchmove", onTouch)
+    }
+  }, [unlockStick])
+
   const onScroll = useCallback(() => {
+    if (ignoreScrollEvent.current) return
     const el = scrollRef.current
     if (!el) return
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    const up = dist > 80
-    userScrolledUp.current = up
-    setShowScrollBtn(up)
-  }, [])
-
-  const scrollToBottom = useCallback(() => {
-    userScrolledUp.current = false
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [])
-
-  useEffect(() => {
-    if (!userScrolledUp.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "instant" as any })
+    // Away from bottom → unlock; back at bottom → re-stick (user intent)
+    if (dist > 80) {
+      stickToBottom.current = false
+      setShowScrollBtn(true)
+    } else {
+      stickToBottom.current = true
+      setShowScrollBtn(false)
     }
-  }, [messages])
+  }, [])
+
+  /** Re-enable stick (jump-to-bottom button or new user message). */
+  const scrollToBottom = useCallback(() => {
+    stickToBottom.current = true
+    setShowScrollBtn(false)
+    if (pinRaf.current) {
+      cancelAnimationFrame(pinRaf.current)
+      pinRaf.current = 0
+    }
+    pinToBottom("smooth")
+  }, [pinToBottom])
+
+  // New send / stream starts → re-stick and pin bottom
+  const wasStreaming = useRef(false)
+  useEffect(() => {
+    if (isStreaming && !wasStreaming.current) {
+      stickToBottom.current = true
+      setShowScrollBtn(false)
+      pinToBottom("auto")
+    }
+    wasStreaming.current = isStreaming
+  }, [isStreaming, pinToBottom])
+
+  // While stuck, follow content growth — throttle during stream so layout
+  // thrash does not make the rest of the app feel unclickable.
+  const lastPinAt = useRef(0)
+  useEffect(() => {
+    if (!stickToBottom.current) return
+    if (isStreaming) {
+      const now = Date.now()
+      if (now - lastPinAt.current < 120) return
+      lastPinAt.current = now
+    }
+    pinToBottom("auto")
+  }, [messages, pinToBottom, isStreaming])
 
   const handleSelectSource = (source: Source) => {
     setSelectedSource(source)
@@ -81,7 +210,7 @@ export function ChatView() {
   const sessionTitle = currentSession?.title || "New Chat"
 
   return (
-    <div className={`flex flex-col h-full overflow-hidden relative ${isStreaming ? "sk-reasoning-flow" : ""}`} style={isStreaming ? { border: "1.5px solid transparent" } : undefined}>
+    <div className={`flex flex-col h-full overflow-hidden relative ${isStreaming ? "sk-reasoning-flow" : ""}`}>
       <div className="flex-1 flex min-h-0">
         {/* Session sidebar — left */}
         <SessionSidebar />
@@ -105,7 +234,17 @@ export function ChatView() {
           </div>
 
           <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto pb-44 relative">
-            {messages.length === 0 ? (
+            {sessionLoading || (sessionId && sessionHydratedId !== sessionId) ? (
+              <div
+                className="flex flex-col items-center justify-center h-full gap-2 py-20"
+                style={{ color: "var(--ze-muted)" }}
+              >
+                <p className="text-sm t-body-family" style={{ color: "var(--ze-ink)" }}>
+                  Loading conversation…
+                </p>
+                <p className="text-xs">Restoring messages for the selected session</p>
+              </div>
+            ) : messages.length === 0 ? (
               <div
                 className="flex flex-col items-center justify-center h-full gap-2 py-20"
                 style={{ color: "var(--ze-muted)" }}
@@ -147,7 +286,7 @@ export function ChatView() {
             </div>
           )}
 
-          {/* Floating chat input — positioned within main chat area */}
+          {/* Floating chat input */}
           <div className={`absolute bottom-4 left-0 right-0 z-10 pointer-events-none transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]`}>
             <div className="pointer-events-auto">
               <ChatInput />

@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
-import { flushSync } from "react-dom"
 import { Send, Loader2, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { createSession, getSession, deleteSession } from "@/api/client"
@@ -18,9 +17,14 @@ interface QAMessage {
 
 const MEETING_SESSION_PREFIX = "meeting_"
 const WARN_THRESHOLD = 20
-const MAX_MESSAGES = 30
+const MAX_MESSAGES = 50 // align with backend _MEETING_MAX_MESSAGES
 const ANIM_DURATION = 350
 const SIDEBAR_W = 400
+
+/** 1 user message = 1 round (request + reply). */
+function countTurns(msgs: { role: string; content: string }[]): number {
+  return msgs.filter((m) => m.role === "user").length
+}
 
 // ── Hint bubble config ──
 const HINT_MESSAGES = [
@@ -81,7 +85,9 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
   const abortRef = useRef<AbortController | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesScrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottom = useRef(true)
+  const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
@@ -117,14 +123,25 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
     try {
       const detail = await getSession(sid).catch(() => null)
       if (detail?.messages?.length) {
-        const msgs: QAMessage[] = detail.messages.map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          sources: m.sources ?? undefined,
-        }))
+        // Dialogue only (skip system transcript / tool placeholders)
+        const msgs: QAMessage[] = detail.messages
+          .filter((m) => {
+            if (m.role === "user") return true
+            if (m.role === "assistant") {
+              const meta = (m.metadata ?? {}) as Record<string, unknown>
+              if (!m.content && meta.tool_calls) return false
+              return !!(m.content || "").trim()
+            }
+            return false
+          })
+          .map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            sources: m.sources ?? undefined,
+          }))
         setMessages(msgs)
-        setMsgCount(detail.messages.length)
+        setMsgCount(countTurns(msgs))
       } else {
         await createSession(meetingTitle, [meetingId], sid).catch(() => {})
         setMessages([])
@@ -137,11 +154,52 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
     }
   }
 
-  // ── Auto-scroll ──
+  // ── Smart auto-scroll (aligned with Collection Quick Chat / main Chat) ──
+  // Stick while at bottom; unlock on scroll-up; re-stick when user returns to bottom.
+
+  const pinRaf = useRef(0)
+  const pinToBottom = useCallback(() => {
+    if (pinRaf.current) return
+    pinRaf.current = requestAnimationFrame(() => {
+      pinRaf.current = 0
+      const el = messagesScrollRef.current
+      if (!el || !stickToBottom.current) return
+      ignoreScrollEvent.current = true
+      el.scrollTop = el.scrollHeight
+      requestAnimationFrame(() => {
+        ignoreScrollEvent.current = false
+      })
+    })
+  }, [])
+
+  const unlockStick = useCallback(() => {
+    if (ignoreScrollEvent.current) return
+    stickToBottom.current = false
+  }, [])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    const el = messagesScrollRef.current
+    if (!el) return
+    const onWheel = () => unlockStick()
+    const onTouch = () => unlockStick()
+    el.addEventListener("wheel", onWheel, { passive: true })
+    el.addEventListener("touchmove", onTouch, { passive: true })
+    return () => {
+      el.removeEventListener("wheel", onWheel)
+      el.removeEventListener("touchmove", onTouch)
+    }
+  }, [unlockStick, open])
+
+  const lastPinAt = useRef(0)
+  useEffect(() => {
+    if (!stickToBottom.current) return
+    if (streaming) {
+      const now = Date.now()
+      if (now - lastPinAt.current < 80) return
+      lastPinAt.current = now
+    }
+    pinToBottom()
+  }, [messages, pinToBottom, streaming])
 
   // ── Auto-resize textarea ──
 
@@ -196,10 +254,15 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
       textareaRef.current.style.height = "auto"
     }
 
+    // New send → re-stick to bottom for this stream
+    stickToBottom.current = true
+
     const userMsg: QAMessage = { id: crypto.randomUUID(), role: "user", content: text, isNew: true }
     const assistantMsg: QAMessage = { id: crypto.randomUUID(), role: "assistant", content: "", isStreaming: true, isNew: true }
     setMessages((prev) => [...prev, userMsg, assistantMsg])
+    setMsgCount((c) => c + 1) // optimistic: one new round
     setStreaming(true)
+    requestAnimationFrame(() => pinToBottom())
 
     setTimeout(() => {
       setMessages((prev) => prev.map((m) => ({ ...m, isNew: false })))
@@ -231,6 +294,9 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
       const decoder = new TextDecoder()
       let buffer = ""
       let sources: QAMessage["sources"] = []
+      // Survive across network chunks (do not reset each read)
+      let eventType = ""
+      let gotDoneCount: number | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -238,21 +304,19 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split("\n")
         buffer = lines.pop() || ""
-        let eventType = ""
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             eventType = line.slice(7).trim()
           } else if (line.startsWith("data: ") && eventType) {
             try {
               const data = JSON.parse(line.slice(6))
-              flushSync(() => {
-                handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
-                if (eventType === "done" && data.message_count != null) {
-                  setMsgCount(data.message_count)
-                }
-              })
+              handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
+              if (eventType === "done" && typeof data.message_count === "number") {
+                gotDoneCount = data.message_count
+                setMsgCount(data.message_count)
+              }
             } catch (e) {
-              console.error("[QuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
+              console.error("[MeetingQuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
             }
             eventType = ""
           }
@@ -260,6 +324,8 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
       }
 
       updateAssistant(assistantMsg.id, undefined, sources.length > 0 ? sources : undefined)
+      // Server turn count preferred; assistant reply does not add a second count
+      if (gotDoneCount != null) setMsgCount(gotDoneCount)
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return
       updateAssistant(assistantMsg.id, `Error: ${String(err)}`)
@@ -267,7 +333,7 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, sessionId, meetingId])
+  }, [input, streaming, sessionId, meetingId, pinToBottom])
 
   const handleSSEEvent = (
     assistantId: string, type: string,
@@ -347,10 +413,17 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
       {/* ── Header ── */}
       <div className="flex items-center justify-end shrink-0 px-3 pt-3 pb-2">
         <div className="flex items-center gap-2">
-          {msgCount >= WARN_THRESHOLD && (
-            <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400"
-              title={`${msgCount}/${MAX_MESSAGES} messages`}>
-              <AlertTriangle className="w-3 h-3" />
+          {msgCount > 0 && (
+            <span
+              className={cn(
+                "flex items-center gap-1 text-[10px] tabular-nums",
+                msgCount >= WARN_THRESHOLD
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-muted-foreground/70",
+              )}
+              title={`${msgCount}/${MAX_MESSAGES} rounds (1 user + 1 reply = 1). Soft limit trims older rounds at ${MAX_MESSAGES}.`}
+            >
+              {msgCount >= WARN_THRESHOLD && <AlertTriangle className="w-3 h-3" />}
               {msgCount}/{MAX_MESSAGES}
             </span>
           )}
@@ -367,7 +440,18 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
       </div>
 
       {/* ── Messages area ── */}
-      <div className={cn(
+      <div
+        ref={messagesScrollRef}
+        onScroll={() => {
+          if (ignoreScrollEvent.current) return
+          const el = messagesScrollRef.current
+          if (!el) return
+          const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+          // Leave bottom → unlock; return to bottom → re-stick
+          if (dist > 60) stickToBottom.current = false
+          else stickToBottom.current = true
+        }}
+        className={cn(
         "flex-1 overflow-y-auto px-3 min-h-0 transition-all duration-500 ease-out",
         hasMessages ? "pb-14" : "pb-24",
         !hasMessages && "flex flex-col items-center justify-center",
@@ -480,7 +564,6 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
                 )}
               </div>
             ))}
-            <div ref={messagesEndRef} />
           </div>
         ) : (
           // Empty state — centered, fades out when messages appear

@@ -4,7 +4,10 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { cn } from "@/lib/utils"
-import { Loader2, X, RefreshCw, Plus, Pencil, Sparkles, ChevronDown } from "lucide-react"
+import {
+  Loader2, X, RefreshCw, Plus, Pencil, Sparkles, ChevronDown,
+  FileText, FolderOpen, GitBranch, Trash2,
+} from "lucide-react"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -17,6 +20,7 @@ import {
   type Meeting, type MeetingTab, type ExtractReceipt,
   type TranscriptSegment,
 } from "@/api/client"
+import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
 import { useBlueprintStream } from "@/hooks/use-blueprint-stream"
 import { useSectionStream, startSectionStream } from "@/hooks/use-section-stream"
@@ -24,6 +28,7 @@ import { useTranslationStream, startTranslationStream } from "@/hooks/use-transl
 import { toast } from "sonner"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 import { SummaryTranslateControl } from "./summary-translate-control"
+import { SummaryMarkdownViewer, normalizeMd } from "./summary-markdown-viewer"
 
 const SAVE_DELAY = 800
 
@@ -47,127 +52,7 @@ interface Props {
   className?: string
 }
 
-// ── Inline markdown normalizer ────────────────────────────────────
-
-/** Fix Tiptap-style markdown quirks: extra spaces inside bold/italic/link syntax. */
-function normalizeMd(md: string): string {
-  return md
-    .replace(/\*\*\s+([^*]+?)\s*\*\*/g, "**$1**")
-    .replace(/(?<!\*)\*(?!\*)\s+([^*]+?)\s*(?<!\*)\*(?!\*)/g, "*$1*")
-}
-
-// ── Markdown viewer with clickable [stt_XXXX] ref buttons ──────────
-
-/** Render inline markdown: **bold**, *italic*, `code`, [stt_XXXX] refs, [priority: X] badges */
-function renderInline(text: string, onRefClick: (id: string) => void): ReactNode[] {
-  const parts: ReactNode[] = []
-  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|(\[(?:ref:)?\s*(stt_\d+(?:\s*,\s*stt_\d+)*)\s*\])|(【(?:ref:)?\s*(stt_\d+(?:\s*,\s*stt_\d+)*)\s*】)|(\[priority:\s*(high|medium|low)\s*\])|(【priority:\s*(high|medium|low)\s*】)/gi
-  let lastIdx = 0
-  let match
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIdx) {
-      parts.push(<span key={`t${lastIdx}`}>{text.slice(lastIdx, match.index)}</span>)
-    }
-    if (match[1]) {
-      parts.push(<strong key={`b${lastIdx}`}>{match[2]}</strong>)
-    } else if (match[3]) {
-      parts.push(<em key={`i${lastIdx}`}>{match[4]}</em>)
-    } else if (match[5]) {
-      parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
-    } else if (match[8] || match[10]) {
-      // [stt_0044,stt_0045,stt_0046] or 【stt_0044,stt_0045,stt_0046】
-      const raw = (match[8] || match[10])!
-      const ids = raw.split(",").map((s) => s.trim()).filter(Boolean)
-      const parsed = ids
-        .map((id) => ({ id, num: parseInt(id.replace(/^stt_0*/, "") || "0", 10) }))
-        .sort((a, b) => a.num - b.num)
-
-      // Group consecutive ids into ranges
-      let ri = 0
-      while (ri < parsed.length) {
-        const start = parsed[ri]
-        let end = start
-        let rj = ri + 1
-        while (rj < parsed.length && parsed[rj].num === end.num + 1) { end = parsed[rj]; rj++ }
-        const sl = start.id.replace(/^stt_0*/, "") || "0"
-        const el = end.id.replace(/^stt_0*/, "") || "0"
-        const label = start.id === end.id ? sl : `${sl}-${el}`
-        const allInRange = parsed.slice(ri, rj).map((p) => p.id)
-        parts.push(
-          <button
-            key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.20)] t-mono-family align-baseline cursor-pointer mr-1"
-            onClick={(e) => { e.stopPropagation(); onRefClick(start.id) }}
-            title={`Sources: ${allInRange.join(", ")}`}
-          >
-            {label}
-          </button>,
-        )
-        ri = rj
-      }
-    } else if (match[12] || match[14]) {
-      // [priority: high/medium/low] or 【priority: high/medium/low】
-      const level = (match[12] || match[14])!.toLowerCase()
-      const colors: Record<string, { bg: string; fg: string }> = {
-        high:    { bg: "rgba(140,46,46,0.12)",  fg: "#C06060" },
-        medium:  { bg: "rgba(138,101,0,0.10)",   fg: "#B09030" },
-        low:     { bg: "rgba(26,94,61,0.10)",    fg: "#5A9070" },
-      }
-      const c = colors[level] ?? colors.medium
-      parts.push(
-        <span
-          key={`p${lastIdx}`}
-          className="inline-flex items-center px-1 py-0 text-[9px] rounded font-medium tracking-wider align-baseline select-none"
-          style={{ backgroundColor: c.bg, color: c.fg }}
-        >
-          {level.toUpperCase()}
-        </span>,
-      )
-    }
-    lastIdx = match.index + match[0].length
-  }
-  if (lastIdx < text.length) {
-    parts.push(<span key={`t${lastIdx}`}>{text.slice(lastIdx)}</span>)
-  }
-  return parts
-}
-
-function MarkdownViewer({ md, onRefClick, speakerNames }: {
-  md: string
-  onRefClick: (id: string) => void
-  speakerNames: Record<string, string>
-}) {
-  if (!md) {
-    return <p className="text-muted-foreground text-sm py-8 text-center">No content yet.</p>
-  }
-
-  // Normalize + resolve [spk:ID] markers and legacy "Speaker X" patterns
-  let resolved = normalizeMd(md)
-  if (speakerNames && Object.keys(speakerNames).length > 0) {
-    resolved = resolved.replace(/\[spk:(\d+)\]/g, (_, id: string) => speakerNames[id] ?? `Speaker ${id}`)
-    for (const [id, name] of Object.entries(speakerNames)) {
-      resolved = resolved.replace(
-        new RegExp(`Speaker ${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g"),
-        name,
-      )
-    }
-  }
-
-  return (
-    <div className="prose prose-sm dark:prose-invert max-w-none">
-      {resolved.split("\n").map((line, i) => {
-        if (!line.trim()) return <div key={i} className="h-3" />
-        if (line.startsWith("### ")) return <h3 key={i} className="text-base font-light mb-1.5 mt-2">{renderInline(line.slice(4), onRefClick)}</h3>
-        if (line.startsWith("## ")) return <h2 key={i} className="text-lg font-light mb-2 mt-3">{renderInline(line.slice(3), onRefClick)}</h2>
-        if (line.startsWith("# ")) return <h1 key={i} className="text-xl font-light mb-3 mt-4">{renderInline(line.slice(2), onRefClick)}</h1>
-        if (/^\s*[-*+]\s/.test(line)) {
-          return <li key={i} className="text-sm leading-relaxed ml-4">{renderInline(line.replace(/^\s*[-*+]\s/, ""), onRefClick)}</li>
-        }
-        return <p key={i} className="text-sm leading-relaxed mb-1">{renderInline(line, onRefClick)}</p>
-      })}
-    </div>
-  )
-}
+// MarkdownViewer lives in summary-markdown-viewer.tsx (shared with note editor)
 
 // ── Thinking skeleton (shown while LLM is generating) ─────────────
 
@@ -331,7 +216,7 @@ function EditableSectionContent({
             }
           />
         ) : (
-          <MarkdownViewer md={content} onRefClick={onRefClick} speakerNames={speakerNames} />
+          <SummaryMarkdownViewer md={content} onRefClick={onRefClick} speakerNames={speakerNames} />
         )}
       </div>
     </div>
@@ -367,8 +252,10 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
   const hasAssociated = !!associatedName
   // Consider "ingested" when tab has an allocated_file_id (already persisted)
   const ingested = !!tab.allocated_file_id
+  /** MD edited after allocate — offer manual Update collection (new version). */
+  const needsReingest = ingested && !!tab.needs_reingest
   // Three-state pill (P2-02):
-  //   1. ingested           → solid green pill, click to cancel
+  //   1. ingested           → solid green pill, click for actions / update
   //   2. hasSuggestion      → dashed outline pill, click to ingest
   //   3. no suggestion      → "Choose a collection" button
   const hasSuggestion = hasAssociated && !ingested
@@ -379,20 +266,37 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
 
   const [ingesting, setIngesting] = useState(false)
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  /** Actions menu when already ingested (open file / files / timeline / remove). */
+  const [actionsOpen, setActionsOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [switchTarget, setSwitchTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const topPillRef = useRef<HTMLButtonElement>(null)
   const dropdownContentRef = useRef<HTMLDivElement>(null)
-  const { collections, fetchCollections } = useAppStore()
+  const actionsMenuRef = useRef<HTMLDivElement>(null)
+  const { collections, fetchCollections, setSidebarView, setActiveCollection, setPendingOpenFile } =
+    useAppStore(
+      useShallow((s) => ({
+        collections: s.collections,
+        fetchCollections: s.fetchCollections,
+        setSidebarView: s.setSidebarView,
+        setActiveCollection: s.setActiveCollection,
+        setPendingOpenFile: s.setPendingOpenFile,
+      }))
+    )
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState(tab.name)
   // 首次 ingest：还没 associated collection 时，选中后立刻在顶部按钮显示 pending 名称
   const [pendingName, setPendingName] = useState<string | null>(null)
+  /** Last bridge node_id from allocate (fallback: resolve via external_ref). */
+  const lastNodeIdRef = useRef<string | null>(null)
 
   const showTopButton = hasAssociated || ingested || !!pendingName
-  const topButtonLabel = ingesting ? "Ingesting..." : (displayName || pendingName || associatedName)
+  const topButtonLabel = ingesting
+    ? "Ingesting..."
+    : displayName || pendingName || associatedName
   const topButtonIsActive = ingesting || displayActive || !!pendingName
 
   // Inline editing for section name + description
@@ -459,21 +363,24 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
     }
   }
 
-  // Dropdown click-outside (portal-based, check both container & dropdown)
+  // Dropdown / actions menu click-outside (portal-based)
   useEffect(() => {
-    if (!dropdownOpen) return
+    if (!dropdownOpen && !actionsOpen) return
     const handler = (e: MouseEvent) => {
+      const t = e.target as Node
       if (
-        menuRef.current && !menuRef.current.contains(e.target as Node) &&
-        dropdownContentRef.current && !dropdownContentRef.current.contains(e.target as Node)
+        menuRef.current && !menuRef.current.contains(t) &&
+        dropdownContentRef.current && !dropdownContentRef.current.contains(t) &&
+        (!actionsMenuRef.current || !actionsMenuRef.current.contains(t))
       ) {
         setDropdownOpen(false)
+        setActionsOpen(false)
         setCreating(false)
       }
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
-  }, [dropdownOpen])
+  }, [dropdownOpen, actionsOpen])
 
   // Fetch collections when dropdown opens
   useEffect(() => {
@@ -558,18 +465,132 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
     if (ingesting) return
     setIngesting(true)
     try {
-      const m = await allocateSection(meetingId, tab.tab_id, colId)
-      onMeetingUpdate(m)
-      toast.success("Ingested to collection")
+      const res = await allocateSection(meetingId, tab.tab_id, colId)
+      // Strip bridge fields before treating as Meeting meta
+      const {
+        file_id: bridgeFileId,
+        task_id: bridgeTaskId,
+        node_id: bridgeNodeId,
+        source: _bridgeSource,
+        collection_id: _bridgeCol,
+        ...meetingRest
+      } = res
+      if (bridgeNodeId) lastNodeIdRef.current = bridgeNodeId
+      onMeetingUpdate(meetingRest as Meeting)
+      // Track async ingest in file-mgmt (Preview-only lock, folder badges)
+      if (bridgeTaskId && bridgeFileId) {
+        const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+        useFileMgmtStore
+          .getState()
+          ._startTaskPolling(colId, bridgeTaskId, bridgeFileId)
+      }
+      const wasUpdate = !!tab.allocated_file_id
+      toast.success(
+        wasUpdate
+          ? bridgeTaskId
+            ? "Collection update queued (new version)…"
+            : "Collection updated"
+          : bridgeTaskId
+            ? "Ingested — processing in collection…"
+            : "Ingested to collection"
+      )
     } catch (err) {
       toast.error(`Ingest failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     setIngesting(false)
   }
 
+  const goToDatabase = (colId: string) => {
+    setActiveCollection(colId)
+    setSidebarView("database")
+  }
+
+  /** Open file detail dialog in Database view. */
+  const handleOpenFile = () => {
+    setActionsOpen(false)
+    const fileId = tab.allocated_file_id
+    const colId = associatedId
+    if (!fileId || !colId) {
+      toast.error("No ingested file linked")
+      return
+    }
+    goToDatabase(colId)
+    // Delay so DatabaseView mounts with the right collection
+    setTimeout(() => {
+      setPendingOpenFile(fileId)
+    }, 80)
+  }
+
+  /** Files tab → Meeting system folder → open detail. */
+  const handleShowInFiles = () => {
+    setActionsOpen(false)
+    const fileId = tab.allocated_file_id
+    const colId = associatedId
+    if (!fileId || !colId) {
+      toast.error("No ingested file linked")
+      return
+    }
+    goToDatabase(colId)
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("open-meeting-file-in-folder", {
+          detail: {
+            collectionId: colId,
+            fileId,
+            meetingId,
+            tabId: tab.tab_id,
+          },
+        })
+      )
+    }, 100)
+  }
+
+  /** Timeline tab → focus meeting anchor node. */
+  const handleShowOnTimeline = async () => {
+    setActionsOpen(false)
+    const colId = associatedId
+    if (!colId) {
+      toast.error("No collection linked")
+      return
+    }
+    goToDatabase(colId)
+    try {
+      let nodeId = lastNodeIdRef.current
+      if (!nodeId) {
+        const { getNodeByExternalRef } = await import("@/api/file-mgmt")
+        const node = await getNodeByExternalRef(colId, `meeting:${meetingId}`)
+        nodeId = node.node_id
+        lastNodeIdRef.current = nodeId
+      }
+      const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+      useFileMgmtStore.getState().requestTimelineFocus(nodeId)
+    } catch (err) {
+      toast.error(
+        `Timeline node not found yet. ${err instanceof Error ? err.message : ""}`.trim()
+      )
+    }
+  }
+
+  /**
+   * Manual re-ingest to the same collection → new file version (Notes-style).
+   * Does not auto-run on save; user clicks Update collection.
+   */
+  const handleUpdateCollection = async () => {
+    setActionsOpen(false)
+    const colId = associatedId
+    if (!colId || !tab.allocated_file_id) {
+      toast.error("Section is not ingested to a collection")
+      return
+    }
+    await handleIngest(colId)
+  }
+
+  // Notify parent of ingesting state without depending on unstable callback identity
+  const onIngestingChangeRef = useRef(onIngestingChange)
+  onIngestingChangeRef.current = onIngestingChange
   useEffect(() => {
-    onIngestingChange?.(tab.tab_id, ingesting)
-  }, [ingesting, onIngestingChange])
+    onIngestingChangeRef.current?.(tab.tab_id, ingesting)
+  }, [ingesting, tab.tab_id])
 
   const handleCancelIngest = async () => {
     setCancelOpen(false)
@@ -679,9 +700,25 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
         {showTopButton && (
           <button
             type="button"
+            ref={topPillRef}
             disabled={ingesting}
-            onClick={displayActive ? () => setCancelOpen(true) : () => handleIngest(associatedId)}
-            title={displayActive ? "Click to cancel ingestion" : displaySuggestion ? "Click to ingest" : undefined}
+            onClick={() => {
+              if (displayActive) {
+                setDropdownOpen(false)
+                setActionsOpen((v) => !v)
+              } else {
+                void handleIngest(associatedId)
+              }
+            }}
+            title={
+              needsReingest
+                ? "Section edited — Update collection to push a new version"
+                : displayActive
+                  ? "Open actions (file / files / timeline / remove)"
+                  : displaySuggestion
+                    ? "Click to ingest"
+                    : undefined
+            }
             className={cn(
               "group relative z-0 flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
               ingesting && "sk-thinking-flow",
@@ -693,9 +730,7 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
               color: topButtonIsActive ? "var(--color-primary)" : "var(--color-muted-foreground)",
             }}
           >
-            <span className="relative z-10 whitespace-nowrap">
-              {topButtonLabel}
-            </span>
+            {/* Background wash behind content */}
             <span
               className={cn(
                 "absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
@@ -706,13 +741,113 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
                 transformOrigin: "left",
               }}
             />
+            {/* Content: [subtle update icon] collection name [chevron] */}
+            <span className="relative z-10 flex items-center justify-center gap-1 min-w-0 w-full px-0.5">
+              {needsReingest && !ingesting ? (
+                <RefreshCw
+                  className="h-2.5 w-2.5 shrink-0 opacity-50"
+                  strokeWidth={2}
+                  aria-label="Update available"
+                />
+              ) : null}
+              <span className="truncate min-w-0">{topButtonLabel}</span>
+              {displayActive && !ingesting ? (
+                <ChevronDown className="h-3 w-3 opacity-70 shrink-0" />
+              ) : null}
+            </span>
           </button>
+        )}
+        {createPortal(
+          <div
+            ref={actionsMenuRef}
+            className={cn(
+              "fixed z-50 flex-col overflow-hidden rounded border border-primary/30 bg-popover/95 backdrop-blur-md shadow-lg transition-all duration-200",
+              actionsOpen && displayActive
+                ? "opacity-100 visible translate-y-0 pointer-events-auto flex"
+                : "opacity-0 invisible translate-y-2 pointer-events-none hidden"
+            )}
+            style={{
+              width: topPillRef.current
+                ? Math.max(topPillRef.current.getBoundingClientRect().width, 180)
+                : 180,
+              top: menuRef.current
+                ? menuRef.current.getBoundingClientRect().top - 4
+                : 0,
+              left: menuRef.current
+                ? menuRef.current.getBoundingClientRect().left
+                : 0,
+              transform: actionsOpen ? "translateY(-100%)" : "translateY(-90%)",
+            }}
+          >
+            {(
+              [
+                ...(needsReingest
+                  ? [
+                      {
+                        key: "update" as const,
+                        label: "Update collection",
+                        icon: RefreshCw,
+                        onClick: () => void handleUpdateCollection(),
+                      },
+                    ]
+                  : []),
+                {
+                  key: "file" as const,
+                  label: "Open file",
+                  icon: FileText,
+                  onClick: handleOpenFile,
+                },
+                {
+                  key: "files" as const,
+                  label: "Show in Files",
+                  icon: FolderOpen,
+                  onClick: handleShowInFiles,
+                },
+                {
+                  key: "timeline" as const,
+                  label: "Show on Timeline",
+                  icon: GitBranch,
+                  onClick: () => void handleShowOnTimeline(),
+                },
+                {
+                  key: "remove" as const,
+                  label: "Remove from collection",
+                  icon: Trash2,
+                  onClick: () => {
+                    setActionsOpen(false)
+                    setCancelOpen(true)
+                  },
+                  danger: true as const,
+                },
+              ]
+            ).map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={item.onClick}
+                disabled={ingesting && item.key === "update"}
+                className={cn(
+                  "flex items-center gap-2 w-full px-2.5 py-2 text-left text-[10px] font-medium uppercase tracking-[0.08em] transition-colors disabled:opacity-50",
+                  "danger" in item && item.danger
+                    ? "text-red-500/80 hover:bg-red-500/10 hover:text-red-500"
+                    : "text-muted-foreground hover:bg-primary hover:text-primary-foreground"
+                )}
+              >
+                <item.icon className="h-3 w-3 shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body
         )}
         <button
           type="button"
           ref={buttonRef}
           disabled={ingesting}
-          onClick={() => setDropdownOpen(!dropdownOpen)}
+          onClick={() => {
+            setActionsOpen(false)
+            setDropdownOpen(!dropdownOpen)
+          }}
           className="group relative z-0 flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
           style={{
             fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
@@ -1447,13 +1582,21 @@ export function MeetingTabs({
   }
 
   const handleSaveSection = async (tabId: string, content: string) => {
-    await saveSectionMd(meetingId, tabId, content)
+    const res = await saveSectionMd(meetingId, tabId, content)
     setTabMdContents((prev) => ({ ...prev, [tabId]: content }))
     if (tabId === "tab_general") {
-      // Mark as loaded so tabs effect won't re-fetch
       loadedTabsRef.current.add("tab_general")
-      onMeetingUpdate({ ...meeting })
     }
+    // Prefer server meeting; always mark needs_reingest when this tab is allocated
+    // so the pill icon updates even if meta was stale client-side.
+    const base = res.meeting ?? meeting
+    const tabs = (base.tabs ?? []).map((t) => {
+      if (t.tab_id !== tabId) return t
+      const allocated = !!(t.allocated_file_id || "").trim()
+      if (!allocated) return t
+      return { ...t, needs_reingest: true }
+    })
+    onMeetingUpdate({ ...base, tabs })
   }
 
   // ── Sentence ID → time map (use sentence_id from backend when available) ──
@@ -2143,11 +2286,15 @@ export function MeetingTabs({
                       onMeetingUpdate={onMeetingUpdate}
                       hideTitle
                       onIngestingChange={(tabId, v) => {
-                        setIngestingTabs(prev => {
-                          const next = new Set(prev);
-                          if (v) { next.add(tabId); } else { next.delete(tabId); }
-                          return next;
-                        });
+                        setIngestingTabs((prev) => {
+                          const has = prev.has(tabId)
+                          if (v && has) return prev
+                          if (!v && !has) return prev
+                          const next = new Set(prev)
+                          if (v) next.add(tabId)
+                          else next.delete(tabId)
+                          return next
+                        })
                       }}
                     />
                   ) : undefined
@@ -2214,6 +2361,10 @@ export function MeetingTabs({
             const updated = { ...meeting.speaker_names, [id]: name }
             updateMeeting(meetingId, { speaker_names: updated }).then((m) => {
               onMeetingUpdate(m)
+              // Refresh [spk:…] display in open note distill blocks
+              void import("@/components/ui/tiptap-editor").then((mod) => {
+                mod.invalidateMeetingSpeakerCache(meetingId)
+              })
             }).catch(() => {})
           }}
           onSegmentClick={onSeekTo}

@@ -73,6 +73,7 @@ class RerankConfig(BaseModel):
 
 class ParsingConfig(BaseModel):
     default_chunk_size: int = 512
+    supported_file_types: list[str] = ["pdf", "docx", "txt", "md", "xlsx", "pptx", "csv", "json", "html"]
 
 
 class RAGConfig(BaseModel):
@@ -188,6 +189,25 @@ class MinerUConfig(BaseModel):
     poll_timeout: float = 300.0  # max wait time in seconds
 
 
+class WebSearchConfig(BaseModel):
+    """Internet search credentials for Chat (Tavily).
+
+    Settings only stores the API key (and optional depth/limits).
+    The on/off switch lives in the Chat UI and is sent per request as
+    ``web_search_enabled``. Even when on, each search still requires HITL
+    confirmation. Results are tagged ``source_type=web``.
+    """
+    # Legacy field — ignored for the master switch (Chat UI owns that).
+    # Kept so old config.yaml with enabled: true still loads.
+    enabled: bool = False
+    provider: str = "tavily"
+    api_key: str = ""
+    max_results: int = 5
+    search_depth: str = "basic"  # basic | advanced
+    # Seconds to wait for the user confirm dialog during streaming chat
+    confirm_timeout_sec: int = 120
+
+
 class AppConfig(BaseModel):
     llm: LLMConfig = LLMConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
@@ -199,6 +219,7 @@ class AppConfig(BaseModel):
     server: ServerConfig = ServerConfig()
     transcription: TranscriptionConfig = TranscriptionConfig()
     mineru: MinerUConfig = MinerUConfig()
+    web_search: WebSearchConfig = WebSearchConfig()
     enrichment: EnrichmentConfig = EnrichmentConfig()
     visual_model_id: str | None = None
     default_chat_model: str | None = None

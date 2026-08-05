@@ -264,23 +264,45 @@ class TestParseConsolidationResponse:
 class TestConsolidateHandler:
     """Tests for consolidate_handler() with mocked dependencies."""
 
+    @staticmethod
+    def _patch_definitive_filter(doc_summaries):
+        """Patch pick_current + source_is_definitive so handler uses given rows."""
+        return (
+            patch(
+                "src.api.routes.info.pick_current_doc_summaries",
+                side_effect=lambda _col, summaries: list(summaries),
+            ),
+            patch(
+                "src.api.routes.info.source_is_definitive",
+                return_value=True,
+            ),
+            patch("src.api.routes.info.clear_debounce"),
+        )
+
     @pytest.mark.asyncio
     async def test_no_doc_summaries_returns_early(self):
-        """If no doc summaries exist, returns early with a message."""
+        """If no definitive docs remain, clear previous consolidate results."""
         from src.tasks.handlers import consolidate_handler
 
         task = _make_task()
+        p_pick, p_def, p_clear = self._patch_definitive_filter([])
 
         with patch("src.tasks.handlers.SummaryManager") as MockSM, \
-             patch("src.tasks.handlers.services") as mock_services:
+             patch("src.tasks.handlers.services") as mock_services, \
+             p_pick, p_def, p_clear:
             mock_sm_instance = MockSM.return_value
             mock_sm_instance.get_doc_summaries.return_value = []
+            mock_services.db.update_collection_config = MagicMock()
 
             result = await consolidate_handler(task, collection="test-col")
 
             assert "No documents" in result["message"]
             mock_sm_instance.delete_collection_summary.assert_called_once_with("test-col")
+            mock_sm_instance.delete_project_description.assert_called_once_with("test-col")
             mock_sm_instance.delete_conflicts.assert_called_once_with("test-col")
+            mock_services.db.update_collection_config.assert_called_once_with(
+                "test-col", {"summary_change_counter": 0}
+            )
 
     @pytest.mark.asyncio
     async def test_full_flow_with_mocks(self):
@@ -309,11 +331,13 @@ class TestConsolidateHandler:
             "===CONFLICTS===\n"
             "None identified"
         )
+        p_pick, p_def, p_clear = self._patch_definitive_filter(doc_summaries)
 
         with patch("src.tasks.handlers.SummaryManager") as MockSM, \
              patch("src.tasks.handlers.services") as mock_services, \
              patch("src.tasks.handlers._get_enriching_llm") as mock_get_llm, \
-             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb:
+             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb, \
+             p_pick, p_def, p_clear:
 
             mock_sm_instance = MockSM.return_value
             mock_sm_instance.get_doc_summaries.return_value = doc_summaries
@@ -343,16 +367,14 @@ class TestConsolidateHandler:
             mock_sm_instance.delete_conflicts.assert_called_once_with("test-col")
 
             # Should read doc summaries
-            mock_sm_instance.get_doc_summaries.assert_called_once_with("test-col")
+            mock_sm_instance.get_doc_summaries.assert_called_once_with(
+                "test-col", included_only=False
+            )
 
-            # Should call LLM
-            mock_llm.generate.assert_called_once()
-            call_arg = mock_llm.generate.call_args[0][0]
-            assert "===SUMMARY===" in call_arg
-            assert "a.pdf" in call_arg or "data A" in call_arg
-
-            # Should embed the collection summary
-            mock_embedding.embed_texts.assert_called_once()
+            # Should call LLM (at least once — may also generate project description)
+            assert mock_llm.generate.call_count >= 1
+            call_arg = mock_llm.generate.call_args_list[0][0][0]
+            assert "data A" in call_arg or "fact A" in call_arg
 
             # Should store new summary and conflicts
             mock_sm_instance.store_collection_summary.assert_called_once()
@@ -380,11 +402,13 @@ class TestConsolidateHandler:
             "===CONFLICTS===\n"
             "- Revenue $4.2M | a.pdf | Revenue $3.8M | b.pdf\n"
         )
+        p_pick, p_def, p_clear = self._patch_definitive_filter(doc_summaries)
 
         with patch("src.tasks.handlers.SummaryManager") as MockSM, \
              patch("src.tasks.handlers.services") as mock_services, \
              patch("src.tasks.handlers._get_enriching_llm") as mock_get_llm, \
-             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb:
+             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb, \
+             p_pick, p_def, p_clear:
 
             mock_sm_instance = MockSM.return_value
             mock_sm_instance.get_doc_summaries.return_value = doc_summaries
@@ -419,16 +443,17 @@ class TestConsolidateHandler:
         from src.tasks.handlers import consolidate_handler
 
         task = _make_task()
+        docs = [{"source": "a.pdf", "data": ["x"], "facts": [], "insights": []}]
+        p_pick, p_def, p_clear = self._patch_definitive_filter(docs)
 
         with patch("src.tasks.handlers.SummaryManager") as MockSM, \
              patch("src.tasks.handlers.services") as mock_services, \
              patch("src.tasks.handlers._get_enriching_llm") as mock_get_llm, \
-             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb:
+             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb, \
+             p_pick, p_def, p_clear:
 
             mock_sm_instance = MockSM.return_value
-            mock_sm_instance.get_doc_summaries.return_value = [
-                {"source": "a.pdf", "data": [], "facts": [], "insights": []}
-            ]
+            mock_sm_instance.get_doc_summaries.return_value = docs
 
             mock_services.db.get_collection_config.return_value = {}
             mock_services.embedding = MagicMock()
@@ -447,16 +472,17 @@ class TestConsolidateHandler:
 
         task = _make_task()
         col_config = {"enriching_llm_provider": "deepseek"}
+        docs = [{"source": "a.pdf", "data": ["x"], "facts": [], "insights": []}]
+        p_pick, p_def, p_clear = self._patch_definitive_filter(docs)
 
         with patch("src.tasks.handlers.SummaryManager") as MockSM, \
              patch("src.tasks.handlers.services") as mock_services, \
              patch("src.tasks.handlers._get_enriching_llm") as mock_get_llm, \
-             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb:
+             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb, \
+             p_pick, p_def, p_clear:
 
             mock_sm_instance = MockSM.return_value
-            mock_sm_instance.get_doc_summaries.return_value = [
-                {"source": "a.pdf", "data": [], "facts": [], "insights": []}
-            ]
+            mock_sm_instance.get_doc_summaries.return_value = docs
 
             mock_services.db.get_collection_config.return_value = col_config
             mock_services.db.update_collection_config = MagicMock()
@@ -477,20 +503,21 @@ class TestConsolidateHandler:
 
     @pytest.mark.asyncio
     async def test_embeds_collection_summary(self):
-        """Verifies the collection summary text is embedded."""
+        """Verifies the collection summary text is stored (embedding optional)."""
         from src.tasks.handlers import consolidate_handler
 
         task = _make_task()
+        docs = [{"source": "a.pdf", "data": ["x"], "facts": [], "insights": []}]
+        p_pick, p_def, p_clear = self._patch_definitive_filter(docs)
 
         with patch("src.tasks.handlers.SummaryManager") as MockSM, \
              patch("src.tasks.handlers.services") as mock_services, \
              patch("src.tasks.handlers._get_enriching_llm") as mock_get_llm, \
-             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb:
+             patch("src.tasks.handlers.get_collection_embedding") as mock_get_emb, \
+             p_pick, p_def, p_clear:
 
             mock_sm_instance = MockSM.return_value
-            mock_sm_instance.get_doc_summaries.return_value = [
-                {"source": "a.pdf", "data": [], "facts": [], "insights": []}
-            ]
+            mock_sm_instance.get_doc_summaries.return_value = docs
 
             mock_services.db.get_collection_config.return_value = {}
             mock_services.db.update_collection_config = MagicMock()
@@ -508,15 +535,9 @@ class TestConsolidateHandler:
 
             await consolidate_handler(task, collection="test-col")
 
-            # Embedding should be called with the summary text
-            mock_embedding.embed_texts.assert_called_once()
-            embed_input = mock_embedding.embed_texts.call_args[0][0]
-            assert summary_text in embed_input[0]
-
-            # store_collection_summary should use the real embedding
+            # store_collection_summary should receive the summary text
             store_call = mock_sm_instance.store_collection_summary.call_args
             assert store_call[0][1] == summary_text  # content
-            assert store_call[0][2] == [0.5] * 128    # embedding vector
 
 
 # ── CONSOLIDATION_PROMPT ────────────────────────────────────

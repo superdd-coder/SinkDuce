@@ -40,7 +40,7 @@ docker compose up -d --build
 3. 添加 **Embedding 提供商**，创建你的第一个 Collection（知识库）。
 
 > [!TIP]
-> **DashScope 一键配置** — Settings → LLM Providers → OneShot Setting (DashScope API)。输入阿里云 API Key，自动配置 LLM（`deepseek-v4-flash`）、Embedding（`text-embedding-v4`，1024 维）、Reranker（`qwen3-rerank`）以及文件/实时转写（`fun-asr`、`fun-asr-realtime`）。
+> **DashScope 一键配置** — Settings → LLM Providers → OneShot Setting (DashScope API)。输入阿里云 API Key，自动配置 LLM（`deepseek-v4-flash`）、Embedding（`text-embedding-v4`，1024 维）、Reranker（`qwen3-rerank`）以及文件/实时转写（`qwen-audio-3.0-asr-flash-filetrans`、`qwen-audio-3.0-asr-flash-streaming`）。
 
 > [!TIP]
 > **OpenRouter 一键配置** — Settings → LLM Providers → OneShot Setting (OpenRouter API)。输入 Key 后自动拉取模型列表并分类为 LLM、Chat（支持函数调用）、Vision（视觉模型）、Embedding 和 Reranker。
@@ -348,6 +348,14 @@ tests/                pytest 测试套件（asyncio_mode = auto）
 ## 🗺️ 未来路线图
 
 - [ ] 多租户服务端部署架构，支持团队协同项目记忆（企业版）
+
+---
+
+## 📜 许可证
+
+SinkDuce 采用 **[GNU Affero General Public License v3.0 or later](LICENSE)**（AGPL-3.0-or-later）开源。
+
+第三方开源依赖（Python 包、前端库、字体、Docker 系统包、Qdrant 等）仍遵循各自许可证。完整声明与直接依赖清单见 **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**。当前审查范围内的直接依赖均为开源（MIT / BSD / Apache-2.0 / ISC / OFL-1.1 等）。可选的商业**远程 API**（OpenAI、Cohere、DashScope、MinerU 云端等）不属于本仓库源码许可证范围；仅其客户端库（若使用）属于开源依赖。
 
 ---
 

@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react"
-import { useAppStore } from "@/stores/app-store"
+import { useState, useEffect, useCallback, useMemo, memo } from "react"
+import { useShallow } from "zustand/react/shallow"
+import { useAppStore, type SidebarView } from "@/stores/app-store"
 import { Header } from "./header"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "./sidebar"
@@ -16,21 +17,58 @@ import { toast } from "sonner"
 
 const DISMISSED_KEY = "model-download-dismissed"
 
+type ViewProps = { active: boolean }
+
+const MemoChatView = memo(function MemoChatView(_props: ViewProps) {
+  return <ChatView />
+})
+const MemoDatabaseView = memo(function MemoDatabaseView({ active }: ViewProps) {
+  return <DatabaseView active={active} />
+})
+const MemoRecallView = memo(function MemoRecallView(_props: ViewProps) {
+  return <RecallView />
+})
+const MemoMeetingView = memo(function MemoMeetingView({ active }: ViewProps) {
+  return <MeetingView active={active} />
+})
+const MemoLLMProviderView = memo(function MemoLLMProviderView(_props: ViewProps) {
+  return <LLMProviderView />
+})
+
 const views = {
-  chat: ChatView,
-  database: DatabaseView,
-  recall: RecallView,
-  meeting: MeetingView,
-  llm_provider: LLMProviderView,
+  chat: MemoChatView,
+  database: MemoDatabaseView,
+  recall: MemoRecallView,
+  meeting: MemoMeetingView,
+  llm_provider: MemoLLMProviderView,
 } as const
 
 export function AppLayout() {
-  const { sidebarView, logPanelOpen, toggleLogPanel } = useAppStore()
+  const { sidebarView, logPanelOpen, toggleLogPanel } = useAppStore(
+    useShallow((s) => ({
+      sidebarView: s.sidebarView,
+      logPanelOpen: s.logPanelOpen,
+      toggleLogPanel: s.toggleLogPanel,
+    }))
+  )
 
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false)
   const [minimized, setMinimized] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
   const [models, setModels] = useState<ModelStatus[]>([])
+  /** First-visit lazy mount; after that keep mounted (state preserved). */
+  const [visitedViews, setVisitedViews] = useState<Set<SidebarView>>(
+    () => new Set([sidebarView])
+  )
+
+  useEffect(() => {
+    setVisitedViews((prev) => {
+      if (prev.has(sidebarView)) return prev
+      const next = new Set(prev)
+      next.add(sidebarView)
+      return next
+    })
+  }, [sidebarView])
 
   // Check on startup
   useEffect(() => {
@@ -110,23 +148,33 @@ export function AppLayout() {
     }
   }, [models])
 
+  const viewEntries = useMemo(
+    () => (Object.keys(views) as SidebarView[]).filter((k) => visitedViews.has(k)),
+    [visitedViews]
+  )
+
   return (
     <div className="h-screen flex flex-col">
       <Header />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-hidden flex flex-col">
-          {Object.entries(views).map(([key, V]) => (
-            <div
-              key={key}
-              className={cn(
-                "flex-1 overflow-hidden",
-                key === sidebarView ? "flex flex-col animate-tab-in" : "hidden",
-              )}
-            >
-              <V />
-            </div>
-          ))}
+          {viewEntries.map((key) => {
+            const V = views[key]
+            const isActive = key === sidebarView
+            return (
+              <div
+                key={key}
+                className={cn(
+                  "flex-1 overflow-hidden",
+                  // No animate-tab-in on every switch — felt like click lag
+                  isActive ? "flex flex-col" : "hidden",
+                )}
+              >
+                <V active={isActive} />
+              </div>
+            )
+          })}
           <div
             className="relative z-40 bg-background overflow-hidden"
             style={{

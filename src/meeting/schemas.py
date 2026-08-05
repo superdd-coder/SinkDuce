@@ -54,5 +54,9 @@ class Tab(BaseModel):
     associated_collection_name: str = ""
     allocated_file_id: str = ""
     is_dirty: bool = False  # set True when user edits name/description; reset on regenerate
+    # True when section MD was edited after allocate; manual re-ingest clears it
+    needs_reingest: bool = False
+    # SHA-256 of raw section MD at last successful allocate (for durable dirty detect)
+    ingested_content_hash: str = ""
     md_file_path: str = ""
     payload_ref: list[str] = Field(default_factory=list)

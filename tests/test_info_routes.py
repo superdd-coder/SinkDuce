@@ -144,7 +144,9 @@ class TestGetDocSummary:
 
         assert result["source"] == "report.pdf"
         assert "Revenue grew 10%" in result["facts"]
-        mock_sm.get_doc_summary.assert_called_once_with("mycol", "report.pdf")
+        mock_sm.get_doc_summary.assert_called_once_with(
+            "mycol", "report.pdf", version_id=None
+        )
 
     def test_doc_summary_not_found(self):
         """Return 404 when doc summary does not exist."""

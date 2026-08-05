@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# @file-viewer vite-plugin copies Worker/WASM assets here at dev/build
+public/file-viewer
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

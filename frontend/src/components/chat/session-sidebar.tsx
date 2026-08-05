@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { createPortal } from "react-dom"
+import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
 import {
   listSessions, deleteSession,
@@ -13,7 +14,15 @@ export function SessionSidebar() {
   const {
     sessionId, sessions, setSessions,
     loadSessionMessages, initSession,
-  } = useAppStore()
+  } = useAppStore(
+    useShallow((s) => ({
+      sessionId: s.sessionId,
+      sessions: s.sessions,
+      setSessions: s.setSessions,
+      loadSessionMessages: s.loadSessionMessages,
+      initSession: s.initSession,
+    }))
+  )
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   /* Sliding active-session indicator — a single 2px green bar that moves to
@@ -71,7 +80,6 @@ export function SessionSidebar() {
       if (id === sessionId) {
         // Don't auto-create — clear session; next message will create one
         useAppStore.getState().setSessionId(null)
-        useAppStore.setState({ messages: [] })
       }
       await refreshList()
       toast.success("Session deleted")

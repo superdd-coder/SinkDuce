@@ -37,6 +37,20 @@ class TestToolRegistration:
         "get_file_chunks",
         "get_document_text",
         "set_document_definitive",
+        # File Management L1 (13)
+        "list_library_tree",
+        "get_timeline",
+        "list_folders",
+        "list_files",
+        "get_file",
+        "list_file_versions",
+        "list_chains",
+        "get_chain",
+        "get_node",
+        "list_groups",
+        "upload_file_from_staging",
+        "upload_file_version_from_staging",
+        "set_file_definitive",
         # Search (3)
         "search_direct_chunks",
         "search_agentic_chunks",
@@ -77,11 +91,11 @@ class TestToolRegistration:
         "delete_hot_words_library",
     }
 
-    def test_all_43_tools_registered(self):
+    def test_all_56_tools_registered(self):
         from src.mcp.server import mcp
         tools = mcp._tool_manager._tools
-        assert len(tools) == 43, (
-            f"Expected 43 tools, got {len(tools)}: {sorted(tools.keys())}"
+        assert len(tools) == 56, (
+            f"Expected 56 tools, got {len(tools)}: {sorted(tools.keys())}"
         )
 
     def test_tool_set_matches_expected(self):
@@ -130,11 +144,15 @@ class TestHttpSubApp:
         assert callable(app)
 
     def test_get_http_app_idempotent(self):
-        from src.mcp.server import get_http_app
+        """Must return the same ASGI app so session_manager matches the mount."""
+        from src.mcp.server import get_http_app, mcp
         a = get_http_app()
+        sm_a = mcp.session_manager
         b = get_http_app()
-        # Either returns the same instance or a fresh one — both must be usable
-        assert a is not None and b is not None
+        sm_b = mcp.session_manager
+        assert a is b, "get_http_app must be a singleton (shared session manager)"
+        assert sm_a is sm_b
+        assert sm_a is not None
 
 
 # ── Module imports ─────────────────────────────────────────────
@@ -219,6 +237,21 @@ class TestModuleImports:
                    delete_hot_words_library):
             assert asyncio.iscoroutinefunction(fn)
 
+    def test_file_mgmt_imports(self):
+        from src.mcp.tools.file_mgmt import (
+            list_library_tree, get_timeline, list_folders, list_files, get_file,
+            list_file_versions, list_chains, get_chain, get_node, list_groups,
+            upload_file_from_staging, upload_file_version_from_staging,
+            set_file_definitive,
+        )
+        for fn in (
+            list_library_tree, get_timeline, list_folders, list_files, get_file,
+            list_file_versions, list_chains, get_chain, get_node, list_groups,
+            upload_file_from_staging, upload_file_version_from_staging,
+            set_file_definitive,
+        ):
+            assert asyncio.iscoroutinefunction(fn)
+
 
 # ── Tool signatures (param introspection) ──────────────────────
 
@@ -294,6 +327,10 @@ _PLACEHOLDER_KWARGS = {
     "name": "test",
     "query": "test",
     "title": "test",
+    "file_id": "test-file-id",
+    "folder_id": "test-folder-id",
+    "chain_id": "test-chain-id",
+    "node_id": "test-node-id",
 }
 
 

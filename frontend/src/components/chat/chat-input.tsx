@@ -1,10 +1,24 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react"
 import { createPortal } from "react-dom"
-import { Sparkles } from "lucide-react"
+import { useShallow } from "zustand/react/shallow"
+import { Globe, Sparkles } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useStreamChat } from "@/hooks/use-stream"
 import { uploadFiles } from "@/api/client"
 import { toast } from "sonner"
+import {
+  loadWebSearchForSession,
+  setSessionWebSearch,
+} from "@/lib/session-web-search"
+import {
+  clearWebSearchAlwaysAllow,
+  setWebSearchConfirmAnchor,
+  getWebSearchConfirmAnchor,
+} from "@/lib/web-search-confirm"
+
+function getComposerStillOurs(el: HTMLDivElement | null) {
+  return !!el && getWebSearchConfirmAnchor() === el
+}
 
 function persisted<T>(key: string, fallback: T): T {
   try {
@@ -20,6 +34,9 @@ export function ChatInput() {
   const [input, setInput] = useState("")
   const [showCollections, setShowCollections] = useState(false)
   const [thinking, setThinking] = useState(() => persisted("thinking", true))
+  // Web toggle: remembered per session (default OFF)
+  const sessionId = useAppStore((s) => s.sessionId)
+  const [webSearch, setWebSearch] = useState(() => loadWebSearchForSession(null))
   const {
     isStreaming,
     activeCollection,
@@ -31,7 +48,20 @@ export function ChatInput() {
     activeModel,
     setActiveModel,
     providers,
-  } = useAppStore()
+  } = useAppStore(
+    useShallow((s) => ({
+      isStreaming: s.isStreaming,
+      activeCollection: s.activeCollection,
+      collections: s.collections,
+      fetchCollections: s.fetchCollections,
+      selectedCollections: s.selectedCollections,
+      toggleCollection: s.toggleCollection,
+      activeProvider: s.activeProvider,
+      activeModel: s.activeModel,
+      setActiveModel: s.setActiveModel,
+      providers: s.providers,
+    }))
+  )
   const { sendMessage, stopGeneration } = useStreamChat()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -46,6 +76,23 @@ export function ChatInput() {
 
   useEffect(() => { fetchCollections() }, [fetchCollections])
   useEffect(() => { localStorage.setItem("chat_thinking", JSON.stringify(thinking)) }, [thinking])
+
+  // Restore Web preference when switching / creating sessions
+  useEffect(() => {
+    setWebSearch(loadWebSearchForSession(sessionId))
+  }, [sessionId])
+
+  const toggleWebSearch = () => {
+    setWebSearch((prev) => {
+      const next = !prev
+      const sid = useAppStore.getState().sessionId
+      // Persist under current session, or draft if none yet
+      setSessionWebSearch(sid, next)
+      // Turning Web off also clears always-allow for this session
+      if (!next) clearWebSearchAlwaysAllow(sid)
+      return next
+    })
+  }
 
   // Auto-resize textarea
   useEffect(() => {
@@ -83,14 +130,15 @@ export function ChatInput() {
   }, [])
 
   const readyProviders = providers.filter((p) => (p.status === "ready" || p.status === "unknown" || !p.status))
+  const providerList = readyProviders.length > 0 ? readyProviders : providers
   const currentProvider = activeProvider
-    ? readyProviders.find((p) => p.id === activeProvider)
-    : readyProviders.find((p) => p.is_default) || readyProviders[0]
+    ? providerList.find((p) => p.id === activeProvider) || providers.find((p) => p.id === activeProvider)
+    : providerList.find((p) => p.is_default) || providerList[0]
   const handleSend = async () => {
     const text = input.trim()
     if (!text || isStreaming) return
     setInput("")
-    await sendMessage(text, thinking)
+    await sendMessage(text, thinking, webSearch)
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -113,16 +161,30 @@ export function ChatInput() {
     ? "All collections"
     : `${selectedCollections.length} collection${selectedCollections.length !== 1 ? "s" : ""}`
 
+  // Anchor web-confirm card to this composer (width + position)
+  const composerRef = useRef<HTMLDivElement>(null)
+  const sidebarView = useAppStore((s) => s.sidebarView)
+  useEffect(() => {
+    // Re-claim anchor whenever Chat is the active view (Quick may have stolen it)
+    if (sidebarView !== "chat") return
+    const el = composerRef.current
+    if (el) setWebSearchConfirmAnchor(el)
+    return () => {
+      if (getComposerStillOurs(el)) setWebSearchConfirmAnchor(null)
+    }
+  }, [sidebarView])
+
   return (
     <div className="px-6 sm:px-12 pb-5 pt-1">
       <div
+        ref={composerRef}
         className="max-w-3xl mx-auto w-full space-y-2.5 bg-background/70 backdrop-blur-lg border px-5 py-3 sk-input-frame"
         style={{ borderRadius: "4px" }}
       >
-        {/* Toolbar */}
-        <div className="flex items-center justify-center gap-4 overflow-hidden text-[10px] font-medium uppercase tracking-[0.1em]">
+        {/* Toolbar — no overflow-hidden: Web toggle must not clip the model menu */}
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[10px] font-medium uppercase tracking-[0.1em]">
           {/* Collection selector */}
-          <div className="relative" ref={collectionMenuRef}>
+          <div className="relative shrink-0" ref={collectionMenuRef}>
             <button
               type="button"
               ref={buttonRef}
@@ -181,127 +243,153 @@ export function ChatInput() {
           {/* Thinking toggle — AI-COMP-060 full-body green flow when ON */}
           <button
             type="button"
-            className={`flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${thinking ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
+            className={`shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${thinking ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
             style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: thinking ? "2px 7px" : "0", borderRadius: "2px" }}
             onClick={() => setThinking(!thinking)}
-            title={thinking ? "Deep thinking ON — slower, more thorough" : "Deep thinking OFF — faster responses"}
+            title={
+              thinking
+                ? "Model deep reasoning ON (reasoning tokens / <think>). Tool & search steps still show."
+                : "Model deep reasoning OFF. You may still see tool / search steps — those are not Think mode."
+            }
           >
             <Sparkles className="h-3 w-3" />
             Think
           </button>
 
-          <div className="w-px h-3 bg-border" />
+          <div className="w-px h-3 bg-border shrink-0" />
 
-          {/* Provider/Model cascading menu */}
-          {readyProviders.length > 0 && (
-            <div className="relative" ref={providerMenuRef}>
-              <button
-                type="button"
-                ref={providerButtonRef}
-                onClick={() => { setShowProviderMenu(!showProviderMenu); setHoveredProvider(null) }}
-                className="group relative flex items-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
-                style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "160px", color: showProviderMenu ? "var(--color-primary-foreground)" : activeProvider ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
+          {/* Web search toggle — requires Tavily API key in Settings */}
+          <button
+            type="button"
+            className={`shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${webSearch ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
+            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: webSearch ? "2px 7px" : "0", borderRadius: "2px" }}
+            onClick={toggleWebSearch}
+            title={
+              webSearch
+                ? "Web search ON for this session — may ask to confirm before searching the internet"
+                : "Web search OFF for this session — knowledge base only (set Tavily API key in Settings)"
+            }
+          >
+            <Globe className="h-3 w-3" />
+            Web
+          </button>
+
+          <div className="w-px h-3 bg-border shrink-0" />
+
+          {/* Provider/Model cascading menu — always visible (not gated solely on ready list) */}
+          <div className="relative shrink-0" ref={providerMenuRef}>
+            <button
+              type="button"
+              ref={providerButtonRef}
+              onClick={() => { setShowProviderMenu(!showProviderMenu); setHoveredProvider(null) }}
+              className="group relative flex items-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
+              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "160px", color: showProviderMenu ? "var(--color-primary-foreground)" : activeProvider ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
+            >
+              <span className="relative z-10 whitespace-nowrap">
+                {activeModel || currentProvider?.default_model || currentProvider?.model || currentProvider?.name || "Default provider"}
+              </span>
+              <span
+                className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
+                style={{ transform: showProviderMenu ? "scaleX(1)" : "scaleX(0)", transformOrigin: showProviderMenu ? "right" : "left" }}
+              />
+            </button>
+            {createPortal(
+              <div
+                ref={providerDropdownRef}
+                className={`fixed z-[100] flex overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                  showProviderMenu ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible translate-y-3 pointer-events-none"
+                }`}
+                style={{
+                  bottom: providerMenuRef.current ? window.innerHeight - providerMenuRef.current.getBoundingClientRect().top + 4 : 0,
+                  left: providerMenuRef.current ? providerMenuRef.current.getBoundingClientRect().left : 0,
+                }}
               >
-                <span className="relative z-10 whitespace-nowrap">
-                  {activeModel || currentProvider?.default_model || currentProvider?.model || currentProvider?.name || "Default provider"}
-                </span>
-                <span
-                  className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-                  style={{ transform: showProviderMenu ? "scaleX(1)" : "scaleX(0)", transformOrigin: showProviderMenu ? "right" : "left" }}
-                />
-              </button>
-              {createPortal(
-                <div
-                  ref={providerDropdownRef}
-                  className={`fixed z-[100] flex overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                    showProviderMenu ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible translate-y-3 pointer-events-none"
-                  }`}
-                  style={{
-                    bottom: providerMenuRef.current ? window.innerHeight - providerMenuRef.current.getBoundingClientRect().top + 4 : 0,
-                    left: providerMenuRef.current ? providerMenuRef.current.getBoundingClientRect().left : 0,
-                  }}
-                >
-                  {/* Left: provider list */}
-                  <div className={`flex flex-col flex-1 min-w-[160px] ${hoveredProvider ? "border-r border-primary/20" : ""}`}>
-                    <button
-                      type="button"
-                      className="group relative flex items-center overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap w-full"
-                      onMouseEnter={() => setHoveredProvider(null)}
-                      onClick={() => {
-                        useAppStore.getState().setActiveProvider(null)
-                        setActiveModel(null)
-                        setShowProviderMenu(false)
-                      }}
-                    >
-                      <span className="relative z-10 text-muted-foreground group-hover:text-primary-foreground transition-colors duration-500">Default</span>
-                      <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100" />
-                    </button>
-                    {readyProviders.map((p) => {
-                      const provModels = p.selected_models && p.selected_models.length > 0
-                        ? p.selected_models
-                        : p.model ? [p.model] : []
-                      const isActive = activeProvider === p.id && !hoveredProvider
-                      return (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className="group relative flex items-center justify-between overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap w-full"
-                          onMouseEnter={() => setHoveredProvider(p.id)}
-                        >
-                          <span className={`relative z-10 transition-colors duration-500 ${isActive ? "text-primary" : hoveredProvider === p.id ? "text-primary-foreground" : "text-muted-foreground group-hover:text-primary-foreground"}`}>
-                            {p.name || p.model}
-                          </span>
-                          {provModels.length > 0 && <span className={`relative z-10 text-[8px] transition-opacity duration-500 ${hoveredProvider === p.id ? "opacity-60" : "opacity-40 group-hover:opacity-60"}`}>→</span>}
-                          <span className={`absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] origin-left ${hoveredProvider === p.id ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"}`} />
-                        </button>
-                      )
-                    })}
-                  </div>
-                  {/* Right: model list — slides in on hover */}
-                  <div
-                    className={`flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                      hoveredProvider
-                        ? "max-w-[200px] opacity-100"
-                        : "max-w-0 opacity-0"
-                    }`}
+                {/* Left: provider list */}
+                <div className={`flex flex-col flex-1 min-w-[160px] ${hoveredProvider ? "border-r border-primary/20" : ""}`}>
+                  <button
+                    type="button"
+                    className="group relative flex items-center overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap w-full"
+                    onMouseEnter={() => setHoveredProvider(null)}
+                    onClick={() => {
+                      useAppStore.getState().setActiveProvider(null)
+                      setActiveModel(null)
+                      setShowProviderMenu(false)
+                    }}
                   >
-                    <div className="min-w-[140px]">
-                      {(() => {
-                        const hp = hoveredProvider ? readyProviders.find(p => p.id === hoveredProvider) : null
-                        const allModels = hp
-                          ? (hp.selected_models && hp.selected_models.length > 0 ? hp.selected_models : hp.model ? [hp.model] : [])
-                          : []
-                        // Only show models with function calling support (required for ChatboxAgent)
-                        const fcIds = (hp as any)?.function_call_model_ids ?? []
-                        const models = allModels.filter((m: string) => fcIds.length === 0 || fcIds.includes(m))
-                        if (models.length === 0) return null
-                        return models.map((m) => (
-                          <button
-                            key={m}
-                            type="button"
-                            className="group relative block w-full overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap"
-                            onClick={() => {
-                              if (hoveredProvider) {
-                                useAppStore.getState().setActiveProvider(hoveredProvider)
-                                setActiveModel(m)
-                              }
-                              setShowProviderMenu(false)
-                            }}
-                          >
-                            <span className={`relative z-10 transition-colors duration-500 ${activeProvider === hoveredProvider && activeModel === m ? "text-primary group-hover:text-primary-foreground" : "text-muted-foreground group-hover:text-primary-foreground"}`}>
-                              {m}
-                            </span>
-                            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100" />
-                          </button>
-                        ))
-                      })()}
+                    <span className="relative z-10 text-muted-foreground group-hover:text-primary-foreground transition-colors duration-500">Default</span>
+                    <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100" />
+                  </button>
+                  {(readyProviders.length > 0 ? readyProviders : providers).map((p) => {
+                    const provModels = p.selected_models && p.selected_models.length > 0
+                      ? p.selected_models
+                      : p.model ? [p.model] : []
+                    const isActive = activeProvider === p.id && !hoveredProvider
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="group relative flex items-center justify-between overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap w-full"
+                        onMouseEnter={() => setHoveredProvider(p.id)}
+                      >
+                        <span className={`relative z-10 transition-colors duration-500 ${isActive ? "text-primary" : hoveredProvider === p.id ? "text-primary-foreground" : "text-muted-foreground group-hover:text-primary-foreground"}`}>
+                          {p.name || p.model}
+                        </span>
+                        {provModels.length > 0 && <span className={`relative z-10 text-[8px] transition-opacity duration-500 ${hoveredProvider === p.id ? "opacity-60" : "opacity-40 group-hover:opacity-60"}`}>→</span>}
+                        <span className={`absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] origin-left ${hoveredProvider === p.id ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"}`} />
+                      </button>
+                    )
+                  })}
+                  {providers.length === 0 && (
+                    <div className="px-3 py-2 text-[10px] text-muted-foreground/60 italic">
+                      No providers — configure in Settings
                     </div>
+                  )}
+                </div>
+                {/* Right: model list — slides in on hover */}
+                <div
+                  className={`flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
+                    hoveredProvider
+                      ? "max-w-[200px] opacity-100"
+                      : "max-w-0 opacity-0"
+                  }`}
+                >
+                  <div className="min-w-[140px]">
+                    {(() => {
+                      const list = readyProviders.length > 0 ? readyProviders : providers
+                      const hp = hoveredProvider ? list.find(p => p.id === hoveredProvider) : null
+                      const allModels = hp
+                        ? (hp.selected_models && hp.selected_models.length > 0 ? hp.selected_models : hp.model ? [hp.model] : [])
+                        : []
+                      // Only show models with function calling support (required for ChatboxAgent)
+                      const fcIds = (hp as any)?.function_call_model_ids ?? []
+                      const models = allModels.filter((m: string) => fcIds.length === 0 || fcIds.includes(m))
+                      if (models.length === 0) return null
+                      return models.map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          className="group relative block w-full overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap"
+                          onClick={() => {
+                            if (hoveredProvider) {
+                              useAppStore.getState().setActiveProvider(hoveredProvider)
+                              setActiveModel(m)
+                            }
+                            setShowProviderMenu(false)
+                          }}
+                        >
+                          <span className={`relative z-10 transition-colors duration-500 ${activeProvider === hoveredProvider && activeModel === m ? "text-primary group-hover:text-primary-foreground" : "text-muted-foreground group-hover:text-primary-foreground"}`}>
+                            {m}
+                          </span>
+                          <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100" />
+                        </button>
+                      ))
+                    })()}
                   </div>
-                </div>,
-                document.body
-              )}
-            </div>
-          )}
+                </div>
+              </div>,
+              document.body
+            )}
+          </div>
         </div>
 
         {/* Input area */}

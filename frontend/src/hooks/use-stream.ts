@@ -5,7 +5,8 @@ import {
   _getCachedMessages, _setCachedMessages,
   type ThinkingSummary,
 } from "@/stores/app-store"
-import { generateSessionTitle, listSessions } from "@/api/client"
+import { confirmWebSearch, generateSessionTitle, listSessions } from "@/api/client"
+import { promptWebSearchConfirm } from "@/lib/web-search-confirm"
 /** Check if sid is the active session; if not, update cache instead of store. */
 function _isActive(sid: string) {
   return useAppStore.getState().sessionId === sid
@@ -42,39 +43,59 @@ function _syncCacheFromStore(sid: string) {
 }
 
 export function useStreamChat() {
-  const {
-    sessionId, initSession,
-    addMessage, appendToLastMessage, setLastMessageSources,
-    appendTimelineThinking, setTimelineToolSummary, setTimelineToolStatus, startTimelineTool,
-    finishLastMessage, flushLastMessageToThinking, setStreaming, selectedCollections,
-    activeProvider, activeModel,
-  } = useAppStore()
+  // Do NOT subscribe to the whole store — streaming updates `messages` every token
+  // and would re-render every consumer of this hook (ChatInput, etc.).
+  // Read actions/state via getState() inside sendMessage / stopGeneration.
 
-  const sendMessage = async (content: string, thinking = true) => {
-    let sid = sessionId
-    if (!sid) {
-      sid = await initSession()
-    }
+  const sendMessage = async (content: string, thinking = true, webSearchEnabled = false) => {
+    const store = useAppStore.getState()
+    // Hydrate restored sessionId (localStorage) before sending so we never
+    // append into an old session while the UI still looks blank.
+    // No session → create; load fail → create new via ensureSessionHydrated.
+    const sid = await store.ensureSessionHydrated()
+    if (!sid) return
 
     // Abort previous stream for the SAME session only
     _abortStream(sid)
     const controller = new AbortController()
     _registerStream(sid, controller)
 
-    addMessage({ id: crypto.randomUUID(), role: "user", content })
+    store.addMessage({ id: crypto.randomUUID(), role: "user", content })
     const assistantId = crypto.randomUUID()
-    addMessage({ id: assistantId, role: "assistant", content: "", isStreaming: true })
-    setStreaming(true)
+    store.addMessage({ id: assistantId, role: "assistant", content: "", isStreaming: true })
+    store.setStreaming(true)
     _syncCacheFromStore(sid)
 
+    // Hoisted so catch/finally can flush even if setup fails mid-way
+    let flushAnswerTokensNow: () => void = () => {}
+
     try {
+      const {
+        selectedCollections,
+        activeProvider,
+        activeModel,
+        appendToLastMessage,
+        setLastMessageSources,
+        appendTimelineThinking,
+        setTimelineToolSummary,
+        setTimelineToolStatus,
+        startTimelineTool,
+        finishTimelineTool,
+        closeOpenTimelineTools,
+        finishLastMessage,
+        flushLastMessageToThinking,
+      } = useAppStore.getState()
+
       const resp = await fetch(`/api/sessions/${sid}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content, thinking, collections: selectedCollections,
+          content,
+          thinking,
+          collections: selectedCollections,
           provider_id: activeProvider || undefined,
           model: activeModel || undefined,
+          web_search_enabled: webSearchEnabled,
         }),
         signal: controller.signal,
       })
@@ -91,6 +112,40 @@ export function useStreamChat() {
       const reader = resp.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = "", currentEvent = ""
+      // Batch answer tokens on a short timer (not rAF): rAF is starved when the
+      // main thread is busy with Markdown/layout, which looked like a freeze at
+      // "好的" while the backend kept generating.
+      let tokenBuf = ""
+      let tokenTimer: ReturnType<typeof setTimeout> | 0 = 0
+      let closedTimelineTools = false
+      const flushTokenBuf = () => {
+        tokenTimer = 0
+        if (!tokenBuf) return
+        const chunk = tokenBuf
+        tokenBuf = ""
+        if (_isActive(sid)) {
+          if (!closedTimelineTools) {
+            closedTimelineTools = true
+            closeOpenTimelineTools()
+          }
+          appendToLastMessage(chunk)
+        } else {
+          _cacheAppend(sid, chunk)
+        }
+      }
+      const queueAnswerToken = (text: string) => {
+        if (!text) return
+        tokenBuf += text
+        if (tokenTimer) return
+        tokenTimer = setTimeout(flushTokenBuf, 32)
+      }
+      flushAnswerTokensNow = () => {
+        if (tokenTimer) {
+          clearTimeout(tokenTimer)
+          tokenTimer = 0
+        }
+        flushTokenBuf()
+      }
 
       while (true) {
         const { done, value } = await reader.read()
@@ -111,18 +166,24 @@ export function useStreamChat() {
 
             switch (currentEvent) {
               case "thinking":
+                // Reasoning timeline is plain text — keep low latency, no MD cost
                 if (active) appendTimelineThinking(data.content)
                 break
 
               case "token":
-                if (active) appendToLastMessage(data.content)
-                else _cacheAppend(sid, data.content)
+                // Final answer path (Think OFF sends almost everything here)
+                queueAnswerToken(String(data.content ?? ""))
                 break
 
               case "tool_call_start":
                 if (active) {
+                  flushAnswerTokensNow()
                   flushLastMessageToThinking()
-                  startTimelineTool()
+                  startTimelineTool({
+                    tool: String(data.tool || ""),
+                    raw_query: String(data.raw_query || data.query || ""),
+                    source_type: data.source_type ? String(data.source_type) : undefined,
+                  })
                 }
                 break
 
@@ -135,11 +196,79 @@ export function useStreamChat() {
                 if (active) setTimelineToolSummary(data as ThinkingSummary)
                 break
 
-              case "tool_result":
-                // Tool execution complete — summary already sent via thinking_summary
+              case "searching":
+                if (active) {
+                  const q = String(data.query || "")
+                  setTimelineToolStatus(q ? `Searching: ${q}` : "Searching…")
+                }
                 break
 
+              case "tool_result":
+                if (active) {
+                  const st = String(data.status || "done")
+                  const mapped =
+                    st === "error"
+                      ? "error"
+                      : st === "declined"
+                        ? "declined"
+                        : "done"
+                  finishTimelineTool({
+                    status: mapped as "done" | "error" | "declined",
+                    sources_count:
+                      typeof data.sources_count === "number"
+                        ? data.sources_count
+                        : undefined,
+                    source_type: data.source_type
+                      ? String(data.source_type)
+                      : undefined,
+                    content:
+                      typeof data.content === "string" ? data.content : undefined,
+                    tool: data.tool ? String(data.tool) : undefined,
+                  })
+                }
+                break
+
+              case "web_search_confirm": {
+                // HITL: pause stream until user answers; must always resolve backend wait
+                const confirmId = String(data.confirm_id || "")
+                const query = String(data.query || "")
+                if (active) {
+                  setTimelineToolStatus(
+                    query
+                      ? `Waiting for web search confirmation: ${query}`
+                      : "Waiting for web search confirmation…",
+                  )
+                }
+                if (!confirmId) {
+                  console.error("[Chat] web_search_confirm missing confirm_id")
+                  break
+                }
+                let approved = false
+                try {
+                  approved = await promptWebSearchConfirm(confirmId, query, sid)
+                } catch (err) {
+                  console.error("[Chat] promptWebSearchConfirm failed:", err)
+                  approved = false
+                }
+                try {
+                  await confirmWebSearch(confirmId, approved)
+                } catch (err) {
+                  console.error("[Chat] web-search-confirm POST failed:", err)
+                  // Retry once so backend does not hang on wait()
+                  try {
+                    await confirmWebSearch(confirmId, approved)
+                  } catch (err2) {
+                    console.error("[Chat] web-search-confirm retry failed:", err2)
+                  }
+                }
+                if (active && !approved) {
+                  finishTimelineTool({ status: "declined", source_type: "web" })
+                }
+                break
+              }
+
               case "done":
+                flushAnswerTokensNow()
                 if (data.sources?.length) {
                   if (active) setLastMessageSources(data.sources)
                   else _cacheSetLastSources(sid, data.sources)
@@ -149,6 +278,15 @@ export function useStreamChat() {
                   _syncCacheFromStore(sid)
                 } else {
                   _cacheFinishLast(sid)
+                }
+                // Live session list: message_count without waiting for full page refresh
+                if (typeof data.message_count === "number") {
+                  const st = useAppStore.getState()
+                  st.setSessions(
+                    st.sessions.map((s) =>
+                      s.id === sid ? { ...s, message_count: data.message_count as number } : s,
+                    ),
+                  )
                 }
                 _unregisterStream(sid)
                 if (sid) {
@@ -168,6 +306,7 @@ export function useStreamChat() {
                 return
 
               case "error":
+                flushAnswerTokensNow()
                 if (active) appendToLastMessage(`Error: ${data.content}`)
                 else _cacheAppend(sid, `Error: ${data.content}`)
                 if (active) finishLastMessage()
@@ -178,13 +317,18 @@ export function useStreamChat() {
           }
         }
       }
+      // Stream body ended without a done event — still flush pending answer text
+      flushAnswerTokensNow()
     } catch (err: any) {
+      flushAnswerTokensNow()
       if (err.name === "AbortError") return
-      if (_isActive(sid)) appendToLastMessage(`Error: ${err.message}`)
+      if (_isActive(sid)) useAppStore.getState().appendToLastMessage(`Error: ${err.message}`)
       else _cacheAppend(sid, `Error: ${err.message}`)
     } finally {
+      flushAnswerTokensNow()
       if (_isActive(sid)) {
-        finishLastMessage()
+        useAppStore.getState().finishLastMessage()
+        useAppStore.getState().setStreaming(false)
         _syncCacheFromStore(sid)
       } else {
         _cacheFinishLast(sid)

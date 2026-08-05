@@ -385,6 +385,13 @@ function createResizableImageExtension() {
           margin-left: ${ml};
           margin-right: ${mr};
         `
+        // Description tracks image width + alignment (not full editor width).
+        descArea.style.width = hasPct ? rawWidth : "auto"
+        descArea.style.maxWidth = "100%"
+        descArea.style.marginLeft = ml
+        descArea.style.marginRight = mr
+        descArea.style.boxSizing = "border-box"
+        descArea.style.textAlign = "center"
       }
       // ── Image wrapper — keeps resize handle pinned to image regardless of caption/description height ──
       const imgWrapper = document.createElement("div")
@@ -447,8 +454,7 @@ function createResizableImageExtension() {
         }
       }
 
-      // Visual Description area — shows AI-generated description below caption.
-      // Always present in DOM (hidden when no description), styled with emerald glow.
+      // Visual Description area — under image, same width/alignment as caption.
       const descArea = document.createElement("div")
       descArea.className = "image-visual-desc"
       descArea.style.cssText = `
@@ -456,7 +462,7 @@ function createResizableImageExtension() {
         font-size: 12px;
         color: #6b7280;
         font-style: italic;
-        text-align: left;
+        text-align: center;
         margin-top: 6px;
         padding: 8px 12px;
         border-radius: 6px;
@@ -467,6 +473,7 @@ function createResizableImageExtension() {
           0 0 25px rgba(4, 120, 87, 0.15);
         line-height: 1.5;
         position: relative;
+        box-sizing: border-box;
       `
       const descTextEl = document.createElement("span")
       descTextEl.className = "image-visual-desc-text"
@@ -873,13 +880,48 @@ function createResizableImageExtension() {
             }
           }
 
-          // Restore percentage-based layout on imgWrapper + captionEl,
-          // NOT on container (which stays 100% for full-width description).
-          imgWrapper.style.width = newPctWidth
-          captionEl.style.width = newPctWidth
+          // Restore percentage layout + keep image/caption/desc centered.
+          // Do NOT clear marginLeft/Right after setNodeMarkup — that raced
+          // update() and left caption/description left-aligned.
+          const a = node.attrs.alignment || "center"
+          let ml = "0",
+            mr = "0"
+          if (a === "center") {
+            ml = "auto"
+            mr = "auto"
+          } else if (a === "right") {
+            ml = "auto"
+          }
           container.style.width = "100%"
-          captionEl.style.marginLeft = ""
-          captionEl.style.marginRight = ""
+          imgWrapper.style.cssText = `
+            position: relative;
+            display: block;
+            line-height: 0;
+            width: ${newPctWidth};
+            max-width: 100%;
+            margin-left: ${ml};
+            margin-right: ${mr};
+          `
+          captionEl.style.cssText = `
+            font-size: 13px;
+            color: #666;
+            text-align: center;
+            margin-top: 8px;
+            font-style: italic;
+            cursor: text;
+            min-height: 20px;
+            width: ${newPctWidth};
+            max-width: 100%;
+            margin-left: ${ml};
+            margin-right: ${mr};
+          `
+          // Keep description under the image (same width + center), not full-bleed left
+          descArea.style.width = newPctWidth
+          descArea.style.maxWidth = "100%"
+          descArea.style.marginLeft = ml
+          descArea.style.marginRight = mr
+          descArea.style.boxSizing = "border-box"
+          descArea.style.textAlign = "center"
 
           document.removeEventListener("mousemove", onMouseMove)
           document.removeEventListener("mouseup", onMouseUp)
@@ -946,6 +988,12 @@ function createResizableImageExtension() {
               margin-left: ${ml};
               margin-right: ${mr};
             `
+            descArea.style.width = hasPct ? w : "auto"
+            descArea.style.maxWidth = "100%"
+            descArea.style.marginLeft = ml
+            descArea.style.marginRight = mr
+            descArea.style.boxSizing = "border-box"
+            descArea.style.textAlign = "center"
 
             // Persist to ProseMirror node
             const { tr } = editor.state
@@ -1000,6 +1048,12 @@ function createResizableImageExtension() {
           margin-left: ${ml};
           margin-right: ${mr};
         `
+        descArea.style.width = hasPctW ? w : "auto"
+        descArea.style.maxWidth = "100%"
+        descArea.style.marginLeft = ml
+        descArea.style.marginRight = mr
+        descArea.style.boxSizing = "border-box"
+        descArea.style.textAlign = "center"
         // Refresh caption — ensure captionEl stays in sync even if
         // commitCaption() already updated it before ProseMirror's update() cycle.
         setCaption(updatedNode.attrs.alt || "")
@@ -1170,6 +1224,94 @@ function showImageFloatingMenu(
 // ──────────────────────────────────────────────
 // DistillBlock Node Extension
 // ──────────────────────────────────────────────
+
+/**
+ * Speaker maps for live [spk:ID] rendering. Always re-fetched (in-flight
+ * deduped) so rename in Meeting UI shows up in open distill blocks.
+ */
+const _speakerInflight = new Map<string, Promise<Record<string, string>>>()
+
+/** Drop cache so next paint pulls latest names (call when note dialog opens). */
+export function invalidateMeetingSpeakerCache(meetingId?: string) {
+  if (meetingId) {
+    _speakerInflight.delete(meetingId)
+  } else {
+    _speakerInflight.clear()
+  }
+  // Notify open distill NodeViews to re-paint
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("meeting-speakers-changed", {
+        detail: meetingId ? { meetingId } : {},
+      })
+    )
+  }
+}
+
+function parseMeetingSourceId(
+  sourceId: string | null | undefined,
+): { meetingId: string; tabId: string } | null {
+  if (!sourceId || !sourceId.startsWith("meeting:")) return null
+  const rest = sourceId.slice("meeting:".length).trim()
+  if (!rest) return null
+  const colon = rest.indexOf(":")
+  if (colon === -1) return { meetingId: rest, tabId: "tab_general" }
+  const meetingId = rest.slice(0, colon).trim()
+  const tabId = rest.slice(colon + 1).trim() || "tab_general"
+  return meetingId ? { meetingId, tabId } : null
+}
+
+/** Apply latest speaker names to [spk:ID] / Speaker N tokens (display only). */
+function applySpeakerDisplay(
+  text: string,
+  names: Record<string, string>,
+): string {
+  let t = text || ""
+  t = t.replace(/\\\[/g, "[").replace(/\\\]/g, "]")
+  t = t.replace(/\[spk:([^\]]+)\]/g, (_, id: string) => {
+    const name = names[id]?.trim()
+    return name || `Speaker ${id}`
+  })
+  for (const [id, name] of Object.entries(names)) {
+    if (!name) continue
+    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    t = t.replace(new RegExp(`\\bSpeaker\\s+${esc}\\b`, "gi"), name)
+  }
+  return t
+}
+
+async function fetchMeetingSpeakerNames(
+  meetingId: string,
+): Promise<Record<string, string>> {
+  let p = _speakerInflight.get(meetingId)
+  if (!p) {
+    p = (async () => {
+      try {
+        const { getMeeting } = await import("@/api/client")
+        const m = await getMeeting(meetingId)
+        return (m.speaker_names ?? {}) as Record<string, string>
+      } catch {
+        return {}
+      } finally {
+        // Allow a fresh fetch next time (after this promise settles)
+        _speakerInflight.delete(meetingId)
+      }
+    })()
+    _speakerInflight.set(meetingId, p)
+  }
+  return p
+}
+
+async function resolveDistillTextForDisplay(
+  text: string,
+  sourceNoteId: string | null | undefined,
+): Promise<string> {
+  const parsed = parseMeetingSourceId(sourceNoteId)
+  if (!parsed || !text) return text || ""
+  const names = await fetchMeetingSpeakerNames(parsed.meetingId)
+  return applySpeakerDisplay(text, names)
+}
+
 function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
   return Node.create({
     name: "distillBlock",
@@ -1324,33 +1466,70 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
         const content = document.createElement("div")
         content.style.cssText = `padding: 10px 14px; font-size: 13px; line-height: 1.6; color: #333;`
 
-        // Loading state
-        if (node.attrs.loading) {
-          content.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 8px; color: #666;">
-              <div class="loading-spinner" style="
-                width: 16px; height: 16px; border: 2px solid #e0e0e0;
-                border-top: 2px solid #1A5E3D; border-radius: 50%;                animation: spin 1s linear infinite;
-              "></div>
-              <span>⏳ Distilling content from "${node.attrs.sourceTitle}"...</span>
-            </div>
-          `
+        // Latest attrs for speaker re-paint (meeting names change while note stays open)
+        let latestText = node.attrs.text as string
+        let latestSourceId = node.attrs.sourceNoteId as string | null
+        let latestLoading = !!node.attrs.loading
+        let latestTitle = (node.attrs.sourceTitle as string) || "source"
 
-          // Add animation style
-          if (!document.getElementById("distill-loading-style")) {
-            const style = document.createElement("style")
-            style.id = "distill-loading-style"
-            style.textContent = `
-              @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-              }
+        const paintContent = (
+          text: string,
+          sourceId: string | null,
+          loading: boolean,
+          title: string,
+        ) => {
+          latestText = text
+          latestSourceId = sourceId
+          latestLoading = loading
+          latestTitle = title
+          if (loading) {
+            content.innerHTML = `
+              <div style="display: flex; align-items: center; gap: 8px; color: #666;">
+                <div class="loading-spinner" style="
+                  width: 16px; height: 16px; border: 2px solid #e0e0e0;
+                  border-top: 2px solid #1A5E3D; border-radius: 50%;
+                  animation: spin 1s linear infinite;
+                "></div>
+                <span>⏳ Distilling content from "${title}"...</span>
+              </div>
             `
-            document.head.appendChild(style)
+            if (!document.getElementById("distill-loading-style")) {
+              const style = document.createElement("style")
+              style.id = "distill-loading-style"
+              style.textContent = `
+                @keyframes spin {
+                  0% { transform: rotate(0deg); }
+                  100% { transform: rotate(360deg); }
+                }
+              `
+              document.head.appendChild(style)
+            }
+            return
           }
-        } else {
-          content.innerHTML = renderMarkdown(node.attrs.text)
+          // Sync first paint (IDs as Speaker N until names load)
+          content.innerHTML = renderMarkdown(
+            applySpeakerDisplay(text || "", {})
+          )
+          // Always re-fetch latest speaker names for meeting distill sources
+          void resolveDistillTextForDisplay(text || "", sourceId).then((resolved) => {
+            if (content.isConnected) {
+              content.innerHTML = renderMarkdown(resolved)
+              requestAnimationFrame(() => {
+                if (content.scrollHeight > 200) {
+                  expandBtn.style.display = "block"
+                }
+              })
+            }
+          })
         }
+
+        // Loading / body
+        paintContent(
+          node.attrs.text,
+          node.attrs.sourceNoteId,
+          !!node.attrs.loading,
+          node.attrs.sourceTitle || "source",
+        )
 
         contentWrapper.appendChild(content)
 
@@ -1377,6 +1556,28 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
         dom.append(header, contentWrapper, expandBtn)
 
+        // Re-resolve speakers when names change (Meeting page) or tab becomes visible
+        const onSpeakersChanged = (ev: Event) => {
+          if (latestLoading || !content.isConnected) return
+          const detail = (ev as CustomEvent).detail as { meetingId?: string } | undefined
+          const parsed = parseMeetingSourceId(latestSourceId)
+          if (
+            detail?.meetingId &&
+            parsed &&
+            detail.meetingId !== parsed.meetingId
+          ) {
+            return
+          }
+          paintContent(latestText, latestSourceId, latestLoading, latestTitle)
+        }
+        const onVisible = () => {
+          if (document.visibilityState === "visible") {
+            onSpeakersChanged(new Event("visibilitychange"))
+          }
+        }
+        window.addEventListener("meeting-speakers-changed", onSpeakersChanged)
+        document.addEventListener("visibilitychange", onVisible)
+
         // Check if content overflows
         requestAnimationFrame(() => {
           if (content.scrollHeight > 200) {
@@ -1390,20 +1591,12 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           update: (updatedNode: ProseMirrorNode) => {
             if (updatedNode.type.name !== "distillBlock") return false
 
-            // Update loading state
-            if (updatedNode.attrs.loading) {
-              content.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 8px; color: #666;">
-                  <div style="
-                    width: 16px; height: 16px; border: 2px solid #e0e0e0;
-                    border-top: 2px solid #1A5E3D; border-radius: 50%;                    animation: spin 1s linear infinite;
-                  "></div>
-                  <span>⏳ Distilling content from "${updatedNode.attrs.sourceTitle}"...</span>
-                </div>
-              `
-            } else {
-              content.innerHTML = renderMarkdown(updatedNode.attrs.text)
-            }
+            paintContent(
+              updatedNode.attrs.text,
+              updatedNode.attrs.sourceNoteId,
+              !!updatedNode.attrs.loading,
+              updatedNode.attrs.sourceTitle || "source",
+            )
 
             link.textContent = `📎 ${updatedNode.attrs.sourceTitle}`
             badge.textContent = updatedNode.attrs.sourceNoteId?.slice(-3) || "?"
@@ -1436,12 +1629,11 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
             return true
           },
-          // NOTE: No destroy() callback here. destroy() fires on every NodeView
-          // teardown — including when switching notes (Tiptap replaces content,
-          // old NodeViews are destroyed). At that point activeNoteId has already
-          // changed but latestContentRef may still hold old content, so saving
-          // would overwrite the target note's content. Backspace/Delete removal
-          // of distill blocks is detected in handleContentChange instead.
+          // Only clean listeners — do not flush note content here
+          destroy: () => {
+            window.removeEventListener("meeting-speakers-changed", onSpeakersChanged)
+            document.removeEventListener("visibilitychange", onVisible)
+          },
         }
       }
     },
@@ -1561,8 +1753,13 @@ function showSlashMenu(
   onDistill?: () => void,
   onImageUpload?: (file: File) => Promise<string>
 ) {
-  const existingMenu = document.getElementById("slash-menu")
-  if (existingMenu) existingMenu.remove()
+  const existingMenu = document.getElementById("slash-menu") as HTMLElement & {
+    __close?: () => void
+  } | null
+  if (existingMenu) {
+    existingMenu.__close?.()
+    existingMenu.remove()
+  }
 
   const commandGroups = [
     {
@@ -1635,27 +1832,32 @@ function showSlashMenu(
 
   const menu = document.createElement("div")
   menu.id = "slash-menu"
+  // Compact single-line rows; fixed height with internal scroll
   menu.style.cssText = `
     position: fixed;
     background: white;
     border: 1px solid #e0e0e0;
-    border-radius: 12px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-    padding: 8px 0;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    padding: 0;
     z-index: 1000;
-    min-width: 280px;
-    max-height: 400px;
-    overflow-y: auto;
+    width: 220px;
+    height: 220px;
+    max-height: min(220px, 50vh);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   `
 
   const searchContainer = document.createElement("div")
-  searchContainer.style.cssText = `padding: 8px 14px; border-bottom: 1px solid #e0e0e0;`
+  searchContainer.style.cssText = `padding: 4px 8px; border-bottom: 1px solid #e0e0e0; flex-shrink: 0;`
   const searchInput = document.createElement("input")
   searchInput.placeholder = "Filter..."
-  searchInput.style.cssText = `width: 100%; border: none; outline: none; font-size: 14px;`
+  searchInput.style.cssText = `width: 100%; border: none; outline: none; font-size: 12px; line-height: 20px; height: 24px; background: transparent;`
   searchContainer.appendChild(searchInput)
 
   const commandList = document.createElement("div")
+  commandList.style.cssText = `flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0;`
   menu.append(searchContainer, commandList)
 
   let allCommands: any[] = []
@@ -1679,7 +1881,7 @@ function showSlashMenu(
     })
 
     if (filteredCommands.length === 0) {
-      commandList.innerHTML = '<div style="padding: 16px; text-align: center; color: #999;">No commands</div>'
+      commandList.innerHTML = '<div style="padding: 8px; text-align: center; color: #999; font-size: 12px;">No commands</div>'
       return
     }
 
@@ -1693,20 +1895,27 @@ function showSlashMenu(
     Object.entries(grouped).forEach(([, commands]) => {
       ;(commands as any[]).forEach((cmd) => {
         const item = document.createElement("div")
-        item.style.cssText = `display: flex; align-items: center; padding: 8px 14px; cursor: pointer;`
+        // Single-line row (~24px): small icon + label only
+        item.style.cssText = `
+          display: flex; align-items: center; gap: 6px;
+          height: 24px; padding: 0 8px; cursor: pointer;
+          box-sizing: border-box;
+        `
         item.dataset.index = String(itemIndex++)
 
         item.innerHTML = `
-          <div style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border-radius: 6px; margin-right: 10px; font-size: 16px;">${cmd.icon}</div>
-          <div style="flex: 1;">
-            <div style="font-size: 13px; font-weight: 500;">${cmd.label}</div>
-            <div style="font-size: 11px; color: #666;">${cmd.desc}</div>
-          </div>
+          <div style="width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border-radius: 3px; font-size: 10px; line-height: 1;">${cmd.icon}</div>
+          <div style="flex: 1; min-width: 0; font-size: 12px; font-weight: 500; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cmd.label}</div>
         `
 
         item.addEventListener("mouseenter", () => { item.style.background = "#f0f7ff" })
         item.addEventListener("mouseleave", () => { item.style.background = "white" })
-        item.addEventListener("click", () => { menu.remove(); cmd.action() })
+        item.addEventListener("click", (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()
+          closeMenu()
+          cmd.action()
+        })
 
         commandList.appendChild(item)
       })
@@ -1724,6 +1933,52 @@ function showSlashMenu(
     if (selectedItem) selectedItem.scrollIntoView({ block: "nearest" })
   }
 
+  const onPointerDownOutside = (e: Event) => {
+    // Use DOM Node (globalThis) — TipTap/ProseMirror also exports `Node`
+    const t = e.target
+    if (t instanceof globalThis.Node && menu.contains(t)) return
+    closeMenu()
+  }
+
+  const onDocKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault()
+      e.stopPropagation()
+      closeMenu()
+      try {
+        editor.chain().focus().run()
+      } catch {
+        /* editor may be gone */
+      }
+    }
+  }
+
+  const onEditorDestroy = () => {
+    closeMenu()
+  }
+
+  const closeMenu = () => {
+    try {
+      editor.off?.("destroy", onEditorDestroy)
+    } catch {
+      /* ignore */
+    }
+    if (!menu.isConnected) {
+      document.removeEventListener("pointerdown", onPointerDownOutside, true)
+      document.removeEventListener("keydown", onDocKeyDown, true)
+      return
+    }
+    menu.remove()
+    document.removeEventListener("pointerdown", onPointerDownOutside, true)
+    document.removeEventListener("keydown", onDocKeyDown, true)
+  }
+  ;(menu as HTMLElement & { __close?: () => void }).__close = closeMenu
+  try {
+    editor.on?.("destroy", onEditorDestroy)
+  } catch {
+    /* ignore */
+  }
+
   searchInput.addEventListener("keydown", (e) => {
     switch (e.key) {
       case "ArrowDown":
@@ -1739,11 +1994,24 @@ function showSlashMenu(
       case "Enter":
         e.preventDefault()
         const cmd = filteredCommands[selectedIndex]
-        if (cmd) { menu.remove(); cmd.action() }
+        if (cmd) {
+          closeMenu()
+          cmd.action()
+        }
         break
       case "Escape":
-        e.preventDefault()
-        menu.remove()
+      case "Delete":
+      case "Backspace":
+        // Empty filter + Delete/Backspace (or always Escape) → dismiss slash menu
+        if (e.key === "Escape" || !(e.target as HTMLInputElement).value) {
+          e.preventDefault()
+          closeMenu()
+          try {
+            editor.chain().focus().run()
+          } catch {
+            /* ignore */
+          }
+        }
         break
     }
   })
@@ -1780,14 +2048,13 @@ function showSlashMenu(
 
   searchInput.focus()
 
-  setTimeout(() => {
-    document.addEventListener("click", function closeMenu(e) {
-      if (!menu.contains(e.target as HTMLElement)) {
-        menu.remove()
-        document.removeEventListener("click", closeMenu)
-      }
-    })
-  }, 10)
+  // Capture-phase pointerdown so clicks on editor / sidebar still dismiss
+  // (bubble-phase click was often swallowed by ProseMirror / React).
+  // Defer one frame so the opening keystroke doesn't immediately close.
+  requestAnimationFrame(() => {
+    document.addEventListener("pointerdown", onPointerDownOutside, true)
+    document.addEventListener("keydown", onDocKeyDown, true)
+  })
 }
 
 // ──────────────────────────────────────────────
@@ -1888,13 +2155,27 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     btn.addEventListener("mouseleave", () => { btn.style.background = "transparent" })
   }
 
-  const makeBtn = (title: string, svg: string, action: () => void) => {
+  const dismissFloatingMenu = () => {
+    menu.remove()
+  }
+
+  const makeBtn = (
+    title: string,
+    svg: string,
+    action: () => void,
+    /** Close the floating bar after the action (delete ops). */
+    closeAfter = false
+  ) => {
     const b = document.createElement("button")
     b.innerHTML = svg
     b.title = title
     b.style.cssText = btnStyle
     hover(b)
-    b.addEventListener("click", (e) => { e.stopPropagation(); action() })
+    b.addEventListener("click", (e) => {
+      e.stopPropagation()
+      action()
+      if (closeAfter) dismissFloatingMenu()
+    })
     return b
   }
 
@@ -1924,23 +2205,33 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
   menu.appendChild(makeDivider())
 
-  // Delete row/column buttons
-  menu.appendChild(makeBtn("Delete row",
+  // Delete row/column — close bar after delete (stale selection otherwise)
+  menu.appendChild(makeBtn(
+    "Delete row",
     `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 6h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 3l8 10M13 3L5 13" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteRow().run()))
-  menu.appendChild(makeBtn("Delete column",
+    () => editor.chain().focus().deleteRow().run(),
+    true
+  ))
+  menu.appendChild(makeBtn(
+    "Delete column",
     `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 5l10 8M3 13L13 5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteColumn().run()))
+    () => editor.chain().focus().deleteColumn().run(),
+    true
+  ))
 
   menu.appendChild(makeDivider())
 
-  // Delete table — red icon
+  // Delete table — red icon; always dismiss menu
   const delTableBtn = document.createElement("button")
   delTableBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" stroke="#ef4444" stroke-width="1.3" rx="1"/><path d="M5 5l6 6M11 5l-6 6" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/></svg>`
   delTableBtn.title = "Delete table"
   delTableBtn.style.cssText = btnStyle
   hover(delTableBtn)
-  delTableBtn.addEventListener("click", (e) => { e.stopPropagation(); editor.chain().focus().deleteTable().run(); menu.remove() })
+  delTableBtn.addEventListener("click", (e) => {
+    e.stopPropagation()
+    editor.chain().focus().deleteTable().run()
+    dismissFloatingMenu()
+  })
   menu.appendChild(delTableBtn)
 
   menu.appendChild(makeDivider())
@@ -2723,6 +3014,10 @@ export function EditorToolbar({ editor, stickyOffset = 0, actions }: { editor: E
   )
 }
 
+/** Shared empty-editor hint for message-style MarkdownEditors. */
+export const MESSAGE_EDITOR_PLACEHOLDER =
+  "Write a message… type / for commands"
+
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
@@ -2734,6 +3029,10 @@ export function TiptapEditor({
   const editorRef = useRef<any>(null)
   const _readonlyRef = useRef(readonly)
   _readonlyRef.current = readonly
+  // Placeholder extension is configured once; read latest text via ref so
+  // prop updates / HMR are not stuck on the first mount string.
+  const placeholderRef = useRef(placeholder || MESSAGE_EDITOR_PLACEHOLDER)
+  placeholderRef.current = placeholder || MESSAGE_EDITOR_PLACEHOLDER
 
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
@@ -2807,7 +3106,12 @@ export function TiptapEditor({
       StarterKit, DistillBlock, Callout, ResizableImage, ReadonlyProtectExt, MarkdownHoverExt, TableEnhancementExt,
       Table.configure({ resizable: true }), TableRow, TableCell, TableHeader,
       TaskList, TaskItem.configure({ nested: true }),
-      Placeholder.configure({ placeholder: placeholder || 'Type "/" for commands...' }),
+      Placeholder.configure({
+        placeholder: () => placeholderRef.current || MESSAGE_EDITOR_PLACEHOLDER,
+        showOnlyWhenEditable: true,
+        showOnlyCurrent: false,
+        includeChildren: false,
+      }),
       SlashCmd,
       Youtube.configure({ width: 640, height: 360 }),
       Highlight.configure({ multicolor: true }),
@@ -3022,6 +3326,17 @@ export function TiptapEditor({
         .tiptap-editor .ProseMirror {
           min-height: 100%;
         }
+        /* TipTap Placeholder extension — without this, data-placeholder is invisible */
+        .tiptap-editor .ProseMirror p.is-editor-empty:first-child::before,
+        .tiptap-editor .ProseMirror p.is-empty:first-child::before {
+          content: attr(data-placeholder);
+          float: left;
+          height: 0;
+          pointer-events: none;
+          color: var(--muted-foreground, #737373);
+          opacity: 0.7;
+          font-style: italic;
+        }
         .tiptap-editor ul[data-type="taskList"] {
           list-style: none !important;
           padding-left: 0 !important;
@@ -3108,7 +3423,7 @@ function PlainEditor({ value, onChange, className, minHeight, placeholder }: Mar
       )}
       {!focused && isEmpty && (
         <div className="md-editor-overlay" onClick={() => textareaRef.current?.focus()}>
-          <span className="text-muted-foreground italic text-sm">{placeholder || "Nothing to preview"}</span>
+          <span className="text-muted-foreground italic text-sm">{placeholder || MESSAGE_EDITOR_PLACEHOLDER}</span>
         </div>
       )}
     </div>

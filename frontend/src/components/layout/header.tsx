@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { Button } from "@/components/ui/button"
 import { Terminal } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
@@ -6,7 +7,16 @@ import { getHealth } from "@/api/client"
 import { cn } from "@/lib/utils"
 
 export function Header() {
-  const { isOnline, setOnline, toggleLogPanel, sidebarOpen, developerMode } = useAppStore()
+  const { isOnline, setOnline, toggleLogPanel, sidebarOpen, developerMode } =
+    useAppStore(
+      useShallow((s) => ({
+        isOnline: s.isOnline,
+        setOnline: s.setOnline,
+        toggleLogPanel: s.toggleLogPanel,
+        sidebarOpen: s.sidebarOpen,
+        developerMode: s.developerMode,
+      }))
+    )
 
   useEffect(() => {
     const check = async () => {

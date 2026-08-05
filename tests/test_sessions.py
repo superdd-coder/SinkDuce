@@ -127,12 +127,74 @@ class TestMessageCRUD:
         assert ids == [m1.id, m2.id, m3.id]  # chronological
 
     def test_get_messages_limit(self, store):
+        """limit counts dialogue units (user/final-assistant), not raw rows."""
         s = store.create_session()
         for i in range(10):
             store.add_message(s.id, "user", f"msg {i}")
 
         msgs = store.get_messages(s.id, limit=5)
-        assert len(msgs) == 5
+        # 10 user-only dialogue units → last 5 users
+        assert [m.content for m in msgs] == [f"msg {i}" for i in range(5, 10)]
+        # Full history
+        assert len(store.get_messages(s.id, limit=None)) == 10
+
+    def test_get_messages_dialogue_window_includes_tools(self, store):
+        s = store.create_session()
+        store.add_message(s.id, "user", "old")
+        store.add_message(s.id, "assistant", "old-a")
+        store.add_message(s.id, "user", "new")
+        store.add_message(
+            s.id, "assistant", "",
+            metadata={"tool_calls": [{"id": "t1", "type": "function",
+                                      "function": {"name": "x", "arguments": "{}"}}]},
+        )
+        store.add_message(s.id, "tool", "TOOL_BODY", metadata={"tool_call_id": "t1"})
+        store.add_message(s.id, "assistant", "new-a")
+
+        # last 2 dialogue units = "new" + "new-a" (tool rows ride along)
+        msgs = store.get_messages(s.id, limit=2)
+        contents = [m.content for m in msgs]
+        assert "old" not in contents
+        assert "TOOL_BODY" in contents
+        assert "new-a" in contents
+
+    def test_get_context_messages_keeps_system_and_recent_dialogue(self, store):
+        """Transcript/system always kept; dialogue window is last N turns (not tool rows)."""
+        s = store.create_session(session_id="meeting_ctx_test")
+        store.add_message(s.id, "system", "TRANSCRIPT_BODY")
+        # 6 early dialogue units (3 user + 3 assistant answers)
+        for i in range(3):
+            store.add_message(s.id, "user", f"old-q-{i}")
+            store.add_message(s.id, "assistant", f"old-a-{i}")
+        # Tool-heavy middle that must not alone push out later turns
+        store.add_message(s.id, "user", "need-tools")
+        store.add_message(
+            s.id, "assistant", "",
+            metadata={"tool_calls": [{"id": "c1", "type": "function",
+                                      "function": {"name": "request_web_search", "arguments": "{}"}}]},
+        )
+        store.add_message(s.id, "tool", "KOREA_DUMP" * 100, metadata={"tool_call_id": "c1"})
+        store.add_message(s.id, "assistant", "korea-answer")
+        # Recent explicit topic
+        store.add_message(s.id, "user", "澳大利亚呢？")
+        store.add_message(s.id, "assistant", "australia-answer")
+        store.add_message(s.id, "user", "还有吗")
+
+        # max_dialogue=4 → last 4 dialogue units
+        ctx = store.get_context_messages(s.id, max_dialogue=4)
+        # same as get_messages(limit=4)
+        assert [m.id for m in ctx] == [m.id for m in store.get_messages(s.id, limit=4)]
+        roles_contents = [(m.role, (m.content or "")[:40]) for m in ctx]
+        # System/transcript always first
+        assert roles_contents[0] == ("system", "TRANSCRIPT_BODY")
+        texts = [m.content for m in ctx if m.role in ("user", "assistant") and m.content]
+        assert "澳大利亚呢？" in texts
+        assert "还有吗" in texts
+        assert "australia-answer" in texts
+        # Early pure Q&A should be outside a tight window
+        assert "old-q-0" not in texts
+        # Tool rows after the cut stay with the turn
+        assert any(m.role == "tool" for m in ctx) or "korea-answer" in texts
 
     def test_add_message_updates_session_updated_at(self, store):
         s = store.create_session()

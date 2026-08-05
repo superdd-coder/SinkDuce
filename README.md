@@ -40,7 +40,7 @@ Open [http://localhost:18900](http://localhost:18900). On first launch:
 3. Add an **Embedding provider** and create your first Collection.
 
 > [!TIP]
-> **DashScope OneShot** — Settings → LLM Providers → OneShot Setting (DashScope API). Enter your Alibaba Cloud API key. Pre-configures LLM (`deepseek-v4-flash`), Embedding (`text-embedding-v4`, 1024d), Reranker (`qwen3-rerank`), and both Transcription providers (`fun-asr`, `fun-asr-realtime`).
+> **DashScope OneShot** — Settings → LLM Providers → OneShot Setting (DashScope API). Enter your Alibaba Cloud API key. Pre-configures LLM (`deepseek-v4-flash`), Embedding (`text-embedding-v4`, 1024d), Reranker (`qwen3-rerank`), and both Transcription providers (`qwen-audio-3.0-asr-flash-filetrans`, `qwen-audio-3.0-asr-flash-streaming`).
 
 > [!TIP]
 > **OpenRouter OneShot** — Settings → LLM Providers → OneShot Setting (OpenRouter API). Enter your key; models are auto-fetched and classified into LLM, Chat (function-calling filtered), Vision, Embedding, and Reranker categories.
@@ -308,7 +308,7 @@ src/
   notes/              Collection Notes: distill, propagate, injection block parsing
   hot_words/          Weighted vocabulary libraries for ASR
   tasks/              Dual-queue async task manager with cooperative cancellation
-  mcp/                MCP server: 43 tools across 8 domains, HTTP Streamable transport
+  mcp/                MCP server: 56 tools across 9 domains (incl. file-mgmt L1), HTTP Streamable transport
   models/             HuggingFace/ModelScope model download manager
 data/                 Runtime data (all gitignored): qdrant/, config.yaml, history/,
                       meetings/, notes/, hot_words/, models/, collections/
@@ -347,6 +347,14 @@ All optional. Copy `.env.template` to `.env`:
 ## 🗺️ Roadmap
 
 - [ ] Multi-tenant server deployment for collaborative team project memory (Enterprise)
+
+---
+
+## 📜 License
+
+SinkDuce is licensed under the **[GNU Affero General Public License v3.0 or later](LICENSE)** (AGPL-3.0-or-later).
+
+Third-party open-source dependencies (Python packages, frontend libraries, fonts, Docker system packages, Qdrant, etc.) remain under their own licenses. See **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** for attribution and a direct-dependency inventory. All direct dependencies reviewed for this notice are open source (MIT / BSD / Apache-2.0 / ISC / OFL-1.1 / …). Optional commercial **remote APIs** (OpenAI, Cohere, DashScope, MinerU cloud, …) are not part of the source license; only their client libraries (where used) are OSS dependencies.
 
 ---
 

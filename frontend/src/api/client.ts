@@ -69,12 +69,21 @@ export interface ChunkConfig {
   child_chunk_size?: number
   child_chunk_overlap?: number
   allowed_file_types?: string[]
+  /** MinerU cloud parsing — default ON (matches Collection Config UI) */
+  cloud_parsing?: boolean
 }
 
 export const createCollection = (name: string, dimensions?: number, chunkConfig?: ChunkConfig) =>
   request<{ id?: string; message?: string; error?: string; dimensions?: number }>("/collections", {
     method: "POST",
-    body: JSON.stringify({ name, dimensions, ...chunkConfig }),
+    // Always send cloud_parsing so new collections persist the UI default (ON)
+    // even when the create dialog does not expose the checkbox.
+    body: JSON.stringify({
+      name,
+      dimensions,
+      cloud_parsing: true,
+      ...chunkConfig,
+    }),
   })
 
 export const deleteCollection = (collectionId: string) =>
@@ -168,6 +177,8 @@ export const deleteDocument = (collection: string, source: string) =>
 
 export interface FileListItem {
   source: string
+  /** Managed file-mgmt id (files.json key) when available */
+  file_id?: string
   chunk_count: number
   file_type?: string
   original_ext?: string
@@ -203,16 +214,52 @@ export interface ChunkDetail {
   meeting_id?: string
 }
 
-export const getFileChunks = (collection: string, source: string, limit = 100) =>
-  request<{ collection: string; source: string; chunks: ChunkDetail[]; total: number }>(
-    `/documents/${collection}/files/${encodeURIComponent(source)}/chunks?limit=${limit}`
+export const getFileChunks = (
+  collection: string,
+  source: string,
+  limit = 100,
+  opts?: { versionId?: string; includeArchived?: boolean }
+) => {
+  const q = new URLSearchParams()
+  q.set("limit", String(limit))
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  if (opts?.includeArchived) q.set("include_archived", "true")
+  return request<{
+    collection: string
+    source: string
+    chunks: ChunkDetail[]
+    total: number
+  }>(
+    `/documents/${collection}/files/${encodeURIComponent(source)}/chunks?${q.toString()}`
   )
+}
 
-export const getFilePreviewUrl = (source: string) =>
-  `/api/documents/preview/${encodeURIComponent(source)}`
+export const getFilePreviewUrl = (
+  source: string,
+  opts?: { collection?: string; storageFile?: string; versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (opts?.collection) q.set("collection", opts.collection)
+  if (opts?.storageFile) q.set("storage_file", opts.storageFile)
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return `/api/documents/preview/${encodeURIComponent(source)}${qs ? `?${qs}` : ""}`
+}
 
-export const getExtractedText = (source: string, collection?: string) =>
-  request<{ text: string; format: string }>(`/documents/extracted/${encodeURIComponent(source)}${collection ? `?collection=${encodeURIComponent(collection)}` : ""}`)
+export const getExtractedText = (
+  source: string,
+  collection?: string,
+  opts?: { storageFile?: string; versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (collection) q.set("collection", collection)
+  if (opts?.storageFile) q.set("storage_file", opts.storageFile)
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return request<{ text: string; format: string }>(
+    `/documents/extracted/${encodeURIComponent(source)}${qs ? `?${qs}` : ""}`
+  )
+}
 
 export const isPreviewable = (filename: string) => {
   const ext = filename.split(".").pop()?.toLowerCase() ?? ""
@@ -230,6 +277,16 @@ export const updateConfig = (section: string, data: Record<string, unknown>) =>
     method: "PUT",
     body: JSON.stringify({ section, data }),
   })
+
+/** Approve or deny a pending Chat web-search HITL request. */
+export const confirmWebSearch = (confirmId: string, approved: boolean) =>
+  request<{ ok: boolean; confirm_id: string; approved: boolean }>(
+    "/chat/web-search-confirm",
+    {
+      method: "POST",
+      body: JSON.stringify({ confirm_id: confirmId, approved }),
+    },
+  )
 
 // ── Local model management ──
 
@@ -495,12 +552,21 @@ export const getProjectDescription = (collectionId: string) =>
 export const getCollectionConflicts = (collectionId: string) =>
   request<{ conflicts: ConflictItem[] }>(`/collections/${collectionId}/info/conflicts`)
 
-export const getDocSummary = (collectionId: string, source: string) =>
-  request<DocSummary>(`/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}`)
-    .catch((err) => {
-      if (err instanceof Error && err.message.includes("404")) return null
-      throw err
-    })
+export const getDocSummary = (
+  collectionId: string,
+  source: string,
+  opts?: { versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return request<DocSummary>(
+    `/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}${qs ? `?${qs}` : ""}`
+  ).catch((err) => {
+    if (err instanceof Error && err.message.includes("404")) return null
+    throw err
+  })
+}
 
 export const setDocSummaryInclude = (collectionId: string, source: string, include: boolean) =>
   request<{ source: string; include_in_summary: boolean }>(
@@ -508,11 +574,20 @@ export const setDocSummaryInclude = (collectionId: string, source: string, inclu
     { method: "PUT", body: JSON.stringify({ include }) }
   )
 
-export const generateDocSummary = (collectionId: string, source: string) =>
-  request<DocSummary>(
-    `/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}/generate`,
+/** Always targets current version. Optional versionId must be current or API returns 400. */
+export const generateDocSummary = (
+  collectionId: string,
+  source: string,
+  opts?: { versionId?: string }
+) => {
+  const q = new URLSearchParams()
+  if (opts?.versionId) q.set("version_id", opts.versionId)
+  const qs = q.toString()
+  return request<{ message: string; task?: TaskInfo; source?: string } & Partial<DocSummary>>(
+    `/collections/${collectionId}/info/doc-summaries/${encodeURIComponent(source)}/generate${qs ? `?${qs}` : ""}`,
     { method: "POST" }
   )
+}
 
 export const triggerConsolidation = (collectionId: string) =>
   request<{ message: string; task: TaskInfo }>(`/collections/${collectionId}/info/consolidate`, {
@@ -711,6 +786,10 @@ export interface MeetingTab {
   associated_collection_name: string
   allocated_file_id: string  // v3: UUID after ingest
   is_dirty: boolean  // v3: user edited name/description → true; regenerate resets to false
+  /** Section MD edited after allocate; manual Update collection clears it */
+  needs_reingest?: boolean
+  /** Hash of MD at last allocate — used to restore needs_reingest after reload */
+  ingested_content_hash?: string
   md_file_path: string
   payload_ref: string[]
 }
@@ -1023,8 +1102,17 @@ export const regenerateSection = (meetingId: string, tabId: string) =>
     method: "POST",
   })
 
+/** Meeting after allocate, plus file-mgmt / timeline bridge fields. */
+export type AllocateSectionResult = Meeting & {
+  file_id?: string
+  task_id?: string | null
+  node_id?: string | null
+  source?: string
+  collection_id?: string
+}
+
 export const allocateSection = (meetingId: string, tabId: string, collectionId: string) =>
-  request<Meeting>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
+  request<AllocateSectionResult>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
     method: "POST",
     body: JSON.stringify({ collection_id: collectionId }),
   })
@@ -1039,7 +1127,12 @@ export const getSectionMd = (meetingId: string, tabId: string) =>
     .then((r) => (r.ok ? r.text() : null))
 
 export const saveSectionMd = (meetingId: string, tabId: string, content: string) =>
-  request<{ ok: boolean }>(`/meetings/${meetingId}/sections/${tabId}/md`, {
+  request<{
+    ok: boolean
+    path?: string
+    needs_reingest?: boolean
+    meeting?: Meeting | null
+  }>(`/meetings/${meetingId}/sections/${tabId}/md`, {
     method: "PUT",
     body: JSON.stringify({ content }),
   })
@@ -1250,6 +1343,12 @@ export interface NoteDetail {
   is_extracted: boolean
   extracted_into: string[]
   is_ingested: boolean
+  /** Managed file under Notes folder when ingested */
+  file_id?: string | null
+  /** SHA-256 of content at last successful ingest (for REINGEST dirty state) */
+  ingested_content_hash?: string | null
+  /** Server: content differs from last ingest */
+  needs_reingest?: boolean
 }
 
 export interface NoteReference {
@@ -1316,6 +1415,48 @@ export const distillNote = (collection: string, targetNoteId: string, sourceNote
     { method: "POST", body: JSON.stringify({ source_note_id: sourceNoteId }) }
   )
 
+/** Distill one meeting summary file (General or a Section) into a note distill-block. */
+export const distillMeetingIntoNote = (
+  collection: string,
+  targetNoteId: string,
+  meetingId: string,
+  tabId: string = "tab_general",
+) =>
+  request<{
+    message: string
+    block_id: string
+    source_note_id: string
+    source_title: string
+    source_type?: string
+    meeting_id: string
+    tab_id: string
+    distilled_content: string
+  }>(
+    `/notes/${encodeURIComponent(collection)}/${targetNoteId}/distill-meeting`,
+    {
+      method: "POST",
+      body: JSON.stringify({ meeting_id: meetingId, tab_id: tabId || "tab_general" }),
+    }
+  )
+
+/** Distill-block source id for one meeting tab (matches backend meeting_source_id). */
+export const meetingDistillSourceId = (meetingId: string, tabId: string = "tab_general") =>
+  `meeting:${meetingId}:${tabId || "tab_general"}`
+
+/** Parse ``meeting:{id}:{tab}`` or legacy ``meeting:{id}``. */
+export const parseMeetingDistillSource = (
+  sourceId: string,
+): { meetingId: string; tabId: string } | null => {
+  if (!sourceId.startsWith("meeting:")) return null
+  const rest = sourceId.slice("meeting:".length).trim()
+  if (!rest) return null
+  const colon = rest.indexOf(":")
+  if (colon === -1) return { meetingId: rest, tabId: "tab_general" }
+  const meetingId = rest.slice(0, colon).trim()
+  const tabId = rest.slice(colon + 1).trim() || "tab_general"
+  return meetingId ? { meetingId, tabId } : null
+}
+
 export const getPropagationPreview = (collection: string, noteId: string) =>
   request<PropagationPreview>(`/notes/${encodeURIComponent(collection)}/${noteId}/propagation-preview`)
 
@@ -1326,10 +1467,21 @@ export const triggerPropagation = (collection: string, noteId: string) =>
   )
 
 export const ingestNote = (collection: string, noteId: string) =>
-  request<{ message: string; status: string }>(
+  request<{ message: string; status: string; file_id?: string | null; task_id?: string | null }>(
     `/notes/${encodeURIComponent(collection)}/${noteId}/ingest`,
     { method: "POST" }
   )
+
+/** Re-ingest as a new version on the managed Notes-folder file. */
+export const reingestNote = (collection: string, noteId: string) =>
+  request<{
+    message: string
+    status: string
+    file_id?: string | null
+    task_id?: string | null
+  }>(`/notes/${encodeURIComponent(collection)}/${noteId}/reingest`, {
+    method: "POST",
+  })
 
 export const removeNoteIngestion = (collection: string, noteId: string) =>
   request<{ message: string; is_ingested: boolean }>(

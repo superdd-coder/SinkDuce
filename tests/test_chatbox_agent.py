@@ -354,11 +354,11 @@ class TestChatboxEdgeCases:
         assert resp.answer == "fallback answer"
 
     def test_very_long_history_truncated(self, store, mock_llm, mock_agentic):
-        """History is limited to _MAX_HISTORY_MESSAGES (50) messages."""
-        from src.chatbox.agent import ChatboxAgent
+        """History is limited by dialogue turns (recent), not oldest raw rows."""
+        from src.chatbox.agent import ChatboxAgent, _MAX_HISTORY_DIALOGUE_MAIN
 
         s = store.create_session()
-        # Add 60 user-assistant pairs = 120 messages
+        # Add 60 user-assistant pairs = 120 dialogue units
         for i in range(60):
             store.add_message(s.id, "user", f"Question {i}")
             store.add_message(s.id, "assistant", f"Answer {i}")
@@ -372,9 +372,143 @@ class TestChatboxEdgeCases:
 
         call_args = mock_llm._client.chat.completions.create.call_args
         msgs = call_args[1]["messages"]
-        # Should have at most 50 history messages + system + current user
-        non_system = [m for m in msgs if m["role"] != "system"]
-        assert len(non_system) <= 52  # 50 history + current user (+ tool msgs from extra)
+        # Fixed system + recent dialogue + current user (already in hist after save)
+        user_contents = [m["content"] for m in msgs if m["role"] == "user"]
+        # Newest history retained
+        assert any("Question 59" in (c or "") for c in user_contents)
+        assert any("New question" in (c or "") for c in user_contents)
+        # Oldest dropped when over dialogue budget
+        assert not any(c == "Question 0" for c in user_contents)
+        # Dialogue-ish user+assistant rows bounded (budget + current turn)
+        dialogue_like = [
+            m for m in msgs
+            if m["role"] in ("user", "assistant") and m.get("content")
+        ]
+        # budget 32 + possible current-user re-append
+        assert len(dialogue_like) <= _MAX_HISTORY_DIALOGUE_MAIN + 2
+        assert _MAX_HISTORY_DIALOGUE_MAIN == 32
+
+    def test_recent_history_not_oldest_for_ambiguous_followup(
+        self, store, mock_llm, mock_agentic,
+    ):
+        """Korea-bug regression: late turns must see recent topic, not first 50 rows."""
+        from src.chatbox.agent import ChatboxAgent
+
+        s = store.create_session()
+        # Flood early history with Korea-like content (more than old 50-row window)
+        for i in range(30):
+            store.add_message(s.id, "user", f"early-{i}")
+            store.add_message(
+                s.id, "assistant", "",
+                metadata={"tool_calls": [{
+                    "id": f"c{i}", "type": "function",
+                    "function": {"name": "request_web_search",
+                                 "arguments": '{"query":"South Korea bioenergy"}'},
+                }]},
+            )
+            store.add_message(
+                s.id, "tool", "KOREA " * 200,
+                metadata={"tool_call_id": f"c{i}"},
+            )
+            store.add_message(s.id, "assistant", f"Korea answer {i}")
+
+        store.add_message(s.id, "user", "澳大利亚呢？")
+        store.add_message(s.id, "assistant", "Australia market overview...")
+        store.add_message(s.id, "user", "还有吗")
+
+        mock_llm._client.chat.completions.create.return_value = _fake_llm_response(
+            content="More on Australia..."
+        )
+        agent = ChatboxAgent(store, mock_llm, mock_agentic)
+        # Rebuild as chat would after user already saved
+        built = agent._build_messages(s.id, "还有吗")
+        flat = "\n".join(
+            (m.get("content") or "") if isinstance(m.get("content"), str) else ""
+            for m in built
+        )
+        assert "澳大利亚呢？" in flat or "Australia" in flat
+        assert "还有吗" in flat
+        # Must not be stuck with only early Korea + missing Australia
+        assert "early-0" not in flat
+
+    def test_three_line_message_layouts(self, store, mock_llm, mock_agentic):
+        """Meeting / Quick / Main Chat use distinct assembly order."""
+        from src.chatbox.agent import ChatboxAgent
+
+        agent = ChatboxAgent(store, mock_llm, mock_agentic)
+        agent._build_catalog_text = MagicMock(return_value="Knowledge base reference:\n- ColA")
+
+        # ── Main Chat: system → history → catalog → extra → user ──
+        main = store.create_session(session_id="main_layout_1")
+        store.add_message(main.id, "user", "prev")
+        store.add_message(main.id, "assistant", "prev-ans")
+        store.add_message(main.id, "user", "now")
+        main_msgs = agent._build_messages(
+            main.id, "now",
+            extra_messages=[{"role": "tool", "tool_call_id": "x", "content": "tool-now"}],
+            catalog_text="Knowledge base reference:\n- ColA",
+        )
+        assert main_msgs[0]["role"] == "system"
+        assert "Knowledge base reference" not in (main_msgs[0].get("content") or "")
+        catalog_idxs = [
+            i for i, m in enumerate(main_msgs)
+            if m["role"] == "system" and "Knowledge base reference" in (m.get("content") or "")
+        ]
+        assert catalog_idxs, "catalog must be present for main chat"
+        # catalog after dialogue history (prev user/assistant appear before catalog)
+        prev_idx = next(
+            i for i, m in enumerate(main_msgs)
+            if m.get("content") == "prev" or m.get("content") == "prev-ans"
+        )
+        assert catalog_idxs[0] > prev_idx
+        # this-turn extra after catalog
+        tool_idx = next(i for i, m in enumerate(main_msgs) if m.get("content") == "tool-now")
+        assert tool_idx > catalog_idxs[0]
+
+        # ── Quick: no catalog ──
+        quick = store.create_session(session_id="quick_col_abc", collections=["col_abc"])
+        store.add_message(quick.id, "user", "q1")
+        store.add_message(quick.id, "assistant", "a1")
+        store.add_message(quick.id, "user", "q2")
+        quick_msgs = agent._build_messages(
+            quick.id, "q2",
+            catalog_text="Knowledge base reference:\n- SHOULD_NOT_APPEAR",
+            system_prompt="Quick system for col",
+        )
+        assert quick_msgs[0]["content"] == "Quick system for col"
+        assert not any(
+            "SHOULD_NOT_APPEAR" in (m.get("content") or "")
+            or "Knowledge base reference" in (m.get("content") or "")
+            for m in quick_msgs
+        )
+
+        # ── Meeting: system prompt, transcript, dialogue, speaker, (user) ──
+        meeting = store.create_session(session_id="meeting_abc123")
+        store.add_message(meeting.id, "system", "FULL_TRANSCRIPT_TEXT")
+        store.add_message(meeting.id, "user", "what was said?")
+        store.add_message(meeting.id, "assistant", "summary")
+        store.add_message(meeting.id, "user", "more?")
+        meet_msgs = agent._build_messages(
+            meeting.id, "more?",
+            system_prompt="MEETING_SYSTEM",
+            catalog_text="Knowledge base reference:\n- NO",
+            pre_message_context="Speaker mapping: S1=Alice",
+        )
+        assert meet_msgs[0]["content"] == "MEETING_SYSTEM"
+        assert meet_msgs[1]["role"] == "system"
+        assert meet_msgs[1]["content"] == "FULL_TRANSCRIPT_TEXT"
+        assert not any(
+            "Knowledge base reference" in (m.get("content") or "") for m in meet_msgs
+        )
+        speaker_idxs = [
+            i for i, m in enumerate(meet_msgs)
+            if m["role"] == "system" and "Speaker mapping" in (m.get("content") or "")
+        ]
+        assert speaker_idxs
+        # speaker after transcript and dialogue
+        assert speaker_idxs[0] > 1
+        transcript_idx = 1
+        assert speaker_idxs[0] > transcript_idx
 
 
 # ── Helpers ───────────────────────────────────────────────────

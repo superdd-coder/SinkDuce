@@ -1,12 +1,16 @@
 """MCP document management tools.
 
 6 atomic tools:
-- :func:`list_documents` — discover documents via the file index (fast, no Qdrant scroll)
+- :func:`list_documents` — **legacy** file-index listing (prefer list_library_tree / list_files)
 - :func:`upload_document_from_staging` — **unified** upload via side-channel staging (zero context leak)
 - :func:`delete_document` — remove document + chunks + summary + file snapshot
-- :func:`get_file_chunks` — list chunks for a document (text + metadata only, no vectors)
-- :func:`get_document_text` — get the full plain text of a document
+- :func:`get_file_chunks` — indexed chunks for a known file (prefer file_id)
+- :func:`get_document_text` — full extractable text for a known file (prefer file_id)
 - :func:`set_document_definitive` — toggle definitive flag, trigger consolidate
+
+**Content path (known file_id):** get_document_text → optional get_file_chunks.
+**Discovery path (unknown file):** search_direct_chunks / search_agentic_chunks.
+**Browse path:** list_library_tree / list_files (file-mgmt), not list_documents.
 
 .. warning::
 
@@ -42,6 +46,7 @@ from typing import Any
 
 from src.mcp.common import (
     err,
+    mcp_result,
     ok,
     require_collection,
     run_sync,
@@ -64,6 +69,76 @@ def _load_file_index(collection_id: str) -> dict[str, dict]:
     return load(collection_id)
 
 
+async def _await_mcp(fn) -> Any:
+    """Run blocking work and wrap as compact MCP CallToolResult."""
+    data = await run_sync(fn)
+    if not isinstance(data, dict):
+        data = {"result": data}
+    return mcp_result(data)
+
+
+def _resolve_doc_identity(
+    collection: str,
+    *,
+    source: str = "",
+    file_id: str = "",
+) -> tuple[str | None, str | None, dict[str, Any] | None]:
+    """Resolve ``(file_id | None, source_key, error | None)``.
+
+    Accepts:
+    - ``file_id`` (preferred for file-mgmt)
+    - ``source=__file__:{id}`` / ``file:{id}`` / bare file_id
+    - legacy ``source`` values from :func:`list_documents`
+    """
+    fid = (file_id or "").strip() or None
+    src = (source or "").strip()
+
+    if not fid and not src:
+        return None, None, err(
+            "Provide file_id (preferred) or source",
+            extract_status="missing_args",
+            hint="file_id from list_files / list_library_tree; source from list_documents",
+        )
+
+    if fid:
+        return fid, f"__file__:{fid}", None
+
+    if src.startswith("__file__:"):
+        return src[len("__file__:") :], src, None
+    if src.startswith("file:"):
+        bare = src[len("file:") :]
+        return bare, f"__file__:{bare}", None
+
+    # file index: match source or key == bare id
+    try:
+        idx = _load_file_index(collection)
+    except Exception:
+        idx = {}
+    for id_, entry in idx.items():
+        if id_ == src or entry.get("source") == src:
+            entry_src = entry.get("source") or f"__file__:{id_}"
+            return id_, entry_src, None
+
+    # file-mgmt DB may know the bare id even if index is stale
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection)
+        try:
+            row = conn.execute(
+                "SELECT file_id FROM files WHERE file_id=?", (src,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            return src, f"__file__:{src}", None
+    except Exception:
+        pass
+
+    # Legacy non-file-mgmt source (pass through as-is)
+    return None, src, None
+
+
 # Task handlers (upload, consolidate, doc_summary, sparse_recalc) are now
 # registered by ``src.main.lifespan`` so the same handler set is shared
 # between the FastAPI HTTP routes and the MCP sub-app mounted at /mcp.
@@ -73,7 +148,16 @@ def _load_file_index(collection_id: str) -> dict[str, dict]:
 
 
 async def list_documents(collection: str) -> str:
-    """List all documents in a collection, using the file index (no Qdrant scroll).
+    """**Legacy** document index listing (file_index / chunk counts).
+
+    **When to use**
+    - Need per-document **chunk counts** or old ``source`` keys without mounts.
+    - Collections that predate file-management and have no folder tree.
+
+    **When not to use (file-mgmt collections)**
+    - Browsing folders/files → **list_library_tree** (default).
+    - Flat list with mounts → **list_files**(scope=all).
+    - Do not use this as the primary navigation tool.
 
     ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
     NOT the display name. Use :func:`list_collections` first to get IDs.
@@ -359,26 +443,64 @@ async def delete_document(collection: str, source: str) -> str:
 # ── get_file_chunks ────────────────────────────────────────────
 
 
+def _lookup_file_names(
+    collection: str, file_id: str | None
+) -> tuple[str | None, str | None]:
+    """Return ``(filename, display_name)`` for a managed file, if known."""
+    if not file_id:
+        return None, None
+    try:
+        from src.file_mgmt.service import get_file_detail
+
+        detail = get_file_detail(collection, file_id)
+        filename = getattr(detail, "filename", None) or None
+        display_name = getattr(detail, "display_name", None) or filename
+        return filename, display_name
+    except Exception:
+        pass
+    try:
+        idx = _load_file_index(collection)
+        entry = idx.get(file_id) or {}
+        label = entry.get("source_label") or entry.get("filename")
+        return label, label
+    except Exception:
+        return None, None
+
+
 async def get_file_chunks(
     collection: str,
-    source: str,
+    file_id: str = "",
+    source: str = "",
     offset: int = 0,
     limit: int = 50,
     include_context: bool = True,
     chunk_type: str = "*",
-) -> str:
-    """List chunks for a document (text + metadata, no vectors).
+) -> Any:
+    """List **indexed chunks** for one document (text + metadata, no vectors).
+
+    **When to use**
+    - Inspect what was actually embedded/indexed for a known file.
+    - Cross-check against ``get_document_text``, or fall back when a historical
+      blob is missing (chunks = **current index only**).
+
+    **When not to use**
+    - Full-document read / clause extraction → prefer ``get_document_text(file_id)``.
+    - Do not know which file → ``search_direct_chunks`` / ``search_agentic_chunks``.
 
     ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
     NOT the display name.
 
-    Returns up to ``limit`` chunks sorted by document order. Use this to
-    inspect what was actually indexed without fetching the full text via
-    ``get_document_text``.
+    **Preferred call:** ``get_file_chunks(collection, file_id=\"…\")``.
+    Prefer **file_id** over building source strings. Maps to Qdrant
+    ``source=__file__:{file_id}`` (``file:{id}`` alias accepted).
+
+    Returns up to ``limit`` chunks sorted by document order.
 
     Args:
         collection: Collection ID from ``list_collections``.
-        source: The ``source`` value from ``list_documents``.
+        file_id: Preferred managed file id from ``list_files`` /
+            ``list_library_tree``.
+        source: Optional document source key (if ``file_id`` not set).
         offset: Skip this many chunks before returning (default 0).
         limit: Max chunks to return (default 50).
         include_context: Include the contextual enrichment prefix in each chunk.
@@ -393,12 +515,21 @@ async def get_file_chunks(
         if e := require_collection(collection):
             return e
 
+        fid, source_key, resolve_err = _resolve_doc_identity(
+            collection, source=source, file_id=file_id
+        )
+        if resolve_err:
+            return resolve_err
+        assert source_key is not None
+
         # Default: exclude child chunks (redundant with parents at same char_offset)
         _filter_type = chunk_type if chunk_type != "*" else None
         _exclude_child = chunk_type == "*"
 
         from qdrant_client.models import FieldCondition, Filter, MatchValue
-        filter_cond = Filter(must=[FieldCondition(key="source", match=MatchValue(value=source))])
+        filter_cond = Filter(
+            must=[FieldCondition(key="source", match=MatchValue(value=source_key))]
+        )
 
         chunks = []
         paged_offset = None
@@ -443,84 +574,242 @@ async def get_file_chunks(
         chunks = chunks[offset:offset + limit]
         return ok(
             collection=collection,
-            source=source,
+            source=source_key,
+            file_id=fid,
             offset=offset,
             limit=limit,
             total=total,
             chunks=chunks,
         )
 
-    return to_json(await run_sync(_run))
+    return await _await_mcp(_run)
 
 
 # ── get_document_text ──────────────────────────────────────────
 
 
-async def get_document_text(collection: str, source: str, offset: int = 0, limit: int = 10000) -> str:
-    """Get the full plain text of a document by re-reading its file snapshot.
+async def get_document_text(
+    collection: str,
+    file_id: str = "",
+    source: str = "",
+    version_id: str = "",
+    offset: int = 0,
+    limit: int = 10000,
+) -> Any:
+    """Get **plain text** of a document from file-mgmt version storage (or legacy).
+
+    **When to use**
+    - Read / summarize / extract clauses from a **known** file (have file_id).
+    - Preferred over stitching many search chunks when the target file is known.
+
+    **When not to use**
+    - Unknown which file → ``search_direct_chunks`` / ``search_agentic_chunks`` first.
+    - Only check what was indexed → ``get_file_chunks``.
+    - Historical version with ``blob_available=false`` (from list_file_versions)
+      → will fail; do not invent body from chunks.
+
+    **vs get_file_chunks vs search (pick one primary path)**
+
+    - ``get_document_text`` → full extractable body (current or version_id).
+    - ``get_file_chunks`` → indexed slices for one file (current index).
+    - ``search_*_chunks`` → discovery by query across the collection.
 
     ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
     NOT the display name.
 
-    Use this when you need the raw extracted text (not the indexed chunks).
-    Returns at most ``limit`` characters (default 10000). Pass ``limit=0`` for
-    unlimited output. Use ``offset`` to read from a position further into the
-    document.
+    **Preferred call (file-mgmt):**
 
-    Returns an error if the file snapshot is missing.
+        get_document_text(collection=\"col_…\", file_id=\"…\")
+
+    Prefer **file_id**; avoid hand-building source strings. Optional
+    ``version_id`` pins a historical blob (check ``blob_available`` first).
+    Default = current version.
+
+    Also accepts ``source``:
+    - ``__file__:{file_id}`` (canonical Qdrant source)
+    - ``file:{file_id}`` (alias)
+    - legacy source keys from :func:`list_documents`
+
+    Uses the same extract path as the HTTP Source viewer (``parsed.txt`` /
+    ``.extracted.txt`` / re-parse / Qdrant stitch).
+
+    Returns at most ``limit`` characters (default 10000). Pass ``limit=0``
+    for unlimited (MCP clients only; in-app Chat clamps this).
+    ``offset``/``limit`` are a **character window** into the extractable
+    plain text — **not** PDF page numbers.
+
+    Success payload always includes::
+
+        total_chars, offset, limit, returned_chars,
+        truncated, has_more, next_offset (or null),
+        content, file_id, source, …
+
+    When ``has_more`` is true, call again with ``offset=next_offset`` to
+    continue. Prefer starting from a search hit's ``char_offset`` when the
+    agent already retrieved a relevant chunk.
+
+    Success structured fields include ``filename`` / ``display_name`` when known.
+    Failure: ``extract_status``, ``reason``, ``file_id``, ``source``, ``hint``.
+
+    **Historical versions:** metadata may exist without a blob →
+    ``extract_status=blob_missing``. Chunks only reflect the **current** index.
+
+    After MCP signature changes, **restart** SinkDuce + client so tools/list
+    refreshes ``file_id`` / ``version_id`` in inputSchema.
 
     Args:
         collection: Collection ID from ``list_collections``.
-        source: The ``source`` value from ``list_documents``.
-        offset: Character offset to start reading from (default 0).
+        file_id: Preferred managed file id from ``list_files`` /
+            ``list_library_tree``.
+        source: Optional source key when ``file_id`` is not used.
+        version_id: Optional historical version id (current if empty).
+        offset: Character offset into extractable text (default 0).
+            Use a chunk's ``char_offset`` from search results to jump near
+            a relevant passage.
         limit: Max characters to return (default 10000; 0 = unlimited).
     """
-    from src.collections.file_index import load as load_file_index
+    from fastapi import HTTPException
+
+    def _fail(
+        message: str,
+        *,
+        extract_status: str,
+        fid: str | None = None,
+        source_key: str | None = None,
+        vid: str | None = None,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        default_hint = (
+            "use get_file_chunks with file_id=… (chunks are for the currently "
+            "indexed version; historical body is unavailable without a blob)"
+            if extract_status == "blob_missing"
+            else "use get_file_chunks with file_id=… or source=__file__:{file_id}"
+        )
+        hint = extra.pop("hint", None) or default_hint
+        fname, dname = _lookup_file_names(collection, fid)
+        payload = err(
+            message,
+            extract_status=extract_status,
+            reason=message,
+            file_id=fid,
+            source=source_key,
+            version_id=vid,
+            hint=hint,
+            **extra,
+        )
+        if fname:
+            payload["filename"] = fname
+        if dname:
+            payload["display_name"] = dname
+        return payload
 
     def _run() -> dict[str, Any]:
         if e := require_collection(collection):
+            e.setdefault("extract_status", "collection_missing")
             return e
-        idx = load_file_index(collection)
-        target_file_id: str | None = None
-        for fid, entry in idx.items():
-            if entry.get("source") == source:
-                target_file_id = fid
-                break
-        if not target_file_id:
-            return err(f"No file snapshot found for source '{source}' in '{collection}'")
 
-        file_dir = _files_dir(collection) / target_file_id
-        if not file_dir.is_dir():
-            return err(f"File snapshot directory missing: {file_dir}")
-
-        files = list(file_dir.iterdir())
-        if not files:
-            return err(f"File snapshot empty: {file_dir}")
-
-        target = next((f for f in files if f.is_file()), None)
-        if target is None:
-            return err(f"No file in snapshot: {file_dir}")
+        fid, source_key, resolve_err = _resolve_doc_identity(
+            collection, source=source, file_id=file_id
+        )
+        if resolve_err:
+            return resolve_err
+        assert source_key is not None
+        vid = (version_id or "").strip() or None
 
         try:
-            full = target.read_text(encoding="utf-8", errors="replace")
+            from src.api.routes.documents import get_extracted_text
+
+            result = get_extracted_text(
+                filename=source_key,
+                collection=collection,
+                version_id=vid,
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                msg = str(detail.get("message") or detail.get("detail") or detail)
+            else:
+                msg = str(detail)
+            status = "blob_missing" if exc.status_code == 404 else "extract_failed"
+            return _fail(
+                msg,
+                extract_status=status,
+                fid=fid,
+                source_key=source_key,
+                vid=vid,
+                status_code=exc.status_code,
+            )
         except Exception as exc:
-            return err(f"Failed to read file: {exc}")
+            logger.exception("get_document_text extract failed")
+            return _fail(
+                f"Failed to extract text: {exc}",
+                extract_status="extract_failed",
+                fid=fid,
+                source_key=source_key,
+                vid=vid,
+            )
 
+        full = result.get("text") or ""
         total_chars = len(full)
-        window = full[offset:offset + limit] if limit > 0 else full[offset:]
-        return ok(
-            collection=collection,
-            source=source,
-            file_id=target_file_id,
-            filename=target.name,
-            size_bytes=target.stat().st_size,
-            total_chars=total_chars,
-            offset=offset,
-            limit=limit,
-            content=window,
-        )
+        # Character window (not PDF pages)
+        off = max(0, int(offset or 0))
+        lim = int(limit) if limit is not None else 10000
+        if lim < 0:
+            lim = 10000
+        window = full[off : off + lim] if lim > 0 else full[off:]
+        returned_chars = len(window)
+        end_pos = off + returned_chars
+        truncated = bool(end_pos < total_chars)
+        has_more = truncated
+        next_offset = end_pos if has_more else None
+        filename, display_name = _lookup_file_names(collection, fid)
 
-    return to_json(await run_sync(_run))
+        payload = ok(
+            collection=collection,
+            source=source_key,
+            file_id=fid,
+            version_id=vid,
+            extract_status="ok" if full else "empty",
+            format=result.get("format"),
+            total_chars=total_chars,
+            offset=off,
+            limit=lim,
+            returned_chars=returned_chars,
+            truncated=truncated,
+            has_more=has_more,
+            next_offset=next_offset,
+            content=window,
+            # Alias for agents that expect "text"
+            text=window,
+        )
+        if filename:
+            payload["filename"] = filename
+        if display_name:
+            payload["display_name"] = display_name
+        if result.get("preview_hint"):
+            payload["preview_hint"] = result["preview_hint"]
+        if not full:
+            payload["hint"] = (
+                "No extractable text for this version; try get_file_chunks "
+                "(current index only) or open the Raw blob in the UI"
+            )
+        elif has_more:
+            payload["hint"] = (
+                f"Character window [{off}:{end_pos}) of {total_chars} chars; "
+                f"has_more=true. If this page is not enough to answer, call "
+                f"get_document_text again with offset={next_offset} (same file_id) "
+                f"— page forward until evidence is sufficient. Prefer starting from "
+                f"a search hit's char_offset when you already know a relevant passage. "
+                f"Stop when the answer is complete — do not read the entire file by default."
+            )
+        else:
+            payload["hint"] = (
+                f"Character window covers the end of extractable text "
+                f"({total_chars} chars total). No further offset needed."
+            )
+        return payload
+
+    return await _await_mcp(_run)
 
 
 # ── set_document_definitive ──────────────────────────────────────

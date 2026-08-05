@@ -1,11 +1,14 @@
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AppLayout } from "@/components/layout/app-layout"
+import { WebSearchConfirmDialog } from "@/components/chat/web-search-confirm-dialog"
 import { Toaster } from "sonner"
 
 export default function App() {
   return (
     <TooltipProvider>
       <AppLayout />
+      {/* Global HITL bar (portaled to body) — must stay mounted for SSE confirm */}
+      <WebSearchConfirmDialog />
       <Toaster
         position="top-right"
         toastOptions={{

@@ -2321,7 +2321,9 @@ class MeetingService:
             file_id = tab_meta.get("allocated_file_id", "")
             if col_id and file_id:
                 try:
-                    self._delete_allocation(col_id, file_id)
+                    self._delete_allocation(
+                        col_id, file_id, meeting_id=meeting_id, detach_anchor=True
+                    )
                     logger.info("[DELETE-SECTION] Cleaned ingest for %s/%s", meeting_id, tab_id)
                 except Exception as exc:
                     logger.warning("[DELETE-SECTION] Failed to clean ingest: %s", exc)
@@ -2433,47 +2435,157 @@ class MeetingService:
     # -- Collection allocation ----------------------------------------------
 
     @staticmethod
-    def _delete_allocation(collection: str, file_id: str) -> None:
-        """Delete an allocation's chunks and file snapshot from a collection."""
+    def _delete_allocation(
+        collection: str,
+        file_id: str,
+        *,
+        meeting_id: str | None = None,
+        detach_anchor: bool = True,
+    ) -> None:
+        """Delete an allocation: Qdrant, file-mgmt SQLite, disk, files.json.
+
+        When *meeting_id* is set and *detach_anchor*, detaches the file from
+        the meeting timeline anchor and deletes the node if empty.
+        """
         try:
-            from src.collections.file_index import load as load_file_index, remove as remove_file_index
+            from src.collections.file_index import load as load_file_index
 
-            # Look up source from file index
-            idx = load_file_index(collection)
+            idx = load_file_index(collection) or {}
             entry = idx.get(file_id, {})
-            source = entry.get("source", "")
+            source = entry.get("source", "") or ""
+
+            # Detach from meeting timeline anchor before purging file rows
+            if detach_anchor and meeting_id and file_id:
+                try:
+                    from src.file_mgmt.service import (
+                        delete_meeting_anchor_if_empty,
+                        detach_file_from_node,
+                        meeting_external_ref,
+                        _open_db,
+                    )
+
+                    ref = meeting_external_ref(meeting_id)
+                    conn = _open_db(collection)
+                    try:
+                        node = conn.execute(
+                            "SELECT node_id FROM nodes WHERE external_ref=?",
+                            (ref,),
+                        ).fetchone()
+                        node_id = node["node_id"] if node else None
+                    finally:
+                        conn.close()
+                    if node_id:
+                        try:
+                            detach_file_from_node(collection, node_id, file_id)
+                        except Exception:
+                            logger.debug(
+                                "detach_file_from_node skipped file=%s node=%s",
+                                file_id[:12],
+                                node_id[:12],
+                                exc_info=True,
+                            )
+                    delete_meeting_anchor_if_empty(collection, meeting_id)
+                except Exception:
+                    logger.debug(
+                        "Anchor detach skipped col=%s file=%s",
+                        collection,
+                        file_id[:12],
+                        exc_info=True,
+                    )
+
             if source:
-                services.db.delete_by_filter(collection=collection, key="source", value=source)
+                try:
+                    if services.db:
+                        services.db.delete_by_filter(
+                            collection=collection, key="source", value=source
+                        )
+                except Exception as exc:
+                    logger.warning("Qdrant delete by source failed: %s", exc)
 
-            # Delete file snapshot
-            file_dir = _files_dir(collection) / file_id
-            if file_dir.exists():
-                shutil.rmtree(file_dir)
+                try:
+                    from src.file_mgmt.service import unregister_files_for_source
 
-            # Remove from index
-            remove_file_index(collection, file_id)
-            logger.info("Deleted allocation file_id=%s source=%s from collection '%s'", file_id, source, collection)
+                    unregister_files_for_source(
+                        collection,
+                        source,
+                        remove_disk=True,
+                        remove_index=True,
+                    )
+                except Exception as exc:
+                    logger.warning("unregister_files_for_source failed: %s", exc)
+            else:
+                # Fallback: no source in index — purge by file_id
+                from src.collections.file_index import remove as remove_file_index
+
+                file_dir = _files_dir(collection) / file_id
+                if file_dir.exists():
+                    shutil.rmtree(file_dir, ignore_errors=True)
+                remove_file_index(collection, file_id)
+                try:
+                    from src.file_mgmt.service import _open_db, _purge_file_sqlite_rows
+
+                    conn = _open_db(collection)
+                    try:
+                        with conn:
+                            if conn.execute(
+                                "SELECT 1 FROM files WHERE file_id=?", (file_id,)
+                            ).fetchone():
+                                _purge_file_sqlite_rows(conn, file_id)
+                    finally:
+                        conn.close()
+                except Exception:
+                    logger.debug("sqlite purge fallback failed", exc_info=True)
+
+            logger.info(
+                "Deleted allocation file_id=%s source=%s from collection '%s'",
+                file_id,
+                source,
+                collection,
+            )
         except Exception as exc:
             logger.warning("Failed to delete allocation file_id=%s: %s", file_id, exc)
 
+    @staticmethod
+    def _managed_file_exists(collection_id: str, file_id: str) -> bool:
+        if not file_id:
+            return False
+        try:
+            from src.file_mgmt.service import _open_db
+
+            conn = _open_db(collection_id)
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM files WHERE file_id=?", (file_id,)
+                ).fetchone()
+                return bool(row)
+            finally:
+                conn.close()
+        except Exception:
+            return False
+
     async def allocate_section_to_collection(
         self, meeting_id: str, tab_id: str, collection_id: str,
-    ) -> Meeting:
-        """Allocate a single section's .md content to a collection.
+    ) -> tuple[Meeting, dict]:
+        """Allocate a section into a collection (file-mgmt + optional timeline).
 
-        Resolves [spk:ID] → speaker names, strips [stt_XXXX] refs,
-        then uploads as a single file via the document pipeline.
+        Returns ``(meeting, bridge)`` where *bridge* has
+        ``file_id``, ``task_id``, ``node_id``, ``source``.
         """
         import re as _re
 
         from src.collections.store import get_collection_meta
-        from src.tasks.handlers import upload_handler
+        from src.file_mgmt.service import (
+            attach_file_to_node,
+            ensure_meeting_anchor_node,
+            register_ingested_source_file,
+            upload_file_version,
+        )
+        from src.tasks.task_manager import task_manager
 
         meeting = store.get_meeting(meeting_id)
         if meeting is None:
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
 
-        # Find the tab
         tab_meta: dict | None = None
         for t in (meeting.tabs or []):
             tid = t["tab_id"] if isinstance(t, dict) else t.tab_id
@@ -2484,29 +2596,22 @@ class MeetingService:
         if tab_meta is None:
             raise ValueError(f"Tab '{tab_id}' not found")
 
-        # ── Idempotency: clean up previous allocation (if any) ────
-        old_fid = tab_meta.get("allocated_file_id", "")
-        old_col = tab_meta.get("associated_collection_id", "")
-        if old_col and old_fid:
-            self._delete_allocation(old_col, old_fid)
-            logger.info(
-                "Cleaned previous allocation %s/%s for tab %s (re-ingest)",
-                old_col, old_fid, tab_id,
-            )
+        old_fid = (tab_meta.get("allocated_file_id") or "").strip()
+        old_col = (tab_meta.get("associated_collection_id") or "").strip()
 
-        # Read section .md content
-        content = store.get_section_md(meeting_id, tab_id)
-        if not content:
+        # Read + process content
+        raw_md = store.get_section_md(meeting_id, tab_id)
+        if not raw_md:
             raise ValueError(f"No content for tab '{tab_id}'")
+        # Fingerprint raw editor content (not the processed upload blob)
+        ingested_hash = store.section_content_hash(raw_md)
 
-        # ── Process content ────────────────────────────────────
-        # 1. Resolve [spk:ID] → speaker names
+        content = raw_md
         speaker_names: dict[str, str] = getattr(meeting, "speaker_names", None) or {}
         for spk_id, name in speaker_names.items():
             content = content.replace(f"[spk:{spk_id}]", name)
             content = _re.sub(rf"\bSpeaker {_re.escape(spk_id)}\b", name, content)
 
-        # 2. Remove sentence refs: [stt_0001,stt_0002-0005] and bare stt_XXXX
         content = _re.sub(
             r"\[(?:ref:)?\s*(?:stt_\d+(?:\s*[-–]\s*\d+)?"
             r"(?:\s*,\s*stt_\d+(?:\s*[-–]\s*\d+)?)*)\s*\]",
@@ -2518,34 +2623,153 @@ class MeetingService:
 
         section_label = tab_meta.get("name", tab_id)
         full_content = f"# {section_label}\n\n{content}"
+        file_bytes = full_content.encode("utf-8")
+        storage_name = f"{tab_id}.md"
 
-        # ── Format meeting date for embedding ────────────────────
-        meeting_date = meeting.created_at.strftime("%Y-%m-%d") if meeting.created_at else None
-
-        # ── Upload to collection ────────────────────────────────
-        alloc_file_id = uuid.uuid4().hex
-        file_dir = _files_dir(collection_id) / alloc_file_id
-        file_dir.mkdir(parents=True, exist_ok=True)
-        file_path = file_dir / f"{tab_id}.md"
-        file_path.write_text(full_content, encoding="utf-8")
-
+        meeting_date = (
+            meeting.created_at.strftime("%Y-%m-%d") if meeting.created_at else None
+        )
+        meeting_title = (meeting.title or "").strip() or "Untitled meeting"
+        display_label = f"{meeting_title} / {section_label}"
         section_source = f"__meeting__:{meeting_id}:{tab_id}"
 
-        upload_task = Task(
-            id=str(uuid.uuid4()),
-            filename=f"meeting_{meeting_id}_{tab_id}",
-            collection=collection_id,
-            status=TaskStatus.PROCESSING,
-            created_at=datetime.now(timezone.utc),
+        task_id: str | None = None
+        alloc_file_id: str
+        node_id: str | None = None
+
+        same_col_version = (
+            bool(old_fid)
+            and old_col == collection_id
+            and self._managed_file_exists(collection_id, old_fid)
         )
 
-        await upload_handler(
-            upload_task, str(file_path), collection_id, section_source,
-            source_label=f"Meeting: {meeting.title} / {section_label}",
-            file_id=alloc_file_id,
-            meeting_id=meeting_id,
-            meeting_date=meeting_date,
-        )
+        if same_col_version:
+            # Stable file_id — new version (Notes-style reingest)
+            alloc_file_id = old_fid
+            result = upload_file_version(
+                collection_id,
+                alloc_file_id,
+                file_bytes,
+                storage_name,
+                commit_message=f"Meeting re-ingest: {display_label}",
+                document_source=section_source,
+                source_label=display_label,
+                file_type="meeting",
+            )
+            task_id = getattr(result, "task_id", None)
+            register_ingested_source_file(
+                collection_id,
+                file_id=alloc_file_id,
+                source=section_source,
+                storage_name=storage_name,
+                system_folder_name="Meeting",
+            )
+        else:
+            # Different collection or first allocate — drop previous fully
+            if old_col and old_fid:
+                self._delete_allocation(
+                    old_col, old_fid, meeting_id=meeting_id, detach_anchor=True
+                )
+                logger.info(
+                    "Cleaned previous allocation %s/%s for tab %s",
+                    old_col,
+                    old_fid,
+                    tab_id,
+                )
+
+            alloc_file_id = uuid.uuid4().hex
+            file_dir = _files_dir(collection_id) / alloc_file_id
+            file_dir.mkdir(parents=True, exist_ok=True)
+            file_path = file_dir / storage_name
+            file_path.write_text(full_content, encoding="utf-8")
+
+            register_ingested_source_file(
+                collection_id,
+                file_id=alloc_file_id,
+                source=section_source,
+                storage_name=storage_name,
+                system_folder_name="Meeting",
+            )
+
+            # Resolve version_id created by register
+            version_id: str | None = None
+            try:
+                from src.file_mgmt.service import _open_db
+
+                conn = _open_db(collection_id)
+                try:
+                    row = conn.execute(
+                        "SELECT current_version_id FROM files WHERE file_id=?",
+                        (alloc_file_id,),
+                    ).fetchone()
+                    version_id = row["current_version_id"] if row else None
+                finally:
+                    conn.close()
+            except Exception:
+                version_id = None
+
+            try:
+                task = task_manager.create_task(
+                    filename=storage_name,
+                    task_type="upload",
+                    file_path=str(file_path),
+                    collection=collection_id,
+                    filename_param=section_source,
+                    source_label=display_label,
+                    file_id=alloc_file_id,
+                    version_id=version_id,
+                    meeting_id=meeting_id,
+                    meeting_date=meeting_date,
+                )
+                task_id = task.id
+            except Exception as e:
+                logger.warning(
+                    "Failed to queue meeting allocate task %s: %s — falling back to sync",
+                    section_source,
+                    e,
+                )
+                # Fallback: synchronous ingest (legacy path)
+                from src.tasks.handlers import upload_handler
+
+                upload_task = Task(
+                    id=str(uuid.uuid4()),
+                    filename=f"meeting_{meeting_id}_{tab_id}",
+                    collection=collection_id,
+                    status=TaskStatus.PROCESSING,
+                    created_at=datetime.now(timezone.utc),
+                )
+                await upload_handler(
+                    upload_task,
+                    str(file_path),
+                    collection_id,
+                    section_source,
+                    source_label=display_label,
+                    file_id=alloc_file_id,
+                    meeting_id=meeting_id,
+                    meeting_date=meeting_date,
+                    version_id=version_id,
+                )
+
+        # Timeline anchor + attach
+        try:
+            node_id = ensure_meeting_anchor_node(
+                collection_id,
+                meeting_id,
+                title=meeting_title,
+                event_time=meeting_date,
+            )
+            attach_file_to_node(
+                collection_id, node_id, file_id=alloc_file_id
+            )
+        except Exception:
+            logger.warning(
+                "Meeting anchor attach failed meeting=%s col=%s file=%s",
+                meeting_id,
+                collection_id,
+                alloc_file_id[:12],
+                exc_info=True,
+            )
+            node_id = None
 
         # ── Update tab metadata ─────────────────────────────────
         col_meta = get_collection_meta(collection_id)
@@ -2558,11 +2782,12 @@ class MeetingService:
                 td["associated_collection_id"] = collection_id
                 td["associated_collection_name"] = col_name
                 td["allocated_file_id"] = alloc_file_id
+                td["needs_reingest"] = False
+                td["ingested_content_hash"] = ingested_hash
             updated_tabs.append(td)
 
         store.update_meeting(meeting_id, tabs=updated_tabs)
 
-        # Rebuild meeting-level tracking arrays from tabs (single source of truth)
         alloc_cols, alloc_fids = _rebuild_allocation_arrays(updated_tabs)
         store.update_meeting(
             meeting_id,
@@ -2573,12 +2798,23 @@ class MeetingService:
         updated = store.get_meeting(meeting_id)
         assert updated is not None
 
+        bridge = {
+            "file_id": alloc_file_id,
+            "task_id": task_id,
+            "node_id": node_id,
+            "source": section_source,
+            "collection_id": collection_id,
+        }
         logger.info(
-            "Allocated section %s/%s to collection '%s'",
-            meeting_id, tab_id, collection_id,
+            "Allocated section %s/%s → col=%s file=%s task=%s node=%s",
+            meeting_id,
+            tab_id,
+            collection_id,
+            alloc_file_id[:12],
+            task_id,
+            (node_id or "")[:12],
         )
-
-        return updated
+        return updated, bridge
 
     async def delete_section_allocation(
         self, meeting_id: str, tab_id: str,
@@ -2601,9 +2837,10 @@ class MeetingService:
         col_id = tab_meta.get("associated_collection_id", "")
         file_id = tab_meta.get("allocated_file_id", "")
         if col_id and file_id:
-            self._delete_allocation(col_id, file_id)
+            self._delete_allocation(
+                col_id, file_id, meeting_id=meeting_id, detach_anchor=True
+            )
 
-        # Clear tab metadata (set to empty string, not pop — frontend expects string)
         updated_tabs: list[dict] = []
         for t in (meeting.tabs or []):
             td = t if isinstance(t, dict) else t.model_dump()
@@ -2611,11 +2848,12 @@ class MeetingService:
                 td["associated_collection_id"] = ""
                 td["associated_collection_name"] = ""
                 td["allocated_file_id"] = ""
+                td["needs_reingest"] = False
+                td["ingested_content_hash"] = ""
             updated_tabs.append(td)
 
         store.update_meeting(meeting_id, tabs=updated_tabs)
 
-        # Rebuild meeting-level tracking arrays from tabs (single source of truth)
         alloc_cols, alloc_fids = _rebuild_allocation_arrays(updated_tabs)
         store.update_meeting(
             meeting_id,

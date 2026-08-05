@@ -65,6 +65,22 @@ class TestContextBuilderBasic:
         result = _cb(chunks)
         assert "id: qdrant-point-abc" in result
 
+    def test_char_offset_and_page_in_output(self):
+        """chunk 有 char_offset / page_number 时写入 header，便于 get_document_text 续读"""
+        chunks = [
+            _ck(
+                "body",
+                chunk_index=3,
+                char_offset=18420,
+                page_number=7,
+                source="__file__:fid99",
+            ),
+        ]
+        result = _cb(chunks)
+        assert "char_offset: 18420" in result
+        assert "page: 7" in result
+        assert "file_id: fid99" in result
+
     def test_context_field_in_output(self):
         """chunk 有 metadata["context"] 时：断言显示 "[Context: ...]" """
         chunks = [_ck("text", context="This is the surrounding context")]

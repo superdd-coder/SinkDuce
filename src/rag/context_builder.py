@@ -25,11 +25,15 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
         Uploaded: {upload_date}
         Document summary: {chunk.metadata["summary"]}
 
-        [Chunk #1 · score: 0.92 · id: {point_id}]
+        [Chunk #1 · score: 0.92 · char_offset: 1200 · page: 3 · id: {point_id}]
         [Context: {chunk.metadata["context"]}]
         {chunk.text}
 
         [Note: {n} intermediate chunks (#X–#Y) from {source} were omitted ...]
+
+    ``char_offset`` (when present) is the character index into extractable
+    document text — use it as ``get_document_text(..., offset=char_offset)``
+    to open a window near this passage.
 
     When *gap_indicators* is False, the ``[Note: ...]`` lines are skipped.
     """
@@ -61,8 +65,18 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
         summary = meta.get("summary", "")
         uploaded_at = meta.get("uploaded_at", "")
         chunk_type = meta.get("chunk_type", "")
+        char_offset = meta.get("char_offset")
+        page_number = meta.get("page_number")
+        # Optional file_id for follow-up get_document_text
+        file_id = meta.get("file_id") or ""
+        if not file_id:
+            src = str(source or "")
+            if src.startswith("__file__:"):
+                file_id = src[len("__file__:"):]
+            elif src.startswith("file:"):
+                file_id = src[len("file:"):]
 
-        entries.append({
+        entry = {
             "text": text,
             "score": score,
             "collection": str(collection),
@@ -73,7 +87,19 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
             "summary": str(summary) if summary else "",
             "uploaded_at": str(uploaded_at) if uploaded_at else "",
             "chunk_type": str(chunk_type) if chunk_type else "",
-        })
+            "file_id": str(file_id) if file_id else "",
+        }
+        if char_offset is not None and char_offset != "":
+            try:
+                entry["char_offset"] = int(char_offset)
+            except (TypeError, ValueError):
+                pass
+        if page_number is not None and page_number != "":
+            try:
+                entry["page_number"] = int(page_number)
+            except (TypeError, ValueError):
+                entry["page_number"] = page_number
+        entries.append(entry)
 
     if not entries:
         return ""
@@ -151,10 +177,16 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
 
                 prev_idx = cur_idx
 
-                # Emit the chunk
+                # Emit the chunk (position fields help follow-up get_document_text)
                 chunk_header = (
                     f"[Chunk #{cur_idx} · score: {entry['score']:.2f}"
                 )
+                if "char_offset" in entry:
+                    chunk_header += f" · char_offset: {entry['char_offset']}"
+                if "page_number" in entry:
+                    chunk_header += f" · page: {entry['page_number']}"
+                if entry.get("file_id"):
+                    chunk_header += f" · file_id: {entry['file_id']}"
                 if entry["point_id"]:
                     chunk_header += f" · id: {entry['point_id']}"
                 chunk_header += "]"

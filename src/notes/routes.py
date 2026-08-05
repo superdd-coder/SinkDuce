@@ -13,7 +13,15 @@ from fastapi.responses import FileResponse
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from src.notes import store
-from src.notes.service import distill_note, propagate_forward, parse_injection_blocks
+from src.notes.service import (
+    distill_note,
+    distill_meeting,
+    meeting_source_id,
+    parse_meeting_source_id,
+    freeze_speakers_in_note_content,
+    propagate_forward,
+    parse_injection_blocks,
+)
 from src.services import services
 from src.rag.markdown_chunker import MarkdownChunker, MarkdownParentChildChunker
 from src.rag.collection_utils import get_collection_embedding
@@ -60,13 +68,39 @@ def _get_ingested_note_ids(collection: str) -> set[str]:
     return ingested
 
 
+def _resolve_note_file_id(collection: str, note_id: str) -> str | None:
+    """Return managed file_id for ``__note__:{note_id}`` from files.json, if any."""
+    source = f"__note__:{note_id}"
+    try:
+        from src.collections.file_index import load as load_file_index
+
+        idx = load_file_index(collection) or {}
+        for fid, entry in idx.items():
+            if entry.get("source") == source:
+                return str(fid)
+    except Exception:
+        logger.debug(
+            "resolve note file_id failed col=%s note=%s",
+            collection,
+            note_id,
+            exc_info=True,
+        )
+    return None
+
+
 def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str):
     """Run full ingest pipeline: chunk → enrich → embed → store.
 
     Runs in a background thread via BackgroundTasks. Reuses the
     enrichment/embedding locks from handlers.py.
+
+    Speaker freeze: meeting distill blocks keep ``[spk:ID]`` until ingest —
+    resolve to current meeting speaker names here (like meeting allocate).
     """
     t_start = time.time()
+
+    # Freeze [spk:…] for RAG / file snapshot (editor still stores live IDs)
+    content = freeze_speakers_in_note_content(content)
 
     # Ensure collection exists in Qdrant
     if not services.db.collection_exists(collection):
@@ -281,16 +315,50 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
     try:
         from src.collections.file_index import load as load_file_index, save as save_file_index
         idx = load_file_index(collection)
+        dirty = False
         for fid, entry in list(idx.items()):
             if entry.get("source") == source and fid != file_id:
                 old_dir = snapshot_dir.parent / fid
                 if old_dir.exists():
                     shutil.rmtree(old_dir)
                 del idx[fid]
-        if any(entry.get("source") == source and fid != file_id for fid, entry in idx.items()):
+                dirty = True
+        if dirty:
             save_file_index(collection, idx)
     except Exception:
-        pass
+        logger.warning(
+            "[INGEST] Note %s: failed cleaning old re-ingest snapshots",
+            note_id,
+            exc_info=True,
+        )
+
+    # Immediate file-mgmt registration under system Notes folder (folder view)
+    try:
+        from src.file_mgmt.service import register_ingested_source_file
+
+        register_ingested_source_file(
+            collection,
+            file_id=file_id,
+            source=source,
+            storage_name=f"{safe_title}.md",
+            system_folder_name="Notes",
+        )
+    except Exception:
+        logger.warning(
+            "[INGEST] Note %s: failed to register file-mgmt entry",
+            note_id,
+            exc_info=True,
+        )
+
+    # Persist fingerprint so REINGEST survives dialog reopen
+    try:
+        store.set_ingested_content_hash(note_id, content)
+    except Exception:
+        logger.warning(
+            "[INGEST] Note %s: failed to save ingested.hash",
+            note_id,
+            exc_info=True,
+        )
 
 
 # ── Notes CRUD ─────────────────────────────────────────────────
@@ -342,21 +410,51 @@ async def get_note(collection: str, note_id: str):
     references = store.get_references(note_id)
     referenced_by = store.get_referenced_by(note_id)
 
-    # Check if this note is ingested into Qdrant
-    is_ingested = False
-    try:
-        if services.db.collection_exists(collection):
-            filter_cond = Filter(
-                must=[FieldCondition(key="source", match=MatchValue(value=f"__note__:{note_id}"))]
-            )
-            is_ingested = services.db.count_by_filter(collection, filter_cond) > 0
-    except Exception:
-        pass
+    # Check if this note is ingested into Qdrant / file-mgmt
+    note_source = f"__note__:{note_id}"
+    file_id = _resolve_note_file_id(collection, note_id)
+    is_ingested = file_id is not None
+    if not is_ingested:
+        try:
+            if services.db and services.db.collection_exists(collection):
+                filter_cond = Filter(
+                    must=[FieldCondition(key="source", match=MatchValue(value=note_source))]
+                )
+                is_ingested = services.db.count_by_filter(collection, filter_cond) > 0
+        except Exception:
+            pass
 
-    # Enrich references with source titles
+    ingested_hash = store.get_ingested_content_hash(note_id)
+    current_hash = store.content_fingerprint(content)
+    # Legacy: ingested but no fingerprint yet — seed baseline so reopen is clean
+    if is_ingested and not ingested_hash:
+        store.set_ingested_content_hash(note_id, content)
+        ingested_hash = current_hash
+    needs_reingest = bool(
+        is_ingested and ingested_hash and ingested_hash != current_hash
+    )
+
+    # Enrich references with source titles (notes + meetings)
     for ref in references:
-        source = store.get_note(ref.get("source_note_id", ""))
-        ref["source_title"] = source.title if source else ref.get("source_note_id", "")
+        sid = ref.get("source_note_id", "")
+        source = store.get_note(sid)
+        if source:
+            ref["source_title"] = source.title
+        else:
+            parsed = parse_meeting_source_id(sid)
+            if parsed:
+                mid, tid = parsed
+                try:
+                    from src.notes.service import build_meeting_tab_distill_source
+                    title, _, _ = build_meeting_tab_distill_source(mid, tid)
+                    ref["source_title"] = title or (ref.get("source_title") or sid)
+                    ref["source_type"] = "meeting"
+                    ref["meeting_id"] = mid
+                    ref["tab_id"] = tid
+                except Exception:
+                    ref["source_title"] = ref.get("source_title") or sid
+            else:
+                ref["source_title"] = ref.get("source_title") or sid
     return {
         "id": note.id,
         "title": note.title,
@@ -368,6 +466,9 @@ async def get_note(collection: str, note_id: str):
         "is_extracted": len(referenced_by) > 0,
         "extracted_into": referenced_by,
         "is_ingested": is_ingested,
+        "file_id": file_id,
+        "ingested_content_hash": ingested_hash,
+        "needs_reingest": needs_reingest,
     }
 
 
@@ -398,10 +499,19 @@ async def update_note(collection: str, note_id: str, body: dict = Body()):
             source_id = block["source_note_id"]
             new_source_ids.add(source_id)
             source = store.get_note(source_id)
+            source_title = source.title if source else ""
+            if not source_title:
+                parsed = parse_meeting_source_id(source_id)
+                if parsed:
+                    try:
+                        from src.notes.service import build_meeting_tab_distill_source
+                        source_title, _, _ = build_meeting_tab_distill_source(parsed[0], parsed[1])
+                    except Exception:
+                        source_title = source_id
             refs.append({
                 "block_id": block["block_id"],
                 "source_note_id": source_id,
-                "source_title": source.title if source else "",
+                "source_title": source_title,
             })
 
         # Save the content and references
@@ -422,7 +532,7 @@ async def delete_note(collection: str, note_id: str):
     """Delete a note and clean up all references and ingested chunks."""
     logger.info("[DELETE] Note %s in collection '%s'", note_id, collection)
 
-    # Clean up ingested chunks from Qdrant
+    # Clean up ingested chunks from Qdrant + file-mgmt + files.json
     source = f"__note__:{note_id}"
     try:
         if services.db.collection_exists(collection):
@@ -430,6 +540,23 @@ async def delete_note(collection: str, note_id: str):
             logger.info("[DELETE] Cleaned up ingested chunks for note %s", note_id)
     except Exception as e:
         logger.warning("Failed to clean up ingested chunks for deleted note %s: %s", note_id, e)
+
+    try:
+        from src.file_mgmt.service import unregister_files_for_source
+
+        unregister_files_for_source(
+            collection, source, remove_disk=True, remove_index=True
+        )
+    except Exception:
+        logger.warning(
+            "[DELETE] Failed to unregister file-mgmt for note %s", note_id, exc_info=True
+        )
+        try:
+            from src.collections.file_index import remove_by_source as remove_file_index
+
+            remove_file_index(collection, source)
+        except Exception:
+            pass
 
     deleted = store.delete_note(note_id)
     if not deleted:
@@ -470,6 +597,53 @@ async def distill_into_note(collection: str, note_id: str, body: dict = Body()):
         "block_id": block_id,
         "source_note_id": source_note_id,
         "source_title": source.title,
+        "distilled_content": distilled,
+    }
+
+
+@router.post("/notes/{collection}/{note_id}/distill-meeting")
+async def distill_meeting_into_note(collection: str, note_id: str, body: dict = Body()):
+    """Distill one meeting summary file (General or Section) into a note block.
+
+    Body: ``meeting_id`` (required), ``tab_id`` (default ``tab_general``).
+    Source id: ``meeting:{meeting_id}:{tab_id}``.
+    Content is speaker-resolved and stripped of refs/priority before the LLM.
+    """
+    meeting_id = (body.get("meeting_id") or "").strip()
+    if not meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    tab_id = (body.get("tab_id") or "tab_general").strip() or "tab_general"
+
+    target = store.get_note(note_id)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"Target note {note_id} not found")
+
+    from src.meeting import store as meeting_store
+    meeting = meeting_store.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+
+    logger.info(
+        "[DISTILL-MEETING] meeting %s tab %s → note %s in collection '%s'",
+        meeting_id, tab_id, note_id, collection,
+    )
+
+    try:
+        source_title, distilled = await asyncio.to_thread(distill_meeting, meeting_id, tab_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    block_id = uuid.uuid4().hex[:12]
+    source_id = meeting_source_id(meeting_id, tab_id)
+
+    return {
+        "message": "Distillation ready",
+        "block_id": block_id,
+        "source_note_id": source_id,
+        "source_title": source_title or meeting.title,
+        "source_type": "meeting",
+        "meeting_id": meeting_id,
+        "tab_id": tab_id,
         "distilled_content": distilled,
     }
 
@@ -521,8 +695,11 @@ async def trigger_propagation(collection: str, note_id: str, background_tasks: B
 
 @router.post("/notes/{collection}/{note_id}/ingest")
 async def ingest_note(collection: str, note_id: str, background_tasks: BackgroundTasks):
-    """Ingest a note's markdown content into the Qdrant vector store
-    so it becomes searchable via RAG."""
+    """First-time ingest of a note (creates managed file under Notes folder).
+
+    For already-ingested notes with content changes, use ``/reingest``
+    (file version pipeline).
+    """
     note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
@@ -531,10 +708,14 @@ async def ingest_note(collection: str, note_id: str, background_tasks: Backgroun
     if not content.strip():
         raise HTTPException(status_code=400, detail="Note content is empty")
 
-    # Remove any existing ingestion first (allows re-ingestion after edits)
+    # Already has a managed file → redirect clients to reingest / version path
+    existing_fid = _resolve_note_file_id(collection, note_id)
+    if existing_fid:
+        return await reingest_note(collection, note_id)
+
     source = f"__note__:{note_id}"
     try:
-        if services.db.collection_exists(collection):
+        if services.db and services.db.collection_exists(collection):
             services.db.delete_by_filter(collection, key="source", value=source)
     except Exception:
         pass
@@ -543,6 +724,7 @@ async def ingest_note(collection: str, note_id: str, background_tasks: Backgroun
         logger.info("[INGEST] Starting ingestion for note %s in collection '%s'", note_id, collection)
         try:
             _do_ingest_note(collection, note_id, note.title, content)
+            store.set_ingested_content_hash(note_id, content)
             logger.info("[INGEST] Completed ingestion for note %s", note_id)
         except Exception as e:
             logger.error("[INGEST] Failed to ingest note %s: %s", note_id, e, exc_info=True)
@@ -552,33 +734,153 @@ async def ingest_note(collection: str, note_id: str, background_tasks: Backgroun
     return {"message": "Ingestion started", "status": "pending"}
 
 
+@router.post("/notes/{collection}/{note_id}/reingest")
+async def reingest_note(collection: str, note_id: str):
+    """Re-ingest an already-managed note as a **new file version**.
+
+    Uses the same upload/version pipeline as folder file updates
+    (``upload_file_version``), preserving ``source=__note__:{note_id}``.
+    """
+    note = store.get_note(note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+
+    content = store.get_content(note_id) or ""
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="Note content is empty")
+
+    file_id = _resolve_note_file_id(collection, note_id)
+    if not file_id:
+        # No managed file yet — first-time pipeline in a daemon thread
+        def run_ingestion():
+            try:
+                _do_ingest_note(collection, note_id, note.title, content)
+                store.set_ingested_content_hash(note_id, content)
+            except Exception as e:
+                logger.error(
+                    "[REINGEST] fallback ingest failed note=%s: %s",
+                    note_id,
+                    e,
+                    exc_info=True,
+                )
+
+        import threading
+
+        threading.Thread(target=run_ingestion, daemon=True).start()
+        return {
+            "message": "No existing file — first ingest started",
+            "status": "pending",
+            "file_id": None,
+            "task_id": None,
+        }
+
+    import re as _re
+
+    safe_title = _re.sub(r"[^\w一-鿿\s-]", "", note.title).strip()[:80] or note_id
+    safe_title = _re.sub(r"\s+", "_", safe_title)
+    filename = f"{safe_title}.md"
+    # Freeze speakers for the versioned file / RAG pipeline only
+    frozen = freeze_speakers_in_note_content(content)
+    file_bytes = frozen.encode("utf-8")
+
+    from src.file_mgmt.service import upload_file_version
+
+    result = upload_file_version(
+        collection,
+        file_id,
+        file_bytes,
+        filename,
+        commit_message=f"Note reingest: {note.title}",
+        document_source=f"__note__:{note_id}",
+        source_label=f"Note: {note.title}",
+        file_type="note",
+    )
+    # Fingerprint now — content is what will be ingested (task may still run)
+    store.set_ingested_content_hash(note_id, content)
+    logger.info(
+        "[REINGEST] note=%s file_id=%s task_id=%s",
+        note_id,
+        file_id[:12],
+        getattr(result, "task_id", None),
+    )
+    return {
+        "message": "Reingest queued as new file version",
+        "status": "pending",
+        "file_id": file_id,
+        "task_id": getattr(result, "task_id", None),
+    }
+
+
 @router.delete("/notes/{collection}/{note_id}/ingest")
 async def remove_note_ingestion(collection: str, note_id: str):
-    """Remove all ingested chunks for a note from Qdrant."""
+    """Remove ingested note: Qdrant chunks + Notes-folder file + disk + files.json."""
     note = store.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
 
     source = f"__note__:{note_id}"
-    logger.info("[INGEST] Removing ingestion for note %s source=%s from collection '%s'", note_id, source, collection)
+    logger.info(
+        "[INGEST] Removing ingestion for note %s source=%s from collection '%s'",
+        note_id,
+        source,
+        collection,
+    )
 
-    if not services.db.collection_exists(collection):
-        logger.warning("[INGEST] Collection '%s' does not exist, nothing to remove", collection)
-        return {"message": "Collection not found, nothing to remove", "is_ingested": False}
+    # 1) Qdrant (best-effort — still clean file-mgmt even if collection missing)
+    if services.db is not None and services.db.collection_exists(collection):
+        try:
+            services.db.delete_by_filter(collection, key="source", value=source)
+            logger.info(
+                "[INGEST] Removed Qdrant chunks for note %s from '%s'",
+                note_id,
+                collection,
+            )
+        except Exception as e:
+            logger.error(
+                "[INGEST] Failed to remove Qdrant for note %s: %s",
+                note_id,
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500, detail=f"Failed to remove ingestion: {e}"
+            )
+    else:
+        logger.warning(
+            "[INGEST] Collection '%s' missing in Qdrant — still cleaning file-mgmt",
+            collection,
+        )
 
+    # 2) File-mgmt SQLite + disk snapshot + files.json (always)
     try:
-        services.db.delete_by_filter(collection, key="source", value=source)
-        logger.info("[INGEST] Removed ingestion for note %s from collection '%s'", note_id, collection)
-    except Exception as e:
-        logger.error("[INGEST] Failed to remove note %s: %s", note_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to remove ingestion: {e}")
+        from src.file_mgmt.service import unregister_files_for_source
 
-    # Update file index
-    try:
-        from src.collections.file_index import remove_by_source as remove_file_index
-        remove_file_index(collection, source)
+        removed = unregister_files_for_source(
+            collection,
+            source,
+            remove_disk=True,
+            remove_index=True,
+        )
+        logger.info(
+            "[INGEST] Removed file-mgmt for note %s: file_ids=%s",
+            note_id,
+            [f[:12] for f in removed],
+        )
     except Exception:
-        pass
+        logger.warning(
+            "[INGEST] Failed to unregister file-mgmt for %s",
+            source,
+            exc_info=True,
+        )
+        # Last-resort: clear files.json only
+        try:
+            from src.collections.file_index import remove_by_source as remove_file_index
+
+            remove_file_index(collection, source)
+        except Exception:
+            pass
+
+    store.clear_ingested_content_hash(note_id)
 
     return {"message": "Ingestion removed", "is_ingested": False}
 

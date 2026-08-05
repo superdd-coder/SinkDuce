@@ -1,15 +1,21 @@
-"""MCP server — registers all 40 atomic tools and exposes the HTTP sub-app.
+"""MCP server — registers atomic tools and exposes the HTTP sub-app.
 
-Tool inventory (40 total, by domain):
+Tool inventory by domain:
 
 Collections (5):
     list_collections, get_collection, create_collection,
     update_collection_config, delete_collection
 
-Documents (6):
+Documents (6) — legacy file-index / Qdrant-oriented:
     list_documents, upload_document_from_staging,
     delete_document, get_file_chunks, get_document_text,
     set_document_definitive
+
+File Management L1 (13) — library tree + timeline + folder/file/version + upload:
+    list_library_tree, get_timeline, list_folders, list_files, get_file,
+    list_file_versions, list_chains, get_chain, get_node, list_groups,
+    upload_file_from_staging, upload_file_version_from_staging,
+    set_file_definitive
 
 Search (3):
     search_direct_chunks, search_agentic_chunks, get_query_history
@@ -32,7 +38,7 @@ Hot Words (5):
     list_hot_words_libraries, get_hot_words_library, create_hot_words_library,
     update_hot_words_library, delete_hot_words_library
 
-Total: 5 + 6 + 3 + 5 + 4 + 6 + 9 + 5 = 43 tools.
+Total: 5 + 6 + 13 + 3 + 5 + 4 + 6 + 9 + 5 = 56 tools.
 
 Architecture
 ------------
@@ -49,11 +55,46 @@ from __future__ import annotations
 
 import logging
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
-mcp = MCPServer(name="sinkduce")
+# Server-level agent guide (shown with tools/list / initialize).
+_MCP_INSTRUCTIONS = """
+SinkDuce MCP — use **collection IDs** (from list_collections), never display names.
+
+## Preferred tool map
+
+| Goal | Use first | Avoid / secondary |
+|------|-----------|-------------------|
+| Browse folders + files | **list_library_tree** | list_folders + N× list_files; list_documents (legacy) |
+| Flat unique file list + mounts | **list_files**(scope=all) | list_documents |
+| Timeline / node graph | **get_timeline** | list_chains + N× get_chain |
+| One node attachments/messages | **get_node** | — |
+| Read full document text | **get_document_text**(file_id=…) | inventing text from search only |
+| See what was indexed | **get_file_chunks**(file_id=…) | — |
+| Find files by question | **search_direct_chunks** (simple) / **search_agentic_chunks** (multi-hop) | browsing entire tree first when query is clear |
+| Version history + which history is readable | **list_file_versions** (blob_available) | calling get_document_text on every version blindly |
+| File paths / nodes / messages | **get_file** | — |
+
+## Rules of thumb
+
+1. Always resolve collection **ID** with list_collections first.
+2. Prefer **file_id** over hand-built source strings. Canonical Qdrant source is ``__file__:{file_id}`` (``file:{id}`` is an accepted alias).
+3. list_library_tree: ``file_count`` is always real; ``files=[]`` + ``truncated=true`` means payload omitted, not empty folder.
+4. get_document_text: only pin version_id when list_file_versions shows blob_available=true; else extract_status=blob_missing. Chunks are the **current index only**.
+5. Multi-mount: one file_id can appear under several folders/nodes — not multiple copies.
+6. After MCP code deploy, restart this server and refresh the client tool schema.
+
+Write tools (upload_*, delete_*, create_*) change data — confirm intent before destructive calls.
+""".strip()
+
+# Pinned to mcp>=1.26,<2 (see pyproject.toml). Do not switch to MCPServer
+# unless the whole monorepo upgrades mcp major in a dedicated PR.
+mcp = FastMCP(
+    name="sinkduce",
+    instructions=_MCP_INSTRUCTIONS,
+)
 
 # ── Resolve base URL for docs that mention the HTTP API ──────
 from src.config import get_config as _get_config
@@ -81,6 +122,44 @@ from src.mcp.tools.documents import (
     set_document_definitive,
 )
 for _t in (list_documents, upload_document_from_staging, delete_document, get_file_chunks, get_document_text, set_document_definitive):
+    desc = _t.__doc__
+    if desc and "{base_url}" in desc:
+        desc = desc.replace("{base_url}", _base_url)
+    mcp.add_tool(_t, description=desc)
+
+# ── File Management (L1) ─────────────────────────────────────
+from src.mcp.tools.file_mgmt import (
+    list_library_tree,
+    get_timeline,
+    list_folders,
+    list_files as fm_list_files,
+    get_file,
+    list_file_versions,
+    list_chains,
+    get_chain,
+    get_node,
+    list_groups,
+    upload_file_from_staging,
+    upload_file_version_from_staging,
+    set_file_definitive,
+)
+# list_files is registered under the function name; import alias avoids
+# clashing with documents helpers if any. Tool public name = fn.__name__.
+for _t in (
+    list_library_tree,
+    get_timeline,
+    list_folders,
+    fm_list_files,
+    get_file,
+    list_file_versions,
+    list_chains,
+    get_chain,
+    get_node,
+    list_groups,
+    upload_file_from_staging,
+    upload_file_version_from_staging,
+    set_file_definitive,
+):
     desc = _t.__doc__
     if desc and "{base_url}" in desc:
         desc = desc.replace("{base_url}", _base_url)
@@ -158,8 +237,16 @@ for _t in (list_hot_words_libraries, get_hot_words_library, create_hot_words_lib
     mcp.add_tool(_t)
 
 
+# Cached ASGI wrapper. MCP SDK's streamable_http_app() creates a *new*
+# StreamableHTTPSessionManager on every call and overwrites mcp.session_manager.
+# If main mounts one instance and session_lifespan() builds another, the mounted
+# app's manager never enters run() → every /mcp request 500s with
+# "Task group is not initialized".
+_http_app_cache: dict[str, object] = {}
+
+
 def get_http_app(mount_path: str = "/mcp"):
-    """Return an ASGI app that serves the FastMCP Streamable HTTP endpoint.
+    """Return a **singleton** ASGI app for the FastMCP Streamable HTTP endpoint.
 
     Usage in ``src/main.py``::
 
@@ -189,10 +276,18 @@ def get_http_app(mount_path: str = "/mcp"):
        clean we expose the sub-app via ``app.add_route`` (no mount) and
        rewrite the path inside the ASGI wrapper.
 
+    3. **Must be singleton**: only one ``streamable_http_app()`` call per
+       process so ``session_lifespan()`` runs the same manager the routes use.
+
     The sub-app shares the main app's lifespan (services and task_manager
     are singletons in ``src.services`` and ``src.tasks.task_manager``).
     """
     from starlette.routing import Route
+
+    key = mount_path.rstrip("/") or "/"
+    cached = _http_app_cache.get(key)
+    if cached is not None:
+        return cached
 
     base = mcp.streamable_http_app()
     new_routes = []
@@ -216,7 +311,7 @@ def get_http_app(mount_path: str = "/mcp"):
     if replaced:
         base.router.routes = new_routes
 
-    mount_prefix = mount_path.rstrip("/") or "/"
+    mount_prefix = key
 
     class _MCPASGIApp:
         """ASGI wrapper that strips ``mount_prefix`` from ``scope['path']`` and
@@ -240,7 +335,9 @@ def get_http_app(mount_path: str = "/mcp"):
                     scope = {**scope, "path": path[len(mount_prefix):]}
             return await self._inner(scope, receive, send)
 
-    return _MCPASGIApp(base)
+    wrapper = _MCPASGIApp(base)
+    _http_app_cache[key] = wrapper
+    return wrapper
 
 
 def session_lifespan():
@@ -251,16 +348,19 @@ def session_lifespan():
     before ``handle_request`` is called — otherwise every request fails with
     ``RuntimeError: Task group is not initialized``.
 
-    Usage in ``src/main.py``'s lifespan::
+    Usage in ``src.main``'s lifespan::
 
         from src.mcp.server import session_lifespan
         async with session_lifespan():
             yield
+
+    Important: call :func:`get_http_app` only once (it is cached) so the
+    manager entered here is the same instance mounted on the FastAPI routes.
     """
     from contextlib import asynccontextmanager
 
-    # Force lazy initialization of the session manager by calling
-    # streamable_http_app() once. After this, mcp.session_manager is set.
+    # Ensure the singleton HTTP app (and its session manager) exists. Prefer
+    # reusing the instance already created at import time in main.py.
     _ = get_http_app()
 
     @asynccontextmanager

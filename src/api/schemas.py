@@ -70,6 +70,8 @@ class CollectionCreateRequest(BaseModel):
     rerank_top_k: int = 5
     # Per-collection config: file type restriction
     allowed_file_types: list[str] | None = None
+    # Per-collection: MinerU cloud parsing (default ON — matches Collection Config UI)
+    cloud_parsing: bool = True
 
 
 class CollectionInfo(BaseModel):

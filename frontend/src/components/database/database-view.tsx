@@ -1,21 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
+import { useShallow } from "zustand/react/shallow"
+import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Loader2 } from "lucide-react"
+import { List, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/stores/app-store"
-import { getCollectionConfig, getFiles, getFileChunks, deleteDocument, uploadFiles, getTasks, clearCompletedTasks, cancelTask, retryTask, getDocSummary, setDocSummaryInclude, generateDocSummary, type FileListItem, type ChunkDetail, type TaskInfo } from "@/api/client"
-import { toast } from "sonner"
+import { getFiles, deleteDocument, getTasks, type FileListItem } from "@/api/client"
 import { CollectionList } from "./collection-list"
 import { CreateCollectionDialog } from "./create-collection-dialog"
 import { DeleteCollectionDialog } from "./delete-collection-dialog"
 import { RenameCollectionDialog } from "./rename-collection-dialog"
 import { CollectionConfig } from "./collection-config"
 import { InfoPanel } from "./info-panel"
-import { FileDetailDialog } from "./file-detail-dialog"
-import { UploadUI, TaskQueueList } from "./upload-section"
+import { ClassicFilesDialog } from "./classic-files-dialog"
 import { QuickChat } from "./quick-chat"
+import { FolderView } from "@/components/file-mgmt/folder-view"
+import { TimelineView } from "@/components/file-mgmt/timeline-view"
+import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
+import { useFileMgmtStore } from "@/stores/file-mgmt-store"
+import { cn } from "@/lib/utils"
 
 // Module-level: allows note-editor-dialog to trigger files refresh after ingestion
 let _refreshFilesCallback: (() => void) | null = null
@@ -23,20 +27,75 @@ export function _triggerFilesRefresh() {
   _refreshFilesCallback?.()
 }
 
-export function DatabaseView() {
-  const { activeCollection, setActiveCollection, removeDeletedCollection, pendingCreateCollection, setPendingCreateCollection, pendingOpenFile, setPendingOpenFile, collections, fetchCollections } = useAppStore()
+/** Top-level database tabs: Info | Files (folders) | Timeline | Config */
+type DbTab = "info" | "files" | "timeline" | "config"
+
+function loadDbUi<T>(key: string, fallback: T): T {
+  try {
+    const v = localStorage.getItem(`rag_${key}`)
+    return v !== null ? (JSON.parse(v) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveDbUi(key: string, value: unknown) {
+  try {
+    localStorage.setItem(`rag_${key}`, JSON.stringify(value))
+  } catch { /* ignore */ }
+}
+
+function loadInitialDbTab(): DbTab {
+  const t = loadDbUi<string>("dbActiveTab", "info")
+  if (t === "info" || t === "files" || t === "timeline" || t === "config") {
+    // Migrate legacy: Files tab + Folders/Timeline sub-toggle
+    if (t === "files") {
+      const mode = loadDbUi<string>("dbViewMode", "folders")
+      if (mode === "timeline") return "timeline"
+    }
+    return t
+  }
+  return "info"
+}
+
+export function DatabaseView({ active = true }: { active?: boolean }) {
+  const {
+    activeCollection,
+    setActiveCollection,
+    removeDeletedCollection,
+    pendingCreateCollection,
+    setPendingCreateCollection,
+    pendingOpenFile,
+    setPendingOpenFile,
+    collections,
+    fetchCollections,
+  } = useAppStore(
+    useShallow((s) => ({
+      activeCollection: s.activeCollection,
+      setActiveCollection: s.setActiveCollection,
+      removeDeletedCollection: s.removeDeletedCollection,
+      pendingCreateCollection: s.pendingCreateCollection,
+      setPendingCreateCollection: s.setPendingCreateCollection,
+      pendingOpenFile: s.pendingOpenFile,
+      setPendingOpenFile: s.setPendingOpenFile,
+      collections: s.collections,
+      fetchCollections: s.fetchCollections,
+    }))
+  )
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState("info")
+  const [activeTab, setActiveTab] = useState<DbTab>(() => loadInitialDbTab())
+  /** Tabs visited at least once — keepMounted after first open for snappy re-switch. */
+  const [visitedTabs, setVisitedTabs] = useState<Set<DbTab>>(
+    () => new Set([loadInitialDbTab()])
+  )
   const [files, setFiles] = useState<FileListItem[]>([])
-  const [loading, setLoading] = useState(false)
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [dialogKey, setDialogKey] = useState(0)
-  const [chunks, setChunks] = useState<ChunkDetail[]>([])
-  const [chunksTotal, setChunksTotal] = useState(0)
-  const [chunksLoading, setChunksLoading] = useState(false)
-  const [tasks, setTasks] = useState<TaskInfo[]>([])
+  /** Unified file detail — fileId for metadata, source for chunks/meeting/note. */
+  const [detailOpen, setDetailOpen] = useState<{
+    fileId?: string | null
+    source?: string | null
+  } | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fetchFilesRef = useRef<() => void>(() => {})
   // Per-fetch stale-response tokens. fetchFiles and fetchTasks each own their
@@ -48,11 +107,38 @@ export function DatabaseView() {
   const tasksTokenRef = useRef(0)
   const [deleteFileTarget, setDeleteFileTarget] = useState<string | null>(null)
   const deleteFileDisplay = files.find(f => f.source === deleteFileTarget)?.display_name || deleteFileTarget
-  const [allowedFileTypes, setAllowedFileTypes] = useState<string[]>([])
-  const [coverage, setCoverage] = useState<string>("")
-  const [generatingSummaries, setGeneratingSummaries] = useState<Set<string>>(new Set())
   const [quickChatOpen, setQuickChatOpen] = useState(false)
-  const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | undefined>(undefined)
+  /** All Files flat list — dialog only, not a top-level tab. */
+  const [classicFilesOpen, setClassicFilesOpen] = useState(false)
+
+  const handleTabChange = useCallback((tab: string) => {
+    const next: DbTab =
+      tab === "info" || tab === "files" || tab === "timeline" || tab === "config"
+        ? tab
+        : "info"
+    setActiveTab(next)
+    setVisitedTabs((prev) => {
+      if (prev.has(next)) return prev
+      const n = new Set(prev)
+      n.add(next)
+      return n
+    })
+    saveDbUi("dbActiveTab", next)
+  }, [])
+
+  // In-app jump from message mini-graph → Timeline (same SPA route, no new window)
+  const timelineNavRequest = useFileMgmtStore((s) => s.timelineNavRequest)
+  useEffect(() => {
+    if (!timelineNavRequest) return
+    handleTabChange("timeline")
+  }, [timelineNavRequest, handleTabChange])
+
+  // Collection switch remounts the panel tree (key=activeCollection); reset visit
+  // cache so we don't keepMounted-mount every prior tab for the new collection.
+  useEffect(() => {
+    setVisitedTabs(new Set([activeTab]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
+  }, [activeCollection])
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -75,23 +161,143 @@ export function DatabaseView() {
 
   // Switch to Info tab when navigating from Meeting page
   useEffect(() => {
-    const handler = () => setActiveTab("info")
+    const handler = () => handleTabChange("info")
     window.addEventListener("show-meeting-log", handler)
     return () => window.removeEventListener("show-meeting-log", handler)
-  }, [])
+  }, [handleTabChange])
 
-  // Open file detail from Meeting Log
+  // Open unified file detail from Meeting Log / Info panel / etc.
   useEffect(() => {
     if (pendingOpenFile) {
-      openFileDetail(pendingOpenFile)
+      const raw = pendingOpenFile
+      const fileId =
+        raw.startsWith("__file__:")
+          ? raw.slice("__file__:".length)
+          : /^[a-f0-9]{32}$/i.test(raw.trim())
+            ? raw.trim()
+            : null
+      setDetailOpen({
+        fileId,
+        // Keep original when it's a document source; when only fileId, detail will fill source
+        source: fileId && raw === fileId ? `__file__:${fileId}` : raw,
+      })
       setPendingOpenFile(null)
     }
   }, [pendingOpenFile, setPendingOpenFile])
 
+  // From note editor: switch to Files tab → Notes folder → open file detail
+  useEffect(() => {
+    const handler = async (ev: Event) => {
+      const detail = (
+        ev as CustomEvent<{
+          collectionId?: string
+          fileId?: string
+          noteId?: string
+        }>
+      ).detail
+      const fileId = detail?.fileId
+      if (!fileId) return
+      const col = detail.collectionId || activeCollection
+      if (!col) return
+
+      handleTabChange("files")
+      try {
+        const store = useFileMgmtStore.getState()
+        await store.fetchFolderTree(col)
+        const tree = useFileMgmtStore.getState().folderTree
+        type TreeN = {
+          name: string
+          is_system?: boolean
+          folder_id: string
+          children?: TreeN[]
+        }
+        const findNotes = (nodes: TreeN[]): string | null => {
+          for (const n of nodes) {
+            if (n.name === "Notes" && n.is_system) return n.folder_id
+            const hit = findNotes(n.children || [])
+            if (hit) return hit
+          }
+          return null
+        }
+        const notesFolderId = findNotes(tree as TreeN[])
+        if (notesFolderId) {
+          await store.selectFolder(col, notesFolderId)
+        } else {
+          await store.refreshFiles(col, { silent: true })
+        }
+      } catch {
+        /* still open detail */
+      }
+      const source = detail.noteId
+        ? `__note__:${detail.noteId}`
+        : `__file__:${fileId}`
+      setDetailOpen({ fileId, source })
+    }
+    window.addEventListener("open-note-file-in-folder", handler)
+    return () => window.removeEventListener("open-note-file-in-folder", handler)
+  }, [activeCollection, handleTabChange])
+
+  // From Meeting ingest UI: Files tab → Meeting folder → open file detail
+  useEffect(() => {
+    const handler = async (ev: Event) => {
+      const detail = (
+        ev as CustomEvent<{
+          collectionId?: string
+          fileId?: string
+          meetingId?: string
+          tabId?: string
+        }>
+      ).detail
+      const fileId = detail?.fileId
+      if (!fileId) return
+      const col = detail.collectionId || activeCollection
+      if (!col) return
+
+      if (detail.collectionId) {
+        setActiveCollection(detail.collectionId)
+      }
+      handleTabChange("files")
+      try {
+        const store = useFileMgmtStore.getState()
+        await store.fetchFolderTree(col)
+        const tree = useFileMgmtStore.getState().folderTree
+        type TreeN = {
+          name: string
+          is_system?: boolean
+          folder_id: string
+          children?: TreeN[]
+        }
+        const findMeeting = (nodes: TreeN[]): string | null => {
+          for (const n of nodes) {
+            if (n.name === "Meeting" && n.is_system) return n.folder_id
+            const hit = findMeeting(n.children || [])
+            if (hit) return hit
+          }
+          return null
+        }
+        const meetingFolderId = findMeeting(tree as TreeN[])
+        if (meetingFolderId) {
+          await store.selectFolder(col, meetingFolderId)
+        } else {
+          await store.refreshFiles(col, { silent: true })
+        }
+      } catch {
+        /* still open detail */
+      }
+      const source =
+        detail.meetingId && detail.tabId
+          ? `__meeting__:${detail.meetingId}:${detail.tabId}`
+          : `__file__:${fileId}`
+      setDetailOpen({ fileId, source })
+    }
+    window.addEventListener("open-meeting-file-in-folder", handler)
+    return () =>
+      window.removeEventListener("open-meeting-file-in-folder", handler)
+  }, [activeCollection, handleTabChange, setActiveCollection])
+
   const fetchFiles = useCallback(async () => {
     if (!activeCollection) return
     const token = ++filesTokenRef.current
-    setLoading(true)
     try {
       const res = await getFiles(activeCollection)
       if (token !== filesTokenRef.current) return  // stale, a newer fetch has started
@@ -99,8 +305,6 @@ export function DatabaseView() {
     } catch {
       if (token !== filesTokenRef.current) return
       setFiles([])
-    } finally {
-      if (token === filesTokenRef.current) setLoading(false)
     }
   }, [activeCollection])
 
@@ -118,7 +322,6 @@ export function DatabaseView() {
     try {
       const res = await getTasks(activeCollection)
       if (token !== tasksTokenRef.current) return  // stale, a newer fetch has started
-      setTasks(res.tasks)
       if (res.processing > 0 || res.pending > 0) {
         if (!pollingRef.current) {
           pollingRef.current = setInterval(fetchTasks, 1000)
@@ -139,51 +342,24 @@ export function DatabaseView() {
     fetchCollections()
   }, [])
 
+  // Pause network polling while Collection tab is not the active sidebar view
   useEffect(() => {
+    if (!active) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+      return
+    }
     fetchFiles()
     fetchTasks()
-    // Fetch allowed file types for this collection
-    if (activeCollection) {
-      getCollectionConfig(activeCollection).then((cfg) => {
-        const types = cfg.allowed_file_types as string[] | undefined
-        setAllowedFileTypes(types && types.length > 0 ? types : [])
-        setCoverage((cfg.coverage as string) || "")
-      }).catch(() => { setAllowedFileTypes([]); setCoverage("") })
-    } else {
-      setAllowedFileTypes([])
-    }
     return () => {
       if (pollingRef.current) {
         clearInterval(pollingRef.current)
         pollingRef.current = null
       }
     }
-  }, [fetchFiles, fetchTasks, activeCollection])
-
-  const handleUpload = async (fileList: FileList | null) => {
-    if (!fileList?.length) return
-    try {
-      await uploadFiles(fileList, activeCollection)
-      fetchTasks()
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg || "Upload failed")
-    }
-  }
-
-  const handleCancelTask = async (taskId: string) => {
-    try {
-      await cancelTask(taskId)
-      fetchTasks()
-    } catch { /* ignore */ }
-  }
-
-  const handleRetryTask = async (taskId: string) => {
-    try {
-      await retryTask(taskId)
-      fetchTasks()
-    } catch { /* ignore */ }
-  }
+  }, [fetchFiles, fetchTasks, activeCollection, active])
 
   const handleDeleteFile = async () => {
     if (!deleteFileTarget) return
@@ -193,79 +369,6 @@ export function DatabaseView() {
       fetchFiles()
     } catch {
       // ignore
-    }
-  }
-
-  const openFileDetail = async (source: string) => {
-    setSelectedFile(source)
-    setDialogKey(k => k + 1)
-    setChunksLoading(true)
-    try {
-      const res = await getFileChunks(activeCollection, source, 10000)
-      setChunks(res.chunks)
-      setChunksTotal(res.total)
-    } catch {
-      setChunks([])
-      setChunksTotal(0)
-    } finally {
-      setChunksLoading(false)
-    }
-  }
-
-  const handleToggleDefinitive = async (file: FileListItem, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!activeCollection) return
-
-    const src = file.source
-    const currentInclude = file.include_in_summary !== false
-
-    if (!file.has_summary) {
-      // No summary yet — generate one (auto-checks include_in_summary)
-      setGeneratingSummaries(prev => new Set(prev).add(src))
-      try {
-        await generateDocSummary(activeCollection, src)
-        // Poll for completion
-        const start = Date.now()
-        while (Date.now() - start < 300_000) {
-          await new Promise(r => setTimeout(r, 2000))
-          try {
-            const ds = await getDocSummary(activeCollection, src)
-            if (ds) {
-              // Update local file state
-              setFiles(prev => prev.map(f =>
-                f.source === src
-                  ? { ...f, has_summary: true, include_in_summary: true }
-                  : f
-              ))
-              break
-            }
-          } catch { /* still generating */ }
-        }
-      } catch (err) {
-        toast.error(`Summary generation failed: ${err instanceof Error ? err.message : String(err)}`)
-      } finally {
-        setGeneratingSummaries(prev => {
-          const next = new Set(prev)
-          next.delete(src)
-          return next
-        })
-      }
-    } else {
-      // Summary exists — toggle include_in_summary
-      const newInclude = !currentInclude
-      // Optimistic update
-      setFiles(prev => prev.map(f =>
-        f.source === src ? { ...f, include_in_summary: newInclude } : f
-      ))
-      try {
-        await setDocSummaryInclude(activeCollection, src, newInclude)
-      } catch (err) {
-        // Revert on error
-        setFiles(prev => prev.map(f =>
-          f.source === src ? { ...f, include_in_summary: currentInclude } : f
-        ))
-        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
     }
   }
 
@@ -284,9 +387,9 @@ export function DatabaseView() {
         {activeCollection ? (
           <div className="h-full flex flex-col px-10 py-8 animate-tab-in">
             {/* Collection name header — AI-COMP-001 Heading LG */}
-            <div className="flex items-baseline justify-between mb-5">
+            <div className="flex items-center justify-between gap-3 mb-5">
               <span
-                className="truncate t-body-family"
+                className="truncate t-body-family min-w-0"
                 style={{
                   fontSize: "24px",
                   fontWeight: 300,
@@ -297,162 +400,149 @@ export function DatabaseView() {
               >
                 {collections.find(c => c.id === activeCollection)?.name || activeCollection}
               </span>
-              <span className="text-[10px] text-muted-foreground">
-                {files.length > 0 && `${files.length} files · `}{collections.find(c => c.id === activeCollection)?.points_count ?? 0} chunks
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  {files.length > 0 && `${files.length} files · `}
+                  {collections.find(c => c.id === activeCollection)?.points_count ?? 0} chunks
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange("config")}
+                  title="Collection settings"
+                  className={cn(
+                    "p-1.5 rounded-md transition-colors",
+                    activeTab === "config"
+                      ? "text-primary bg-primary/10"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  )}
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
-              <TabsList className="w-fit bg-transparent p-0 gap-5 border-b rounded-none border-border relative">
-                <TabsIndicator renderBeforeHydration />
-                <TabsTrigger
-                  value="info"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
-                  style={{ borderColor: "transparent" }}
+            <div className="flex-1 flex flex-col min-h-0 min-w-0">
+              {/*
+                Tab list only uses Base UI Tabs (for indicator).
+                Panels are custom — NO TabsContent: its [hidden]/starting-style
+                transitions zero size and flash Timeline on every switch.
+              */}
+              <div className="shrink-0 flex items-center justify-between gap-3 min-w-0 w-full h-7">
+                <Tabs
+                  value={activeTab}
+                  onValueChange={handleTabChange}
+                  className="min-w-0"
                 >
-                  Info
-                </TabsTrigger>
-                <TabsTrigger
-                  value="files"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
-                  style={{ borderColor: "transparent" }}
-                >
-                  Files
-                </TabsTrigger>
-                <TabsTrigger
-                  value="config"
-                  className="text-[10px] font-medium uppercase tracking-[0.12em] px-0 py-1.5 rounded-none bg-transparent data-[state=active]:shadow-none text-muted-foreground after:!opacity-0"
-                  style={{ borderColor: "transparent" }}
-                >
-                  Config
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent key={`info-${activeTab}`} value="info" className="flex-1 mt-2 overflow-hidden min-h-0 animate-tab-in">
-                <ScrollArea className="h-full">
-                  <InfoPanel collection={activeCollection} />
-                </ScrollArea>
-              </TabsContent>
-
-              <TabsContent key={`files-${activeTab}`} value="files" className="flex-1 mt-2 overflow-hidden animate-tab-in">
-                <div className="h-full flex flex-col gap-4">
-                  {coverage && (
-                    <div className="text-[11px] leading-relaxed px-3 py-2 border border-dashed border-border bg-muted/30 t-sans-family">
-                      <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground/70">Coverage · </span>
-                      <span className="text-muted-foreground">{coverage}</span>
-                    </div>
-                  )}
-                  {/* Upload UI stays at top, always accessible (not in scroll). */}
-                  <UploadUI
-                    hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
-                    allowedFileTypes={allowedFileTypes}
-                    onUpload={handleUpload}
-                  />
-                  {/* One shared scroll area: Upload Queue + File List scroll together
-                      so a long task queue can never push the file list out of view. */}
-                  <div className="flex-1 overflow-auto">
-                    <TaskQueueList
-                      hasActiveTasks={tasks.some((t) => t.status === "pending" || t.status === "processing")}
-                      tasks={tasks}
-                      onClearCompleted={clearCompletedTasks}
-                      onRefreshTasks={fetchTasks}
-                      onCancelTask={handleCancelTask}
-                      onRetryTask={handleRetryTask}
+                  <TabsList className="!h-7 w-fit bg-transparent p-0 gap-5 border-0 rounded-none relative shrink-0 items-center">
+                    <TabsIndicator
+                      renderBeforeHydration
+                      className="!bottom-0 h-0.5"
                     />
-                    {loading ? (
-                      <p className="text-sm text-muted-foreground">Loading...</p>
-                    ) : files.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No files yet</p>
-                    ) : (
-                      <div className="space-y-0">
-                        {files.map((file) => (
-                          <div
-                            key={file.source}
-                            className="flex items-center gap-3 py-2.5 cursor-pointer text-sm border-b transition-colors group border-b border-dashed border-border text-foreground"
-                            onClick={() => openFileDetail(file.source)}
-                          >
-                            <div className="flex-1 min-w-0 flex items-center gap-3">
-                              {/* Fixed-width tag — equal width, text centered */}
-                              <span className="shrink-0 flex items-center" style={{ width: "72px" }}>
-                                {file.file_type === "note" && (
-                                  <span
-                                    className="text-[10px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
-                                    style={{
-                                      background: "rgba(37,99,235,0.08)",
-                                      color: "hsl(217.2 91.2% 59.8%)",
-                                      borderRadius: "2px",
-                                    }}
-                                  >
-                                    Note
-                                  </span>
-                                )}
-                                {file.has_meeting && (
-                                  <span
-                                    className="text-[10px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-center w-full leading-normal"
-                                    style={{
-                                      background: "rgba(217,119,6,0.08)",
-                                      color: "hsl(32.2 94.6% 43.7%)",
-                                      borderRadius: "2px",
-                                    }}
-                                  >
-                                    Meeting
-                                  </span>
-                                )}
-                              </span>
-                              <span className="truncate text-xs">{file.display_name || file.source}</span>
-                            </div>
-                            <span className="text-[10px] font-medium text-muted-foreground">{file.chunk_count} chunks</span>
-                            {/* Definitive toggle */}
-                            {file.has_summary !== null && (
-                              <button
-                                className="shrink-0 flex items-center gap-1.5 cursor-pointer"
-                                style={{ background: "none", border: "none" }}
-                                onClick={(e) => handleToggleDefinitive(file, e)}
-                                title={file.include_in_summary !== false ? "Included in collection summary — click to exclude" : "Not included in collection summary — click to include"}
-                              >
-                                {generatingSummaries.has(file.source) ? (
-                                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-                                ) : (
-                                  <span className={`flex items-center justify-center w-3.5 h-3.5 rounded-sm border transition-colors ${
-                                    file.include_in_summary !== false
-                                      ? "border-primary bg-primary text-primary-foreground"
-                                      : "border-muted-foreground/30 bg-transparent"
-                                  }`}>
-                                    {file.include_in_summary !== false && (
-                                      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                      </svg>
-                                    )}
-                                  </span>
-                                )}
-                                <span className={`text-[10px] font-medium uppercase tracking-[0.1em] ${
-                                  file.include_in_summary !== false ? "text-foreground" : "text-muted-foreground"
-                                }`}>
-                                  Definitive
-                                </span>
-                              </button>
-                            )}
-                            <button
-                              className="text-[10px] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-muted-foreground"
-                              style={{ background: "none", border: "none" }}
-                              onClick={(e) => { e.stopPropagation(); setDeleteFileTarget(file.source) }}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        ))}
-                      </div>
+                    {(
+                      [
+                        ["info", "Info"],
+                        ["files", "Files"],
+                        ["timeline", "Timeline"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <TabsTrigger
+                        key={value}
+                        value={value}
+                        className={cn(
+                          "!h-7 min-h-0 px-0 py-0 rounded-none bg-transparent",
+                          "data-[state=active]:shadow-none data-active:bg-transparent",
+                          "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                          "text-muted-foreground data-active:text-primary",
+                          "after:!opacity-0 after:!content-none",
+                          "inline-flex items-center justify-center"
+                        )}
+                        style={{ borderColor: "transparent" }}
+                      >
+                        {label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+                {/* Files tab only: All Files flat list dialog — right edge of tab bar row */}
+                {activeTab === "files" && (
+                  <button
+                    type="button"
+                    onClick={() => setClassicFilesOpen(true)}
+                    title="All Files"
+                    className={cn(
+                      "shrink-0 inline-flex items-center gap-1.5 h-7 px-1.5 rounded-md ml-auto",
+                      "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
+                      "text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
                     )}
-                  </div>
-                </div>
-              </TabsContent>
+                  >
+                    <List className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">All Files</span>
+                  </button>
+                )}
+              </div>
 
-              <TabsContent key={`config-${activeTab}`} value="config" className="flex-1 mt-2 overflow-hidden min-h-0 animate-tab-in">
-                <ScrollArea className="h-full">
-                  <CollectionConfig collection={activeCollection} />
-                </ScrollArea>
-              </TabsContent>
-            </Tabs>
+              {/*
+                Keep-alive tab panels (SaaS-style):
+                - Visit once → stay mounted (no remount / Loading flash).
+                - Inactive = opacity-0 + inert (NOT display:none, NOT visibility:hidden).
+                  · opacity cannot be re-opened by descendants → no residual bleed.
+                  · display:none zeroed Timeline's viewport → wrong pan, nodes clipped on return.
+                  · visibility:hidden can be overridden by child visibility:visible.
+                - Active panel has solid bg + higher z so nothing shows through.
+              */}
+              <div className="relative flex-1 min-h-0 min-w-0 mt-1 bg-background isolate">
+                {(
+                  [
+                    ["info", visitedTabs.has("info")] as const,
+                    ["files", visitedTabs.has("files")] as const,
+                    ["timeline", visitedTabs.has("timeline")] as const,
+                    ["config", visitedTabs.has("config")] as const,
+                  ] as const
+                ).map(([tab, visited]) => {
+                  if (!visited) return null
+                  const isActive = activeTab === tab
+                  return (
+                    <div
+                      key={tab}
+                      className={cn(
+                        "absolute inset-0 flex flex-col overflow-hidden bg-background",
+                        "transition-opacity duration-0",
+                        isActive
+                          ? "z-10 opacity-100"
+                          : "z-0 opacity-0 pointer-events-none select-none"
+                      )}
+                      aria-hidden={!isActive}
+                      inert={!isActive ? true : undefined}
+                    >
+                      {tab === "info" && (
+                        <ScrollArea className="h-full">
+                          <InfoPanel collection={activeCollection} />
+                        </ScrollArea>
+                      )}
+                      {tab === "files" && (
+                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                          <FolderView collectionId={activeCollection} />
+                        </div>
+                      )}
+                      {tab === "timeline" && (
+                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                          <TimelineView
+                            collectionId={activeCollection}
+                            // Only "live" when Collection sidebar is open AND Timeline sub-tab is selected
+                            active={active && isActive}
+                          />
+                        </div>
+                      )}
+                      {tab === "config" && (
+                        <ScrollArea className="h-full">
+                          <CollectionConfig collection={activeCollection} />
+                        </ScrollArea>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           </div>
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
@@ -472,10 +562,15 @@ export function DatabaseView() {
           onOpen={() => setQuickChatOpen(true)}
           onClose={() => setQuickChatOpen(false)}
           files={files}
-          onSourceClick={(source, chunkIndex) => {
+          onSourceClick={(source) => {
             setActiveTab("files")
-            setHighlightChunkIndex(chunkIndex)
-            openFileDetail(source)
+            const fileId =
+              source.startsWith("__file__:")
+                ? source.slice("__file__:".length)
+                : /^[a-f0-9]{32}$/i.test(source.trim())
+                  ? source.trim()
+                  : null
+            setDetailOpen({ fileId, source })
           }}
         />
       )}
@@ -497,21 +592,35 @@ export function DatabaseView() {
         />
       )}
 
-      <FileDetailDialog
-        collection={activeCollection}
-        source={selectedFile}
-        displayName={files.find(f => f.source === selectedFile)?.display_name}
-        fileType={files.find(f => f.source === selectedFile)?.file_type}
-        originalExt={files.find(f => f.source === selectedFile)?.original_ext}
-        openKey={dialogKey}
-        chunks={chunks}
-        chunksTotal={chunksTotal}
-        loading={chunksLoading}
-        highlightChunkIndex={highlightChunkIndex}
-        onOpenChange={(v) => { if (!v) { setSelectedFile(null); setHighlightChunkIndex(undefined); fetchFiles() } }}
-      />
+      {activeCollection && (
+        <FileMgmtDetailDialog
+          collectionId={activeCollection}
+          fileId={detailOpen?.fileId}
+          source={detailOpen?.source}
+          open={!!detailOpen}
+          onOpenChange={(v) => {
+            if (!v) {
+              setDetailOpen(null)
+              fetchFiles()
+              void useFileMgmtStore.getState().refreshFiles(activeCollection)
+            }
+          }}
+          onDeleted={() => {
+            setDetailOpen(null)
+            fetchFiles()
+          }}
+        />
+      )}
 
-      {/* File deletion confirmation */}
+      {activeCollection && (
+        <ClassicFilesDialog
+          collectionId={activeCollection}
+          open={classicFilesOpen}
+          onOpenChange={setClassicFilesOpen}
+        />
+      )}
+
+      {/* File deletion confirmation (Quick Chat / pendingOpenFile paths) */}
       <Dialog open={!!deleteFileTarget} onOpenChange={(v) => !v && setDeleteFileTarget(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>

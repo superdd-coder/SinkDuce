@@ -95,14 +95,28 @@ def get_collection_reranker(col_config: dict) -> RerankerProvider | None:
     return None
 
 
-def get_embedding_overrides(collections: list[str]) -> dict[str, EmbeddingProvider]:
-    """Build per-collection embedding providers for a list of collections."""
+def get_embedding_overrides(collections: list[str]) -> dict[str, EmbeddingProvider | None]:
+    """Build per-collection embedding providers for a list of collections.
+
+    When services are not initialized (unit tests / early boot), returns
+    ``None`` overrides so callers can fall back to the default retriever
+    embedding instead of raising.
+    """
     from src.services import services
 
-    overrides = {}
+    overrides: dict[str, EmbeddingProvider | None] = {}
     for col in collections:
-        cc = services.db.get_collection_config(col)
-        overrides[col] = get_collection_embedding(cc, col)
+        try:
+            if services.db is None:
+                overrides[col] = None
+                continue
+            cc = services.db.get_collection_config(col) or {}
+            overrides[col] = get_collection_embedding(cc, col)
+        except Exception as exc:
+            logger.warning(
+                "embedding override failed for col=%r: %s", col, exc
+            )
+            overrides[col] = None
     return overrides
 
 

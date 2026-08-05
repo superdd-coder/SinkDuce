@@ -1,6 +1,29 @@
+# Build args for base images.
+# Defaults = Docker Hub / ghcr (required for GitHub Actions; CN mirrors often 403 there).
+# Local CN mirror example:
+#   docker build \
+#     --build-arg NODE_IMAGE=docker.1ms.run/library/node:20-slim \
+#     --build-arg PYTHON_IMAGE=docker.1ms.run/library/python:3.11-slim \
+#     .
+# Or set NODE_IMAGE / PYTHON_IMAGE in a local .env for docker compose.
+#
+# ARG before any FROM is global default for FROM lines only.
+
+ARG NODE_IMAGE=node:20-slim
+ARG PYTHON_IMAGE=python:3.11-slim
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.6.14
+
+# ── uv binary (COPY --from=var is unsupported; use a named stage) ──
+FROM ${UV_IMAGE} AS uv
+
 # Stage 1: Build frontend
-FROM node:20-slim AS frontend
-RUN npm install -g pnpm@10
+FROM ${NODE_IMAGE} AS frontend
+# Prefer Corepack (ships with Node 20) over `npm install -g pnpm`.
+# Fallback: npmmirror if npmjs is unreachable.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable \
+    && (corepack prepare pnpm@10.15.1 --activate \
+        || npm install -g pnpm@10.15.1 --registry=https://registry.npmmirror.com)
 WORKDIR /app/frontend
 COPY frontend/pnpm-lock.yaml frontend/package.json ./
 RUN pnpm install --frozen-lockfile
@@ -8,10 +31,10 @@ COPY frontend/ .
 RUN pnpm run build
 
 # Stage 2: Python app
-FROM python:3.11-slim
+FROM ${PYTHON_IMAGE}
 
 # Use uv (fast Rust-based pip replacement) for Python deps
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 
 WORKDIR /app
 

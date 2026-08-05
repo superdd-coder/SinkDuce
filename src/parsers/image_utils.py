@@ -232,6 +232,7 @@ def describe_images(
     model_id: str,
     prompt: str,
     max_workers: int = 20,
+    on_image_done: Callable[[], None] | None = None,
 ) -> list[ImageInfo]:
     """Concurrently describe images using a Vision LLM.
 
@@ -241,6 +242,8 @@ def describe_images(
         model_id: The specific vision model ID to use.
         prompt: The system/user prompt for image description.
         max_workers: Max concurrent Vision LLM calls.
+        on_image_done: Called once per image when its describe attempt finishes
+            (success or failure) — for completed-work progress tracking.
 
     Returns:
         Images with ``description`` filled in. Only images that got a
@@ -255,6 +258,13 @@ def describe_images(
         visual_llm = create_llm_for_provider(provider, model=model_id)
     except Exception as e:
         logger.warning("[ImageDescribe] Failed to create vision LLM: %s", e)
+        # Count all as done so progress does not stall
+        if on_image_done:
+            for _ in images:
+                try:
+                    on_image_done()
+                except Exception:
+                    pass
         return []
 
     results: list[ImageInfo] = []
@@ -274,6 +284,12 @@ def describe_images(
                     logger.debug("[ImageDescribe] img_id=%s no description, skipped", img.image_id)
             except Exception:
                 logger.exception("[ImageDescribe] img_id=%s unexpected error", img.image_id)
+            finally:
+                if on_image_done:
+                    try:
+                        on_image_done()
+                    except Exception:
+                        pass
 
     logger.info("[ImageDescribe] %d/%d images described successfully", len(results), len(images))
     return results
@@ -284,41 +300,27 @@ def describe_images(
 def resolve_image_path(file_id: str, image_id: str) -> Path | None:
     """Find image file on disk from file_id + image_id.
 
-    Searches collections/files/{file_id}/images/.
-    Images are saved as {image_id}.{ext} by process_document_images during ingest.
+    Searches ``files/{file_id}/images/`` (legacy) and
+    ``files/{file_id}/{version_id}/images/`` across collections.
     """
-    data_dir = Path("data").resolve()
-    cols_dir = data_dir / "collections"
-    if not cols_dir.is_dir():
-        return None
+    from src.file_mgmt.storage_paths import find_image_file
 
-    for col_dir in cols_dir.iterdir():
-        if not col_dir.is_dir():
-            continue
-        img_dir = col_dir / "files" / file_id / "images"
-        if not img_dir.is_dir():
-            continue
-        # Try common image extensions
-        for ext in ("png", "jpg", "jpeg", "gif", "webp"):
-            img_path = img_dir / f"{image_id}.{ext}"
-            if img_path.is_file():
-                return img_path
-    return None
+    return find_image_file(None, file_id, image_id)
 
 
 def _resolve_image_path_direct(file_id: str, image_id: str, collection: str) -> Path | None:
-    """Direct path resolution when collection is known — no directory scanning."""
-    _exts = ("png", "jpg", "jpeg", "gif", "webp")
-    img_dir = Path("data").resolve() / "collections" / collection / "files" / file_id / "images"
-    if not img_dir.is_dir():
-        logger.warning("[ImageStitch] img_dir not found: %s", img_dir)
-        return None
-    for ext in _exts:
-        p = img_dir / f"{image_id}.{ext}"
-        if p.is_file():
-            return p
-    logger.warning("[ImageStitch] image file not found in %s (tried %s)", img_dir, _exts)
-    return None
+    """Direct path resolution when collection is known — no full collection scan."""
+    from src.file_mgmt.storage_paths import find_image_file
+
+    path = find_image_file(collection, file_id, image_id)
+    if path is None:
+        logger.warning(
+            "[ImageStitch] image not found: file_id=%s image_id=%s col=%s",
+            file_id,
+            image_id,
+            collection,
+        )
+    return path
 
 
 def encode_image_base64(image_id: str, file_id: str) -> tuple[str, str] | None:
@@ -441,6 +443,8 @@ def process_document_images(
     vision_provider=None,
     vision_model_id: str = "",
     vision_prompt: str = "",
+    on_image_done: Callable[[], None] | None = None,
+    on_describe_planned: Callable[[int], None] | None = None,
 ) -> ParsedDocument:
     """Post-process a ParsedDocument's images: filter, save, describe, update content.
 
@@ -459,6 +463,9 @@ def process_document_images(
         vision_provider: LLM provider config with visual_model_ids.
         vision_model_id: The vision model to use. If empty, skip description.
         vision_prompt: Prompt for image description.
+        on_image_done: Per-image completion callback (after each describe finishes).
+        on_describe_planned: Called with N before describing, so callers can
+            register N work units for progress tracking.
     """
     if not doc.images:
         return doc
@@ -520,8 +527,17 @@ def process_document_images(
     if vision_provider and vision_model_id and needs_description:
         logger.info("[ImageProcess] Describing %d images (mixed+visual) with %s",
                     len(needs_description), vision_model_id)
+        if on_describe_planned:
+            try:
+                on_describe_planned(len(needs_description))
+            except Exception:
+                pass
         described = describe_images(
-            needs_description, vision_provider, vision_model_id, vision_prompt,
+            needs_description,
+            vision_provider,
+            vision_model_id,
+            vision_prompt,
+            on_image_done=on_image_done,
         )
     else:
         described = []

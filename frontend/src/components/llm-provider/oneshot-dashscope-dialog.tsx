@@ -21,6 +21,9 @@ interface OneShotDashscopeDialogProps {
 }
 
 const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+// Fixed DashScope ASR models (no UI picker; adapters also hardcode these).
+const FILE_TRANS_MODEL = "qwen-audio-3.0-asr-flash-filetrans"
+const RT_TRANS_MODEL = "qwen-audio-3.0-asr-flash-streaming"
 
 export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotDashscopeDialogProps) {
   const [apiKey, setApiKey] = useState("")
@@ -29,8 +32,6 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
   const [visualModel, setVisualModel] = useState("qwen3.5-flash")
   const [embModel, setEmbModel] = useState("text-embedding-v4")
   const [rerankerModel, setRerankerModel] = useState("qwen3-rerank")
-  const [fileTransModel, setFileTransModel] = useState("fun-asr")
-  const [rtTransModel, setRtTransModel] = useState("fun-asr-realtime")
   const [showApiKey, setShowApiKey] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -105,14 +106,14 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
         createFileTranscriptionProvider({
           name: "Dashscope",
           adapter: "dashscope_funasr",
-          model: fileTransModel.trim(),
+          model: FILE_TRANS_MODEL,
           api_key: apiKey.trim(),
           is_active: true,
         }),
         createRealtimeTranscriptionProvider({
           name: "Dashscope",
           adapter: "dashscope_funasr_realtime",
-          model: rtTransModel.trim(),
+          model: RT_TRANS_MODEL,
           api_key: apiKey.trim(),
           is_active: true,
         }),
@@ -218,29 +219,15 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
             </p>
           </div>
 
-          {/* File Transcription Model */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">File Transcription Model</label>
-            <Input
-              value={fileTransModel}
-              onChange={(e) => setFileTransModel(e.target.value)}
-              placeholder="fun-asr"
-            />
+          {/* Transcription models are fixed (no picker) */}
+          <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+            <p className="text-sm font-medium">Transcription (fixed)</p>
             <p className="text-xs text-muted-foreground">
-              Adapter: DashScope FunASR (file)
+              File: <span className="font-mono">{FILE_TRANS_MODEL}</span>
             </p>
-          </div>
-
-          {/* Realtime Transcription Model */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Realtime Transcription Model</label>
-            <Input
-              value={rtTransModel}
-              onChange={(e) => setRtTransModel(e.target.value)}
-              placeholder="fun-asr-realtime"
-            />
             <p className="text-xs text-muted-foreground">
-              Adapter: DashScope FunASR (realtime)
+              Realtime: <span className="font-mono">{RT_TRANS_MODEL}</span>
+              {" · "}instant hot words · semantic punctuation
             </p>
           </div>
         </div>

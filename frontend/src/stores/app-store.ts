@@ -65,11 +65,23 @@ export interface MetaInfo {
   max_iterations?: number
 }
 
+export type TimelineToolStatus = "running" | "done" | "error" | "declined" | "awaiting_confirm"
+
 export interface TimelineBlock {
   type: "thinking" | "tool"
   content?: string              // thinking text (accumulated)
-  summary?: ThinkingSummary     // tool call summary
+  summary?: ThinkingSummary     // optional agentic detail (not shown by default UI)
   isStreaming?: boolean         // still receiving
+  /** Tool function name */
+  tool?: string
+  /** Short query / argument preview */
+  toolQuery?: string
+  /** running | done | error | declined | awaiting_confirm */
+  toolStatus?: TimelineToolStatus
+  sourceType?: string
+  sourcesCount?: number
+  /** Tool return text (collapsible body) */
+  toolResult?: string
 }
 
 export interface Message {
@@ -159,7 +171,20 @@ interface AppState {
   appendTimelineThinking: (token: string) => void
   setTimelineToolSummary: (summary: ThinkingSummary | undefined) => void
   setTimelineToolStatus: (status: string) => void
-  startTimelineTool: () => void
+  startTimelineTool: (info?: {
+    tool?: string
+    raw_query?: string
+    source_type?: string
+  }) => void
+  finishTimelineTool: (info?: {
+    status?: TimelineToolStatus
+    sources_count?: number
+    source_type?: string
+    content?: string
+    tool?: string
+  }) => void
+  /** Force any non-terminal tool rows to done (when answer tokens start). */
+  closeOpenTimelineTools: () => void
   setLastMessageHasToolCall: () => void
   finishLastMessage: () => void
   flushLastMessageToThinking: () => void
@@ -183,17 +208,25 @@ interface AppState {
 
   // ── Session ──
   sessionId: string | null
+  /** Which sessionId currently has its history loaded into `messages`. */
+  sessionHydratedId: string | null
+  /** True while fetching session messages from the backend. */
+  sessionLoading: boolean
   sessions: import("@/api/client").SessionItem[]
   setSessionId: (id: string | null) => void
   setSessions: (s: import("@/api/client").SessionItem[]) => void
   initSession: (collections?: string[]) => Promise<string>
   loadSessionMessages: (sessionId: string) => Promise<void>
+  /** Ensure active session history is in `messages` before sending. */
+  ensureSessionHydrated: () => Promise<string | null>
   deleteCurrentSession: () => Promise<void>
 }
 
 // Module-level per-session state
 const _streamAborts = new Map<string, AbortController>()
 const _sessionCache = new Map<string, Message[]>()
+/** In-flight history loads — dedupe concurrent hydrate for the same session. */
+const _hydratePromises = new Map<string, Promise<void>>()
 
 /** Register an abort controller for a session. Returns the controller. */
 export function _registerStream(sessionId: string, ctrl: AbortController) {
@@ -234,13 +267,21 @@ export const useAppStore = create<AppState>((set) => ({
     if (state.sidebarView === "meeting" && view !== "meeting" && state.navigationGuard) {
       if (!state.navigationGuard()) return
     }
+    try {
+      localStorage.setItem("rag_sidebarView", JSON.stringify(view))
+    } catch { /* ignore */ }
     set({ sidebarView: view })
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
-  activeCollection: "",
-  setActiveCollection: (id) => set({ activeCollection: id }),
+  activeCollection: loadPersisted<string>("activeCollection", ""),
+  setActiveCollection: (id) => {
+    try {
+      localStorage.setItem("rag_activeCollection", JSON.stringify(id))
+    } catch { /* ignore */ }
+    set({ activeCollection: id })
+  },
   collections: [],
   setCollections: (collections) => set({ collections }),
   fetchCollections: async () => {
@@ -252,6 +293,15 @@ export const useAppStore = create<AppState>((set) => ({
       const cleaned = current.filter((id) => validIds.has(id))
       if (cleaned.length !== current.length) {
         localStorage.setItem("rag_selectedCollections", JSON.stringify(cleaned))
+      }
+      // Drop activeCollection if it no longer exists
+      const active = useAppStore.getState().activeCollection
+      if (active && !validIds.has(active)) {
+        try {
+          localStorage.setItem("rag_activeCollection", JSON.stringify(""))
+        } catch { /* ignore */ }
+        set({ collections: items, selectedCollections: cleaned, activeCollection: "" })
+        return
       }
       set({ collections: items, selectedCollections: cleaned })
     } catch {
@@ -282,10 +332,18 @@ export const useAppStore = create<AppState>((set) => ({
       return { selectedCollections: next }
     }),
   removeDeletedCollection: (id) =>
-    set((s) => ({
-      selectedCollections: s.selectedCollections.filter((c) => c !== id),
-      activeCollection: s.activeCollection === id ? "" : s.activeCollection,
-    })),
+    set((s) => {
+      const nextActive = s.activeCollection === id ? "" : s.activeCollection
+      const nextSelected = s.selectedCollections.filter((c) => c !== id)
+      try {
+        localStorage.setItem("rag_activeCollection", JSON.stringify(nextActive))
+        localStorage.setItem("rag_selectedCollections", JSON.stringify(nextSelected))
+      } catch { /* ignore */ }
+      return {
+        selectedCollections: nextSelected,
+        activeCollection: nextActive,
+      }
+    }),
 
   recallCollections: [],
   setRecallCollections: (ids) => set({ recallCollections: ids }),
@@ -314,12 +372,14 @@ export const useAppStore = create<AppState>((set) => ({
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   appendToLastMessage: (token) =>
     set((s) => {
-      const msgs = [...s.messages]
-      if (msgs.length > 0) {
-        const last = msgs[msgs.length - 1]
-        msgs[msgs.length - 1] = { ...last, content: last.content + token }
-      }
-      return { messages: msgs }
+      // Keep answer tokens at normal priority so UI streams like reasoning.
+      // (startTransition deferred paints until the SSE loop idled → one big dump.)
+      const msgs = s.messages
+      if (msgs.length === 0) return s
+      const last = msgs[msgs.length - 1]
+      const next = msgs.slice(0, -1)
+      next.push({ ...last, content: last.content + token })
+      return { messages: next }
     }),
   flushLastMessageToThinking: () =>
     set((s) => {
@@ -390,7 +450,7 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { messages: msgs }
     }),
-  startTimelineTool: () =>
+  startTimelineTool: (info) =>
     set((s) => {
       const msgs = [...s.messages]
       if (msgs.length > 0) {
@@ -400,7 +460,54 @@ export const useAppStore = create<AppState>((set) => ({
         if (tl.length > 0 && tl[tl.length - 1].type === "thinking") {
           tl[tl.length - 1] = { ...tl[tl.length - 1], isStreaming: false }
         }
-        tl.push({ type: "tool", summary: undefined })
+        const toolName = (info?.tool || "").trim()
+        const rawQ = (info?.raw_query || "").trim()
+        const sourceType = (info?.source_type || "").trim() || undefined
+        tl.push({
+          type: "tool",
+          summary: undefined,
+          isStreaming: true,
+          tool: toolName || undefined,
+          toolQuery: rawQ || undefined,
+          // Web confirm is applied later via setTimelineToolStatus / web_search_confirm.
+          // Do not stick on awaiting_confirm forever when search runs without a dialog
+          // (e.g. already Allowed this turn / Always-allow).
+          toolStatus: "running",
+          sourceType,
+        })
+        msgs[msgs.length - 1] = {
+          ...last,
+          timeline: tl,
+          hasToolCall: true,
+        }
+      }
+      return { messages: msgs }
+    }),
+  finishTimelineTool: (info) =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1]
+        const tl = [...(last.timeline || [])]
+        for (let i = tl.length - 1; i >= 0; i--) {
+          if (tl[i].type === "tool") {
+            const st = info?.status || "done"
+            tl[i] = {
+              ...tl[i],
+              isStreaming: false,
+              toolStatus: st,
+              tool: info?.tool || tl[i].tool,
+              sourcesCount:
+                info?.sources_count !== undefined
+                  ? info.sources_count
+                  : tl[i].sourcesCount,
+              sourceType: info?.source_type || tl[i].sourceType,
+              toolResult:
+                info?.content !== undefined ? info.content : tl[i].toolResult,
+            }
+            break
+          }
+        }
         msgs[msgs.length - 1] = { ...last, timeline: tl }
       }
       return { messages: msgs }
@@ -430,14 +537,51 @@ export const useAppStore = create<AppState>((set) => ({
         const tl = [...(last.timeline || [])]
         for (let i = tl.length - 1; i >= 0; i--) {
           if (tl[i].type === "tool") {
+            // Never reopen a finished tool when later status text arrives
+            const prev = tl[i].toolStatus
+            if (prev === "done" || prev === "error" || prev === "declined") {
+              const cur = tl[i].summary || { aq_count: 0, task_count: 0, tasks: [] }
+              tl[i] = { ...tl[i], summary: { ...cur, status } }
+              break
+            }
             const cur = tl[i].summary || { aq_count: 0, task_count: 0, tasks: [] }
-            tl[i] = { ...tl[i], summary: { ...cur, status } }
+            const st = String(status || "")
+            const lower = st.toLowerCase()
+            // HITL waiting only while confirm dialog is up; Searching/[WEB] → running
+            const waitingConfirm = lower.includes("waiting for web search confirmation")
+            const nextStatus = waitingConfirm ? "awaiting_confirm" : "running"
+            tl[i] = {
+              ...tl[i],
+              summary: { ...cur, status: st },
+              toolStatus: nextStatus,
+            }
             break
           }
         }
         msgs[msgs.length - 1] = { ...last, timeline: tl }
       }
       return { messages: msgs }
+    }),
+  /** Mark any still-open tool rows done (e.g. answer tokens started). */
+  closeOpenTimelineTools: () =>
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length === 0) return s
+      const last = msgs[msgs.length - 1]
+      const tl = last.timeline
+      if (!tl?.length) return s
+      let changed = false
+      const next = tl.map((b) => {
+        if (b.type !== "tool") return b
+        const st = b.toolStatus
+        if (st === "done" || st === "error" || st === "declined") return b
+        changed = true
+        return { ...b, isStreaming: false, toolStatus: "done" as const }
+      })
+      if (!changed) return s
+      const out = msgs.slice(0, -1)
+      out.push({ ...last, timeline: next })
+      return { messages: out }
     }),
   setLastMessageHasToolCall: () =>
     set((s) => {
@@ -451,7 +595,28 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       const msgs = [...s.messages]
       if (msgs.length > 0) {
-        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], isStreaming: false }
+        const last = msgs[msgs.length - 1]
+        // Force every tool step to a terminal state when the turn ends
+        const tl = (last.timeline || []).map((b) => {
+          if (b.type === "thinking" && b.isStreaming) {
+            return { ...b, isStreaming: false }
+          }
+          if (b.type !== "tool") return b
+          const st = b.toolStatus
+          // Keep terminal statuses; coerce running / awaiting_confirm / undefined → done
+          const terminal =
+            st === "done" || st === "error" || st === "declined"
+          return {
+            ...b,
+            isStreaming: false,
+            toolStatus: terminal ? st : "done",
+          }
+        })
+        msgs[msgs.length - 1] = {
+          ...last,
+          isStreaming: false,
+          timeline: tl.length ? tl : last.timeline,
+        }
       }
       return { messages: msgs, isStreaming: false }
     }),
@@ -463,7 +628,7 @@ export const useAppStore = create<AppState>((set) => ({
   logPanelOpen: false,
   toggleLogPanel: () => set((s) => ({ logPanelOpen: !s.logPanelOpen })),
 
-  developerMode: false,
+  developerMode: true,
   toggleDeveloperMode: () => set((s) => ({ developerMode: !s.developerMode })),
 
   activeMeeting: null,
@@ -473,54 +638,135 @@ export const useAppStore = create<AppState>((set) => ({
   setNavigationGuard: (guard) => set({ navigationGuard: guard }),
 
   // ── Session ──
+  // sessionId is restored from localStorage; messages are not — must hydrate on Chat enter.
   sessionId: loadPersisted<string | null>("sessionId", null),
+  sessionHydratedId: null as string | null,
+  sessionLoading: false,
   sessions: [] as import("@/api/client").SessionItem[],
-  setSessionId: (id) => set({ sessionId: id }),
+  setSessionId: (id) =>
+    set(
+      id
+        ? { sessionId: id }
+        : { sessionId: null, sessionHydratedId: null, sessionLoading: false, messages: [] },
+    ),
   setSessions: (sessions) => set({ sessions }),
   initSession: async (collections) => {
     const state = useAppStore.getState()
+    _saveActiveToCache()
     const s = await createSession("", collections ?? state.selectedCollections)
-    set({ sessionId: s.id, messages: [] })
+    // Brand-new empty session is already "hydrated"
+    set({
+      sessionId: s.id,
+      sessionHydratedId: s.id,
+      sessionLoading: false,
+      messages: [],
+      isStreaming: false,
+    })
     return s.id
   },
   loadSessionMessages: async (sessionId) => {
-    // Save current session to cache (keep its stream alive in background)
-    _saveActiveToCache()
-    // Restore target from cache if available
-    const cached = _sessionCache.get(sessionId)
-    if (cached) {
-      set({ messages: [...cached], sessionId, isStreaming: useAppStore.getState().isStreaming })
+    const state = useAppStore.getState()
+    // Already showing this session's history
+    if (state.sessionHydratedId === sessionId && state.sessionId === sessionId) {
       return
     }
-    set({ isStreaming: false })
-    try {
-      const detail = await getSession(sessionId)
-      set({
-        messages: detail.messages
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => {
-            const meta = (m.metadata ?? {}) as Record<string, any>
-            const summary = meta.thinking_summary as ThinkingSummary | undefined
-            // Skip assistant messages that are just tool-call placeholders
-            // (no visible content, only function call metadata)
-            if (m.role === "assistant" && !m.content && meta.tool_calls) {
-              return null
-            }
-            return {
-              id: m.id,
-              role: m.role as "user" | "assistant",
-              content: m.content,
-              sources: m.sources ?? undefined,
-              metaInfo: meta as MetaInfo,
-              thinkingSummary: summary,
-            }
-          })
-          .filter((m): m is NonNullable<typeof m> => m != null),
-        sessionId,
-      })
-    } catch {
-      set({ sessionId: null, messages: [] })
+    // Join in-flight hydrate for the same id (send during Loading…)
+    const inflight = _hydratePromises.get(sessionId)
+    if (inflight) {
+      await inflight
+      return
     }
+
+    const run = (async () => {
+      // Save current session to cache (keep its stream alive in background)
+      _saveActiveToCache()
+      // Restore target from cache if available
+      const cached = _sessionCache.get(sessionId)
+      if (cached) {
+        set({
+          messages: [...cached],
+          sessionId,
+          sessionHydratedId: sessionId,
+          sessionLoading: false,
+          isStreaming: useAppStore.getState().isStreaming,
+        })
+        return
+      }
+      set({
+        sessionId,
+        sessionLoading: true,
+        sessionHydratedId: null,
+        isStreaming: false,
+        // Clear immediately so we never show another session's messages under this id
+        messages: [],
+      })
+      try {
+        const detail = await getSession(sessionId)
+        // Drop stale response if user switched sessions mid-fetch
+        if (useAppStore.getState().sessionId !== sessionId) return
+        set({
+          messages: detail.messages
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => {
+              const meta = (m.metadata ?? {}) as Record<string, any>
+              const summary = meta.thinking_summary as ThinkingSummary | undefined
+              // Skip assistant messages that are just tool-call placeholders
+              // (no visible content, only function call metadata)
+              if (m.role === "assistant" && !m.content && meta.tool_calls) {
+                return null
+              }
+              const timeline = buildTimelineFromMeta(meta)
+              return {
+                id: m.id,
+                role: m.role as "user" | "assistant",
+                content: m.content,
+                sources: m.sources ?? undefined,
+                metaInfo: meta as MetaInfo,
+                thinkingSummary: summary,
+                hasToolCall: !!timeline?.length || !!summary,
+                timeline,
+              }
+            })
+            .filter((m): m is NonNullable<typeof m> => m != null),
+          sessionId,
+          sessionHydratedId: sessionId,
+          sessionLoading: false,
+        })
+      } catch {
+        // Invalid / deleted session — clear selection so next send creates a new one
+        if (useAppStore.getState().sessionId === sessionId) {
+          set({
+            sessionId: null,
+            sessionHydratedId: null,
+            sessionLoading: false,
+            messages: [],
+          })
+        }
+      }
+    })()
+
+    _hydratePromises.set(sessionId, run)
+    try {
+      await run
+    } finally {
+      _hydratePromises.delete(sessionId)
+    }
+  },
+  ensureSessionHydrated: async (): Promise<string | null> => {
+    const state = useAppStore.getState()
+    if (!state.sessionId) {
+      return state.initSession()
+    }
+    if (state.sessionHydratedId === state.sessionId) {
+      return state.sessionId
+    }
+    await state.loadSessionMessages(state.sessionId)
+    const after = useAppStore.getState()
+    // load failed → session cleared; start a fresh one for this message
+    if (!after.sessionId || after.sessionHydratedId !== after.sessionId) {
+      return after.initSession()
+    }
+    return after.sessionId
   },
   deleteCurrentSession: async () => {
     const { sessionId } = useAppStore.getState()
@@ -528,9 +774,59 @@ export const useAppStore = create<AppState>((set) => ({
     _abortStream(sessionId)
     _sessionCache.delete(sessionId)
     await deleteSession(sessionId)
-    set({ sessionId: null, messages: [] })
+    set({
+      sessionId: null,
+      sessionHydratedId: null,
+      sessionLoading: false,
+      messages: [],
+    })
   },
 }))
+
+/** Rebuild UI timeline from assistant message metadata (after page reload). */
+export function buildTimelineFromMeta(
+  meta: Record<string, any> | null | undefined,
+): TimelineBlock[] | undefined {
+  if (!meta) return undefined
+
+  const raw = meta.tool_trace
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw.map((t: Record<string, any>) => ({
+      type: "tool" as const,
+      tool: String(t.tool || t.name || ""),
+      toolQuery: String(t.toolQuery ?? t.tool_query ?? ""),
+      toolResult: String(t.toolResult ?? t.tool_result ?? ""),
+      toolStatus: (t.toolStatus || t.tool_status || "done") as TimelineToolStatus,
+      sourceType: t.sourceType || t.source_type || undefined,
+      sourcesCount:
+        typeof t.sourcesCount === "number"
+          ? t.sourcesCount
+          : typeof t.sources_count === "number"
+            ? t.sources_count
+            : undefined,
+      summary: (t.summary as ThinkingSummary | undefined) || undefined,
+      isStreaming: false,
+    }))
+  }
+
+  // Backward compat: only agentic thinking_summary was saved
+  const summary = meta.thinking_summary as ThinkingSummary | undefined
+  if (
+    summary &&
+    ((summary.aq_count ?? 0) > 0 || (summary.tasks?.length ?? 0) > 0)
+  ) {
+    return [
+      {
+        type: "tool",
+        tool: "search_knowledge_base",
+        summary,
+        toolStatus: "done",
+        isStreaming: false,
+      },
+    ]
+  }
+  return undefined
+}
 
 // Helper functions to get collection by id or name
 export function getCollectionById(id: string): CollectionItem | undefined {
@@ -549,7 +845,6 @@ useAppStore.subscribe((state) => {
     localStorage.setItem("rag_activeProvider", JSON.stringify(state.activeProvider))
     localStorage.setItem("rag_activeModel", JSON.stringify(state.activeModel))
     localStorage.setItem("rag_selectedCollections", JSON.stringify(state.selectedCollections))
-    localStorage.setItem("rag_sidebarView", JSON.stringify(state.sidebarView))
     localStorage.setItem("rag_sessionId", JSON.stringify(state.sessionId))
   }, 500)
 })

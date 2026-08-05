@@ -146,9 +146,8 @@ def _clean_markdown_for_tiptap(md: str) -> str:
     return md
 
 # File extensions supported by MinerU's Precision Parsing API.
-# .docx excluded — always uses local mammoth parser for better Markdown output.
 MINERU_SUPPORTED_EXTENSIONS = {
-    ".pdf", ".doc", ".ppt", ".pptx",
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx",
     ".xls", ".xlsx", ".html",
     ".png", ".jpg", ".jpeg", ".jp2", ".webp", ".gif", ".bmp",
 }

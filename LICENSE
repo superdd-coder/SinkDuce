@@ -621,3 +621,19 @@ copy of the Program in return for a fee.
   SinkDuce — https://github.com/superdd-coder/sinkduce
   Copyright (C) 2026  Jethro
   Licensed under the GNU AGPL v3 or later.
+
+  ---------------------------------------------------------------------------
+  Third-party open-source components
+  ---------------------------------------------------------------------------
+  SinkDuce depends on and may redistribute numerous third-party open-source
+  libraries, fonts, and system packages. Those components remain under their
+  respective licenses (MIT, BSD, Apache-2.0, ISC, OFL-1.1, etc.).
+
+  Attribution and license details for direct dependencies and redistributed
+  components are listed in the file:
+
+      THIRD_PARTY_NOTICES.md
+
+  The text of the GNU Affero General Public License above is copyright Free
+  Software Foundation and must not be modified. The project copyright notice
+  and this third-party pointer are not part of the FSF license text.

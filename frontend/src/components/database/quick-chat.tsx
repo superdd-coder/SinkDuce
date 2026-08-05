@@ -1,10 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { flushSync } from "react-dom"
-import { Send, Loader2, AlertTriangle } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { Send, Loader2, AlertTriangle, Globe } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { createSession, getSession, deleteSession } from "@/api/client"
+import {
+  loadWebSearchForSession,
+  setSessionWebSearch,
+} from "@/lib/session-web-search"
+import {
+  getWebSearchConfirmAnchor,
+  setWebSearchConfirmAnchor,
+} from "@/lib/web-search-confirm"
 
 // ── Types ──
 
@@ -23,6 +29,11 @@ const WARN_THRESHOLD = 20
 const MAX_MESSAGES = 30
 const ANIM_DURATION = 350
 const SIDEBAR_W = 400
+
+/** Count Q&A turns: 1 user message = 1 round (request + reply). */
+function countTurns(msgs: { role: string; content: string }[]): number {
+  return msgs.filter((m) => m.role === "user").length
+}
 
 // ── Hint bubble config ──
 const HINT_MESSAGES = [
@@ -83,9 +94,16 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
   const [msgCount, setMsgCount] = useState(0)
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set())
+  // Web toggle remembered per quick session (quick_<collectionId>); default OFF
+  const [webSearch, setWebSearch] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesScrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottom = useRef(true)
+  const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  /** Stable host for web-confirm portal — avoid inline ref callbacks (re-fire every render). */
+  const webConfirmHostRef = useRef<HTMLDivElement | null>(null)
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
@@ -98,22 +116,47 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     if (!collectionId) return
     const sid = `${QUICK_SESSION_PREFIX}${collectionId}`
     setSessionId(sid)
+    setWebSearch(loadWebSearchForSession(sid))
     initSession(sid)
   }, [collectionId])
+
+  // Claim / release web-confirm anchor only when panel open state changes
+  useEffect(() => {
+    if (open && webConfirmHostRef.current) {
+      setWebSearchConfirmAnchor(webConfirmHostRef.current)
+    }
+    return () => {
+      const cur = getWebSearchConfirmAnchor()
+      if (cur && cur === webConfirmHostRef.current) {
+        setWebSearchConfirmAnchor(null)
+      }
+    }
+  }, [open])
 
   const initSession = async (sid: string) => {
     setLoadingHistory(true)
     try {
       const detail = await getSession(sid).catch(() => null)
       if (detail?.messages?.length) {
-        const msgs: QAMessage[] = detail.messages.map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          sources: m.sources ?? undefined,
-        }))
+        // Dialogue only: skip tool rows and empty tool-call placeholders
+        const msgs: QAMessage[] = detail.messages
+          .filter((m) => {
+            if (m.role === "user") return true
+            if (m.role === "assistant") {
+              const meta = (m.metadata ?? {}) as Record<string, unknown>
+              if (!m.content && meta.tool_calls) return false
+              return !!(m.content || "").trim()
+            }
+            return false
+          })
+          .map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            sources: m.sources ?? undefined,
+          }))
         setMessages(msgs)
-        setMsgCount(detail.messages.length)
+        setMsgCount(countTurns(msgs))
       } else {
         await createSession(collectionName, [collectionId], sid).catch(() => {})
         setMessages([])
@@ -126,11 +169,52 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     }
   }
 
-  // ── Auto-scroll ──
+  // ── Smart auto-scroll: stick while streaming; unlock on scroll-up; re-stick at bottom ──
+
+  const pinRaf = useRef(0)
+  const pinToBottom = useCallback(() => {
+    if (pinRaf.current) return
+    pinRaf.current = requestAnimationFrame(() => {
+      pinRaf.current = 0
+      const el = messagesScrollRef.current
+      if (!el || !stickToBottom.current) return
+      ignoreScrollEvent.current = true
+      el.scrollTop = el.scrollHeight
+      requestAnimationFrame(() => {
+        ignoreScrollEvent.current = false
+      })
+    })
+  }, [])
+
+  const unlockStick = useCallback(() => {
+    if (ignoreScrollEvent.current) return
+    stickToBottom.current = false
+  }, [])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    const el = messagesScrollRef.current
+    if (!el) return
+    const onWheel = () => unlockStick()
+    const onTouch = () => unlockStick()
+    el.addEventListener("wheel", onWheel, { passive: true })
+    el.addEventListener("touchmove", onTouch, { passive: true })
+    return () => {
+      el.removeEventListener("wheel", onWheel)
+      el.removeEventListener("touchmove", onTouch)
+    }
+  }, [unlockStick, open])
+
+  // Throttle stick-scroll while streaming
+  const lastPinAt = useRef(0)
+  useEffect(() => {
+    if (!stickToBottom.current) return
+    if (streaming) {
+      const now = Date.now()
+      if (now - lastPinAt.current < 80) return
+      lastPinAt.current = now
+    }
+    pinToBottom()
+  }, [messages, pinToBottom, streaming])
 
   // ── Auto-resize textarea ──
 
@@ -185,10 +269,17 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       textareaRef.current.style.height = "auto"
     }
 
+    // New user message → re-stick to bottom for this stream
+    stickToBottom.current = true
+
     const userMsg: QAMessage = { id: crypto.randomUUID(), role: "user", content: text, isNew: true }
-    const assistantMsg: QAMessage = { id: crypto.randomUUID(), role: "assistant", content: "", isStreaming: true, isNew: true }
+    const assistantId = crypto.randomUUID()
+    const assistantMsg: QAMessage = { id: assistantId, role: "assistant", content: "", isStreaming: true, isNew: true }
     setMessages((prev) => [...prev, userMsg, assistantMsg])
+    // Optimistic: one new turn when user sends (reply does not add another)
+    setMsgCount((c) => c + 1)
     setStreaming(true)
+    requestAnimationFrame(() => pinToBottom())
 
     setTimeout(() => {
       setMessages((prev) => prev.map((m) => ({ ...m, isNew: false })))
@@ -196,6 +287,40 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
 
     const controller = new AbortController()
     abortRef.current = controller
+
+    // Local helpers — always use assistantId + setMessages (no stale handleSSEEvent)
+    const appendThinkingLocal = (token: string) => {
+      if (!token) return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, thinkingContent: (m.thinkingContent || "") + token }
+            : m,
+        ),
+      )
+    }
+    // Immediate content append (same priority as thinking). React 18 batches
+    // multiple setStates within one await-read tick → one paint per SSE chunk.
+    const appendTokenLocal = (token: string) => {
+      if (!token) return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, content: m.content + token } : m,
+        ),
+      )
+    }
+    const finishLocal = (sources?: QAMessage["sources"]) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== assistantId) return m
+          return {
+            ...m,
+            isStreaming: false,
+            ...(sources !== undefined ? { sources } : {}),
+          }
+        }),
+      )
+    }
 
     try {
       const resp = await fetch(`/api/sessions/${sessionId}/messages`, {
@@ -206,20 +331,30 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           thinking: true,
           collections: [collectionId],
           mode: "direct",
+          web_search_enabled: webSearch,
         }),
         signal: controller.signal,
       })
 
       if (!resp.ok) {
         const err = await resp.text()
-        updateAssistant(assistantMsg.id, `Error: ${resp.status} - ${err}`)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: `Error: ${resp.status} - ${err}`, isStreaming: false }
+              : m,
+          ),
+        )
         return
       }
 
       const reader = resp.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
-      let sources: QAMessage["sources"] = []
+      let sources: NonNullable<QAMessage["sources"]> = []
+      // Must survive across network chunks (event: and data: often split)
+      let eventType = ""
+      let gotDoneCount: number | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -227,19 +362,73 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split("\n")
         buffer = lines.pop() || ""
-        let eventType = ""
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             eventType = line.slice(7).trim()
           } else if (line.startsWith("data: ") && eventType) {
             try {
-              const data = JSON.parse(line.slice(6))
-              flushSync(() => {
-                handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
-                if (eventType === "done" && data.message_count != null) {
+              const data = JSON.parse(line.slice(6)) as Record<string, unknown>
+              if (eventType === "web_search_confirm") {
+                const confirmId = String(data.confirm_id || "")
+                const query = String(data.query || "")
+                if (confirmId) {
+                  const { promptWebSearchConfirm } = await import("@/lib/web-search-confirm")
+                  const { confirmWebSearch } = await import("@/api/client")
+                  const approved = await promptWebSearchConfirm(
+                    confirmId,
+                    query,
+                    sessionId,
+                  )
+                  try {
+                    await confirmWebSearch(confirmId, approved)
+                  } catch (err) {
+                    console.error("[QuickChat] web-search-confirm failed:", err)
+                  }
+                }
+              } else if (eventType === "thinking") {
+                appendThinkingLocal(String(data.content ?? ""))
+              } else if (eventType === "token") {
+                appendTokenLocal(String(data.content ?? ""))
+              } else if (eventType === "tool_call_start") {
+                const tool = String(data.tool || "tool")
+                const q = data.raw_query || data.query
+                const line = q
+                  ? `\n📡 ${tool}: ${String(q).slice(0, 120)}`
+                  : `\n📡 ${tool}`
+                appendThinkingLocal(line)
+              } else if (eventType === "searching") {
+                const q = String(data.query || "")
+                appendThinkingLocal(q ? `\n🔍 ${q}` : "\n🔍 Searching…")
+              } else if (eventType === "tool_result") {
+                const st = String(data.status || "done")
+                const tool = String(data.tool || "")
+                const n = data.sources_count
+                const isSearchLike =
+                  tool === "lookup_collection" ||
+                  tool === "search_knowledge_base" ||
+                  tool === "request_web_search"
+                const line =
+                  st === "declined"
+                    ? tool === "request_web_search"
+                      ? "\n⛔ Web search declined / off"
+                      : "\n⛔ Tool declined / cancelled"
+                    : st === "error"
+                      ? "\n❌ Tool failed"
+                      : isSearchLike && typeof n === "number"
+                        ? `\n✅ Done · ${n} source${n === 1 ? "" : "s"}`
+                        : "\n✅ Done"
+                appendThinkingLocal(line)
+              } else if (eventType === "done") {
+                if (data.sources) {
+                  sources = data.sources as NonNullable<QAMessage["sources"]>
+                }
+                if (typeof data.message_count === "number") {
+                  gotDoneCount = data.message_count
                   setMsgCount(data.message_count)
                 }
-              })
+              } else if (eventType === "error") {
+                appendTokenLocal(`Error: ${data.content}`)
+              }
             } catch (e) {
               console.error("[QuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
             }
@@ -248,65 +437,35 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
         }
       }
 
-      updateAssistant(assistantMsg.id, undefined, sources.length > 0 ? sources : undefined)
+      finishLocal(sources.length > 0 ? sources : undefined)
+      // Server turn count preferred; do not +1 for assistant (already counted on send)
+      if (gotDoneCount != null) setMsgCount(gotDoneCount)
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return
-      updateAssistant(assistantMsg.id, `Error: ${String(err)}`)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: `Error: ${String(err)}`, isStreaming: false }
+            : m,
+        ),
+      )
     } finally {
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, sessionId, collectionId])
+  }, [input, streaming, sessionId, collectionId, webSearch, pinToBottom])
 
-  const handleSSEEvent = (
-    assistantId: string, type: string,
-    data: Record<string, unknown>,
-    setSources: (s: QAMessage["sources"]) => void,
-  ) => {
-    switch (type) {
-      case "thinking": appendThinking(assistantId, data.content as string); break
-      case "token": appendToken(assistantId, data.content as string); break
-      case "searching":
-        // Show searching indicator in the assistant message
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n🔍 Searching: ${data.query || ""}...` } : m
-        ));
-        break
-      case "tool_call_start":
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n📡 Calling ${data.tool || "tool"}...` } : m
-        ));
-        break
-      case "tool_result":
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n✅ Found ${data.sources_count || 0} sources` } : m
-        ));
-        break
-      case "done":
-        console.log("[QuickChat] DONE event received — sources:", data.sources, "type:", typeof data.sources, "isArray:", Array.isArray(data.sources))
-        if (data.sources) {
-          const srcs = data.sources as QAMessage["sources"]
-          console.log("[QuickChat] DONE: setting sources count:", srcs?.length)
-          setSources(srcs)
-        }
-        break
-      case "error": updateAssistant(assistantId, `Error: ${data.content}`); break
-    }
-  }
-
-  const appendThinking = (id: string, token: string) => {
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, thinkingContent: (m.thinkingContent || "") + token } : m)))
-  }
-
-  const appendToken = (id: string, token: string) => {
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: m.content + token } : m)))
-  }
-
-  const updateAssistant = (id: string, content?: string, sources?: QAMessage["sources"]) => {
-    setMessages((prev) => prev.map((m) => {
-      if (m.id !== id) return m
-      return { ...m, ...(content !== undefined ? { content } : {}), ...(sources !== undefined ? { sources } : {}), isStreaming: false }
-    }))
+  const toggleWebSearch = () => {
+    setWebSearch((prev) => {
+      const next = !prev
+      if (sessionId) setSessionWebSearch(sessionId, next)
+      if (!next && sessionId) {
+        void import("@/lib/web-search-confirm").then((m) =>
+          m.clearWebSearchAlwaysAllow(sessionId),
+        )
+      }
+      return next
+    })
   }
 
   // ── Clear ──
@@ -340,10 +499,17 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       {/* ── Header ── */}
       <div className="flex items-center justify-end shrink-0 px-3 pt-3 pb-2">
         <div className="flex items-center gap-2">
-          {msgCount >= WARN_THRESHOLD && (
-            <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400"
-              title={`${msgCount}/${MAX_MESSAGES} messages`}>
-              <AlertTriangle className="w-3 h-3" />
+          {msgCount > 0 && (
+            <span
+              className={cn(
+                "flex items-center gap-1 text-[10px] tabular-nums",
+                msgCount >= WARN_THRESHOLD
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-muted-foreground/70",
+              )}
+              title={`${msgCount}/${MAX_MESSAGES} rounds (1 user question + 1 assistant reply = 1). Soft limit: older rounds are trimmed at ${MAX_MESSAGES}.`}
+            >
+              {msgCount >= WARN_THRESHOLD && <AlertTriangle className="w-3 h-3" />}
               {msgCount}/{MAX_MESSAGES}
             </span>
           )}
@@ -360,7 +526,18 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       </div>
 
       {/* ── Messages area ── */}
-      <div className={cn(
+      <div
+        ref={messagesScrollRef}
+        onScroll={() => {
+          if (ignoreScrollEvent.current) return
+          const el = messagesScrollRef.current
+          if (!el) return
+          const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+          // Leave bottom → unlock; return to bottom → re-stick (same as main Chat)
+          if (dist > 60) stickToBottom.current = false
+          else stickToBottom.current = true
+        }}
+        className={cn(
         "flex-1 overflow-y-auto px-3 min-h-0 transition-all duration-500 ease-out",
         hasMessages ? "pb-14" : "pb-24",
         !hasMessages && "flex flex-col items-center justify-center",
@@ -383,9 +560,15 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                 {msg.role === "assistant" && (msg.content || msg.thinkingContent) ? (
                   <div>
                     {msg.thinkingContent && (
-                      <details className="mb-2" open={msg.isStreaming ? true : undefined}>
+                      <details
+                        className="mb-2"
+                        // Collapse when final answer starts (same idea as main Chat process trail)
+                        open={msg.isStreaming && !msg.content ? true : undefined}
+                      >
                         <summary className="text-[10px] text-muted-foreground/60 cursor-pointer hover:text-muted-foreground transition-colors">
-                          Thinking {msg.isStreaming && <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-[-1px]" />}
+                          Thinking {msg.isStreaming && !msg.content && (
+                            <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-[-1px]" />
+                          )}
                         </summary>
                         <p className="mt-1 text-[10px] text-muted-foreground/50 whitespace-pre-wrap leading-relaxed italic">
                           {msg.thinkingContent}
@@ -393,9 +576,11 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                       </details>
                     )}
                     {msg.content ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-xs">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                      </div>
+                      <StreamingAnswerBody
+                        content={msg.content}
+                        isStreaming={!!msg.isStreaming}
+                        className="break-words text-xs [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-xs"
+                      />
                     ) : msg.isStreaming && (
                       <div className="flex items-center gap-1 text-muted-foreground">
                         <Loader2 className="w-3 h-3 animate-spin" />
@@ -411,7 +596,10 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                 ) : (
                   <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">{msg.content}</p>
                 )}
-                {msg.role === "assistant" && !msg.isStreaming && msg.sources && msg.sources.length > 0 && (
+                {msg.role === "assistant" && !msg.isStreaming && msg.sources && msg.sources.length > 0 && (() => {
+                  const webN = msg.sources!.filter((s) => s.metadata?.source_type === "web").length
+                  const kbN = msg.sources!.length - webN
+                  return (
                   <div className="mt-3 pt-2 border-t border-dashed border-border">
                     <button
                       onClick={() => setExpandedSources((prev) => {
@@ -421,7 +609,11 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                       })}
                       className="flex items-center justify-between w-full text-[10px] font-normal uppercase tracking-[0.12em] text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer mb-2"
                     >
-                      <span>Sources · {msg.sources.length}</span>
+                      <span>
+                        Sources · {msg.sources!.length}
+                        {webN > 0 ? ` · ${webN} web` : ""}
+                        {kbN > 0 && webN > 0 ? ` · ${kbN} kb` : ""}
+                      </span>
                       <svg
                         className={cn("w-3 h-3 transition-transform duration-300", expandedSources.has(msg.id) && "rotate-180")}
                         viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
@@ -440,24 +632,45 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                     >
                       <div className="overflow-hidden">
                         <div className="space-y-1 max-h-32 overflow-y-auto">
-                          {msg.sources.slice(0, 5).map((s, i) => {
+                          {msg.sources!.slice(0, 8).map((s, i) => {
+                            const isWeb = s.metadata?.source_type === "web"
+                            const url = (s.metadata?.url as string) || ""
                             const src = (s.metadata?.source || s.metadata?.filename) as string | undefined
                             const chunkIdx = s.metadata?.chunk_index as number | undefined
-                            const displayName = src ? getDisplayName(src) : "Unknown"
+                            const label = isWeb
+                              ? String(s.metadata?.source_label || s.metadata?.source || url || "Web")
+                              : (src ? getDisplayName(src) : "Unknown")
                             return (
                               <div
                                 key={i}
                                 className={cn(
                                   "text-[10px] text-muted-foreground bg-muted rounded p-1.5 border-b border-dashed border-border/50 last:border-0",
-                                  src && onSourceClick && "cursor-pointer hover:bg-primary/10 hover:text-foreground transition-colors",
+                                  (isWeb && url) || (src && onSourceClick)
+                                    ? "cursor-pointer hover:bg-primary/10 hover:text-foreground transition-colors"
+                                    : "",
+                                  isWeb && "border-l-2 border-l-amber-500/60",
                                 )}
                                 onClick={() => {
+                                  if (isWeb && url) {
+                                    window.open(url, "_blank", "noopener,noreferrer")
+                                    return
+                                  }
                                   if (src && onSourceClick) onSourceClick(src, chunkIdx)
                                 }}
                               >
-                                <div className="truncate font-medium">{displayName}</div>
-                                {chunkIdx != null && (
+                                <div className="flex items-center gap-1 min-w-0">
+                                  {isWeb && (
+                                    <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/40">
+                                      WEB
+                                    </span>
+                                  )}
+                                  <div className="truncate font-medium">{label}</div>
+                                </div>
+                                {!isWeb && chunkIdx != null && (
                                   <div className="text-[9px] opacity-50">Chunk #{chunkIdx}</div>
+                                )}
+                                {isWeb && url && (
+                                  <div className="text-[9px] truncate text-amber-700/80 dark:text-amber-400/80 mt-0.5">{url}</div>
                                 )}
                                 <div className="line-clamp-2 mt-0.5 opacity-70">{s.text}</div>
                               </div>
@@ -467,7 +680,8 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                       </div>
                     </div>
                   </div>
-                )}
+                  )
+                })()}
               </div>
             ))}
             <div ref={messagesEndRef} />
@@ -498,13 +712,20 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
 
       </div>
 
-      {/* Floating input */}
-      <div className="absolute bottom-6 left-0 right-0 z-10 pointer-events-none">
-        <div className="pointer-events-auto">
+      {/* Floating input + web-confirm slot (inside Quick panel, above composer) */}
+      <div className="absolute bottom-6 left-0 right-0 z-20 pointer-events-none px-0">
+        <div className="pointer-events-auto flex flex-col gap-2 w-full">
+          <div
+            ref={webConfirmHostRef}
+            data-web-confirm-host="inline"
+            className="px-3 w-full"
+          />
           <ChatInputBar
             input={input}
             setInput={setInput}
             streaming={streaming}
+            webSearch={webSearch}
+            onToggleWebSearch={toggleWebSearch}
             onSend={send}
             onKeyDown={handleKeyDown}
             textareaRef={textareaRef}
@@ -597,17 +818,43 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
 // ── Chat Input Bar ──
 
 function ChatInputBar({
-  input, setInput, streaming, onSend, onKeyDown, textareaRef,
+  input, setInput, streaming, webSearch, onToggleWebSearch, onSend, onKeyDown, textareaRef,
 }: {
   input: string
   setInput: (v: string) => void
   streaming: boolean
+  webSearch: boolean
+  onToggleWebSearch: () => void
   onSend: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
+  // Web confirm anchors to the panel slot (data-web-confirm-host=inline), not the bar
   return (
     <div className="flex items-center gap-2 w-[88%] mx-auto transition-all duration-300 ease-out">
+      {/* Web search toggle */}
+      <button
+        type="button"
+        onClick={onToggleWebSearch}
+        disabled={streaming}
+        title={
+          webSearch
+            ? "Web search ON — may confirm before searching the internet"
+            : "Web search OFF — collection only (API key in Settings)"
+        }
+        className={cn(
+          "shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all",
+          webSearch ? "text-primary-foreground" : "text-muted-foreground/70 hover:text-primary",
+          streaming && "opacity-50",
+        )}
+        style={{
+          background: webSearch ? "var(--ze-green, #1A5E3D)" : "transparent",
+          border: webSearch ? "none" : "1px solid var(--border)",
+        }}
+      >
+        <Globe className="w-3.5 h-3.5" />
+      </button>
+
       {/* Input pill */}
       <div
         className={cn(

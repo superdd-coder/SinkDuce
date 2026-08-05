@@ -110,7 +110,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         setEnrichingLlmProvider(String(cfg.enriching_llm_provider ?? ""))
         setEnrichingLlmModel(String(cfg.enriching_llm_model ?? ""))
 
-        // Cloud parsing
+        // Cloud parsing — default true when key missing (matches backend)
         setCloudParsing(Boolean(cfg.cloud_parsing ?? true))
 
         // Sparse vocabulary

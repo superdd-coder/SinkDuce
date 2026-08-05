@@ -33,6 +33,13 @@ class SessionMessageRequest(BaseModel):
     mode: str = "agentic"  # "agentic" | "direct"
     provider_id: str | None = None  # temporary override for this message
     model: str | None = None        # temporary override for this message
+    # Chat-UI switch (default off). Requires Tavily API key in Settings.
+    web_search_enabled: bool = False
+
+
+class WebSearchConfirmRequest(BaseModel):
+    confirm_id: str
+    approved: bool
 
 
 class SessionResponse(BaseModel):
@@ -82,17 +89,19 @@ def _get_store():
 
 
 def _session_response(session, store) -> SessionResponse:
+    # limit=1 → last dialogue unit (+ tools); system may be first in the list
     msgs = store.get_messages(session.id, limit=1)
-    last_msg = msgs[0].content[:100] if msgs else None
-    # Count messages cheaply: use len of get_messages up to a reasonable limit
-    all_msgs = store.get_messages(session.id, limit=1000)
+    non_system = [m for m in msgs if m.role != "system"]
+    last = non_system[-1] if non_system else (msgs[-1] if msgs else None)
+    last_msg = (last.content[:100] if last and last.content else None)
+    message_count = store.count_messages(session.id)
     return SessionResponse(
         id=session.id,
         title=session.title,
         collections=session.collections,
         created_at=session.created_at,
         updated_at=session.updated_at,
-        message_count=len(all_msgs),
+        message_count=message_count,
         last_message=last_msg,
     )
 
@@ -146,7 +155,7 @@ def get_session(session_id: str):
     session = store.get_session(session_id)
     if session is None:
         raise HTTPException(404, f"Session {session_id} not found")
-    msgs = store.get_messages(session_id)
+    msgs = store.get_messages(session_id, limit=None)
     # Filter out internal tool/function messages — they are LLM conversation
     # context (tool_call + tool_result pairs), not user-visible chat content.
     visible_msgs = [m for m in msgs if m.role in ("user", "assistant")]
@@ -192,13 +201,17 @@ def generate_title(session_id: str):
     if session is None:
         raise HTTPException(404, f"Session {session_id} not found")
 
-    msgs = store.get_messages(session_id)
+    # Full history — title is from the *first* Q&A, not the recent window
+    msgs = store.get_messages(session_id, limit=None)
     user_msg = None
     assistant_msg = None
     for m in msgs:
         if m.role == "user" and user_msg is None:
             user_msg = m
         elif m.role == "assistant" and user_msg is not None and assistant_msg is None:
+            # Prefer final answers over tool-call placeholders
+            if not (m.content or "").strip():
+                continue
             assistant_msg = m
             break
 
@@ -313,6 +326,7 @@ async def send_message(session_id: str, body: SessionMessageRequest = Body(...))
             thinking=body.thinking, collections=body.collections,
             mode=body.mode,
             provider_id=body.provider_id, model=body.model,
+            web_search_enabled=body.web_search_enabled,
         ):
             yield sse
 
@@ -325,3 +339,20 @@ async def send_message(session_id: str, body: SessionMessageRequest = Body(...))
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/chat/web-search-confirm")
+def confirm_web_search(body: WebSearchConfirmRequest = Body(...)):
+    """Approve or deny a pending web-search HITL request from Chat SSE."""
+    from src.chatbox.web_search import web_search_confirm_store
+
+    confirm_id = (body.confirm_id or "").strip()
+    if not confirm_id:
+        raise HTTPException(400, "confirm_id is required")
+    ok = web_search_confirm_store.resolve(confirm_id, body.approved)
+    if not ok:
+        raise HTTPException(
+            404,
+            f"No pending web-search confirmation for id={confirm_id}",
+        )
+    return {"ok": True, "confirm_id": confirm_id, "approved": body.approved}

@@ -132,8 +132,22 @@ def _format_provider_error(exc: Exception) -> tuple[int, str]:
 
 @app.middleware("http")
 async def provider_error_middleware(request: Request, call_next):
+    path = request.url.path
+    # /api/foo/ → /api/foo so SPA catch-all never serves index.html for API slashes
+    if (
+        request.method in ("GET", "HEAD")
+        and path.startswith("/api/")
+        and path.endswith("/")
+        and len(path) > 5
+    ):
+        from fastapi.responses import RedirectResponse
+
+        q = request.url.query
+        dest = path.rstrip("/") + (f"?{q}" if q else "")
+        return RedirectResponse(url=dest, status_code=307)
+
     try:
-        return await call_next(request)
+        response = await call_next(request)
     except Exception as exc:
         status, message = _format_provider_error(exc)
         logger.error("Request %s %s failed: [%d] %s — %s",
@@ -142,6 +156,10 @@ async def provider_error_middleware(request: Request, call_next):
             status_code=status,
             content={"error": message, "detail": str(exc)[:500]},
         )
+    # Prevent CDN/browser from caching API JSON as HTML (or vice versa)
+    if path.startswith("/api/") or path == "/health":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 from src.api.routes.query import router as query_router
 from src.api.routes.documents import router as documents_router
@@ -170,6 +188,8 @@ app.include_router(meeting_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(visual_router, prefix="/api")
 app.include_router(hot_words_router)
+from src.file_mgmt.routes import router as file_mgmt_router
+app.include_router(file_mgmt_router, prefix="/api/file-mgmt")
 
 
 # ── MCP sub-app (mounted at /mcp) ─────────────────────────────
@@ -224,6 +244,17 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # Never return index.html for API/MCP — that yields "got HTML" JSON parse
+        # errors in the SPA when a route is missing or the path is wrong.
+        if (
+            full_path == "api"
+            or full_path.startswith("api/")
+            or full_path == "mcp"
+            or full_path.startswith("mcp/")
+            or full_path == "health"
+            or full_path.startswith("health/")
+        ):
+            return JSONResponse({"detail": f"Not Found: /{full_path}"}, status_code=404)
         file = FRONTEND_DIST / full_path
         if file.is_file():
             return FileResponse(file)

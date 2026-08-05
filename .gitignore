@@ -68,3 +68,6 @@ design-demos/
 .planning/
 docs/
 DESIGN_SYSTEM.html
+
+# HyperFrames / local video renders (do not commit)
+videos/
