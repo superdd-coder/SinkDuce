@@ -1,101 +1,10 @@
-import { memo, useEffect, useRef, useState } from "react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { memo, useEffect, useState } from "react"
 import { Brain, ChevronDown, ChevronRight, Wrench } from "lucide-react"
 import { SourcesCard } from "./sources-card"
 import { ThinkingSteps } from "./thinking-steps"
+import { StreamingAnswerBody } from "./streaming-answer-body"
 import type { Message, Source, TimelineBlock, ThinkingSummary } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
-
-const MD_PROSE =
-  "prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0"
-
-/** Light cleanup + close open fences so remark does not thrash on partial streams. */
-function stabilizeStreamingMarkdown(md: string): string {
-  let s = md
-    .replace(/\*\*\s+([^*]+?)\s*\*\*/g, "**$1**")
-    .replace(/(?<!\*)\*(?!\*)\s+([^*]+?)\s*(?<!\*)\*(?!\*)/g, "*$1*")
-  const fences = s.match(/^```/gm)
-  if (fences && fences.length % 2 === 1) s += "\n```"
-  return s
-}
-
-/**
- * Live answer rendering without freezing Chat SSE.
- *
- * Meeting Summary only paints one growing `streamingMd` pane. Chat also mounts a
- * heavy process trail; full ReactMarkdown on *every* token blocked the main
- * thread so the reader loop stalled after the first chars ("好的").
- *
- * While streaming:
- *  - Markdown only for **completed lines** (cheap, stable AST)
- *  - Current open line always as plain text (always tracks SSE, zero parse cost)
- *  - MD for completed lines re-parsed at most every STREAM_MD_MS
- * When done: one full Markdown pass on the complete document.
- */
-const STREAM_MD_MS = 200
-
-const AnswerBody = memo(function AnswerBody({
-  content,
-  isStreaming,
-}: {
-  content: string
-  isStreaming: boolean
-}) {
-  // Completed-lines prefix last sent to ReactMarkdown
-  const [mdHead, setMdHead] = useState("")
-  const contentRef = useRef(content)
-  contentRef.current = content
-
-  useEffect(() => {
-    if (!isStreaming) {
-      setMdHead("")
-      return
-    }
-    const syncHead = () => {
-      const c = contentRef.current
-      const nl = c.lastIndexOf("\n")
-      const next = nl >= 0 ? c.slice(0, nl + 1) : ""
-      setMdHead((prev) => (prev === next ? prev : next))
-    }
-    syncHead()
-    const id = window.setInterval(syncHead, STREAM_MD_MS)
-    return () => clearInterval(id)
-  }, [isStreaming])
-
-  if (!isStreaming) {
-    return (
-      <div className={MD_PROSE}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-      </div>
-    )
-  }
-
-  const nl = content.lastIndexOf("\n")
-  const liveHead = nl >= 0 ? content.slice(0, nl + 1) : ""
-  const tail = nl >= 0 ? content.slice(nl + 1) : content
-  // Prefer throttled head for MD; if head grew but tick not yet, still show plain for gap
-  const formatted = mdHead
-  const plainGap =
-    liveHead.length > formatted.length ? liveHead.slice(formatted.length) : ""
-
-  return (
-    <div className={MD_PROSE}>
-      {formatted ? (
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {stabilizeStreamingMarkdown(formatted)}
-        </ReactMarkdown>
-      ) : null}
-      {/* Instant path — never blocked by remark; always matches store/SSE */}
-      {(plainGap || tail) ? (
-        <span className="whitespace-pre-wrap break-words text-foreground">
-          {plainGap}
-          {tail}
-        </span>
-      ) : null}
-    </div>
-  )
-})
 
 function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(true)
@@ -453,7 +362,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
         </div>
       ) : message.content ? (
         <div className="text-sm leading-[1.8] text-foreground t-body-family">
-          <AnswerBody content={message.content} isStreaming={streaming} />
+          <StreamingAnswerBody content={message.content} isStreaming={streaming} />
         </div>
       ) : null}
 

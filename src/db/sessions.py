@@ -337,16 +337,21 @@ class SessionStore:
         return row[0] if row else 0
 
     def count_dialogue_messages(self, session_id: str) -> int:
-        """Count user↔assistant dialogue only (not tool-call rounds).
+        """Count user + final-assistant rows (not tool-call rounds).
 
-        Counts:
-        - every ``user`` message
-        - every ``assistant`` message with non-empty content (final answers)
-        Skips: ``system``, ``tool``, and assistant rows that are only function-call
-        placeholders (empty content + tool_calls metadata).
+        Prefer :meth:`count_dialogue_turns` for UI "round" counters
+        (1 user + 1 reply = 1 turn).
         """
         msgs = self.get_messages(session_id, limit=None)
         return sum(1 for m in msgs if self._is_dialogue_message(m))
+
+    def count_dialogue_turns(self, session_id: str) -> int:
+        """Count Q&A rounds: one ``user`` message = one turn (request + reply).
+
+        Tool rows and assistant messages do not add to the turn count.
+        """
+        msgs = self.get_messages(session_id, limit=None)
+        return sum(1 for m in msgs if m.role == "user")
 
     def trim_messages(self, session_id: str, keep_last: int) -> int:
         """Delete oldest messages, keeping only the most recent *keep_last*.
@@ -383,24 +388,25 @@ class SessionStore:
         return deleted
 
     def trim_to_dialogue_messages(self, session_id: str, keep_dialogue: int) -> int:
-        """Trim so only the last *keep_dialogue* dialogue messages remain (with tools).
+        """Backward-compatible alias: *keep_dialogue* is treated as **turns** (user rows)."""
+        return self.trim_to_dialogue_turns(session_id, keep_dialogue)
 
-        Finds the oldest kept user/assistant dialogue message and deletes
-        everything before it (except system). Tool messages tied to kept
-        dialogue stay. Returns number of rows deleted.
+    def trim_to_dialogue_turns(self, session_id: str, keep_turns: int) -> int:
+        """Trim so only the last *keep_turns* Q&A rounds remain.
+
+        A turn starts at a ``user`` message and includes following tool/assistant
+        rows until the next user. System messages (e.g. meeting transcript) are
+        never deleted. Returns number of rows deleted.
         """
-        if keep_dialogue <= 0:
+        if keep_turns <= 0:
             return 0
         msgs = self.get_messages(session_id, limit=None)
-        dialogue_ids: list[str] = [
-            m.id for m in msgs if self._is_dialogue_message(m)
-        ]
-        if len(dialogue_ids) <= keep_dialogue:
+        user_ids = [m.id for m in msgs if m.role == "user"]
+        if len(user_ids) <= keep_turns:
             return 0
-        keep_from_id = dialogue_ids[-keep_dialogue]
-        # Delete non-system messages before keep_from_id in chronological order
-        cut = False
+        keep_from_id = user_ids[-keep_turns]
         delete_ids: list[str] = []
+        cut = False
         for m in msgs:
             if m.id == keep_from_id:
                 cut = True
@@ -422,7 +428,7 @@ class SessionStore:
             deleted = cur.rowcount
         if deleted:
             logger.info(
-                "Trimmed %d msgs from session %s to keep %d dialogue messages",
-                deleted, session_id, keep_dialogue,
+                "Trimmed %d msgs from session %s to keep %d dialogue turns",
+                deleted, session_id, keep_turns,
             )
         return deleted

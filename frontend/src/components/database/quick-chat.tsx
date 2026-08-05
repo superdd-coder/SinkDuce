@@ -1,9 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { flushSync } from "react-dom"
 import { Send, Loader2, AlertTriangle, Globe } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import { cn } from "@/lib/utils"
+import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { createSession, getSession, deleteSession } from "@/api/client"
 import {
   loadWebSearchForSession,
@@ -31,6 +29,11 @@ const WARN_THRESHOLD = 20
 const MAX_MESSAGES = 30
 const ANIM_DURATION = 350
 const SIDEBAR_W = 400
+
+/** Count Q&A turns: 1 user message = 1 round (request + reply). */
+function countTurns(msgs: { role: string; content: string }[]): number {
+  return msgs.filter((m) => m.role === "user").length
+}
 
 // ── Hint bubble config ──
 const HINT_MESSAGES = [
@@ -99,6 +102,8 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
   const stickToBottom = useRef(true)
   const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  /** Stable host for web-confirm portal — avoid inline ref callbacks (re-fire every render). */
+  const webConfirmHostRef = useRef<HTMLDivElement | null>(null)
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
@@ -115,12 +120,16 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     initSession(sid)
   }, [collectionId])
 
-  // When panel closes, drop our web-confirm anchor so main Chat can reclaim it
+  // Claim / release web-confirm anchor only when panel open state changes
   useEffect(() => {
-    if (open) return
-    const cur = getWebSearchConfirmAnchor()
-    if (cur?.dataset.webConfirmHost === "inline") {
-      setWebSearchConfirmAnchor(null)
+    if (open && webConfirmHostRef.current) {
+      setWebSearchConfirmAnchor(webConfirmHostRef.current)
+    }
+    return () => {
+      const cur = getWebSearchConfirmAnchor()
+      if (cur && cur === webConfirmHostRef.current) {
+        setWebSearchConfirmAnchor(null)
+      }
     }
   }, [open])
 
@@ -147,7 +156,7 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
             sources: m.sources ?? undefined,
           }))
         setMessages(msgs)
-        setMsgCount(msgs.length)
+        setMsgCount(countTurns(msgs))
       } else {
         await createSession(collectionName, [collectionId], sid).catch(() => {})
         setMessages([])
@@ -160,7 +169,7 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     }
   }
 
-  // ── Smart auto-scroll: stick while streaming; unlock on user scroll; re-stick on send ──
+  // ── Smart auto-scroll: stick while streaming; unlock on scroll-up; re-stick at bottom ──
 
   const pinRaf = useRef(0)
   const pinToBottom = useCallback(() => {
@@ -195,9 +204,17 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     }
   }, [unlockStick, open])
 
+  // Throttle stick-scroll while streaming
+  const lastPinAt = useRef(0)
   useEffect(() => {
-    if (stickToBottom.current) pinToBottom()
-  }, [messages, pinToBottom])
+    if (!stickToBottom.current) return
+    if (streaming) {
+      const now = Date.now()
+      if (now - lastPinAt.current < 80) return
+      lastPinAt.current = now
+    }
+    pinToBottom()
+  }, [messages, pinToBottom, streaming])
 
   // ── Auto-resize textarea ──
 
@@ -256,8 +273,11 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     stickToBottom.current = true
 
     const userMsg: QAMessage = { id: crypto.randomUUID(), role: "user", content: text, isNew: true }
-    const assistantMsg: QAMessage = { id: crypto.randomUUID(), role: "assistant", content: "", isStreaming: true, isNew: true }
+    const assistantId = crypto.randomUUID()
+    const assistantMsg: QAMessage = { id: assistantId, role: "assistant", content: "", isStreaming: true, isNew: true }
     setMessages((prev) => [...prev, userMsg, assistantMsg])
+    // Optimistic: one new turn when user sends (reply does not add another)
+    setMsgCount((c) => c + 1)
     setStreaming(true)
     requestAnimationFrame(() => pinToBottom())
 
@@ -267,6 +287,40 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
 
     const controller = new AbortController()
     abortRef.current = controller
+
+    // Local helpers — always use assistantId + setMessages (no stale handleSSEEvent)
+    const appendThinkingLocal = (token: string) => {
+      if (!token) return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, thinkingContent: (m.thinkingContent || "") + token }
+            : m,
+        ),
+      )
+    }
+    // Immediate content append (same priority as thinking). React 18 batches
+    // multiple setStates within one await-read tick → one paint per SSE chunk.
+    const appendTokenLocal = (token: string) => {
+      if (!token) return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, content: m.content + token } : m,
+        ),
+      )
+    }
+    const finishLocal = (sources?: QAMessage["sources"]) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== assistantId) return m
+          return {
+            ...m,
+            isStreaming: false,
+            ...(sources !== undefined ? { sources } : {}),
+          }
+        }),
+      )
+    }
 
     try {
       const resp = await fetch(`/api/sessions/${sessionId}/messages`, {
@@ -284,7 +338,13 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
 
       if (!resp.ok) {
         const err = await resp.text()
-        updateAssistant(assistantMsg.id, `Error: ${resp.status} - ${err}`)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: `Error: ${resp.status} - ${err}`, isStreaming: false }
+              : m,
+          ),
+        )
         return
       }
 
@@ -292,6 +352,9 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       const decoder = new TextDecoder()
       let buffer = ""
       let sources: QAMessage["sources"] = []
+      // Must survive across network chunks (event: and data: often split)
+      let eventType = ""
+      let gotDoneCount: number | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -299,13 +362,12 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split("\n")
         buffer = lines.pop() || ""
-        let eventType = ""
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             eventType = line.slice(7).trim()
           } else if (line.startsWith("data: ") && eventType) {
             try {
-              const data = JSON.parse(line.slice(6))
+              const data = JSON.parse(line.slice(6)) as Record<string, unknown>
               if (eventType === "web_search_confirm") {
                 const confirmId = String(data.confirm_id || "")
                 const query = String(data.query || "")
@@ -323,13 +385,49 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                     console.error("[QuickChat] web-search-confirm failed:", err)
                   }
                 }
-              } else {
-                flushSync(() => {
-                  handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
-                  if (eventType === "done" && data.message_count != null) {
-                    setMsgCount(data.message_count)
-                  }
-                })
+              } else if (eventType === "thinking") {
+                appendThinkingLocal(String(data.content ?? ""))
+              } else if (eventType === "token") {
+                appendTokenLocal(String(data.content ?? ""))
+              } else if (eventType === "tool_call_start") {
+                const tool = String(data.tool || "tool")
+                const q = data.raw_query || data.query
+                const line = q
+                  ? `\n📡 ${tool}: ${String(q).slice(0, 120)}`
+                  : `\n📡 ${tool}`
+                appendThinkingLocal(line)
+              } else if (eventType === "searching") {
+                const q = String(data.query || "")
+                appendThinkingLocal(q ? `\n🔍 ${q}` : "\n🔍 Searching…")
+              } else if (eventType === "tool_result") {
+                const st = String(data.status || "done")
+                const tool = String(data.tool || "")
+                const n = data.sources_count
+                const isSearchLike =
+                  tool === "lookup_collection" ||
+                  tool === "search_knowledge_base" ||
+                  tool === "request_web_search"
+                const line =
+                  st === "declined"
+                    ? tool === "request_web_search"
+                      ? "\n⛔ Web search declined / off"
+                      : "\n⛔ Tool declined / cancelled"
+                    : st === "error"
+                      ? "\n❌ Tool failed"
+                      : isSearchLike && typeof n === "number"
+                        ? `\n✅ Done · ${n} source${n === 1 ? "" : "s"}`
+                        : "\n✅ Done"
+                appendThinkingLocal(line)
+              } else if (eventType === "done") {
+                if (data.sources) {
+                  sources = data.sources as QAMessage["sources"]
+                }
+                if (typeof data.message_count === "number") {
+                  gotDoneCount = data.message_count
+                  setMsgCount(data.message_count)
+                }
+              } else if (eventType === "error") {
+                appendTokenLocal(`Error: ${data.content}`)
               }
             } catch (e) {
               console.error("[QuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
@@ -339,10 +437,18 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
         }
       }
 
-      updateAssistant(assistantMsg.id, undefined, sources.length > 0 ? sources : undefined)
+      finishLocal(sources.length > 0 ? sources : undefined)
+      // Server turn count preferred; do not +1 for assistant (already counted on send)
+      if (gotDoneCount != null) setMsgCount(gotDoneCount)
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return
-      updateAssistant(assistantMsg.id, `Error: ${String(err)}`)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: `Error: ${String(err)}`, isStreaming: false }
+            : m,
+        ),
+      )
     } finally {
       setStreaming(false)
       abortRef.current = null
@@ -360,94 +466,6 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       }
       return next
     })
-  }
-
-  const handleSSEEvent = (
-    assistantId: string, type: string,
-    data: Record<string, unknown>,
-    setSources: (s: QAMessage["sources"]) => void,
-  ) => {
-    switch (type) {
-      case "thinking": appendThinking(assistantId, data.content as string); break
-      case "token": appendToken(assistantId, data.content as string); break
-      case "searching":
-        // Show searching indicator in the assistant message
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + `\n🔍 Searching: ${data.query || ""}...` } : m
-        ));
-        break
-      case "tool_call_start": {
-        const tool = String(data.tool || "tool")
-        const q = data.raw_query || data.query
-        const line = q
-          ? `\n📡 ${tool}: ${String(q).slice(0, 120)}`
-          : `\n📡 ${tool}`
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
-        ));
-        break
-      }
-      case "searching": {
-        const q = String(data.query || "")
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, thinkingContent: (m.thinkingContent || "") + (q ? `\n🔍 ${q}` : "\n🔍 Searching…") }
-            : m
-        ));
-        break
-      }
-      case "tool_result": {
-        const st = String(data.status || "done")
-        const tool = String(data.tool || "")
-        const n = data.sources_count
-        // Structure tools (list_library_tree, …) are not retrieval — never show "0 sources"
-        const isSearchLike =
-          tool === "lookup_collection" ||
-          tool === "search_knowledge_base" ||
-          tool === "request_web_search"
-        const line =
-          st === "declined"
-            ? tool === "request_web_search"
-              ? "\n⛔ Web search declined / off"
-              : "\n⛔ Tool declined / cancelled"
-            : st === "error"
-              ? "\n❌ Tool failed"
-              : isSearchLike && typeof n === "number"
-                ? `\n✅ Done · ${n} source${n === 1 ? "" : "s"}`
-                : "\n✅ Done"
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, thinkingContent: (m.thinkingContent || "") + line } : m
-        ));
-        break
-      }
-      case "web_search_confirm":
-        // Handled asynchronously in the stream loop (see send path)
-        break
-      case "done":
-        console.log("[QuickChat] DONE event received — sources:", data.sources, "type:", typeof data.sources, "isArray:", Array.isArray(data.sources))
-        if (data.sources) {
-          const srcs = data.sources as QAMessage["sources"]
-          console.log("[QuickChat] DONE: setting sources count:", srcs?.length)
-          setSources(srcs)
-        }
-        break
-      case "error": updateAssistant(assistantId, `Error: ${data.content}`); break
-    }
-  }
-
-  const appendThinking = (id: string, token: string) => {
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, thinkingContent: (m.thinkingContent || "") + token } : m)))
-  }
-
-  const appendToken = (id: string, token: string) => {
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: m.content + token } : m)))
-  }
-
-  const updateAssistant = (id: string, content?: string, sources?: QAMessage["sources"]) => {
-    setMessages((prev) => prev.map((m) => {
-      if (m.id !== id) return m
-      return { ...m, ...(content !== undefined ? { content } : {}), ...(sources !== undefined ? { sources } : {}), isStreaming: false }
-    }))
   }
 
   // ── Clear ──
@@ -481,10 +499,17 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       {/* ── Header ── */}
       <div className="flex items-center justify-end shrink-0 px-3 pt-3 pb-2">
         <div className="flex items-center gap-2">
-          {msgCount >= WARN_THRESHOLD && (
-            <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400"
-              title={`${msgCount}/${MAX_MESSAGES} dialogue messages (user + assistant; tool calls not counted)`}>
-              <AlertTriangle className="w-3 h-3" />
+          {msgCount > 0 && (
+            <span
+              className={cn(
+                "flex items-center gap-1 text-[10px] tabular-nums",
+                msgCount >= WARN_THRESHOLD
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-muted-foreground/70",
+              )}
+              title={`${msgCount}/${MAX_MESSAGES} rounds (1 user question + 1 assistant reply = 1). Soft limit: older rounds are trimmed at ${MAX_MESSAGES}.`}
+            >
+              {msgCount >= WARN_THRESHOLD && <AlertTriangle className="w-3 h-3" />}
               {msgCount}/{MAX_MESSAGES}
             </span>
           )}
@@ -508,7 +533,9 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           const el = messagesScrollRef.current
           if (!el) return
           const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+          // Leave bottom → unlock; return to bottom → re-stick (same as main Chat)
           if (dist > 60) stickToBottom.current = false
+          else stickToBottom.current = true
         }}
         className={cn(
         "flex-1 overflow-y-auto px-3 min-h-0 transition-all duration-500 ease-out",
@@ -533,9 +560,15 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                 {msg.role === "assistant" && (msg.content || msg.thinkingContent) ? (
                   <div>
                     {msg.thinkingContent && (
-                      <details className="mb-2" open={msg.isStreaming ? true : undefined}>
+                      <details
+                        className="mb-2"
+                        // Collapse when final answer starts (same idea as main Chat process trail)
+                        open={msg.isStreaming && !msg.content ? true : undefined}
+                      >
                         <summary className="text-[10px] text-muted-foreground/60 cursor-pointer hover:text-muted-foreground transition-colors">
-                          Thinking {msg.isStreaming && <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-[-1px]" />}
+                          Thinking {msg.isStreaming && !msg.content && (
+                            <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-[-1px]" />
+                          )}
                         </summary>
                         <p className="mt-1 text-[10px] text-muted-foreground/50 whitespace-pre-wrap leading-relaxed italic">
                           {msg.thinkingContent}
@@ -543,9 +576,11 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                       </details>
                     )}
                     {msg.content ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-xs">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                      </div>
+                      <StreamingAnswerBody
+                        content={msg.content}
+                        isStreaming={!!msg.isStreaming}
+                        className="break-words text-xs [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-xs"
+                      />
                     ) : msg.isStreaming && (
                       <div className="flex items-center gap-1 text-muted-foreground">
                         <Loader2 className="w-3 h-3 animate-spin" />
@@ -681,10 +716,7 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       <div className="absolute bottom-6 left-0 right-0 z-20 pointer-events-none px-0">
         <div className="pointer-events-auto flex flex-col gap-2 w-full">
           <div
-            ref={(el) => {
-              // Only update when node mounts/unmounts — not every parent re-render
-              if (el && open) setWebSearchConfirmAnchor(el)
-            }}
+            ref={webConfirmHostRef}
             data-web-confirm-host="inline"
             className="px-3 w-full"
           />

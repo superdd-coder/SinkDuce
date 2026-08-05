@@ -151,11 +151,12 @@ export function ChatView() {
     const el = scrollRef.current
     if (!el) return
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    // Scrolling away from bottom unlocks stick
+    // Away from bottom → unlock; back at bottom → re-stick (user intent)
     if (dist > 80) {
       stickToBottom.current = false
       setShowScrollBtn(true)
     } else {
+      stickToBottom.current = true
       setShowScrollBtn(false)
     }
   }, [])
@@ -182,12 +183,18 @@ export function ChatView() {
     wasStreaming.current = isStreaming
   }, [isStreaming, pinToBottom])
 
-  // While stuck, follow content growth (throttled via rAF inside pinToBottom)
+  // While stuck, follow content growth — throttle during stream so layout
+  // thrash does not make the rest of the app feel unclickable.
+  const lastPinAt = useRef(0)
   useEffect(() => {
-    if (stickToBottom.current) {
-      pinToBottom("auto")
+    if (!stickToBottom.current) return
+    if (isStreaming) {
+      const now = Date.now()
+      if (now - lastPinAt.current < 120) return
+      lastPinAt.current = now
     }
-  }, [messages, pinToBottom])
+    pinToBottom("auto")
+  }, [messages, pinToBottom, isStreaming])
 
   const handleSelectSource = (source: Source) => {
     setSelectedSource(source)

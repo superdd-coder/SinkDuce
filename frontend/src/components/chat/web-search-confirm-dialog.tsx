@@ -173,9 +173,11 @@ export function WebSearchConfirmDialog() {
       }
 
   return createPortal(
+    // Not a full-screen modal — only the card captures clicks (pointer-events-none
+    // on the wrapper). aria-modal would trap focus and make the rest of the app
+    // feel "unclickable" while waiting for Allow/Decline.
     <div
       role="dialog"
-      aria-modal="true"
       aria-label="Confirm web search"
       className="pointer-events-none"
       style={style}

@@ -279,6 +279,15 @@ export function useStreamChat() {
                 } else {
                   _cacheFinishLast(sid)
                 }
+                // Live session list: message_count without waiting for full page refresh
+                if (typeof data.message_count === "number") {
+                  const st = useAppStore.getState()
+                  st.setSessions(
+                    st.sessions.map((s) =>
+                      s.id === sid ? { ...s, message_count: data.message_count as number } : s,
+                    ),
+                  )
+                }
                 _unregisterStream(sid)
                 if (sid) {
                   const msgs = active ? useAppStore.getState().messages : (_getCachedMessages(sid) ?? [])

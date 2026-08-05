@@ -276,38 +276,47 @@ class ChatboxAgent:
         )
 
     def _check_session_truncation(self, session_id: str) -> int | None:
-        """Check and enforce session dialogue limits.
+        """Check and enforce session **turn** limits (1 user + 1 reply = 1 turn).
 
-        Counts **user ↔ assistant** dialogue only — tool-call rows and pure
-        function-call placeholders do NOT count as turns.
+        Counts **user messages only**. Tool rows and assistant replies do not
+        increase the turn counter.
 
-        For quick_ sessions: trim at _QUICK_MAX_MESSAGES, keep _QUICK_TRIM_KEEP.
-        For meeting_ sessions: trim at _MEETING_MAX_MESSAGES, keep _MEETING_TRIM_KEEP.
+        For quick_ sessions: trim at _QUICK_MAX_MESSAGES turns, keep _QUICK_TRIM_KEEP.
+        For meeting_ sessions: trim at _MEETING_MAX_MESSAGES turns, keep _MEETING_TRIM_KEEP.
 
-        Returns the current dialogue message count BEFORE any truncation, or
-        None if not a quick or meeting session.
+        Returns the current turn count BEFORE any truncation, or None if not a
+        quick/meeting session.
         """
         if session_id.startswith("quick_"):
-            max_msgs, trim_keep = _QUICK_MAX_MESSAGES, _QUICK_TRIM_KEEP
+            max_turns, trim_keep = _QUICK_MAX_MESSAGES, _QUICK_TRIM_KEEP
         elif session_id.startswith("meeting_"):
-            max_msgs, trim_keep = _MEETING_MAX_MESSAGES, _MEETING_TRIM_KEEP
+            max_turns, trim_keep = _MEETING_MAX_MESSAGES, _MEETING_TRIM_KEEP
         else:
             return None
-        count_fn = getattr(self._store, "count_dialogue_messages", None)
+        count_fn = getattr(self._store, "count_dialogue_turns", None)
         if callable(count_fn):
             count = count_fn(session_id)
         else:
-            count = self._store.count_messages(session_id, exclude_system=True)
-        if count >= max_msgs:
+            # Fallback: approximate turns as half of user+assistant dialogue rows
+            dlg = getattr(self._store, "count_dialogue_messages", None)
+            raw = dlg(session_id) if callable(dlg) else self._store.count_messages(
+                session_id, exclude_system=True,
+            )
+            count = (raw + 1) // 2
+        if count >= max_turns:
             logger.info(
-                "Session %s hit %d dialogue messages, trimming to %d",
+                "Session %s hit %d dialogue turns, trimming to %d",
                 session_id, count, trim_keep,
             )
-            trim_fn = getattr(self._store, "trim_to_dialogue_messages", None)
+            trim_fn = getattr(self._store, "trim_to_dialogue_turns", None)
             if callable(trim_fn):
                 trim_fn(session_id, trim_keep)
             else:
-                self._store.trim_messages(session_id, trim_keep)
+                trim_old = getattr(self._store, "trim_to_dialogue_messages", None)
+                if callable(trim_old):
+                    trim_old(session_id, trim_keep)
+                else:
+                    self._store.trim_messages(session_id, trim_keep)
             return trim_keep
         return count
 
@@ -1610,12 +1619,22 @@ class ChatboxAgent:
                             i, s.get("text", "")[:60], s.get("score", 0),
                             list((s.get("metadata") or {}).keys())[:6],
                         )
-                # Fresh dialogue count after this turn (user + assistant, no tools)
-                _done_count = msg_count
+                # message_count: Q&A turns for quick/meeting UI; raw rows for main Chat sidebar
+                _done_count = msg_count if msg_count is not None else 0
                 if session_id.startswith("quick_") or session_id.startswith("meeting_"):
-                    _cdf = getattr(self._store, "count_dialogue_messages", None)
-                    if callable(_cdf):
-                        _done_count = _cdf(session_id)
+                    _ct = getattr(self._store, "count_dialogue_turns", None)
+                    if callable(_ct):
+                        try:
+                            _done_count = int(_ct(session_id))
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        _done_count = int(
+                            self._store.count_messages(session_id, exclude_system=True)
+                        )
+                    except Exception:
+                        pass
                 yield {
                     "type": "done",
                     "sources": all_sources,
@@ -1656,11 +1675,21 @@ class ChatboxAgent:
                 "[Chatbox] Force generate returned empty — total_tool_calls=%d sources=%d",
                 total_tool_calls, len(all_sources),
             )
-        _done_count = msg_count
+        _done_count = msg_count if msg_count is not None else 0
         if session_id.startswith("quick_") or session_id.startswith("meeting_"):
-            _cdf = getattr(self._store, "count_dialogue_messages", None)
-            if callable(_cdf):
-                _done_count = _cdf(session_id)
+            _ct = getattr(self._store, "count_dialogue_turns", None)
+            if callable(_ct):
+                try:
+                    _done_count = int(_ct(session_id))
+                except Exception:
+                    pass
+        else:
+            try:
+                _done_count = int(
+                    self._store.count_messages(session_id, exclude_system=True)
+                )
+            except Exception:
+                pass
         yield {
             "type": "done",
             "sources": all_sources,

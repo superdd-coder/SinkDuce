@@ -372,8 +372,8 @@ export const useAppStore = create<AppState>((set) => ({
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   appendToLastMessage: (token) =>
     set((s) => {
-      // Only replace the last message object; keep timeline/sources refs so
-      // memoized process-trail does not rebuild during answer streaming.
+      // Keep answer tokens at normal priority so UI streams like reasoning.
+      // (startTransition deferred paints until the SSE loop idled → one big dump.)
       const msgs = s.messages
       if (msgs.length === 0) return s
       const last = msgs[msgs.length - 1]
