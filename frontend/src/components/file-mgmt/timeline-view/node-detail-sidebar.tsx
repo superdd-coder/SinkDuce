@@ -68,6 +68,8 @@ interface NodeDetailSidebarProps {
   collectionId: string
   nodeId: string | null
   onClose: () => void
+  /** Hide header close control (deselect node closes the panel). */
+  hideCloseButton?: boolean
   onNodeUpdated: () => void
   getGroupName: (groupId: string | null) => string
   groups: NodeGroup[]
@@ -77,6 +79,7 @@ export function NodeDetailSidebar({
   collectionId,
   nodeId,
   onClose,
+  hideCloseButton = false,
   onNodeUpdated,
   getGroupName,
   groups,
@@ -354,17 +357,20 @@ export function NodeDetailSidebar({
       data-node-detail-sidebar
       className="h-full w-full min-h-0 border border-border rounded-xl bg-background shadow-lg flex flex-col overflow-hidden"
     >
-      {/* Header */}
+      {/* Header — close via deselect on canvas (no X when hideCloseButton) */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
           Node Detail
         </h3>
-        <button
-          className="text-muted-foreground hover:text-foreground transition-colors"
-          onClick={onClose}
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {!hideCloseButton && (
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {loading ? (

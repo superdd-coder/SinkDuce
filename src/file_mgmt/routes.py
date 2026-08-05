@@ -25,6 +25,9 @@ from src.file_mgmt.models import (
     NodeFileAttach,
     NodeReorder,
     NodeUpdate,
+    TodoCreate,
+    TodoLinkNode,
+    TodoUpdate,
 )
 
 router = APIRouter()
@@ -485,3 +488,37 @@ def toggle_file_archive(collection_id: str, file_id: str, req: ArchiveToggle):
     Requires version for optimistic locking.
     """
     return service.toggle_archive(collection_id, file_id, req)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Collection To-do list
+# ════════════════════════════════════════════════════════════════════
+
+
+@router.get("/{collection_id}/todos")
+def list_todos(
+    collection_id: str,
+    done: Optional[bool] = Query(None),
+    chain_id: Optional[str] = Query(None),
+):
+    return service.list_todos(collection_id, done=done, chain_id=chain_id)
+
+
+@router.post("/{collection_id}/todos", status_code=201)
+def create_todo(collection_id: str, req: TodoCreate):
+    return service.create_todo(collection_id, req)
+
+
+@router.patch("/{collection_id}/todos/{todo_id}")
+def update_todo(collection_id: str, todo_id: str, req: TodoUpdate):
+    return service.update_todo(collection_id, todo_id, req)
+
+
+@router.delete("/{collection_id}/todos/{todo_id}", status_code=204)
+def delete_todo(collection_id: str, todo_id: str):
+    service.delete_todo(collection_id, todo_id)
+
+
+@router.post("/{collection_id}/todos/{todo_id}/link-node")
+def link_todo_node(collection_id: str, todo_id: str, req: TodoLinkNode):
+    return service.link_todo_node(collection_id, todo_id, req)

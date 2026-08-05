@@ -293,3 +293,43 @@ export interface EndChainRequest {
   message_body?: string | null
   attachment_file_ids?: string[]
 }
+
+// ── Collection To-do ──
+
+export interface TodoItem {
+  todo_id: string
+  title: string
+  body: string | null
+  done: boolean
+  ddl: string | null
+  target_chain_id: string | null
+  chain_id: string
+  chain_title: string
+  is_main_chain: boolean
+  completed_node_id: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface TodoCreateRequest {
+  title: string
+  body?: string | null
+  ddl?: string | null
+  target_chain_id?: string | null
+}
+
+export interface TodoUpdateRequest {
+  title?: string | null
+  body?: string | null
+  ddl?: string | null
+  target_chain_id?: string | null
+  done?: boolean | null
+  clear_ddl?: boolean
+  clear_chain?: boolean
+  clear_body?: boolean
+}
+
+export interface TodoLinkNodeRequest {
+  node_id: string
+}

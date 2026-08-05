@@ -138,6 +138,20 @@ _CREATE_TABLES = [
       edited_by       TEXT,
       version         INTEGER NOT NULL DEFAULT 1
     )''',
+    # todos (collection checklist; independent of timeline nodes)
+    '''CREATE TABLE todos (
+      todo_id           TEXT PRIMARY KEY,
+      title             TEXT NOT NULL,
+      body              TEXT,
+      done              INTEGER NOT NULL DEFAULT 0,
+      ddl               TEXT,
+      target_chain_id   TEXT REFERENCES chains(chain_id) ON DELETE SET NULL,
+      completed_node_id TEXT REFERENCES nodes(node_id) ON DELETE SET NULL,
+      sort_order        INTEGER,
+      created_at        TEXT NOT NULL,
+      updated_at        TEXT NOT NULL,
+      completed_at      TEXT
+    )''',
 ]
 
 _CREATE_INDEXES = [
@@ -155,12 +169,15 @@ _CREATE_INDEXES = [
     'CREATE INDEX idx_folders_parent    ON folders(parent_folder_id)',
     'CREATE INDEX idx_nodes_created_by  ON nodes(created_by)',
     'CREATE INDEX idx_files_created_by  ON files(created_by)',
+    'CREATE INDEX idx_todos_done_ddl    ON todos(done, ddl)',
+    'CREATE INDEX idx_todos_chain       ON todos(target_chain_id)',
 ]
 
 # Table names for verification
 EXPECTED_TABLES = {
     "folders", "node_groups", "chains", "nodes",
     "files", "file_versions", "file_paths", "file_nodes", "messages",
+    "todos",
 }
 
 EXPECTED_INDEXES = {
@@ -170,6 +187,7 @@ EXPECTED_INDEXES = {
     "idx_file_nodes_node", "idx_file_nodes_file",
     "idx_messages_owner", "idx_files_archived",
     "idx_folders_parent", "idx_nodes_created_by", "idx_files_created_by",
+    "idx_todos_done_ddl", "idx_todos_chain",
 }
 
 
@@ -338,6 +356,53 @@ def _ensure_nodes_external_ref(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_external_ref "
             "ON nodes(external_ref) WHERE external_ref IS NOT NULL"
+        )
+
+
+def _ensure_todos_table(conn: sqlite3.Connection) -> None:
+    """Create todos table + indexes if missing (existing collection DBs)."""
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "todos" not in tables:
+        conn.execute(
+            """CREATE TABLE todos (
+              todo_id           TEXT PRIMARY KEY,
+              title             TEXT NOT NULL,
+              body              TEXT,
+              done              INTEGER NOT NULL DEFAULT 0,
+              ddl               TEXT,
+              target_chain_id   TEXT REFERENCES chains(chain_id) ON DELETE SET NULL,
+              completed_node_id TEXT REFERENCES nodes(node_id) ON DELETE SET NULL,
+              sort_order        INTEGER,
+              created_at        TEXT NOT NULL,
+              updated_at        TEXT NOT NULL,
+              completed_at      TEXT
+            )"""
+        )
+        logger.info("Created todos table")
+    # Existing DBs created before body column
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(todos)").fetchall()}
+    if "body" not in cols:
+        try:
+            conn.execute("ALTER TABLE todos ADD COLUMN body TEXT")
+            logger.info("Added todos.body column")
+        except sqlite3.OperationalError as e:
+            if not _is_duplicate_column_error(e):
+                raise
+    indexes = {
+        row[1] for row in conn.execute("PRAGMA index_list(todos)").fetchall()
+    }
+    if "idx_todos_done_ddl" not in indexes:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_todos_done_ddl ON todos(done, ddl)"
+        )
+    if "idx_todos_chain" not in indexes:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_todos_chain ON todos(target_chain_id)"
         )
 
 
@@ -704,6 +769,7 @@ def init_collection_db(collection_id: str) -> None:
                 _ensure_folders_icon_columns(conn_backfill)
                 _ensure_file_paths_archived(conn_backfill)
                 _ensure_nodes_external_ref(conn_backfill)
+                _ensure_todos_table(conn_backfill)
                 _backfill_system_folders(conn_backfill)
                 _cleanup_uncategorized_folder(conn_backfill)
             _backfill_done.add(collection_id)

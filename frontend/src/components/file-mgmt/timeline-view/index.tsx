@@ -12,6 +12,10 @@ import {
 } from '@/components/ui/dialog'
 import type { Chain, Node, NodeGroup } from '@/types/file-mgmt'
 import { listChains,listNodes,reorderNode,listGroups,reopenChain,createNode,updateNode,createChain,deleteChain } from "@/api/file-mgmt"
+import { TodoCard } from '@/components/database/todo-card'
+import { CreateTodoDialog } from '@/components/database/create-todo-dialog'
+import { triggerTodoRefresh } from '@/lib/todo-refresh'
+import { AddNodeTodoSplit } from './add-node-todo-split'
 import {
   DndContext,
   closestCenter,
@@ -368,8 +372,6 @@ export function TimelineView({ collectionId, active = true }: TVP) {
   const clearTimelineNavRequest = useFileMgmtStore((s) => s.clearTimelineNavRequest)
   /** Keeps sidebar content mounted during close slide animation. */
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null)
-  /** Visual open state (one frame behind mount so enter slide plays). */
-  const [panelAnimOpen, setPanelAnimOpen] = useState(false)
   const panelOpen = selId != null
   // Canvas pan/zoom
   const [scale, setScale] = useState(1)
@@ -443,6 +445,9 @@ export function TimelineView({ collectionId, active = true }: TVP) {
   useEffect(() => () => cancelCamAnim(), [cancelCamAnim])
   const [addOpen,setAddOpen]=useState(false)
   const [addTgt,setAddTgt]=useState<{chainId:string;afterOrder:number}|null>(null)
+  /** Last chain used for add node/todo — sidebar default for new todos. */
+  const [todoDefaultChainId, setTodoDefaultChainId] = useState<string | null>(null)
+  const [todoSidebarKey, setTodoSidebarKey] = useState(0)
   const [ccOpen,setCcOpen]=useState(false)
   const [ccTgt,setCcTgt]=useState<{parentChainId:string;parentNodeId:string}|null>(null)
   const [ecOpen,setEcOpen]=useState(false)
@@ -565,20 +570,30 @@ export function TimelineView({ collectionId, active = true }: TVP) {
     return ids
   }, [msgMode, msgFocus, msgDetail, chains, chainData])
 
-  // Drive enter/exit slide: mount panel, then flip anim flag next frame
+  // When node loses focus, clear detail immediately → Todo rail
   useEffect(() => {
     if (selId) {
       setPanelNodeId(selId)
-      const id = requestAnimationFrame(() => setPanelAnimOpen(true))
-      return () => cancelAnimationFrame(id)
+      return
     }
-    setPanelAnimOpen(false)
+    setPanelNodeId(null)
   }, [selId])
   const ref=useCallback(()=>{fetch({silent:true});setDrk(k=>k+1)},[fetch])
   const ncr=useCallback(()=>{setAddOpen(false);setAddTgt(null);fetch({silent:true})},[fetch])
   const ccr=useCallback(()=>{setCcOpen(false);setCcTgt(null);fetch({silent:true})},[fetch])
   const ecr=useCallback(()=>{setEcOpen(false);setEcTgt(null);fetch({silent:true})},[fetch])
-  const addN=useCallback((cid:string,ao:number)=>{setAddTgt({chainId:cid,afterOrder:ao});setAddOpen(true)},[])
+  const addN=useCallback((cid:string,ao:number)=>{
+    setTodoDefaultChainId(cid)
+    setAddTgt({chainId:cid,afterOrder:ao})
+    setAddOpen(true)
+  },[])
+  const [timelineCreateTodoOpen, setTimelineCreateTodoOpen] = useState(false)
+  const addTodoOnChain=useCallback((cid:string)=>{
+    // Drop node focus so Todo rail is visible; create via modal (not inline)
+    setSelId(null)
+    setTodoDefaultChainId(cid)
+    setTimelineCreateTodoOpen(true)
+  },[])
   const cc=useCallback(async(pCid:string,pNid:string)=>{try{const mcd2=chainData.get(pCid);const pn=mcd2?.nodes.find(n=>n.node_id===pNid);if(chains.filter(bc=>bc.parent_node_id===pNid&&!bc.has_end_node).length>0){toast.error("Node already has an active branch");return}const title=pn?.title||"Branch";await createChain(collectionId,{parent_chain_id:pCid,parent_node_id:pNid,title});await updateNode(collectionId,pNid,{node_type:"start",version:pn?.version??1});toast.success("Branch "+title+" created");fetch({silent:true})}catch(e){toast.error("Failed: "+String(e))}},[collectionId,chainData,fetch,chains])
   const confirmDeleteBranchTitle = useMemo(() => {
     if (!confirmDeleteBranchId) return 'Empty branch'
@@ -1999,6 +2014,7 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                     isCompleted={bi.done}
                     onNodeClick={clk}
                     onAddNode={msgMode ? () => {} : addN}
+                    onAddTodo={msgMode ? undefined : addTodoOnChain}
                     onMergeBranch={msgMode ? undefined : () => mergeBranch(bi.bc.chain_id)}
                     onCreateChain={msgMode ? () => {} : cc}
                     groups={groups}
@@ -2047,14 +2063,15 @@ export function TimelineView({ collectionId, active = true }: TVP) {
   const SIDEBAR_INSET_BOTTOM = 12
   /** Gap between message detail column and stream column (equal widths). */
   const MSG_DETAIL_GAP = 12
-  const rightPanelOpen = msgMode || panelOpen
+  // Todo list is the default right rail; messages / node detail take exclusive priority.
   // Message detail expands an equal-width column left of the stream, squeezing the canvas.
   const msgColumns = msgMode && msgDetail.open ? 2 : 1
   const sidebarContentW =
     SIDEBAR_W * msgColumns + (msgColumns > 1 ? MSG_DETAIL_GAP : 0)
-  const shellW = rightPanelOpen
-    ? sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT
-    : 0
+  const shellW =
+    sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT
+  const mainChainId = chains.find((c) => c.is_main)?.chain_id ?? null
+  const todoChainDefault = todoDefaultChainId || mainChainId
 
   return (
     <div className="h-full min-h-0 flex overflow-hidden bg-muted/5">
@@ -2238,6 +2255,7 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                     isBranch={false}
                     onNodeClick={clk}
                     onAddNode={msgMode ? () => {} : addN}
+                    onAddTodo={msgMode ? undefined : addTodoOnChain}
                     onCreateChain={msgMode ? () => {} : cc}
                     groups={groups}
                     focusGroupId={focusGroupId}
@@ -2296,52 +2314,78 @@ export function TimelineView({ collectionId, active = true }: TVP) {
           }
         }}
       >
-        {(msgMode || panelNodeId) && (
+        <div
+          className="h-full box-border flex justify-end"
+          style={{
+            width: sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT,
+            paddingLeft: SIDEBAR_GAP_LEFT,
+            paddingRight: SIDEBAR_INSET_RIGHT,
+            paddingBottom: SIDEBAR_INSET_BOTTOM,
+          }}
+        >
           <div
-            className="h-full box-border flex justify-end"
-            style={{
-              width: sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT,
-              paddingLeft: SIDEBAR_GAP_LEFT,
-              paddingRight: SIDEBAR_INSET_RIGHT,
-              paddingBottom: SIDEBAR_INSET_BOTTOM,
-            }}
+            className={cn(
+              'h-full shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] translate-x-0',
+            )}
+            style={{ width: sidebarContentW }}
+            onClick={(e) => e.stopPropagation()}
+            data-todo-sidebar={!msgMode && !panelNodeId ? true : undefined}
           >
-            <div
-              className={cn(
-                'h-full shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
-                msgMode || panelAnimOpen ? 'translate-x-0' : 'translate-x-[110%]',
-              )}
-              style={{ width: sidebarContentW }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {msgMode ? (
-                <MessageStreamSidebar
-                  collectionId={collectionId}
-                  chains={chains}
-                  chainNodes={chainNodesMap}
-                  focus={msgFocus}
-                  onClose={() => {
-                    setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
-                    setMsgMode(false)
-                  }}
-                  onFocusChange={setMsgFocus}
-                  onDetailChange={setMsgDetail}
-                  detailOpen={msgDetail.open}
+            {msgMode ? (
+              <MessageStreamSidebar
+                collectionId={collectionId}
+                chains={chains}
+                chainNodes={chainNodesMap}
+                focus={msgFocus}
+                onClose={() => {
+                  setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
+                  setMsgMode(false)
+                }}
+                onFocusChange={setMsgFocus}
+                onDetailChange={setMsgDetail}
+                detailOpen={msgDetail.open}
+              />
+            ) : selId && panelNodeId ? (
+              <NodeDetailSidebar
+                collectionId={collectionId}
+                nodeId={panelNodeId}
+                onClose={closeSidebar}
+                hideCloseButton
+                onNodeUpdated={ref}
+                getGroupName={gn}
+                groups={groups}
+              />
+            ) : (
+              <div className="h-full rounded-lg border border-border/60 bg-background overflow-y-auto p-2">
+                <TodoCard
+                  key={todoSidebarKey}
+                  collection={collectionId}
+                  defaultChainId={todoChainDefault}
+                  variant="sidebar"
                 />
-              ) : (
-                <NodeDetailSidebar
-                  collectionId={collectionId}
-                  nodeId={panelNodeId}
-                  onClose={closeSidebar}
-                  onNodeUpdated={ref}
-                  getGroupName={gn}
-                  groups={groups}
-                />
-              )}
-            </div>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
+
+      {/* Timeline create-todo modal (always mounted so hover + works even if detail was open) */}
+      <CreateTodoDialog
+        collectionId={collectionId}
+        open={timelineCreateTodoOpen}
+        onOpenChange={(o) => {
+          setTimelineCreateTodoOpen(o)
+          if (!o) setTodoSidebarKey((k) => k + 1)
+        }}
+        defaultChainId={todoChainDefault}
+        onCreated={() => {
+          setTodoSidebarKey((k) => k + 1)
+          triggerTodoRefresh({
+            collectionId,
+            reason: 'create',
+          })
+        }}
+      />
 
       {/* Portaled dialogs (outside flex flow) */}
       <AddNodeDialog
@@ -2415,6 +2459,8 @@ interface CRP {
   isCompleted?: boolean
   onNodeClick: (id: string) => void
   onAddNode: (cid: string, after: number) => void
+  /** Add todo linked to this chain (timeline hover split). */
+  onAddTodo?: (cid: string) => void
   /** Last branch node hover: merge / end chain */
   onMergeBranch?: () => void
   onCreateChain: (pCid: string, pNid: string) => void
@@ -2487,28 +2533,26 @@ function ChainEndDrop({ chainId }: { chainId: string }) {
 function ChainEndAddButton({
   chainId,
   onAdd,
+  onAddTodo,
 }: {
   chainId: string
   onAdd: () => void
+  onAddTodo?: () => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: endDropId(chainId) })
   return (
-    <button
+    <div
       ref={setNodeRef}
-      type="button"
-      data-branch-add
       className={cn(
-        'w-10 h-10 shrink-0 rounded-md border border-dashed',
-        'bg-background flex items-center justify-center transition-colors shadow-sm',
-        isOver
-          ? 'border-primary/50 text-primary ring-2 ring-primary/20'
-          : 'border-muted-foreground/30 text-muted-foreground/50 hover:text-muted-foreground/80 hover:border-muted-foreground/50',
+        'overflow-visible',
+        isOver && 'ring-2 ring-primary/20 rounded-md',
       )}
-      onClick={onAdd}
-      title="Add node"
     >
-      <Plus className="h-4 w-4" />
-    </button>
+      <AddNodeTodoSplit
+        onAddNode={onAdd}
+        onAddTodo={onAddTodo ?? onAdd}
+      />
+    </div>
   )
 }
 
@@ -2519,6 +2563,7 @@ function ChainRow({
   isCompleted = false,
   onNodeClick,
   onAddNode,
+  onAddTodo,
   onMergeBranch,
   onCreateChain,
   groups,
@@ -2558,20 +2603,16 @@ function ChainRow({
           className="flex justify-center items-center py-2"
           style={{ width: slotWidth }}
         >
-          <button
-            type="button"
-            data-branch-target
-            className="w-10 h-10 rounded-md border border-dashed border-muted-foreground/30 bg-background flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground/70 hover:border-muted-foreground/50 transition-colors shadow-sm"
-            onClick={() => onAddNode(chainId, 0)}
-            title="Add first node to branch"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+          <AddNodeTodoSplit
+            onAddNode={() => onAddNode(chainId, 0)}
+            onAddTodo={() => onAddTodo?.(chainId)}
+            titleNode="Add first node to branch"
+          />
         </div>
       )
     }
     return (
-      <div className="flex items-center py-2">
+      <div className="flex items-center py-2 gap-2">
         <ChainEndDrop chainId={chainId} />
         <button
           type="button"
@@ -2591,6 +2632,10 @@ function ChainRow({
           <Plus className="h-4 w-4 shrink-0" />
           <span className="text-xs font-medium truncate">Add first node</span>
         </button>
+        <AddNodeTodoSplit
+          onAddNode={() => onAddNode(chainId, 0)}
+          onAddTodo={() => onAddTodo?.(chainId)}
+        />
       </div>
     )
   }
@@ -2849,10 +2894,11 @@ function ChainRow({
         {/* End drop + add only while chain is open */}
         {!messageMode && !isCompleted && (
           useEqualGrid && plusCenterX != null ? (
-            // Dashed square +, center on baseline (short connector from last card)
+            // Anchor so the 40px Node + center sits on baseline; Todo expands right
+            // without shifting the + (no translate-x-1/2 on the whole group).
             <div
-              className="absolute z-10 top-1/2 -translate-x-1/2 -translate-y-1/2"
-              style={{ left: plusCenterX }}
+              className="absolute z-10 top-1/2 -translate-y-1/2 overflow-visible"
+              style={{ left: plusCenterX - 20 }}
             >
               <ChainEndAddButton
                 chainId={chainId}
@@ -2860,6 +2906,7 @@ function ChainRow({
                   const l = chainData[chainData.length - 1]
                   onAddNode(chainId, l ? l.order : 0)
                 }}
+                onAddTodo={() => onAddTodo?.(chainId)}
               />
             </div>
           ) : useEqualGrid ? (
@@ -2877,6 +2924,7 @@ function ChainRow({
                   const l = chainData[chainData.length - 1]
                   onAddNode(chainId, l ? l.order : 0)
                 }}
+                onAddTodo={() => onAddTodo?.(chainId)}
               />
             </div>
           ) : (
@@ -2886,18 +2934,13 @@ function ChainRow({
                 <div className="flex items-center justify-center self-center mx-1">
                   <div className="w-8 h-px bg-muted-foreground/15" />
                 </div>
-                <button
-                  type="button"
-                  data-branch-add
-                  className="w-10 h-10 shrink-0 rounded-md border border-dashed border-muted-foreground/30 bg-background flex items-center justify-center text-muted-foreground/50 hover:text-muted-foreground/80 hover:border-muted-foreground/50 transition-colors shadow-sm"
-                  onClick={() => {
+                <AddNodeTodoSplit
+                  onAddNode={() => {
                     const l = chainData[chainData.length - 1]
                     onAddNode(chainId, l ? l.order : 0)
                   }}
-                  title="Add node"
-                >
-                  <Plus className="h-4 w-4" />
-                </button>
+                  onAddTodo={() => onAddTodo?.(chainId)}
+                />
               </div>
             </>
           )

@@ -25,6 +25,10 @@ import type {
   NodeCreateRequest,
   NodeUpdateRequest,
   EndChainRequest,
+  TodoItem,
+  TodoCreateRequest,
+  TodoUpdateRequest,
+  TodoLinkNodeRequest,
 } from "@/types/file-mgmt"
 
 const BASE = "/api/file-mgmt"
@@ -89,9 +93,23 @@ export function getNameConflict(err: unknown): NameConflictDetail | null {
 }
 
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? "GET").toUpperCase()
+  const headers = new Headers(options?.headers)
+  // Only set JSON content-type when sending a body (GET+application/json can
+  // confuse some proxies and is unnecessary).
+  if (
+    method !== "GET" &&
+    method !== "HEAD" &&
+    method !== "DELETE" &&
+    !headers.has("Content-Type")
+  ) {
+    headers.set("Content-Type", "application/json")
+  }
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
+    method,
+    headers,
+    cache: "no-store",
   })
   if (!res.ok) {
     const body = await res.text()
@@ -99,7 +117,32 @@ async function req<T>(path: string, options?: RequestInit): Promise<T> {
   }
   // 204 No Content
   if (res.status === 204) return undefined as unknown as T
-  return res.json()
+  const ct = res.headers.get("content-type") || ""
+  const text = await res.text()
+  // SPA / proxy mis-route often returns index.html with 200
+  if (
+    text.trimStart().startsWith("<!DOCTYPE") ||
+    text.trimStart().startsWith("<!doctype") ||
+    text.trimStart().startsWith("<html")
+  ) {
+    throw new FileMgmtApiError(
+      res.status,
+      `Expected JSON from ${BASE}${path} but got HTML (content-type: ${ct || "missing"}). ` +
+        `Hard-refresh the page (Cmd+Shift+R). If using Cloudflare, purge cache for /api/*. ` +
+        `Verify: curl -sS http://127.0.0.1:18900${BASE}${path}`
+    )
+  }
+  if (!text) return undefined as unknown as T
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new FileMgmtApiError(
+      res.status,
+      ct.includes("json")
+        ? `Invalid JSON from ${path}`
+        : `Non-JSON response from ${path}`
+    )
+  }
 }
 
 // ── Folder ──
@@ -507,4 +550,46 @@ export const demoteFilePath = (
   req<FilePath>(`/${collectionId}/files/${fileId}/demote-path`, {
     method: "POST",
     body: JSON.stringify({ path_id: pathId }),
+  })
+
+// ── Collection To-do ──
+
+export const listTodos = (
+  collectionId: string,
+  opts?: { done?: boolean; chain_id?: string }
+) => {
+  const qs = new URLSearchParams()
+  if (opts?.done !== undefined) qs.set("done", String(opts.done))
+  if (opts?.chain_id) qs.set("chain_id", opts.chain_id)
+  const q = qs.toString()
+  return req<TodoItem[]>(`/${collectionId}/todos${q ? `?${q}` : ""}`)
+}
+
+export const createTodo = (collectionId: string, body: TodoCreateRequest) =>
+  req<TodoItem>(`/${collectionId}/todos`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+
+export const updateTodo = (
+  collectionId: string,
+  todoId: string,
+  body: TodoUpdateRequest
+) =>
+  req<TodoItem>(`/${collectionId}/todos/${todoId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+
+export const deleteTodo = (collectionId: string, todoId: string) =>
+  req<void>(`/${collectionId}/todos/${todoId}`, { method: "DELETE" })
+
+export const linkTodoNode = (
+  collectionId: string,
+  todoId: string,
+  body: TodoLinkNodeRequest
+) =>
+  req<TodoItem>(`/${collectionId}/todos/${todoId}/link-node`, {
+    method: "POST",
+    body: JSON.stringify(body),
   })

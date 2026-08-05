@@ -12,7 +12,7 @@ import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import { Paperclip, Search, Upload, X } from "lucide-react"
 import { toast } from "sonner"
-import type { FileSummary, NodeGroup } from "@/types/file-mgmt"
+import type { FileSummary, Node, NodeGroup } from "@/types/file-mgmt"
 import {
   attachFileToNode,
   createNode,
@@ -33,13 +33,22 @@ type PendingAttachment =
 interface AddNodeDialogProps {
   collectionId: string
   chainId: string
+  /**
+   * Insert after this order on the chain.
+   * Use `-1` (or any negative) to **append at the end** (todo → node, etc.).
+   */
   afterOrder: number
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: () => void
+  /** Called after node (+ attachments) succeed; receives the created node. */
+  onCreated: (node?: Node) => void
   groups: NodeGroup[]
   /** Refresh groups in parent after create-group from this dialog. */
   onGroupsChanged?: () => void
+  /** Prefill title (e.g. from a completed todo). */
+  initialTitle?: string
+  /** Prefill node message (e.g. todo description). */
+  initialMessageBody?: string
 }
 
 export function AddNodeDialog({
@@ -51,6 +60,8 @@ export function AddNodeDialog({
   onCreated,
   groups,
   onGroupsChanged,
+  initialTitle,
+  initialMessageBody,
 }: AddNodeDialogProps) {
   const [title, setTitle] = useState("")
   const [groupSlug, setGroupSlug] = useState<string>(groups[0]?.group_id ?? "")
@@ -96,9 +107,11 @@ export function AddNodeDialog({
       setDragOver(false)
       setGroupFormOpen(false)
     } else {
+      setTitle(initialTitle?.trim() || "")
+      setMessageBody(initialMessageBody?.trim() || "")
       setGroupSlug((prev) => prev || groups[0]?.group_id || "")
     }
-  }, [open, groups])
+  }, [open, groups, initialTitle, initialMessageBody])
 
   const addUploadFiles = (files: FileList | File[]) => {
     const list = Array.from(files).filter((f) => f.size >= 0)
@@ -188,11 +201,15 @@ export function AddNodeDialog({
     }
     setSubmitting(true)
     try {
+      // Backend clamps order to [1, max_order+1]. Large value → chain tail.
+      // afterOrder < 0 means append (e.g. completed todo → node).
+      const order =
+        afterOrder >= 0 ? afterOrder + 1 : 1_000_000_000
       const node = await createNode(collectionId, chainId, {
         group_id: groupSlug,
         node_type: "event",
         title: trimmedTitle,
-        order: afterOrder >= 0 ? afterOrder + 1 : 0,
+        order,
         event_time: eventTime || null,
       })
 
@@ -229,7 +246,7 @@ export function AddNodeDialog({
       }
 
       toast.success("Node added")
-      onCreated()
+      onCreated(node)
       onOpenChange(false)
     } catch (err) {
       const conflict = getNameConflict(err)

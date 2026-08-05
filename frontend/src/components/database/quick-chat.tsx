@@ -351,7 +351,7 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
       const reader = resp.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
-      let sources: QAMessage["sources"] = []
+      let sources: NonNullable<QAMessage["sources"]> = []
       // Must survive across network chunks (event: and data: often split)
       let eventType = ""
       let gotDoneCount: number | null = null
@@ -420,7 +420,7 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
                 appendThinkingLocal(line)
               } else if (eventType === "done") {
                 if (data.sources) {
-                  sources = data.sources as QAMessage["sources"]
+                  sources = data.sources as NonNullable<QAMessage["sources"]>
                 }
                 if (typeof data.message_count === "number") {
                   gotDoneCount = data.message_count

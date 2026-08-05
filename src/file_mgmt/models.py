@@ -335,6 +335,48 @@ class NodeFileAttach(BaseModel):
     file_id: str | None = None  # attach existing file; if None, upload new file
 
 
+# ════════════════════════════════════════════════════════════════
+# Todo (collection checklist; not a timeline node)
+# ════════════════════════════════════════════════════════════════
+
+class TodoCreate(BaseModel):
+    title: str
+    body: str | None = None  # detailed description (optional)
+    ddl: str | None = None  # ISO date or datetime; optional
+    target_chain_id: str | None = None  # null = main chain
+
+
+class TodoUpdate(BaseModel):
+    title: str | None = None
+    body: str | None = None  # set description; use clear_body to wipe
+    ddl: str | None = None
+    target_chain_id: str | None = None
+    done: bool | None = None
+    clear_ddl: bool = False  # when True, set ddl to NULL
+    clear_chain: bool = False  # when True, set target_chain_id to NULL (main)
+    clear_body: bool = False  # when True, set body to NULL
+
+
+class TodoLinkNode(BaseModel):
+    node_id: str
+
+
+class TodoOut(BaseModel):
+    todo_id: str
+    title: str
+    body: str | None = None
+    done: bool
+    ddl: str | None = None
+    target_chain_id: str | None = None  # stored; null means main-by-default
+    chain_id: str  # resolved
+    chain_title: str = ""
+    is_main_chain: bool = True
+    completed_node_id: str | None = None
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
 # Resolve forward references for recursive models
 FolderTree.model_rebuild()
 FileDetail.model_rebuild()

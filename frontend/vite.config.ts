@@ -62,9 +62,16 @@ export default defineConfig({
         timeout: 0,
         proxyTimeout: 0,
       },
+      // Catch-all API proxy. ws:true is required so meeting realtime-transcribe
+      // (and any other WebSocket under /api) is upgraded; without it Vite ignores
+      // the upgrade and the browser sees close 1006 / "closed before established".
       "/api": {
         target: API_TARGET,
         changeOrigin: true,
+        ws: true,
+        // Realtime ASR + SSE can stay open for a long time
+        timeout: 0,
+        proxyTimeout: 0,
       },
       "/health": API_TARGET,
     },
