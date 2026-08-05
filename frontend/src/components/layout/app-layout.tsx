@@ -154,11 +154,14 @@ export function AppLayout() {
   )
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="pm-shell-root h-screen flex flex-col">
       <Header />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0">
         <Sidebar />
-        <main className="flex-1 overflow-hidden flex flex-col">
+        {/*
+          Sage canvas behind float cards; padding = soft-shadow bleed.
+        */}
+        <main className="pm-shell-main flex-1 min-w-0 flex flex-col overflow-hidden p-3 pt-1">
           {viewEntries.map((key) => {
             const V = views[key]
             const isActive = key === sidebarView
@@ -166,9 +169,14 @@ export function AppLayout() {
               <div
                 key={key}
                 className={cn(
-                  "flex-1 overflow-hidden",
-                  // No animate-tab-in on every switch — felt like click lag
-                  isActive ? "flex flex-col" : "hidden",
+                  "flex-1 min-h-0",
+                  // Database workspace needs visible overflow for card shadows;
+                  // other views clip content as before.
+                  isActive
+                    ? key === "database"
+                      ? "flex flex-col overflow-visible"
+                      : "flex flex-col overflow-hidden"
+                    : "hidden",
                 )}
               >
                 <V active={isActive} />
@@ -176,7 +184,7 @@ export function AppLayout() {
             )
           })}
           <div
-            className="relative z-40 bg-background overflow-hidden"
+            className="relative z-40 overflow-hidden rounded-[var(--pm-r-lg,20px)] bg-[var(--pm-surface,#fefcf8)]"
             style={{
               height: logPanelOpen ? 280 : 0,
               transition: "height 350ms cubic-bezier(0.4,0,0.2,1)",

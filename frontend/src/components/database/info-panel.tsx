@@ -203,22 +203,17 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
     fetchStats,
   ])
 
-  // ── Collection switch: reset + initial load ────────────────
+  // ── Collection switch: soft refresh (keep previous paint until new data) ─
+  // Wiping summary/stats to null caused a hard white flash on every switch.
 
   useEffect(() => {
-    hasLoadedRef.current = false
+    // Keep stale paint while fetching the next collection (no blank frame).
+    const keepStalePaint = hasLoadedRef.current
     wasConsolidatingRef.current = false
     wasBusyRef.current = false
-    setSummary(null)
-    setProjectDescription(null)
-    setConflicts([])
-    setMeetings([])
-    setDefinitiveFiles([])
     setDefinitiveOpen(false)
     setConsolidating(false)
     setSelectedConflict(null)
-    setNotesCount(0)
-    setDocCount(0)
     setOpenRail(null)
 
     let cancelled = false
@@ -231,7 +226,11 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
           wasConsolidatingRef.current = true
         }
       } catch { /* ignore */ }
-      if (!cancelled) await refreshAll({ silent: false })
+      // First open: loud load. Later switches: silent so no Loading… flash.
+      if (!cancelled) {
+        await refreshAll({ silent: keepStalePaint })
+        if (!cancelled) hasLoadedRef.current = true
+      }
     })()
 
     return () => { cancelled = true }

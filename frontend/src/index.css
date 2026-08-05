@@ -118,12 +118,14 @@
   * {
     @apply border-border outline-ring/50;
   }
-  body {
-    @apply bg-background text-foreground;
-    margin: 0;
-  }
   html {
     @apply font-sans;
+    background-color: var(--pm-canvas, #f6f5f1);
+  }
+  body {
+    @apply text-foreground;
+    margin: 0;
+    background-color: var(--pm-canvas, #f6f5f1);
   }
 }
 
@@ -190,21 +192,24 @@
 
 :root {
   /*
-   * Premium canvas (matches product-mock / reference):
-   * page wash #f6f5f1; stage #fefcf8.
+   * Shell hierarchy (user lock):
+   *  1) Canvas  #f6f5f1 — page + header + Navigate
+   *  2) Float   #fdfbf7 — Collections + stage (identical)
    */
-  --background: #f6f5f1;                     /* --pm-bg app canvas (behind stage) */
-  --foreground: #121410;                     /* --pm-ink */
-  --card: #fefcf8;                           /* --pm-surface stage */
+  --pm-canvas: #f6f5f1;
+  --pm-float: #fdfbf7;
+  --background: var(--pm-canvas);
+  --foreground: #121410;
+  --card: var(--pm-float);
   --card-foreground: #121410;
-  --popover: #fefcf8;
+  --popover: var(--pm-float);
   --popover-foreground: #121410;
-  --primary: oklch(0.38 0.08 160);           /* #1A5E3D accent green */
-  --primary-foreground: oklch(0.99 0 0);     /* white */
-  --secondary: #f6f5f1;                      /* --pm-shell */
+  --primary: oklch(0.38 0.08 160);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: #f6f5f1;
   --secondary-foreground: #121410;
   --muted: #f0efeb;
-  --muted-foreground: #6a706a;               /* --pm-muted */
+  --muted-foreground: #6a706a;
   --accent: #f6f5f1;
   --accent-foreground: #121410;
   --destructive: oklch(0.577 0.245 27.325);
@@ -229,7 +234,7 @@
 
 /* === Zero Enclosure Design Tokens === */
 :root {
-  --ze-bg: #f6f5f1;                          /* align with Premium canvas */
+  --ze-bg: #f6f5f1;                          /* page canvas */
   --ze-ink: #121410;
   --ze-text: #2a2e2a;
   --ze-muted: rgba(18, 20, 16, 0.55);
@@ -244,9 +249,9 @@
  * Dual-read with --ze-* where values already match brand green.
  */
 :root {
-  --pm-bg: #f6f5f1;           /* canvas behind big stage */
-  --pm-shell: #f6f5f1;
-  --pm-surface: #fefcf8;      /* stage cream */
+  --pm-bg: var(--pm-canvas, #f6f5f1);       /* page / header / Navigate */
+  --pm-shell: var(--pm-canvas, #f6f5f1);
+  --pm-surface: var(--pm-float, #fdfbf7);   /* Collections + stage */
   --pm-ink: #121410;
   --pm-text: #2a2e2a;
   --pm-muted: #6a706a;
@@ -704,45 +709,24 @@ input[type="checkbox"] {
 }
 
 /*
- * Collection switch enter — soft, premium (used when key=collectionId remounts)
- * Stagger: chrome (title) → body slightly after
+ * Collection switch — soft opacity (no remount, no translate “jump”)
+ * Driven by .pm-collection-soft-fade.is-faded on chrome + body
  */
-@keyframes pm-collection-in {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.pm-collection-soft-fade {
+  opacity: 1;
+  transition: opacity 160ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
 }
-@keyframes pm-collection-title-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-.pm-collection-enter {
-  /* stage shell stays put; children animate */
-}
-.pm-collection-enter .pm-collection-chrome {
-  animation: pm-collection-title-in 380ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
-}
-.pm-collection-enter .pm-collection-body {
-  animation: pm-collection-in 440ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) 50ms both;
+.pm-collection-soft-fade.is-faded {
+  opacity: 0;
+  pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .pm-collection-enter .pm-collection-chrome,
-  .pm-collection-enter .pm-collection-body {
-    animation: none !important;
-    opacity: 1 !important;
-    transform: none !important;
+  .pm-collection-soft-fade {
+    transition: none;
   }
+}
+/* Legacy class kept for empty-state shell if any caller still uses it */
+.pm-collection-enter {
 }
 
 /*
@@ -2117,28 +2101,38 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 
 /*
- * Surface hierarchy (Premium mock):
- *  1) Canvas     --pm-bg      #f6f5f1   page wash (outside stage)
- *  2) Big stage  --pm-surface #fefcf8
- *  3) Matrix     soft off-white (.pm-h-cell)
- *  4) Rail / QC  #ffffff
+ * Surface hierarchy (user lock):
+ *  1) Canvas  #f6f5f1 — page + header + Navigate
+ *  2) Float   #fdfbf7 — Collections + stage (identical)
+ *  3) Nested  #ffffff — To-do / rail on stage
+ *
+ * No filter:drop-shadow on float cards — same box-shadow only.
  */
-.pm-stage {
-  background: var(--pm-surface, #fefcf8);
-  border-radius: var(--pm-r-lg, 16px);
-  box-shadow: var(--pm-shadow);
+.pm-float-surface,
+.pm-stage,
+.pm-shell-collections-surface {
+  background-color: #fdfbf7 !important;
+  background-image: none !important;
+  color: var(--pm-ink, #121410);
   border: none;
+  border-radius: var(--pm-r-lg, 20px);
   box-sizing: border-box;
+  filter: none !important;
+  box-shadow:
+    0 1px 2px rgba(18, 20, 16, 0.04),
+    0 8px 24px -6px rgba(18, 20, 16, 0.08),
+    0 20px 40px -16px rgba(18, 20, 16, 0.06) !important;
+}
+.pm-stage {
   padding: 22px 26px 20px;
   min-width: 0;
-  color: var(--pm-ink, #121410);
 }
 .pm-surface {
-  background: var(--pm-surface, #fefcf8);
+  background: #fdfbf7;
   box-shadow: var(--pm-shadow-sm);
   border-radius: var(--pm-r);
 }
-/* Brightest nested cards on the cream stage */
+/* Nested cards on stage — pure white (mock To-do / rail) */
 .pm-rail-card {
   min-width: 0;
   padding: 12px;
@@ -2235,7 +2229,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
    * Soft white cells on cream stage — lighter than stage, not gray.
    * (Using --pm-shell here painted a gray band across the middle.)
    */
-  background: color-mix(in srgb, #ffffff 82%, var(--pm-surface, #fefcf8));
+  background: color-mix(in srgb, #ffffff 82%, var(--pm-surface, #fdfbf7));
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.9) inset,
     0 1px 2px rgba(18, 20, 16, 0.03),
@@ -2874,6 +2868,503 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   /* Keep in layout flow for first paint; opacity handles hide if needed */
   display: block !important;
   opacity: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Premium App Shell — mock language (floating cards on soft canvas)
+   Keep wordmark SINK + italic DUCE. Nav: slim rail + diamond active plate.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.pm-shell-root {
+  background-color: var(--pm-canvas, #f6f5f1);
+  -webkit-font-smoothing: antialiased;
+}
+.pm-shell-main {
+  background-color: var(--pm-canvas, #f6f5f1);
+  min-width: 0;
+  isolation: isolate;
+}
+.pm-shell-workspace {
+  background-color: transparent;
+  box-sizing: border-box;
+  overflow: visible;
+}
+.pm-shell-stage-slot {
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ── Header — same canvas as page / Navigate ── */
+.pm-shell-header {
+  background-color: var(--pm-canvas, #f6f5f1);
+  border-bottom: none;
+  -webkit-font-smoothing: antialiased;
+}
+.pm-shell-brand {
+  margin: 0;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 14px;
+  font-weight: 300;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--pm-ink, #121410);
+  line-height: 1;
+}
+.pm-shell-brand-em {
+  font-style: italic;
+  font-weight: 300;
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-shell-tagline {
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 300;
+  letter-spacing: 0.04em;
+  color: var(--pm-muted, #6a706a);
+  white-space: nowrap;
+}
+.pm-shell-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--pm-muted, #6a706a);
+}
+.pm-shell-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--pm-danger, #b42318);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-danger, #b42318) 16%, transparent);
+}
+.pm-shell-status.is-online .pm-shell-status-dot {
+  background: var(--pm-green, #1a5e3d);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent);
+}
+.pm-shell-status.is-online {
+  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 70%, var(--pm-muted, #6a706a));
+}
+
+/* ── Navigate rail — same canvas as header / page ── */
+.pm-shell-nav {
+  width: 72px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 16px;
+  background-color: var(--pm-canvas, #f6f5f1);
+  border-right: none;
+  box-sizing: border-box;
+}
+.pm-shell-nav-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-top: 4px;
+}
+.pm-shell-nav-item {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  min-height: 52px;
+  padding: 10px 4px;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--pm-muted, #6a706a);
+  transition: color 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Hover: soft diamond ghost (same language as active plate) */
+.pm-shell-nav-item::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, #ffffff);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.75) inset,
+    0 2px 10px -4px color-mix(in srgb, var(--pm-green, #1a5e3d) 14%, transparent);
+  transform: translate(-50%, -50%) rotate(45deg) scale(0.86);
+  opacity: 0;
+  z-index: 0;
+  pointer-events: none;
+  transition:
+    opacity 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 260ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-shell-nav-item:hover:not(.is-active) {
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-shell-nav-item:hover:not(.is-active)::before {
+  opacity: 1;
+  transform: translate(-50%, -50%) rotate(45deg) scale(1);
+}
+.pm-shell-nav-item:hover:not(.is-active) .pm-shell-nav-text {
+  letter-spacing: 0.07em;
+}
+.pm-shell-nav-item:active:not(.is-active)::before {
+  transform: translate(-50%, -50%) rotate(45deg) scale(0.94);
+  opacity: 0.85;
+}
+.pm-shell-nav-item.is-active {
+  color: var(--pm-green, #1a5e3d);
+  background: transparent;
+}
+.pm-shell-nav-item.is-active::before {
+  opacity: 0; /* active uses shared plate */
+}
+/*
+ * Shared diamond plate — slides via `top`, spins via rotate.
+ * Each view switch adds +90° so it rolls into place.
+ */
+.pm-shell-nav-plate {
+  position: absolute;
+  left: 50%;
+  top: 0; /* overridden inline to item center Y */
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #ffffff);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 2px 12px -4px color-mix(in srgb, var(--pm-green, #1a5e3d) 20%, transparent),
+    0 6px 16px -8px color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent);
+  z-index: 0;
+  pointer-events: none;
+  will-change: transform, top;
+  transition: none;
+  opacity: 0;
+}
+.pm-shell-nav-plate.is-ready {
+  opacity: 1;
+  /* slower roll + travel */
+  transition:
+    top 680ms cubic-bezier(0.33, 1.02, 0.42, 1),
+    transform 680ms cubic-bezier(0.33, 1.02, 0.42, 1),
+    opacity 220ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-shell-nav-plate.is-ready {
+    transition: top 1ms linear, transform 1ms linear, opacity 1ms linear;
+  }
+  .pm-shell-nav-item {
+    transition: color 1ms linear;
+  }
+  .pm-shell-nav-item::before {
+    transition: none;
+  }
+}
+/* System chrome type — --pm-t-label */
+.pm-shell-nav-text {
+  position: relative;
+  z-index: 1;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  text-align: center;
+  transition: letter-spacing 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-shell-nav-item.is-active .pm-shell-nav-text {
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-shell-nav-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 0 6px;
+  margin-top: auto;
+}
+.pm-shell-version {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  font-size: 10px;
+  font-weight: 300;
+  letter-spacing: 0.08em;
+  color: var(--pm-faint, #969c96);
+}
+.pm-shell-update-card {
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 14%, transparent);
+  box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04));
+  text-align: left;
+}
+.pm-shell-update-label {
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-shell-update-ver {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 300;
+  color: var(--pm-ink, #121410);
+}
+.pm-shell-update-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-shell-update-ghost {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--pm-faint, #969c96);
+  text-align: left;
+}
+
+/* ── Collections float card ── */
+.pm-shell-collections {
+  width: 228px;
+  flex-shrink: 0;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: visible;
+  background: transparent;
+  filter: none;
+  -webkit-font-smoothing: antialiased;
+}
+.pm-shell-collections-surface {
+  /* bg + shadow from shared .pm-float-surface / .pm-shell-collections-surface rule */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.pm-shell-collections-surface [data-slot="scroll-area"],
+.pm-shell-collections-surface [data-slot="scroll-area-viewport"] {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+.pm-shell-collections-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 16px 12px;
+  flex-shrink: 0;
+  border-bottom: none;
+}
+/* System chrome — same as .pm-label on stage */
+.pm-shell-collections-title {
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pm-muted, #6a706a);
+}
+.pm-shell-collections-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--pm-green, #1a5e3d);
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.08);
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-shell-collections-new:hover {
+  background: var(--pm-green-deep, #0f4a2d);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+  transform: translateY(-0.5px);
+}
+.pm-shell-col-list {
+  position: relative;
+  /* Inset rows + indicator from panel edge (was too flush) */
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+/* Sliding mint focus — one pill moves between rows */
+.pm-shell-col-indicator {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 0;
+  z-index: 0;
+  border-radius: 10px;
+  pointer-events: none;
+  /* Soft mint wash on float surface */
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fdfbf7);
+  /* Deep green left edge (mock) */
+  box-shadow:
+    inset 2.5px 0 0 0 var(--pm-green, #1a5e3d),
+    inset 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  will-change: transform, height;
+  transition: none;
+}
+.pm-shell-col-indicator.is-ready {
+  transition:
+    transform 320ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    height 320ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-shell-col-indicator.is-ready {
+    transition: none;
+  }
+}
+.pm-shell-col-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Extra left pad so text clears the deep-green inset bar */
+  padding: 9px 10px 9px 14px;
+  margin-bottom: 2px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--pm-text, #2a2e2a);
+  background: transparent;
+  /* Only color/bg — no size-changing props (prevents hover layout thrash) */
+  transition:
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background-color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-shell-col-row:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 3.5%, transparent);
+}
+.pm-shell-col-row.is-active {
+  background: transparent; /* mint + green bar from sliding indicator */
+  color: var(--pm-ink, #121410);
+}
+/* Collection names — editorial light serif (system premium) */
+.pm-shell-col-name {
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 14px;
+  font-weight: 300;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  min-width: 0;
+  color: var(--pm-ink, #121410);
+  -webkit-font-smoothing: antialiased;
+}
+.pm-shell-col-row.is-active .pm-shell-col-name {
+  font-weight: 300;
+  color: var(--pm-green, #1a5e3d);
+}
+/* Fixed width so count ↔ actions never reflow the row */
+.pm-shell-col-meta {
+  position: relative;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.pm-shell-col-count {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-faint, #969c96);
+  line-height: 1;
+  transition: opacity 120ms ease;
+}
+.pm-shell-col-row.is-active .pm-shell-col-count {
+  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 55%, var(--pm-muted, #6a706a));
+}
+.pm-shell-col-actions {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.pm-shell-col-row:hover .pm-shell-col-actions,
+.pm-shell-col-row:focus-within .pm-shell-col-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pm-shell-col-row:hover .pm-shell-col-count,
+.pm-shell-col-row:focus-within .pm-shell-col-count {
+  opacity: 0;
+}
+.pm-shell-col-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--pm-faint, #969c96);
+  background: transparent;
+  transition: color 120ms ease, background 120ms ease;
+}
+.pm-shell-col-action:hover {
+  color: var(--pm-ink, #121410);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+}
+.pm-shell-col-action--danger:hover {
+  color: var(--pm-danger, #b42318);
+  background: color-mix(in srgb, var(--pm-danger, #b42318) 10%, transparent);
+}
+
+/* Stage height fill — color from shared .pm-stage / .pm-float-surface */
+.pm-shell-workspace .pm-stage {
+  height: 100%;
+  border-radius: var(--pm-r-lg, 20px);
 }
 
 /* Soft dialog surface (opt-in via class on DialogContent) */

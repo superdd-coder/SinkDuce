@@ -157,13 +157,36 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     handleTabChange("timeline")
   }, [timelineNavRequest, handleTabChange])
 
-  // Collection switch remounts the panel tree (key=activeCollection); reset visit
-  // cache so we don't keepMounted-mount every prior tab for the new collection.
+  /**
+   * Collection switch: soft opacity fade (no key-remount hard cut).
+   * Keep the stage tree mounted; only dim → data updates → restore.
+   */
+  const [collectionFade, setCollectionFade] = useState<"in" | "out">("in")
+  const collectionFadeGen = useRef(0)
+  const collectionFadeSkipFirst = useRef(true)
+  const COL_FADE_OUT_MS = 140
+
   useEffect(() => {
+    // Reset tab keep-alive for the new collection (avoid stale visited set)
     setVisitedTabs(new Set([activeTab]))
     setStageTab(activeTab)
     setStagePhase("shown")
     panelMotionGen.current += 1
+
+    // First paint / empty→select: no blink
+    if (collectionFadeSkipFirst.current) {
+      collectionFadeSkipFirst.current = false
+      return
+    }
+    if (!activeCollection) return
+
+    const gen = ++collectionFadeGen.current
+    setCollectionFade("out")
+    const t = window.setTimeout(() => {
+      if (collectionFadeGen.current !== gen) return
+      setCollectionFade("in")
+    }, COL_FADE_OUT_MS)
+    return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
   }, [activeCollection])
 
@@ -499,7 +522,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
   )
 
   return (
-    <div className="h-full flex">
+    /* overflow visible so stage + collections soft shadows are not clipped */
+    <div className="pm-shell-workspace h-full flex gap-3 min-h-0 min-w-0">
       <CollectionList
         collections={collections}
         activeCollection={activeCollection}
@@ -509,16 +533,17 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
         onRename={setRenameTarget}
       />
 
-      <div
-        className="flex-1 overflow-hidden p-2 sm:p-2.5 min-h-0 bg-[var(--pm-bg,#f6f5f1)]"
-        key={activeCollection || "empty"}
-      >
+      <div className="pm-shell-stage-slot flex-1 min-h-0 min-w-0">
         {activeCollection ? (
-          /* Big soft stage card — whole Collection Overview lives on this surface */
-          <div className="pm-stage pm-collection-enter h-full min-h-0 flex flex-col">
+          /* Big soft stage — stable mount (no key=collectionId remount flash) */
+          <div className="pm-stage pm-float-surface h-full min-h-0 flex flex-col overflow-hidden">
             {/* Collection header — title left, Settings ⋮ far right (not in tab bar) */}
             <header
-              className="pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3"
+              className={cn(
+                "pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3",
+                "pm-collection-soft-fade",
+                collectionFade === "out" && "is-faded"
+              )}
               style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
             >
               <div className="min-w-0">
@@ -547,7 +572,13 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               </button>
             </header>
 
-            <div className="pm-collection-body flex-1 flex flex-col min-h-0 min-w-0">
+            <div
+              className={cn(
+                "pm-collection-body flex-1 flex flex-col min-h-0 min-w-0",
+                "pm-collection-soft-fade",
+                collectionFade === "out" && "is-faded"
+              )}
+            >
               {/*
                 Single always-mounted tab bar (Overview | Files | Timeline).
                 Must NOT move between InfoPanel chrome and this shell — remounting
