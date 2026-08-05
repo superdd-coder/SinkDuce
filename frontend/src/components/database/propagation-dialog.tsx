@@ -35,7 +35,7 @@ export function PropagationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="pm-dialog max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-500" />
@@ -83,13 +83,14 @@ export function PropagationDialog({
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
-              variant="outline"
+              variant="ghost"
+              size="sm"
               onClick={() => onOpenChange(false)}
               disabled={propagating}
             >
               Skip
             </Button>
-            <Button onClick={onConfirm} disabled={propagating}>
+            <Button size="sm" onClick={onConfirm} disabled={propagating}>
               {propagating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-1.5" />

@@ -77,17 +77,22 @@ function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
   )
 }
 
-function TabsIndicator({ className, ...props }: TabsPrimitive.Indicator.Props) {
+function TabsIndicator({ className, style, ...props }: TabsPrimitive.Indicator.Props) {
   return (
     <TabsPrimitive.Indicator
       data-slot="tabs-indicator"
       className={cn(
-        "absolute bottom-0 h-0.5 bg-primary transition-all duration-300 ease-out",
+        "pointer-events-none absolute z-0",
+        // Default: underline bar. Pill mode overrides via .pm-tabs-indicator (top/height).
+        "bottom-0 h-0.5 bg-primary",
+        "transition-[left,width,top,height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[left,width]",
         className
       )}
       style={{
+        // Base UI sets --active-tab-* on this node; position from those vars.
         left: "var(--active-tab-left)",
         width: "var(--active-tab-width)",
+        ...style,
       }}
       {...props}
     />

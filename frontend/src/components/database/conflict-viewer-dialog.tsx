@@ -186,7 +186,7 @@ export function ConflictViewerDialog({
 }: ConflictViewerDialogProps) {
   return (
     <Dialog open={!!conflict} onOpenChange={(v) => onOpenChange(v)}>
-      <DialogContent className="!max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col">
+      <DialogContent className="pm-dialog !max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Conflict</DialogTitle>
         </DialogHeader>

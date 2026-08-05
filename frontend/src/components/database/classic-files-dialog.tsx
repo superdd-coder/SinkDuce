@@ -240,7 +240,7 @@ export function ClassicFilesDialog({
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
           className={cn(
-            "!flex flex-col gap-3 p-5 overflow-hidden min-h-0",
+            "pm-dialog !flex flex-col gap-3 p-5 overflow-hidden min-h-0",
             "sm:max-w-3xl w-[min(920px,calc(100%-2rem))]",
             "h-[min(72vh,720px)] max-h-[min(72vh,720px)]"
           )}
@@ -581,7 +581,7 @@ export function ClassicFilesDialog({
         open={!!deleteFileTarget}
         onOpenChange={(v) => !v && setDeleteFileTarget(null)}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
             <DialogTitle>Delete File</DialogTitle>
           </DialogHeader>

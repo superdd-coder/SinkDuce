@@ -33,7 +33,7 @@ export function CreateNoteDialog({ open, onOpenChange, onCreate }: CreateNoteDia
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
           <DialogTitle>Create New Note</DialogTitle>
         </DialogHeader>
@@ -46,10 +46,10 @@ export function CreateNoteDialog({ open, onOpenChange, onCreate }: CreateNoteDia
             autoFocus
           />
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+            <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={!title.trim() || creating}>
+            <Button size="sm" onClick={handleCreate} disabled={!title.trim() || creating}>
               {creating ? "Creating..." : "Create"}
             </Button>
           </div>

@@ -2624,6 +2624,12 @@ interface MarkdownEditorProps {
   stickyToolbarOffset?: number
   /** Extra toolbar actions on the right side. */
   toolbarActions?: ReactNode
+  /**
+   * Remove default EditorContent padding (p-4).
+   * Use for flush reading surfaces (e.g. Collection Overview summary)
+   * so body width matches plain text siblings.
+   */
+  flush?: boolean
 }
 
 // ──────────────────────────────────────────────
@@ -3023,6 +3029,7 @@ export function TiptapEditor({
   readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
   showToolbar = true,
   stickyToolbarOffset, toolbarActions,
+  flush = false,
 }: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
@@ -3395,7 +3402,13 @@ export function TiptapEditor({
         }
       `}</style>
       {!readonly && showToolbar && <EditorToolbar editor={editor} stickyOffset={stickyToolbarOffset} actions={toolbarActions} />}
-      <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4 min-h-full flex-1" />
+      <EditorContent
+        editor={editor}
+        className={cn(
+          "prose prose-sm dark:prose-invert max-w-none min-h-full flex-1 w-full",
+          flush ? "p-0 !max-w-none" : "p-4"
+        )}
+      />
     </div>
   )
 }

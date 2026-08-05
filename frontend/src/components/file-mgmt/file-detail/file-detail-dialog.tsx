@@ -1279,7 +1279,7 @@ export function FileMgmtDetailDialog({
         open={open && !!(fileId || source)}
         onOpenChange={onOpenChange}
       >
-        <DialogContent className="!max-w-[94vw] !w-[94vw] h-[88vh] flex flex-col p-4 gap-3">
+        <DialogContent className="pm-dialog !max-w-[94vw] !w-[94vw] h-[88vh] flex flex-col p-4 gap-3">
           <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2 min-w-0">
               <span className="truncate font-light" title={titleName}>

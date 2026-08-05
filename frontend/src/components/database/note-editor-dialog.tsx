@@ -312,7 +312,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     >
       <DialogContent
         showCloseButton
-        className="!max-w-[92vw] !w-[92vw] h-[85vh] p-0 !gap-0 flex flex-col"
+        className="pm-dialog !max-w-[92vw] !w-[92vw] h-[85vh] p-0 !gap-0 flex flex-col"
       >
         {/* Global chrome — sidebar toggle only */}
         <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">

@@ -71,7 +71,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
           <DialogTitle>Create Collection</DialogTitle>
         </DialogHeader>
@@ -79,7 +79,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
         <div className="space-y-4 py-2">
           {/* Name — always visible */}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Name</label>
+            <label className="pm-label">Name</label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -209,8 +209,10 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleCreate} disabled={saving || !name.trim()}>
+          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={handleCreate} disabled={saving || !name.trim()}>
             {saving ? "Creating..." : "Create"}
           </Button>
         </div>

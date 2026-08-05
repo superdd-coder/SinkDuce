@@ -189,20 +189,24 @@
 }
 
 :root {
-  --background: oklch(0.987 0.002 90);       /* #FAFAF7 gallery white */
-  --foreground: oklch(0.18 0.02 160);        /* #0A120E deep ink */
-  --card: oklch(0.99 0.001 90);
-  --card-foreground: oklch(0.18 0.02 160);
-  --popover: oklch(0.99 0.001 90);
-  --popover-foreground: oklch(0.18 0.02 160);
+  /*
+   * Premium canvas (matches product-mock / reference):
+   * page wash #f6f5f1; stage #fefcf8.
+   */
+  --background: #f6f5f1;                     /* --pm-bg app canvas (behind stage) */
+  --foreground: #121410;                     /* --pm-ink */
+  --card: #fefcf8;                           /* --pm-surface stage */
+  --card-foreground: #121410;
+  --popover: #fefcf8;
+  --popover-foreground: #121410;
   --primary: oklch(0.38 0.08 160);           /* #1A5E3D accent green */
   --primary-foreground: oklch(0.99 0 0);     /* white */
-  --secondary: oklch(0.97 0.002 90);
-  --secondary-foreground: oklch(0.18 0.02 160);
-  --muted: oklch(0.96 0.003 90);
-  --muted-foreground: oklch(0.35 0.02 160);  /* ↑ darker for readability */
-  --accent: oklch(0.96 0.003 90);
-  --accent-foreground: oklch(0.18 0.02 160);
+  --secondary: #f6f5f1;                      /* --pm-shell */
+  --secondary-foreground: #121410;
+  --muted: #f0efeb;
+  --muted-foreground: #6a706a;               /* --pm-muted */
+  --accent: #f6f5f1;
+  --accent-foreground: #121410;
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.90 0.006 160);           /* jade-tinted border */
   --input: oklch(0.90 0.006 160);
@@ -213,26 +217,76 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.25rem;                          /* tighter radius */
-  --sidebar: oklch(0.987 0.002 90);          /* same as background */
-  --sidebar-foreground: oklch(0.35 0.02 160);
-  --sidebar-primary: oklch(0.18 0.02 160);
+  --sidebar: #f6f5f1;                        /* soft shell, not same as canvas */
+  --sidebar-foreground: #6a706a;
+  --sidebar-primary: #121410;
   --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.96 0.003 90);
-  --sidebar-accent-foreground: oklch(0.18 0.02 160);
+  --sidebar-accent: color-mix(in srgb, #1a5e3d 8%, #fefcf8);
+  --sidebar-accent-foreground: #121410;
   --sidebar-border: oklch(0.90 0.006 160);
   --sidebar-ring: oklch(0.38 0.08 160);
 }
 
 /* === Zero Enclosure Design Tokens === */
 :root {
-  --ze-bg: #FAFAF7;
-  --ze-ink: #0A120E;
-  --ze-text: #1C2E24;
-  --ze-muted: rgba(10, 18, 14, 0.62);     /* ↑ was 0.4, now much more readable */
+  --ze-bg: #f6f5f1;                          /* align with Premium canvas */
+  --ze-ink: #121410;
+  --ze-text: #2a2e2a;
+  --ze-muted: rgba(18, 20, 16, 0.55);
   --ze-green: #1A5E3D;
   --ze-line-structural: rgba(42, 77, 62, 0.12);
   --ze-line-section: rgba(42, 77, 62, 0.55);
-  --ze-line-dashed: rgba(42, 77, 62, 0.18);  /* ↑ was 0.13, slightly more visible */
+  --ze-line-dashed: rgba(42, 77, 62, 0.18);
+}
+
+/* === Premium UI v1 tokens (Collection Overview + soft chrome) ===
+ * Source: development_doc/design-premium-v1/tokens.css
+ * Dual-read with --ze-* where values already match brand green.
+ */
+:root {
+  --pm-bg: #f6f5f1;           /* canvas behind big stage */
+  --pm-shell: #f6f5f1;
+  --pm-surface: #fefcf8;      /* stage cream */
+  --pm-ink: #121410;
+  --pm-text: #2a2e2a;
+  --pm-muted: #6a706a;
+  --pm-faint: #969c96;
+  --pm-green: var(--ze-green, #1a5e3d);
+  --pm-green-deep: #0f4a2d;
+  --pm-green-soft: rgba(26, 94, 61, 0.10);
+  --pm-green-wash: rgba(26, 94, 61, 0.06);
+  --pm-on: #e8f0eb;
+  --pm-danger: #b42318;
+  /* Soft float — readable on warm gallery bg (avoid near-zero spread) */
+  --pm-shadow-sm:
+    0 1px 0 rgba(255, 255, 255, 0.85) inset,
+    0 1px 2px rgba(18, 20, 16, 0.04),
+    0 6px 16px -4px rgba(18, 20, 16, 0.10),
+    0 14px 28px -12px rgba(18, 20, 16, 0.08);
+  --pm-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 2px 4px rgba(18, 20, 16, 0.04),
+    0 12px 28px -8px rgba(18, 20, 16, 0.12),
+    0 24px 48px -16px rgba(18, 20, 16, 0.10);
+  --pm-r-sm: 8px;
+  --pm-r: 16px;       /* matrix / rail cards / soft panels */
+  --pm-r-lg: 20px;    /* stage + Quick Chat float */
+  --pm-ff: var(--ff-sans, "Geist Variable", system-ui, sans-serif);
+  --pm-ff-prose: var(--ff-serif, "Source Serif 4 Variable", Georgia, serif);
+  --pm-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Collection title slightly larger than chrome (was 22px) */
+  --pm-t-display: 300 26px/1.22 var(--pm-ff-prose);
+  /* Overview vertical rhythm: title↔tabs = tabs↔summary stack gaps */
+  --pm-ov-gap: 14px;
+  --pm-t-title: 400 13px/1.35 var(--pm-ff);
+  --pm-t-body: 300 13px/1.5 var(--pm-ff);
+  --pm-t-label: 400 11px/1.3 var(--pm-ff);
+  --pm-t-meta: 300 11px/1.35 var(--pm-ff);
+  --pm-t-prose: 300 14.5px/1.75 var(--pm-ff-prose);
+  --pm-prose-measure: 58ch;
+  --pm-rail-min: 272px;
+  --pm-card-gap: 10px;
+  --pm-stage-pad-x: 28px;
 }
 
 /* === Unified Editorial Overrides === */
@@ -647,6 +701,133 @@ input[type="checkbox"] {
 }
 .animate-tab-in {
   animation: tab-fade-in 0.25s ease-out;
+}
+
+/*
+ * Collection switch enter — soft, premium (used when key=collectionId remounts)
+ * Stagger: chrome (title) → body slightly after
+ */
+@keyframes pm-collection-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pm-collection-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.pm-collection-enter {
+  /* stage shell stays put; children animate */
+}
+.pm-collection-enter .pm-collection-chrome {
+  animation: pm-collection-title-in 380ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+.pm-collection-enter .pm-collection-body {
+  animation: pm-collection-in 440ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) 50ms both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-collection-enter .pm-collection-chrome,
+  .pm-collection-enter .pm-collection-body {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/*
+ * View / panel motion — sequential fade (ghost-free)
+ * ─────────────────────────────────────────────────────────
+ * Dual opacity crossfade stacks two UIs → “幻影”.
+ * Cover switch (instant in) feels like hard cut.
+ *
+ * Sequential (driven by database-view stageTab / stagePhase):
+ *  1) .is-exiting  fade out current (only this UI visible)
+ *  2) swap stage to next
+ *  3) .is-active   fade in next (only this UI visible)
+ */
+.pm-panel {
+  will-change: opacity;
+}
+.pm-panel-fade {
+  /* transparent over .pm-stage — stage owns the cream surface */
+  background-color: transparent;
+}
+.pm-panel-fade.is-active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 180ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-panel-fade.is-exiting {
+  opacity: 0;
+  visibility: visible;
+  pointer-events: none;
+  transition: opacity 140ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-panel-fade.is-idle {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: none;
+}
+/* Legacy aliases */
+.pm-panel-soft,
+.pm-panel-config {
+  background-color: transparent;
+}
+.pm-panel-soft.is-active,
+.pm-panel-config.is-active {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity 180ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-panel-soft.is-exiting,
+.pm-panel-config.is-exiting {
+  opacity: 0;
+  visibility: visible;
+  transform: none;
+  pointer-events: none;
+  transition: opacity 140ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-panel-soft.is-idle,
+.pm-panel-config.is-idle {
+  opacity: 0;
+  transform: none;
+  pointer-events: none;
+  visibility: hidden;
+  transition: none;
+}
+.pm-tabs-shell {
+  transition: opacity 160ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-tabs-shell.is-in {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-panel-fade,
+  .pm-panel-soft,
+  .pm-panel-config,
+  .pm-tabs-shell {
+    transition: none !important;
+  }
+  .pm-panel-fade.is-idle,
+  .pm-panel-soft.is-idle,
+  .pm-panel-config.is-idle {
+    visibility: hidden;
+  }
 }
 
 /* ── Toast styling ── */
@@ -1770,6 +1951,12 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   display: none !important;
 }
 
+/* No bounce / overscroll drag past content edges */
+[data-slot="scroll-area-viewport"] {
+  overscroll-behavior-y: none;
+  overscroll-behavior: contain;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    Typography Token System · 9 layers · single source of truth
    ─────────────────────────────────────────────────────────────────
@@ -1852,6 +2039,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   .t-body-italic-family{ font-family: var(--ff-serif); font-style: italic; }
   .t-sans-family       { font-family: var(--ff-sans); }
   .t-mono-family       { font-family: var(--ff-mono); }
+}
 
 /* ── Quick Chat message slide-in ── */
 @keyframes slide-in-right {
@@ -1892,43 +2080,1830 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   transition: opacity 0.2s ease;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   Premium v1 · Collection Overview utilities
+   Scoped helpers — prefer these over one-off text-[11px] in Overview.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.pm-label {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+}
+.pm-meta {
+  font: var(--pm-t-meta);
+  color: var(--pm-faint);
+}
+.pm-display {
+  margin: 0;
+  font: var(--pm-t-display);
+  letter-spacing: -0.015em;
+  color: var(--pm-ink);
+}
+.pm-title {
+  font: var(--pm-t-title);
+  color: var(--pm-ink);
+}
+.pm-prose {
+  font: var(--pm-t-prose);
+  color: var(--pm-text);
+  max-width: var(--pm-prose-measure);
+}
+.pm-prose strong {
+  font-weight: 600;
+  color: var(--pm-ink);
+}
+
+/*
+ * Surface hierarchy (Premium mock):
+ *  1) Canvas     --pm-bg      #f6f5f1   page wash (outside stage)
+ *  2) Big stage  --pm-surface #fefcf8
+ *  3) Matrix     soft off-white (.pm-h-cell)
+ *  4) Rail / QC  #ffffff
+ */
+.pm-stage {
+  background: var(--pm-surface, #fefcf8);
+  border-radius: var(--pm-r-lg, 16px);
+  box-shadow: var(--pm-shadow);
+  border: none;
+  box-sizing: border-box;
+  padding: 22px 26px 20px;
+  min-width: 0;
+  color: var(--pm-ink, #121410);
+}
+.pm-surface {
+  background: var(--pm-surface, #fefcf8);
+  box-shadow: var(--pm-shadow-sm);
+  border-radius: var(--pm-r);
+}
+/* Brightest nested cards on the cream stage */
+.pm-rail-card {
+  min-width: 0;
+  padding: 12px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  border: none;
+}
+
+/* Primary / ghost buttons (Overview chrome) */
+.pm-btn-pri {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--pm-on);
+  background: var(--pm-green);
+  border: none;
+  border-radius: var(--pm-r-sm);
+  padding: 7px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.06);
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-btn-pri:hover:not(:disabled) {
+  background: var(--pm-green-deep);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+  transform: translateY(-1px);
+}
+.pm-btn-pri:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.08);
+}
+.pm-btn-pri:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+.pm-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--pm-text);
+  background: rgba(18, 20, 16, 0.05);
+  border: none;
+  border-radius: var(--pm-r-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 160ms var(--pm-ease);
+}
+.pm-btn-ghost:hover:not(:disabled) {
+  background: rgba(18, 20, 16, 0.08);
+}
+.pm-btn-xs {
+  padding: 3px 8px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+.pm-btn-danger {
+  color: var(--pm-danger);
+}
+
+/* Stats cells (matrix cards) */
+.pm-health {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 var(--pm-ov-gap, 14px);
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  /* shadows need a little air between cells */
+  overflow: visible;
+}
+.pm-h-cell {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border-radius: var(--pm-r, 16px);
+  /*
+   * Soft white cells on cream stage — lighter than stage, not gray.
+   * (Using --pm-shell here painted a gray band across the middle.)
+   */
+  background: color-mix(in srgb, #ffffff 82%, var(--pm-surface, #fefcf8));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 1px 2px rgba(18, 20, 16, 0.03),
+    0 4px 14px -6px rgba(18, 20, 16, 0.07);
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+  z-index: 0;
+}
+.pm-h-num {
+  font-family: var(--pm-ff-prose);
+  font-size: 20px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.015em;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-ink);
+}
+.pm-h-cell.ok .pm-h-num {
+  color: var(--pm-green);
+}
+
+/*
+ * Shared reading column — Project definition + Summary body
+ * same left + right edges (full left column width).
+ */
+.pm-read-column {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Shared body measure: both edges align with stats / column */
+.pm-read-text {
+  display: block;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  /* 两端对齐 — left & right edges of the paragraph block */
+  text-align: justify;
+  text-justify: inter-ideograph;
+  text-align-last: left;
+  hyphens: auto;
+}
+
+/* Blurb (Consolidate lives on Summary header) */
+.pm-blurb-row {
+  display: block;
+  margin: 0 0 var(--pm-ov-gap, 14px);
+  min-width: 0;
+  width: 100%;
+}
+.pm-blurb {
+  font: var(--pm-t-meta);
+  color: var(--pm-muted);
+  line-height: 1.55;
+}
+
+/* Summary header — same full width as body */
+.pm-summary-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0; /* bottom aligns with To-do card (upper band) */
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+/* Noticeable without bold: larger, darker ink, light weight */
+.pm-summary-title {
+  margin: 0;
+  font-family: var(--pm-ff-prose);
+  font-size: 15px;
+  font-weight: 300;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--pm-ink);
+}
+
+/* Summary body — identical horizontal measure as .pm-blurb */
+.pm-summary-body {
+  font: var(--pm-t-prose);
+  color: var(--pm-text);
+}
+.pm-summary-body strong {
+  font-weight: 600;
+  color: var(--pm-ink);
+}
+.pm-summary-editor.tiptap-editor,
+.pm-summary-body .tiptap-editor {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+/* Kill Tailwind/prose max-width & padding so right edge matches blurb */
+.pm-summary-body .tiptap-editor .prose,
+.pm-summary-body .tiptap-editor [class*="prose"],
+.pm-summary-body .tiptap-editor .ProseMirror {
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  box-sizing: border-box !important;
+  font: inherit !important;
+  color: inherit;
+  line-height: inherit;
+  text-align: justify;
+  text-justify: inter-ideograph;
+  text-align-last: left;
+}
+.pm-summary-body .ProseMirror > *:first-child {
+  margin-top: 0 !important;
+}
+.pm-summary-body .ProseMirror p {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin-top: 0.85em;
+  margin-bottom: 0.85em;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  text-align: justify;
+  text-justify: inter-ideograph;
+  text-align-last: left;
+}
+
+/*
+ * Overview layout (canonical)
+ * 1) Left: chrome sticky (tabs → Consolidate); only body scrolls.
+ * 2) Right: full stage height, bottom aligns with left content area bottom.
+ * 3) To-do height = chrome measure; Notes/Meetings expand into remaining space.
+ */
+.pm-overview {
+  /*
+   * FAB is position:fixed over the stage — do NOT reserve vertical space on the
+   * right rail (that made To-do/Notes/Meetings shorter than Quick Chat float).
+   * Left scroll still uses a small bottom pad so text isn’t under the diamond.
+   */
+  --pm-overview-fab-pad: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(var(--pm-rail-min), 0.85fr);
+  column-gap: 18px;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  align-items: stretch;
+  overflow: visible;
+  /* symmetric inset (was 2/4/4/2 — right was 2px wider than left) */
+  padding: 2px;
+  /* never paint a second gray wash on the cream stage */
+  background: transparent;
+}
+.pm-overview-left,
+.pm-overview-left-scroll,
+.pm-overview-left-body,
+.pm-read-column {
+  background: transparent;
+}
+
+/* Left column: chrome fixed + body scroll */
+.pm-overview-left {
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* visible so stats soft-shadows aren’t clipped; body still scrolls */
+  overflow: visible;
+  box-sizing: border-box;
+}
+.pm-overview-chrome {
+  width: 100%;
+  flex: 0 0 auto;
+  z-index: 2;
+  /* sits on .pm-stage surface */
+  background: transparent;
+  overflow: visible;
+  padding: 3px;
+  margin: -3px -3px 0;
+  box-sizing: content-box;
+}
+.pm-overview-tabs {
+  margin-bottom: var(--pm-ov-gap, 14px);
+}
+.pm-overview-left-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  padding-bottom: var(--pm-overview-fab-pad);
+  box-sizing: border-box;
+}
+.pm-overview-left-body {
+  margin-top: 6px;
+}
+
+/* Right: full stage height — portal host for Quick Chat (absolute inset-0) */
+.pm-overview-right {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  height: 100%;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: visible;
+  padding-bottom: 0;
+  /* stacking context for portaled QC */
+  isolation: isolate;
+}
+/*
+ * To-do + Notes + Meetings — fill full right column (no FAB pad gap).
+ * Height matches Quick Chat float. FAB overlays; does not shrink this stack.
+ */
+.pm-rail-stack {
+  --pm-qc-rail-motion: 300ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pm-card-gap, 10px);
+  /* no padding-bottom fab-pad — that was the “shorter than QC” gap */
+  padding: 0;
+  box-sizing: border-box;
+  overflow: visible;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: 50% 40%;
+  transition:
+    opacity var(--pm-qc-rail-motion),
+    transform var(--pm-qc-rail-motion);
+}
+.pm-overview-right.is-qc-covered .pm-rail-stack {
+  opacity: 0;
+  transform: translateY(6px) scale(0.985);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-rail-stack {
+    transition: none !important;
+  }
+}
+
+/* To-do: fixed height from chrome measure; list scrolls inside card */
+.pm-todo-fixed {
+  flex: 0 0 auto;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+.pm-todo-fixed > .todo-card,
+.pm-todo-fixed > .pm-rail-card {
+  flex: 1 1 auto;
+  height: 100% !important;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  box-shadow: var(--pm-shadow-sm);
+}
+
+/*
+ * Notes + Meetings rail motion
+ * ─────────────────────────────────────────────────────────
+ * Symmetric open/close via flex-grow only (interpolable 0 ↔ 1).
+ *
+ * Why expand used to “flash”:
+ * Card shell jumped to flex:1 in one frame; only body used grid 0fr→1fr.
+ * Collapse felt smooth (height followed content); open felt like a pop.
+ *
+ * Model:
+ * 1) .pm-rail-lower always fills under To-do (no transition)
+ * 2) Card + body both flex-grow 0 ↔ 1 with the SAME duration + ease-in-out
+ * 3) flex-basis stays auto (card) / 0 (body) — never auto↔0 on the same node
+ * 4) overflow:hidden + min-height:0 so closed body contributes no height
+ * 5) No grid-template-rows, no translateY
+ */
+.pm-rail-lower {
+  /* Symmetric ease — ease-out (pm-ease) makes open feel like a fast pop */
+  --pm-rail-motion: 200ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pm-card-gap, 10px);
+  flex: 1 1 0;
+  min-height: 0;
+}
+.pm-rail-lower > .pm-rail-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden; /* clip expand content to rounded card */
+  flex-grow: 0;
+  flex-shrink: 0;
+  flex-basis: auto;
+  transition: flex-grow var(--pm-rail-motion);
+  box-shadow: var(--pm-shadow-sm);
+}
+.pm-rail-lower > .pm-rail-card .pm-collapse-h {
+  border-radius: var(--pm-r) var(--pm-r) 0 0;
+}
+.pm-rail-lower > .pm-rail-card .pm-rail-expand {
+  border-radius: 0 0 var(--pm-r) var(--pm-r);
+}
+.pm-rail-lower > .pm-rail-card.is-expanded {
+  flex-grow: 1;
+  flex-shrink: 1;
+  min-height: 0;
+}
+
+/*
+ * Body: basis 0 + min-height 0 + overflow hidden → closed height is 0
+ * (overflow not visible zeroes automatic min-size). Open: flex-grow 1 fills
+ * card under the header. Same transition as the card shell.
+ */
+.pm-rail-expand {
+  flex-grow: 0;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    flex-grow var(--pm-rail-motion),
+    opacity var(--pm-rail-motion);
+}
+.pm-rail-expand.is-open {
+  flex-grow: 1;
+  opacity: 1;
+}
+.pm-rail-expand-panel {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.pm-rail-expand-inner {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.pm-rail-expand:not(.is-open) {
+  pointer-events: none;
+}
+/* Scroll only while open — avoids scrollbar width flash mid-motion */
+.pm-rail-expand.is-open .pm-rail-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-rail-lower > .pm-rail-card,
+  .pm-rail-expand {
+    transition: none !important;
+  }
+}
+
+/* Chevron: fixed square box, rotate around true center, align with title */
+.pm-rail-chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--pm-faint);
+  transition:
+    transform 240ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms ease;
+  transform-origin: 50% 50%;
+  line-height: 0;
+}
+.pm-rail-chev svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.pm-rail-chev.is-open {
+  transform: rotate(90deg);
+  color: var(--pm-green);
+}
+
+/*
+ * Rail list row — hover pill focus (Meetings title / section lines, etc.)
+ */
+.pm-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--pm-text, inherit);
+  font: inherit;
+  line-height: 1.3;
+  transition: background 140ms ease;
+  box-sizing: border-box;
+}
+.pm-rail-row:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+}
+.pm-rail-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-green) 45%, transparent);
+  outline-offset: 1px;
+}
+/*
+ * Section under a meeting: indent the whole pill (margin), not only text
+ * (padding-left alone keeps hover wash full-width).
+ * Tighter vertical padding so Meeting ↔ Section stack reads as one group.
+ */
+.pm-rail-row--indent {
+  width: calc(100% - 14px);
+  margin-left: 14px;
+  padding: 3px 10px;
+  color: var(--pm-muted, inherit);
+}
+.pm-rail-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--pm-ink, var(--pm-text));
+}
+.pm-rail-row--indent .pm-rail-row-title {
+  font: var(--pm-t-meta);
+  color: var(--pm-muted);
+}
+
+/*
+ * Nested sub-collapse (To-do Completed / Notes Extracted)
+ * Always mounted; open/close via grid 0fr ↔ 1fr + opacity (symmetric ease).
+ * Content height is intrinsic — no flex-fill dual-track.
+ */
+.pm-subcollapse {
+  --pm-sub-motion: 200ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--pm-sub-motion);
+}
+.pm-subcollapse.is-open {
+  grid-template-rows: 1fr;
+}
+.pm-subcollapse-panel {
+  overflow: hidden;
+  min-height: 0;
+}
+.pm-subcollapse-inner {
+  opacity: 0;
+  transition: opacity var(--pm-sub-motion);
+}
+.pm-subcollapse.is-open .pm-subcollapse-inner {
+  opacity: 1;
+}
+.pm-subcollapse:not(.is-open) .pm-subcollapse-inner {
+  pointer-events: none;
+}
+/*
+ * Trigger: larger hit area + explicit meta type.
+ * Do NOT use `font: inherit` — it overrides .pm-meta when both classes
+ * share equal specificity and this rule comes later in the sheet.
+ */
+.pm-subcollapse-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  padding: 6px 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  /* Same as .pm-meta — secondary chrome, not inherited body/serif */
+  font: var(--pm-t-meta);
+  color: var(--pm-faint);
+  border-radius: var(--pm-r-sm, 6px);
+  transition: background 140ms ease;
+}
+.pm-subcollapse-trigger:hover {
+  background: rgba(18, 20, 16, 0.03);
+}
+.pm-subcollapse-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-green) 45%, transparent);
+  outline-offset: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-subcollapse,
+  .pm-subcollapse-inner {
+    transition: none !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  .pm-overview {
+    --pm-overview-fab-pad: 40px;
+    grid-template-columns: 1fr;
+    height: auto;
+    max-height: none;
+    min-height: 100%;
+  }
+  .pm-overview-left {
+    overflow: visible;
+    max-height: none;
+  }
+  .pm-overview-left-scroll {
+    overflow: visible;
+    flex: none;
+    padding-bottom: 16px;
+  }
+  .pm-overview-right {
+    min-height: min(72vh, 640px);
+    max-height: none;
+  }
+  .pm-todo-fixed {
+    min-height: 160px;
+  }
+  .pm-rail-lower {
+    min-height: 240px;
+  }
+}
+
+/* Collection pill tabs — sliding soft pill via TabsIndicator */
+.pm-tabs[role="tablist"],
+.pm-tabs {
+  border-bottom: none !important;
+  background: transparent !important;
+  gap: 4px !important;
+  height: auto !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  position: relative !important;
+}
+.pm-tabs [role="tab"],
+.pm-vtab {
+  position: relative;
+  z-index: 1;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 999px !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+  padding: 7px 12px !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: none !important;
+  color: var(--pm-muted) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  /* Tab hover = text color only (no wash / lift) */
+  transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
+}
+.pm-tabs [role="tab"]::after,
+.pm-tabs [role="tab"][data-active]::after,
+.pm-tabs [role="tab"][aria-selected="true"]::after {
+  display: none !important;
+  opacity: 0 !important;
+  content: none !important;
+  background: transparent !important;
+}
+/* Active tab: text only — pill is the sliding indicator */
+.pm-tabs [role="tab"][data-active],
+.pm-tabs [role="tab"][aria-selected="true"],
+.pm-tabs [role="tab"][data-state="active"],
+.pm-vtab.is-on {
+  background: transparent !important;
+  color: var(--pm-green) !important;
+  box-shadow: none !important;
+}
+.pm-tabs [role="tab"]:not([aria-selected="true"]):not([data-active]):not([data-state="active"]) {
+  color: var(--pm-muted) !important;
+}
+/* Hover: text green only — no background wash */
+.pm-tabs [role="tab"]:not([aria-selected="true"]):not([data-active]):not([data-state="active"]):hover,
+.pm-vtab:not(.is-on):hover {
+  color: var(--pm-green) !important;
+  background: transparent !important;
+}
+/* Sliding pill indicator (Base UI sets --active-tab-*) */
+.pm-tabs [data-slot="tabs-indicator"],
+.pm-tabs-indicator {
+  display: block !important;
+  position: absolute !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+  bottom: auto !important;
+  border-radius: 999px !important;
+  background: var(--pm-green-soft) !important;
+  box-shadow: none !important;
+  /* left/top/width/height from CSS vars — animate smoothly */
+  left: var(--active-tab-left) !important;
+  top: var(--active-tab-top) !important;
+  width: var(--active-tab-width) !important;
+  height: var(--active-tab-height) !important;
+  transition:
+    left 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    top 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    width 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    height 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
+}
+.pm-tabs [data-slot="tabs-indicator"][hidden] {
+  /* Keep in layout flow for first paint; opacity handles hide if needed */
+  display: block !important;
+  opacity: 0;
+}
+
+/* Soft dialog surface (opt-in via class on DialogContent) */
+.pm-dialog {
+  background: var(--pm-surface) !important;
+  border-radius: var(--pm-r-lg) !important;
+  box-shadow: var(--pm-shadow) !important;
+  ring: none;
+  border: none;
+}
+.pm-dialog [data-slot="dialog-title"] {
+  font: var(--pm-t-title);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--pm-ink);
+}
+.pm-dialog [data-slot="dialog-footer"] {
+  background: transparent;
+  border-top: none;
+}
+
+/*
+ * Web-search HITL confirm — Premium soft card (main chat + Quick Chat)
+ * Type scale aligned with --pm-t-* (title / meta / label)
+ */
+.pm-web-confirm {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 14px 12px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 12%, transparent);
+  box-shadow:
+    var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)),
+    0 8px 28px -12px rgba(18, 20, 16, 0.12);
+  color: var(--pm-ink, #121410);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+.pm-web-confirm-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.pm-web-confirm-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+  border-radius: 999px;
+  color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
+}
+.pm-web-confirm-title {
+  /* ≈ --pm-t-title, slightly tighter for compact card */
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  color: var(--pm-ink, #121410);
+}
+.pm-web-confirm-desc {
+  margin: 5px 0 0;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11.5px;
+  font-weight: 300;
+  line-height: 1.55;
+  letter-spacing: 0.005em;
+  color: var(--pm-muted, #6a706a);
+}
+.pm-web-confirm-em {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-web-confirm-query {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--pm-r-sm, 8px);
+  background: color-mix(in srgb, var(--pm-surface, #fefcf8) 70%, #fff);
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  /* Query chip: tabular-friendly, good CJK line height */
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: var(--pm-text, #2a2e2a);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 4.8em;
+  overflow: auto;
+}
+.pm-web-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.pm-web-confirm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  /* ≈ --pm-t-label chrome */
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-web-confirm-btn--ghost {
+  color: var(--pm-muted, #6a706a);
+  background: transparent;
+}
+.pm-web-confirm-btn--ghost:hover {
+  color: var(--pm-ink, #121410);
+  background: rgba(18, 20, 16, 0.05);
+}
+.pm-web-confirm-btn--soft {
+  color: var(--pm-green, #1a5e3d);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+}
+.pm-web-confirm-btn--soft:hover {
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 40%, transparent);
+}
+.pm-web-confirm-btn--pri {
+  color: #fff;
+  background: var(--pm-green, #1a5e3d);
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.08);
+  padding: 0 14px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+.pm-web-confirm-btn--pri:hover {
+  background: var(--pm-green-deep, #0f4a2d);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+  transform: translateY(-0.5px);
+}
+.pm-web-confirm-btn--pri:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(18, 20, 16, 0.08);
+}
+
+/*
+ * Premium collapse / accordion — reusable
+ * Height: grid 0fr → 1fr (smooth, no max-height guess)
+ * Chevron: rotate 90° on open
+ * Content: short fade after expand starts
+ */
+/* Definitive sources etc. — matched open/close (no faster collapse) */
+.pm-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-collapse.is-open {
+  grid-template-rows: 1fr;
+}
+.pm-collapse-panel {
+  overflow: hidden;
+  min-height: 0;
+}
+.pm-collapse:not(.is-open) .pm-collapse-panel {
+  pointer-events: none;
+}
+.pm-collapse-panel-inner {
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-collapse.is-open .pm-collapse-panel-inner {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.pm-collapse-chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition:
+    transform 240ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms ease;
+  transform-origin: center;
+  color: var(--pm-faint);
+}
+.pm-collapse-trigger[aria-expanded="true"] .pm-collapse-chev,
+.pm-collapse.is-open .pm-collapse-chev {
+  transform: rotate(90deg);
+  color: var(--pm-green);
+}
+
+/* Rail accordion header row — large hit target (title row, not text-only) */
+.pm-collapse-h {
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 0;
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: var(--pm-r);
+  transition: background 160ms var(--pm-ease);
+  box-sizing: border-box;
+  min-height: 44px; /* comfortable click / touch target */
+}
+.pm-collapse-h:hover {
+  background: rgba(18, 20, 16, 0.03);
+}
+/*
+ * Toggle control fills remaining width + full row height.
+ * Padding lives here (not on the outer shell) so the whole title band is clickable.
+ */
+.pm-collapse-h-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 14px 12px;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  border-radius: var(--pm-r);
+}
+.pm-collapse-h-main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-green) 45%, transparent);
+  outline-offset: -2px;
+}
+/* Right-side actions (Import / New / meta) — outside toggle, vertically centered */
+.pm-collapse-h-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 8px 12px 8px 4px;
+  align-self: stretch;
+}
+.pm-count-pill {
+  font: var(--pm-t-meta);
+  font-weight: 400;
+  color: var(--pm-muted);
+  background: rgba(18, 20, 16, 0.05);
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Quick Chat floating button · diamond hover rotation ── */
-.quick-chat-btn:hover .diamond-outer {
+/*
+ * Quick Chat — float card over Overview right rail
+ * Compact chat chrome (header · thread · composer) so it reads as conversation.
+ */
+.pm-qc-float {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--pm-r-lg, 20px);
+  /* same tier as To-do / Notes / Meetings — whiter than stage */
+  background: #ffffff;
+  box-shadow: var(--pm-shadow);
+  border: none;
+  z-index: 30;
+}
+/* Portaled into [data-pm-rail-anchor] — always fills the right rail box */
+.pm-qc-float--rail {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+}
+/* No rail host (rare) — fixed fallback */
+.pm-qc-float--fallback {
+  position: fixed;
+  top: 96px;
+  right: 28px;
+  bottom: 28px;
+  width: min(320px, 28vw);
+  z-index: 40;
+}
+/*
+ * Diamond FAB — above To-do card (top-right of right rail).
+ * Hint bubble: left of diamond, slightly elevated (左边偏上) — see quick-chat.tsx.
+ */
+.pm-qc-fab {
+  z-index: 50;
+  overflow: visible;
+}
+.pm-qc-fab--rail {
+  position: absolute;
+  top: -44px;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: visible;
+}
+.pm-qc-fab--fallback {
+  position: fixed;
+  top: 92px;
+  right: 28px;
+}
+/* Visual-only pill (flow layout — DO NOT set absolute/top/right here) */
+.pm-qc-hint-pill {
+  position: static;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: color-mix(in srgb, #fff 78%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--pm-shadow-sm);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  color: var(--ze-green, #1a5e3d);
+  pointer-events: none;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  box-sizing: border-box;
+}
+.pm-qc-hint-pill > span {
+  line-height: 1;
+  display: block;
+}
+/* Legacy class — neutralize any stale absolute rules from HMR cache */
+.pm-qc-hint {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: none !important;
+  margin: 0 !important;
+}
+.pm-qc-panel {
+  /* title solid band + soft fade (shared by header + thread) */
+  --pm-qc-header-solid: 42px; /* hard edge slightly higher */
+  --pm-qc-header-fade: 32px;  /* soft zone a bit taller */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+/*
+ * Header: no hard rule.
+ * Solid white through the original title/divider line so scrolled text is
+ * fully gone there; short soft fade only below that edge (上实下虚).
+ */
+.pm-qc-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 12px 12px var(--pm-qc-header-fade);
+  min-height: calc(var(--pm-qc-header-solid) + var(--pm-qc-header-fade));
+  border-bottom: none;
+  pointer-events: none;
+  /*
+   * Solid until original boundary (~title bottom), then soft dissolve only.
+   * Content under the solid band is fully covered (完全消失在边界处).
+   */
+  background: linear-gradient(
+    to bottom,
+    #ffffff 0,
+    #ffffff var(--pm-qc-header-solid),
+    color-mix(in srgb, #ffffff 55%, transparent)
+      calc(var(--pm-qc-header-solid) + var(--pm-qc-header-fade) * 0.45),
+    transparent calc(var(--pm-qc-header-solid) + var(--pm-qc-header-fade))
+  );
+}
+/* Title row controls still clickable */
+.pm-qc-header > * {
+  pointer-events: auto;
+}
+.pm-qc-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
+  flex-shrink: 0;
+}
+.pm-qc-header-title {
+  margin: 0;
+  font: var(--pm-t-title, 400 13px/1.35 Geist, system-ui, sans-serif);
+  color: var(--pm-ink, #121410);
+  letter-spacing: -0.01em;
+}
+.pm-qc-header-sub {
+  margin: 1px 0 0;
+  font: var(--pm-t-meta, 300 11px/1.35 Geist, system-ui, sans-serif);
+  color: var(--pm-faint, #8a8d86);
+}
+/* ── Thread ── */
+.pm-qc-thread {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* start content below solid title band; can scroll up under soft fade */
+  padding: calc(var(--pm-qc-header-solid, 48px) + 6px) 12px 8px;
+  /* room so last messages sit above the floating input */
+  padding-bottom: 72px;
+}
+.pm-qc-thread--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.pm-qc-thread-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 4px;
+}
+/*
+ * QC messages — mirror Chat `message-bubble.tsx` (compact rail width).
+ * User: right, role green, text + bottom hairline.
+ * Assistant: left rail, “Assistant” label, prose body (not a filled bubble).
+ */
+.pm-qc-msg {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 1.25rem;
+}
+.pm-qc-msg--user {
+  align-items: flex-end;
+}
+.pm-qc-msg--assistant {
+  align-items: stretch;
+  max-width: 100%;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--border, rgba(42, 77, 62, 0.18));
+}
+.pm-qc-msg-role {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 0.35rem;
+  color: var(--pm-green, #1a5e3d);
+  font-family: var(--pm-ff, system-ui, sans-serif);
+}
+.pm-qc-msg-role--ai {
+  display: block;
+  color: color-mix(in srgb, var(--pm-muted, #6a706a) 90%, transparent);
+}
+.pm-qc-msg-role--ai svg {
+  display: none; /* Chat uses plain “Assistant” label, no icon */
+}
+.pm-qc-bubble {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+}
+.pm-qc-bubble--user {
+  max-width: 88%;
+  padding: 0 0 0.65rem;
+  border-bottom: 1px solid var(--border, rgba(42, 77, 62, 0.18));
+  text-align: right;
+  background: transparent;
+  border-radius: 0;
+  color: var(--pm-ink, #121410);
+}
+.pm-qc-bubble--assistant {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.pm-qc-bubble-text {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 300;
+  line-height: 1.7;
+  font-family: var(--pm-ff, system-ui, sans-serif);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--pm-ink, #121410);
+}
+/* Match Chat StreamingAnswerBody host: text-sm leading-[1.8] */
+.pm-qc-answer {
+  font-size: 13px;
+  font-weight: 300;
+  line-height: 1.8;
+  font-family: var(--pm-ff, system-ui, sans-serif);
+  color: var(--pm-ink, #121410);
+}
+.pm-qc-answer :is(p, li) {
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: inherit;
+}
+.pm-qc-answer :is(h1, h2, h3, h4) {
+  font-family: var(--pm-ff-prose, Georgia, serif);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--pm-ink, #121410);
+}
+.pm-qc-answer strong {
+  font-weight: 600;
+}
+.pm-qc-thinking {
+  margin-bottom: 0.65rem;
+}
+.pm-qc-thinking summary {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--pm-muted, #6a706a) 85%, transparent);
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--pm-ff, system-ui, sans-serif);
+}
+.pm-qc-thinking summary::-webkit-details-marker {
+  display: none;
+}
+.pm-qc-thinking p {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 300;
+  line-height: 1.5;
+  color: var(--pm-faint, #969c96);
+  font-style: italic;
+  white-space: pre-wrap;
+}
+.pm-qc-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 300;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-style: italic;
+  color: oklch(0.38 0.08 160 / 0.7);
+}
+/* Sources */
+.pm-qc-sources {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(18, 20, 16, 0.08);
+}
+.pm-qc-sources-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: var(--pm-t-label, 400 11px/1.3 Geist, system-ui, sans-serif);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-faint, #8a8d86);
+  text-align: left;
+}
+.pm-qc-sources-toggle:hover {
+  color: var(--pm-muted, #5c615a);
+}
+.pm-qc-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 8rem;
+  overflow-y: auto;
+}
+.pm-qc-source-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(18, 20, 16, 0.03);
+  text-align: left;
+  cursor: pointer;
+  font: var(--pm-t-meta, 300 11px/1.35 Geist, system-ui, sans-serif);
+  color: var(--pm-muted, #5c615a);
+  transition: background 140ms ease;
+}
+.pm-qc-source-item:not(.is-static):hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  color: var(--pm-ink, #121410);
+}
+.pm-qc-source-item.is-web {
+  border-left: 2px solid color-mix(in srgb, #d97706 55%, transparent);
+}
+.pm-qc-source-item.is-static {
+  cursor: default;
+}
+.pm-qc-web-badge {
+  flex-shrink: 0;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+}
+.pm-qc-source-meta {
+  font-size: 10px;
+  opacity: 0.55;
+  margin-top: 1px;
+}
+/* Empty */
+.pm-qc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 16px 12px 24px;
+  max-width: 240px;
+}
+.pm-qc-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
+  margin-bottom: 4px;
+}
+.pm-qc-empty-title {
+  margin: 0;
+  font: var(--pm-t-title, 400 13px/1.35 Geist, system-ui, sans-serif);
+  color: var(--pm-ink, #121410);
+}
+.pm-qc-empty-sub {
+  margin: 0;
+  font: var(--pm-t-meta, 300 11px/1.45 Geist, system-ui, sans-serif);
+  color: var(--pm-faint, #8a8d86);
+}
+/*
+ * Floating composer — glass pill suspended over the thread (not a dock strip).
+ * Mirrors the original “悬空输入” feel inside the float card.
+ */
+.pm-qc-composer-float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  pointer-events: none;
+  padding: 0 10px 14px;
+  /* soft fade so thread content dissolves under the float */
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, #fff 88%, transparent) 35%,
+    transparent 100%
+  );
+}
+.pm-qc-composer-float-inner {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+}
+/*
+ * Composer pill — single glass shell.
+ * Focus: soft breath (::before). Streaming: continuous green FLOW (.pm-qc-stream-fx).
+ *
+ * Continuity notes (avoid start/end hitch):
+ *  - Flow uses linear infinite (ease loops “pause” at 0%/100%).
+ *  - Stream FX always mounted; only opacity toggles (no remount / restart snap).
+ *  - Send button keeps layout width when hidden (no pill reflow).
+ *  - Focus ↔ stream border/bg stay close so host transition isn’t a hard jump.
+ */
+.pm-qc-input-row {
+  --pm-qc-fx-ease: 480ms cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 92%;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 6px 6px 6px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #fff 90%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--pm-shadow-sm);
+  border: 1.5px solid rgba(18, 20, 16, 0.08);
+  isolation: isolate;
+  overflow: hidden;
+  transition:
+    border-color var(--pm-qc-fx-ease),
+    background var(--pm-qc-fx-ease),
+    box-shadow var(--pm-qc-fx-ease);
+}
+/* Focus glow (editing only) */
+.pm-qc-input-row::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity var(--pm-qc-fx-ease);
+  animation: sk-input-breathe-focus 2.4s linear infinite;
+}
+.pm-qc-input-row:focus-within:not(.pm-qc-input-row--thinking) {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 50%, transparent);
+  background: color-mix(in srgb, #fff 87%, oklch(0.38 0.08 160 / 0.04));
+}
+.pm-qc-input-row:focus-within:not(.pm-qc-input-row--thinking)::before {
+  opacity: 1;
+}
+/* Streaming host — near focus look so enter/exit don’t “pop” the shell */
+.pm-qc-input-row.pm-qc-input-row--thinking {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 48%, transparent);
+  background: color-mix(in srgb, #fff 86%, oklch(0.38 0.08 160 / 0.05));
+  box-shadow: var(--pm-shadow-sm);
+}
+.pm-qc-input-row.pm-qc-input-row--thinking::before {
+  opacity: 0;
+}
+/*
+ * Stream FX — always in DOM, always animating (linear loop).
+ * Only opacity crossfades; avoids restart hitch at gen start/end.
+ */
+.pm-qc-stream-fx {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: opacity var(--pm-qc-fx-ease);
+  will-change: opacity;
+}
+.pm-qc-input-row--thinking .pm-qc-stream-fx {
+  opacity: 1;
+}
+/* Soft sweep — linear infinite for seamless loop */
+.pm-qc-stream-fx::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    oklch(0.38 0.08 160 / 0.48) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: sk-green-flow 2.4s linear infinite;
+  opacity: 0.4;
+  filter: blur(6px);
+  pointer-events: none;
+}
+/* Perimeter flow line — same linear loop, phase-aligned */
+.pm-qc-stream-fx::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid transparent;
+  background: linear-gradient(
+      90deg,
+      transparent 18%,
+      var(--ze-green, #1a5e3d) 50%,
+      transparent 82%
+    )
+    border-box;
+  background-size: 200% 100%; /* match sweep cycle length */
+  -webkit-mask:
+    linear-gradient(#fff 0 0) padding-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: sk-green-flow 2.4s linear infinite;
+  pointer-events: none;
+}
+.pm-qc-web-btn {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--pm-muted, #5c615a);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+.pm-qc-web-btn:hover:not(:disabled) {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+}
+.pm-qc-web-btn.is-on {
+  background: var(--pm-green, #1a5e3d);
+  color: var(--pm-on, #f7faf6);
+}
+/* Text field flush in pill — no second frame / no own breath */
+.pm-qc-input-frame {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 4px 4px 2px;
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0;
+  box-shadow: none !important;
+  backdrop-filter: none;
+  outline: none;
+}
+.pm-qc-input-frame::before,
+.pm-qc-input-frame::after {
+  display: none !important;
+  content: none !important;
+}
+.pm-qc-textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  max-height: 72px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  resize: none;
+  outline: none;
+  font: var(--pm-t-body, 300 13px/1.4 Geist, system-ui, sans-serif);
+  color: var(--pm-ink, #121410);
+  overflow-y: auto;
+}
+.pm-qc-textarea::placeholder {
+  color: var(--pm-faint, #8a8d86);
+}
+.pm-qc-textarea:disabled {
+  opacity: 0.6;
+}
+.pm-qc-send {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--pm-faint, #8a8d86);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+.pm-qc-send.is-ready {
+  background: var(--pm-green, #1a5e3d);
+  color: var(--pm-on, #f7faf6);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+}
+.pm-qc-send.is-ready:hover {
+  background: var(--pm-green-deep, #144a30);
+}
+.pm-qc-send:disabled:not(.is-hidden) {
+  cursor: not-allowed;
+}
+/* Keep 30×30 footprint so pill doesn’t reflow at stream start/end */
+.pm-qc-send.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  /* size preserved — was width:0 + scale which snapped the whole pill */
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-qc-float {
+    transition: none !important;
+  }
+}
+
+/* Idle hover: outer CW 180°, inner CCW 180° (disabled while open-spinning) */
+.quick-chat-btn .diamond-outer,
+.quick-chat-btn .diamond-inner {
+  transform-origin: center;
+  transform-box: fill-box;
+  transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.quick-chat-btn:not(.quick-chat-btn-spinning):hover .diamond-outer {
   transform: rotate(180deg);
 }
-.quick-chat-btn:hover .diamond-inner {
+.quick-chat-btn:not(.quick-chat-btn-spinning):hover .diamond-inner {
   transform: rotate(-180deg);
 }
 
-/* ── Quick Chat floating button · gentle float bob (wrapper) ── */
-@keyframes qc-float {
-  0%, 100% { bottom: 24px; }
-  50%      { bottom: 32px; }
+/* Bob the whole group (hint + diamond) so they stay aligned */
+@keyframes qc-float-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 .quick-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  line-height: 0;
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.12));
-  transition:
-    filter 0.3s ease,
-    transform 0.35s ease-out;
+  transition: filter 0.3s ease;
+}
+.quick-chat-btn svg {
+  display: block;
+  width: 40px;
+  height: 40px;
 }
 .quick-chat-btn:hover {
   filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.18));
 }
 
-
-/* ── Quick Chat float group — the wrapper that floats both icon + bubble ── */
+/* Bubble + diamond column stack; shared bob */
 .qc-float-group {
-  animation: qc-float 3s ease-in-out infinite;
   position: relative;
+  animation: qc-float-bob 3s ease-in-out infinite;
 }
-/* ── Quick Chat floating button · continuous spin when sidebar open ── */
 @keyframes qc-spin-cw {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 @keyframes qc-spin-ccw {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(-360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+/* While spinning: no transition (linear spin); hover flip is overridden by animation */
+.quick-chat-btn-spinning .diamond-outer,
+.quick-chat-btn-spinning .diamond-inner {
+  transition: none !important;
 }
 .quick-chat-btn-spinning .diamond-outer {
   animation: qc-spin-cw 6s linear infinite;
@@ -1937,16 +3912,28 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   animation: qc-spin-ccw 6s linear infinite;
 }
 
-/* ── Quick Chat hint bubble · emerge from diamond ── */
+/* Emerge from diamond (right) — horizontal; vertical offset via relative top on pill */
 @keyframes hint-emerge {
-  0% { opacity: 0; transform: translateX(16px) translateY(4px) scale(0.3); }
-  35% { opacity: 1; transform: translateX(-2px) translateY(-1px) scale(1.06); }
-  60% { transform: translateX(1px) translateY(1px) scale(0.95); }
-  85% { transform: translateX(0) translateY(-0.5px) scale(1.02); }
-  100% { opacity: 1; transform: translateX(0) translateY(0) scale(1); }
+  0% {
+    opacity: 0;
+    transform: translateX(14px) scale(0.3);
+  }
+  40% {
+    opacity: 1;
+    transform: translateX(-2px) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
 }
 @keyframes hint-retract {
-  0% { opacity: 1; transform: scale(1) translateX(0) translateY(0); }
-  100% { opacity: 0; transform: scale(0.5) translateX(20px) translateY(6px); }
-}
+  0% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(12px) scale(0.5);
+  }
 }

@@ -132,15 +132,13 @@ export function CreateTodoDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="pm-dialog sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New to-do</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-1">
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              TODO
-            </label>
+            <label className="pm-label">TODO</label>
             <input
               autoFocus
               value={title}
@@ -154,9 +152,7 @@ export function CreateTodoDialog({
             />
           </div>
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              Description (optional)
-            </label>
+            <label className="pm-label">Description (optional)</label>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
@@ -166,9 +162,7 @@ export function CreateTodoDialog({
             />
           </div>
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              Chain
-            </label>
+            <label className="pm-label">Chain</label>
             <div className="mt-1 relative">
               <select
                 value={selectedChainId}
@@ -194,9 +188,7 @@ export function CreateTodoDialog({
             </div>
           </div>
           <div>
-            <label className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              Deadline (optional)
-            </label>
+            <label className="pm-label">Deadline (optional)</label>
             <div className="mt-1 relative flex items-center gap-1">
               {/* Empty: hide browser yyyy/mm/dd ghost text; click opens calendar */}
               {!ddl && (
@@ -238,10 +230,10 @@ export function CreateTodoDialog({
             </div>
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="!border-t-0 !bg-transparent">
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
             onClick={() => onOpenChange(false)}
             disabled={submitting}

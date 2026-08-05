@@ -149,7 +149,7 @@ export function TodoDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="pm-dialog sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {readonly ? "Todo detail" : "Edit todo"}
@@ -243,10 +243,10 @@ export function TodoDetailDialog({
             </div>
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="!border-t-0 !bg-transparent">
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
             onClick={() => onOpenChange(false)}
           >
