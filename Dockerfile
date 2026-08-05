@@ -1,12 +1,16 @@
-# Build args: override when Docker Hub is slow / blocked.
-# Defaults use docker.1ms.run (common CN-friendly mirror).
-# Official Hub:
-#   docker build --build-arg NODE_IMAGE=node:20-slim --build-arg PYTHON_IMAGE=python:3.11-slim .
+# Build args for base images.
+# Defaults = Docker Hub / ghcr (required for GitHub Actions; CN mirrors often 403 there).
+# Local CN mirror example:
+#   docker build \
+#     --build-arg NODE_IMAGE=docker.1ms.run/library/node:20-slim \
+#     --build-arg PYTHON_IMAGE=docker.1ms.run/library/python:3.11-slim \
+#     .
+# Or set NODE_IMAGE / PYTHON_IMAGE in a local .env for docker compose.
 #
 # ARG before any FROM is global default for FROM lines only.
 
-ARG NODE_IMAGE=docker.1ms.run/library/node:20-slim
-ARG PYTHON_IMAGE=docker.1ms.run/library/python:3.11-slim
+ARG NODE_IMAGE=node:20-slim
+ARG PYTHON_IMAGE=python:3.11-slim
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.6.14
 
 # ── uv binary (COPY --from=var is unsupported; use a named stage) ──
