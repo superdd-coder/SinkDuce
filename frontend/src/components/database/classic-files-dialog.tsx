@@ -239,161 +239,142 @@ export function ClassicFilesDialog({
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
+          overlayClassName="pm-dialog-overlay--silk"
           className={cn(
-            "pm-dialog !flex flex-col gap-3 p-5 overflow-hidden min-h-0",
+            "pm-dialog pm-dialog--silk pm-all-files",
+            "!flex flex-col gap-0 p-0 overflow-hidden min-h-0",
             "sm:max-w-3xl w-[min(920px,calc(100%-2rem))]",
-            "h-[min(72vh,720px)] max-h-[min(72vh,720px)]"
+            "h-[min(76vh,760px)] max-h-[min(76vh,760px)]",
+            "animate-none data-open:animate-none data-closed:animate-none"
           )}
         >
-          <DialogHeader className="shrink-0 pr-8">
-            <DialogTitle className="flex items-center gap-2">
-              <List className="h-4 w-4 text-[var(--pm-muted)]" />
+          {/* Header — Premium chrome (Geist label + quiet meta) */}
+          <DialogHeader className="pm-all-files-header shrink-0">
+            <DialogTitle className="pm-all-files-title">
+              <List className="h-4 w-4 shrink-0 text-[var(--pm-muted)]" strokeWidth={1.75} />
               All Files
             </DialogTitle>
-            <p className="pm-meta">
+            <p className="pm-all-files-sub">
               Flat list of every document in this collection.
             </p>
           </DialogHeader>
 
           {coverage ? (
-            <div className="pm-files-coverage">
-              <span className="pm-label" style={{ display: "inline" }}>
-                Coverage ·{" "}
-              </span>
-              <span>{coverage}</span>
+            <div className="pm-all-files-coverage">
+              <span className="pm-label">Coverage ·</span>
+              <span className="pm-meta">{coverage}</span>
             </div>
           ) : null}
 
-          {/* Two panes: current files scroll independently; old versions stay pinned at bottom */}
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
+          {/* Body: soft list stage + pinned old-versions panel */}
+          <div className="pm-all-files-body flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div className="pm-all-files-list flex-1 min-h-0 overflow-y-auto overscroll-contain">
               {initialLoading && files.length === 0 ? (
-                <div className="flex items-center gap-2 py-6 pm-meta">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading…
+                <div className="pm-all-files-empty">
+                  <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
+                  <span className="pm-meta">Loading…</span>
                 </div>
               ) : files.length === 0 ? (
-                <p className="pm-meta py-6">No files yet</p>
+                <div className="pm-all-files-empty">
+                  <p className="pm-meta">No files yet</p>
+                </div>
               ) : (
-                <div className="space-y-0">
+                <div className="pm-all-files-rows">
                   {files.map((file) => {
                     const ingesting =
                       !!file.file_id && !!ingestingFiles[file.file_id]
                     return (
-                    <div
-                      key={file.source}
-                      className={cn(
-                        "pm-files-list-row group",
-                        (ingesting || deletingSource === file.source) &&
-                          "is-disabled"
-                      )}
-                      onClick={() => {
-                        if (ingesting) {
-                          toast.info(
-                            "File is still ingesting — open it when progress finishes."
-                          )
-                          return
-                        }
-                        setDetailOpen({
-                          // fileId → right panel (paths/versions)
-                          fileId: file.file_id || null,
-                          // document source → chunks/source/summary (__meeting__/__note__)
-                          source: file.source || null,
-                        })
-                      }}
-                    >
-                      <div className="flex-1 min-w-0 flex items-center gap-3">
-                        <span
-                          className="shrink-0 flex items-center"
-                          style={{ width: "72px" }}
-                        >
-                          {file.file_type === "note" && (
-                            <span className="pm-files-tag">Note</span>
-                          )}
-                          {file.has_meeting && (
-                            <span className="pm-files-tag">Meeting</span>
-                          )}
-                        </span>
-                        <span className="truncate pm-title">
-                          {file.display_name || file.source}
-                        </span>
-                      </div>
-                      <span className="pm-meta tabular-nums">
-                        {file.chunk_count} chunks
-                      </span>
-                      {file.has_summary !== null && (
-                        <button
-                          type="button"
-                          className="shrink-0 flex items-center gap-1.5 cursor-pointer bg-transparent border-0"
-                          onClick={(e) => void handleToggleDefinitive(file, e)}
-                          title={
-                            file.include_in_summary !== false
-                              ? "Included in collection summary — click to exclude"
-                              : "Not included in collection summary — click to include"
+                      <div
+                        key={file.source}
+                        className={cn(
+                          "pm-all-files-row group",
+                          (ingesting || deletingSource === file.source) &&
+                            "is-disabled"
+                        )}
+                        onClick={() => {
+                          if (ingesting) {
+                            toast.info(
+                              "File is still ingesting — open it when progress finishes."
+                            )
+                            return
                           }
-                        >
-                          {generatingSummaries.has(file.source) ? (
-                            <Loader2 className="h-3 w-3 animate-spin text-[var(--pm-faint)]" />
-                          ) : (
-                            <span
-                              className={cn(
-                                "flex items-center justify-center w-3.5 h-3.5 rounded-sm border transition-colors",
-                                file.include_in_summary !== false
-                                  ? "border-[var(--pm-green)] bg-[var(--pm-green)] text-[var(--pm-on)]"
-                                  : "border-[var(--pm-faint)] bg-transparent"
-                              )}
-                            >
-                              {file.include_in_summary !== false && (
-                                <svg
-                                  className="w-2.5 h-2.5"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                  stroke="currentColor"
-                                  strokeWidth={3}
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M5 13l4 4L19 7"
-                                  />
-                                </svg>
-                              )}
-                            </span>
-                          )}
-                          <span
-                            className={cn(
-                              "pm-label",
-                              file.include_in_summary !== false
-                                ? "text-[var(--pm-ink)]"
-                                : "text-[var(--pm-faint)]"
-                            )}
-                          >
-                            Definitive
-                          </span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="pm-meta opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-[var(--pm-danger)] bg-transparent border-0"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setDeleteFileTarget(file.source)
+                          setDetailOpen({
+                            fileId: file.file_id || null,
+                            source: file.source || null,
+                          })
                         }}
                       >
-                        Delete
-                      </button>
-                    </div>
-                  )})}
+                        <div className="pm-all-files-row-main">
+                          <div className="pm-all-files-tags">
+                            {file.file_type === "note" && (
+                              <span className="pm-files-tag">Note</span>
+                            )}
+                            {file.has_meeting && (
+                              <span className="pm-files-tag">Meeting</span>
+                            )}
+                            {!file.file_type && !file.has_meeting && (
+                              <FileTypeIcon
+                                source={{
+                                  filename: file.display_name || file.source,
+                                }}
+                                className="h-3.5 w-3.5 text-[var(--pm-muted)]"
+                              />
+                            )}
+                          </div>
+                          <span className="pm-all-files-name truncate">
+                            {file.display_name || file.source}
+                          </span>
+                        </div>
+                        <span className="pm-all-files-chunks pm-meta tabular-nums shrink-0">
+                          {file.chunk_count} chunks
+                        </span>
+                        {file.has_summary !== null && (
+                          <button
+                            type="button"
+                            className={cn(
+                              "pm-all-files-def",
+                              file.include_in_summary !== false && "is-on"
+                            )}
+                            onClick={(e) => void handleToggleDefinitive(file, e)}
+                            title={
+                              file.include_in_summary !== false
+                                ? "Included in collection summary — click to exclude"
+                                : "Not included in collection summary — click to include"
+                            }
+                          >
+                            {generatingSummaries.has(file.source) ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <span className="pm-all-files-check" aria-hidden>
+                                {file.include_in_summary !== false ? "✓" : ""}
+                              </span>
+                            )}
+                            <span>Definitive</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="pm-all-files-del"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDeleteFileTarget(file.source)
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
 
-            {/* Pinned bottom: collapsible old versions (version history, not Archive folder) */}
-            <div className="shrink-0 pt-2 relative z-10 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
+            {/* Old versions — soft nested panel */}
+            <div className="pm-all-files-history shrink-0">
               <button
                 type="button"
                 aria-expanded={oldVersionsOpen}
-                className="w-full shrink-0 flex items-center gap-2 py-1.5 text-left pm-meta hover:text-[var(--pm-ink)] transition-colors"
+                className="pm-all-files-history-toggle"
                 onClick={() => setOldVersionsOpen((v) => !v)}
               >
                 <ChevronRight
@@ -402,14 +383,13 @@ export function ClassicFilesDialog({
                     oldVersionsOpen && "rotate-90"
                   )}
                 />
-                <History className="h-3.5 w-3.5 shrink-0" />
+                <History className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
                 <span className="pm-label">Old versions</span>
-                <span className="pm-meta tabular-nums">
+                <span className="pm-all-files-history-count">
                   {oldVersionsLoading ? "…" : oldVersions.length}
                 </span>
               </button>
 
-              {/* Height animate via grid 0fr → 1fr (open/close same duration) */}
               <div
                 className={cn(
                   "grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
@@ -420,83 +400,80 @@ export function ClassicFilesDialog({
               >
                 <div className="min-h-0 overflow-hidden">
                   <div
-                    className="overflow-y-auto overscroll-contain pb-1 max-h-[min(32vh,260px)]"
-                    // Keep panel non-interactive while collapsed
+                    className="pm-all-files-history-list"
                     inert={!oldVersionsOpen ? true : undefined}
                   >
                     {oldVersionsLoading ? (
-                      <div className="flex items-center gap-2 py-3 pm-meta">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        Loading…
+                      <div className="pm-all-files-empty !py-4">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--pm-faint)]" />
+                        <span className="pm-meta">Loading…</span>
                       </div>
                     ) : oldVersions.length === 0 ? (
-                      <p className="pm-meta py-2 pl-6">
+                      <p className="pm-meta px-1 py-2">
                         No archived versions yet. Updating a file keeps the
                         previous blob as an old version (not moved into Archive).
                       </p>
                     ) : (
-                      <div className="space-y-0">
+                      <div className="pm-all-files-rows">
                         {oldVersions.map((ov) => {
                           const blobMissing = ov.blob_available === false
                           return (
-                          <div
-                            key={ov.version_id}
-                            className={cn(
-                              "pm-files-list-row",
-                              blobMissing && "opacity-70"
-                            )}
-                            onClick={() =>
-                              setDetailOpen({
-                                fileId: ov.file_id,
-                                source: `__file__:${ov.file_id}`,
-                                // Focus this historical version (not latest)
-                                versionId: ov.version_id,
-                                storageFileId: ov.storage_file_id,
-                              })
-                            }
-                            title={
-                              blobMissing
-                                ? "Blob missing on disk — Raw cannot show this version"
-                                : ov.commit_message ||
-                                  `${ov.filename || "version"} of ${ov.current_display_name || ov.current_filename}`
-                            }
-                          >
-                            <FileTypeIcon
-                              source={{
-                                filename: ov.filename,
-                                original_ext: ov.original_ext,
-                              }}
-                              className="h-3.5 w-3.5 shrink-0 text-[var(--pm-muted)]"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <div className="truncate pm-title">
-                                {/* Always this history row's blob — never current label */}
-                                <span className="pm-meta tabular-nums mr-1.5">
-                                  v{ov.version_no}
-                                </span>
-                                {ov.filename ||
-                                  ov.storage_file_id ||
-                                  `version ${ov.version_no}`}
-                                {blobMissing ? (
-                                  <span className="ml-1.5 pm-meta text-[var(--pm-danger)]">
-                                    · blob missing
+                            <div
+                              key={ov.version_id}
+                              className={cn(
+                                "pm-all-files-row is-history",
+                                blobMissing && "is-disabled"
+                              )}
+                              onClick={() =>
+                                setDetailOpen({
+                                  fileId: ov.file_id,
+                                  source: `__file__:${ov.file_id}`,
+                                  versionId: ov.version_id,
+                                  storageFileId: ov.storage_file_id,
+                                })
+                              }
+                              title={
+                                blobMissing
+                                  ? "Blob missing on disk — Raw cannot show this version"
+                                  : ov.commit_message ||
+                                    `${ov.filename || "version"} of ${ov.current_display_name || ov.current_filename}`
+                              }
+                            >
+                              <FileTypeIcon
+                                source={{
+                                  filename: ov.filename,
+                                  original_ext: ov.original_ext,
+                                }}
+                                className="h-3.5 w-3.5 shrink-0 text-[var(--pm-muted)]"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="truncate pm-all-files-name">
+                                  <span className="pm-meta tabular-nums mr-1.5">
+                                    v{ov.version_no}
                                   </span>
-                                ) : null}
+                                  {ov.filename ||
+                                    ov.storage_file_id ||
+                                    `version ${ov.version_no}`}
+                                  {blobMissing ? (
+                                    <span className="ml-1.5 pm-meta text-[var(--pm-danger)]">
+                                      · blob missing
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="truncate pm-meta">
+                                  history of{" "}
+                                  {ov.current_display_name ||
+                                    ov.current_filename ||
+                                    ov.file_id.slice(0, 8)}
+                                  {ov.commit_message
+                                    ? ` · ${ov.commit_message}`
+                                    : ""}
+                                </div>
                               </div>
-                              <div className="truncate pm-meta">
-                                history of{" "}
-                                {ov.current_display_name ||
-                                  ov.current_filename ||
-                                  ov.file_id.slice(0, 8)}
-                                {ov.commit_message
-                                  ? ` · ${ov.commit_message}`
-                                  : ""}
-                              </div>
+                              <span className="shrink-0 pm-meta tabular-nums hidden sm:inline">
+                                {formatTime(ov.created_at)}
+                              </span>
                             </div>
-                            <span className="shrink-0 pm-meta tabular-nums hidden sm:inline">
-                              {formatTime(ov.created_at)}
-                            </span>
-                          </div>
                           )
                         })}
                       </div>
@@ -552,7 +529,10 @@ export function ClassicFilesDialog({
         open={!!deleteFileTarget}
         onOpenChange={(v) => !v && setDeleteFileTarget(null)}
       >
-        <DialogContent className="pm-dialog max-w-sm">
+        <DialogContent
+          overlayClassName="pm-dialog-overlay--silk"
+          className="pm-dialog pm-dialog--silk max-w-sm animate-none data-open:animate-none data-closed:animate-none"
+        >
           <DialogHeader>
             <DialogTitle>Delete File</DialogTitle>
           </DialogHeader>

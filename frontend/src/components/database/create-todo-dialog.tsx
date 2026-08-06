@@ -1,6 +1,6 @@
 /**
- * Modal to create a collection todo (title + optional DDL + chain select).
- * Chain is always choosable; defaultChainId only sets the initial selection.
+ * Modal to create a collection todo (title + optional markdown body + DDL + chain).
+ * Description uses Premium MarkdownEditor without slash commands.
  */
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Loader2, X } from "lucide-react"
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { cn } from "@/lib/utils"
 import { createTodo, listChains } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
@@ -47,6 +48,8 @@ export function CreateTodoDialog({
   const [loadingChains, setLoadingChains] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const ddlInputRef = useRef<HTMLInputElement>(null)
+  /** Remount editor when dialog opens so TipTap starts clean */
+  const [editorKey, setEditorKey] = useState(0)
 
   const openDdlPicker = () => {
     const el = ddlInputRef.current
@@ -69,6 +72,7 @@ export function CreateTodoDialog({
     setTitle("")
     setBody("")
     setDdl("")
+    setEditorKey((k) => k + 1)
     setLoadingChains(true)
     listChains(collectionId)
       .then((list) => {
@@ -133,7 +137,10 @@ export function CreateTodoDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="pm-dialog sm:max-w-md">
+      <DialogContent
+        className="pm-dialog pm-dialog--silk sm:max-w-lg"
+        overlayClassName="pm-dialog-overlay--silk"
+      >
         <DialogHeader>
           <DialogTitle>New to-do</DialogTitle>
         </DialogHeader>
@@ -154,13 +161,20 @@ export function CreateTodoDialog({
           </div>
           <div>
             <label className="pm-field-label">Description (optional)</label>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={4}
-              placeholder="Details, context, acceptance criteria…"
-              className="pm-field"
-            />
+            <div className="pm-todo-md-host">
+              {open && (
+                <MarkdownEditor
+                  key={editorKey}
+                  value={body}
+                  onChange={setBody}
+                  enableSlash={false}
+                  showToolbar
+                  flush
+                  placeholder="Details, context, acceptance criteria…"
+                  className="pm-todo-md-editor"
+                />
+              )}
+            </div>
           </div>
           <div>
             <label className="pm-field-label">Chain</label>

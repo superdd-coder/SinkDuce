@@ -56,17 +56,36 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
     const hasNotesLoadedRef = useRef(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const editorCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-    /** Match .pm-ws-dialog close duration (+ small buffer) */
-    const EDITOR_CLOSE_MS = 340
+    /** Match pm-dialog--silk exit (280ms + buffer), same as todo dialogs */
+    const EDITOR_CLOSE_MS = 320
 
-    const openEditor = useCallback((id: string) => {
-      if (editorCloseTimerRef.current) {
-        clearTimeout(editorCloseTimerRef.current)
-        editorCloseTimerRef.current = null
-      }
-      setActiveNoteId(id)
-      setEditorOpen(true)
-    }, [])
+    /**
+     * Open note workspace with the same enter path as todo silk dialogs:
+     * mount (or stay) with open=false, then flip open=true so Base UI applies
+     * data-starting-style → fade-in. Mounting with open already true skips enter.
+     */
+    const openEditor = useCallback(
+      (id: string) => {
+        if (editorCloseTimerRef.current) {
+          clearTimeout(editorCloseTimerRef.current)
+          editorCloseTimerRef.current = null
+        }
+        const needsEnterAnim = !editorOpen
+        setActiveNoteId(id)
+        if (needsEnterAnim) {
+          setEditorOpen(false)
+          // Double rAF: commit closed mount, then open for starting-style transition
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              setEditorOpen(true)
+            })
+          })
+        } else {
+          setEditorOpen(true)
+        }
+      },
+      [editorOpen]
+    )
 
     const fetchNotes = useCallback(async (opts?: { silent?: boolean }) => {
       if (!collection) return

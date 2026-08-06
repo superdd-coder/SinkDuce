@@ -5,7 +5,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { Calendar, Loader2, Paperclip, Pencil } from "lucide-react"
@@ -186,11 +185,6 @@ export function MessageEditorDialog({
     onSelectNodeMessage,
   ])
 
-  const handleCancelEdit = useCallback(() => {
-    setContent(activeMsg?.body || initialContent)
-    setEditing(false)
-  }, [activeMsg?.body, initialContent])
-
   const handleSelectNodeMessage = useCallback(
     (m: Message) => {
       if (m.message_id === activeMsg?.message_id) return
@@ -215,194 +209,150 @@ export function MessageEditorDialog({
     })
   }, [nodeMsgs])
 
-  // Enter/exit must stay mounted (portal keepMounted + no key flip on close)
-  // Symmetric open/close durations (Premium motion)
-  const dialogMotion = cn(
-    "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-    "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-2",
-    "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2",
-    "data-closed:duration-300 data-open:duration-300"
+  /**
+   * Silk open/close (same as todo / Note) — opacity + scale + overlay fade.
+   * Parent must keep dialog mounted while open→false (no hard unmount).
+   */
+  const silkShell = cn(
+    "pm-dialog pm-dialog--silk",
+    "animate-none data-open:animate-none data-closed:animate-none"
   )
 
-  // Non-node: single-column dialog; Edit / Cancel / Save sit top-right
+  const bodyClass =
+    "prose prose-sm max-w-none leading-relaxed break-words [&_p]:my-2 font-[family-name:var(--pm-ff-prose)]"
+
+  /** Chrome actions: Save when editing, Edit when viewing (non-system). */
+  const chromeActions = (
+    <div className="pm-msg-dialog-actions">
+      {editing ? (
+        <button
+          type="button"
+          className="pm-btn-pri pm-btn-xs"
+          onClick={() => void handleSave()}
+          disabled={!content.trim() || saving}
+        >
+          {saving ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Saving…
+            </>
+          ) : (
+            "Save"
+          )}
+        </button>
+      ) : (
+        !isSystem &&
+        activeMsg && (
+          <button
+            type="button"
+            className="pm-btn-ghost pm-btn-xs gap-1"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Edit
+          </button>
+        )
+      )}
+    </div>
+  )
+
+  const titleRow = (
+    <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
+      <span className="shrink-0">{title}</span>
+      {sourceTag && (
+        <span
+          className={cn(
+            "pm-meta normal-case tracking-normal px-1.5 py-0.5 rounded truncate max-w-[12rem]",
+            sourceTag.isCurrentFolder
+              ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+              : "text-[var(--pm-muted)] bg-[rgba(18,20,16,0.05)]"
+          )}
+          title={sourceTag.full}
+        >
+          {sourceTag.label}
+        </span>
+      )}
+    </DialogTitle>
+  )
+
+  /** Message body card — same surface for Add / preview / edit. */
+  const messageCard = (
+    <div
+      key={activeMsg?.message_id ?? "new"}
+      className="pm-msg-dialog-card flex-1 min-h-0 flex flex-col overflow-hidden"
+    >
+      {editing ? (
+        <div className="flex-1 min-h-0 flex flex-col pm-msg-editor-host">
+          <MarkdownEditor
+            value={content}
+            onChange={setContent}
+            minHeight={isNodeMsg ? "140px" : "280px"}
+            placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+            showToolbar
+            flush
+            className="flex-1 min-h-0"
+          />
+        </div>
+      ) : (
+        <div className="p-5 pm-prose max-w-none flex-1 overflow-auto">
+          <MessageBody
+            body={activeMsg?.body || initialContent}
+            className={bodyClass}
+          />
+        </div>
+      )}
+    </div>
+  )
+
+  // ── Single column (Add Message + file/folder message preview/edit) ──
   if (!isNodeMsg) {
     return (
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
+          overlayClassName="pm-dialog-overlay--silk"
           className={cn(
-            "pm-dialog w-[1200px] max-w-[90vw] sm:max-w-[90vw] h-[85vh] flex flex-col overflow-hidden",
-            dialogMotion
+            silkShell,
+            "pm-msg-dialog w-[min(1200px,90vw)] max-w-[90vw] sm:max-w-[90vw] h-[85vh] flex flex-col overflow-hidden gap-0 p-0"
           )}
         >
-          <DialogHeader className="shrink-0">
-            <DialogTitle className="flex items-center gap-2 min-w-0 pr-28">
-              <span className="shrink-0">{title}</span>
-              {sourceTag && (
-                <span
-                  className={cn(
-                    "pm-meta px-1.5 py-0.5 rounded truncate max-w-[12rem]",
-                    sourceTag.isCurrentFolder
-                      ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
-                      : "text-[var(--pm-muted)] bg-[rgba(18,20,16,0.05)]"
-                  )}
-                  title={sourceTag.full}
-                >
-                  {sourceTag.label}
-                </span>
-              )}
-            </DialogTitle>
-            {/* Top-right actions — leave room for dialog close (X) */}
-            <div className="absolute top-3.5 right-12 z-10 flex items-center gap-1.5">
-              {editing ? (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={handleCancelEdit}
-                    disabled={saving}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="xs"
-                    onClick={() => void handleSave()}
-                    disabled={!content.trim() || saving}
-                  >
-                    {saving ? "Saving…" : "Save"}
-                  </Button>
-                </>
-              ) : (
-                !isSystem &&
-                activeMsg && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    className="gap-1 h-7 px-2 text-[var(--pm-muted)] hover:text-[var(--pm-ink)]"
-                    onClick={() => setEditing(true)}
-                  >
-                    <Pencil className="h-3 w-3" />
-                    Edit
-                  </Button>
-                )
-              )}
-            </div>
+          <DialogHeader className="pm-msg-dialog-chrome shrink-0">
+            {titleRow}
+            {chromeActions}
           </DialogHeader>
-          <div className="flex-1 min-h-0 overflow-auto flex flex-col">
-            {editing ? (
-              <MarkdownEditor
-                value={content}
-                onChange={setContent}
-                minHeight="280px"
-                placeholder={MESSAGE_EDITOR_PLACEHOLDER}
-                showToolbar={false}
-              />
-            ) : (
-              <div className="p-4 pm-prose max-w-none flex-1 overflow-auto">
-                <MessageBody
-                  body={activeMsg?.body || initialContent}
-                  className="prose prose-sm max-w-none leading-relaxed break-words [&_p]:my-2"
-                />
-              </div>
-            )}
+          <div className="pm-msg-dialog-stage flex-1 min-h-0 overflow-hidden flex flex-col">
+            {messageCard}
           </div>
         </DialogContent>
       </Dialog>
     )
   }
 
-  // Node message: message | detail | timeline
+  // ── Node message: same chrome + floating cards (message | detail | timeline)
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        overlayClassName="pm-dialog-overlay--silk"
         className={cn(
-          "pm-dialog w-[1200px] max-w-[92vw] sm:max-w-[92vw] h-[88vh] flex flex-col gap-0 p-0 overflow-hidden",
-          dialogMotion
+          silkShell,
+          "pm-msg-dialog w-[min(1200px,92vw)] max-w-[92vw] sm:max-w-[92vw] h-[88vh] flex flex-col overflow-hidden gap-0 p-0"
         )}
       >
-        <DialogHeader className="px-4 py-3 shrink-0 shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
-          <DialogTitle className="flex items-center gap-2 min-w-0 pr-8">
-            <span className="shrink-0">{title}</span>
-            {sourceTag && (
-              <span
-                className="pm-meta text-[var(--pm-green)] bg-[var(--pm-green-soft)] px-1.5 py-0.5 rounded truncate max-w-[14rem]"
-                title={sourceTag.full}
-              >
-                {sourceTag.label}
-              </span>
-            )}
-          </DialogTitle>
+        <DialogHeader className="pm-msg-dialog-chrome shrink-0">
+          {titleRow}
+          {chromeActions}
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <div className="flex-1 min-h-0 flex shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)] overflow-hidden">
+        <div className="pm-msg-dialog-stage flex-1 min-h-0 overflow-hidden flex flex-col gap-3">
+          {/* Upper: message card + node meta card */}
+          <div className="flex-1 min-h-0 flex gap-3 overflow-hidden">
             {/* Left: active message preview / edit */}
-            <div className="flex-[1.4] min-w-0 min-h-0 flex flex-col shadow-[inset_-1px_0_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)] overflow-hidden relative">
-              <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
-                {editing ? (
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={handleCancelEdit}
-                      disabled={saving}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      size="xs"
-                      onClick={() => void handleSave()}
-                      disabled={!content.trim() || saving}
-                    >
-                      {saving ? "Saving…" : "Save"}
-                    </Button>
-                  </>
-                ) : (
-                  !isSystem && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="gap-1 h-7 px-2 text-[var(--pm-muted)] hover:text-[var(--pm-ink)]"
-                      onClick={() => setEditing(true)}
-                    >
-                      <Pencil className="h-3 w-3" />
-                      Edit
-                    </Button>
-                  )
-                )}
-              </div>
-              <div className="flex-1 min-h-0 overflow-auto">
-                {/* key forces a short fade when switching node messages */}
-                <div
-                  key={activeMsg?.message_id ?? "empty"}
-                  className="h-full min-h-0 animate-in fade-in-0 duration-200"
-                >
-                  {editing ? (
-                    <div className="p-4 pt-10 h-full min-h-0">
-                      <MarkdownEditor
-                        value={content}
-                        onChange={setContent}
-                        minHeight="140px"
-                        placeholder={MESSAGE_EDITOR_PLACEHOLDER}
-                        showToolbar={false}
-                      />
-                    </div>
-                  ) : (
-                    <div className="p-4 pt-10 pr-16 pm-prose max-w-none">
-                      <MessageBody
-                        body={activeMsg?.body || ""}
-                        className="prose prose-sm max-w-none leading-relaxed break-words [&_p]:my-2"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
+            <div className="flex-[1.4] min-w-0 min-h-0 flex flex-col overflow-hidden">
+              {messageCard}
             </div>
 
-            {/* Right: node meta + clickable message list */}
-            <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-[var(--pm-green-wash)] overflow-hidden">
-              <div className="shrink-0 p-4 space-y-3 shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
+            {/* Right: node meta + message list */}
+            <div className="pm-msg-dialog-card flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+              <div className="shrink-0 p-4 space-y-3 border-b border-[color-mix(in_srgb,var(--pm-ink)_6%,transparent)]">
                 <p className="pm-label">Node detail</p>
                 {nodeLoading ? (
                   <div className="flex justify-center py-4">
@@ -443,7 +393,7 @@ export function MessageEditorDialog({
                           {nodeDetail.attachments.map((a) => (
                             <li
                               key={a.file_id}
-                              className="flex items-center gap-1.5 pm-meta px-2 py-1 rounded-[var(--pm-r-sm)] bg-white"
+                              className="flex items-center gap-1.5 pm-meta px-2 py-1 rounded-[var(--pm-r-sm)] bg-[var(--pm-canvas)]"
                             >
                               <Paperclip className="h-3 w-3 text-[var(--pm-faint)] shrink-0" />
                               <span className="truncate">
@@ -458,7 +408,7 @@ export function MessageEditorDialog({
                 )}
               </div>
 
-              {/* Message list fills remaining height; fixed row height */}
+              {/* Message list fills remaining height */}
               <div className="flex-1 min-h-0 flex flex-col p-3 pt-2.5">
                 <p className="pm-label shrink-0 mb-1.5">
                   Node messages ({sortedNodeMsgs.length})
@@ -478,11 +428,10 @@ export function MessageEditorDialog({
                             "w-full text-left rounded-[var(--pm-r-sm)] px-2.5 py-2 transition-colors duration-150",
                             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--pm-green-soft)]",
                             selected
-                              ? "bg-[var(--pm-green-soft)] shadow-sm"
-                              : "bg-white/80 hover:bg-white"
+                              ? "bg-[var(--pm-green-soft)]"
+                              : "bg-[var(--pm-canvas)] hover:bg-[var(--pm-green-wash)]"
                           )}
                         >
-                          {/* Render markdown + Tiptap HTML colors (not raw source) */}
                           <div className="min-h-[2.5rem]">
                             {(m.body || "").trim() ? (
                               <MessagePreview body={m.body || ""} lines={2} />
@@ -505,20 +454,18 @@ export function MessageEditorDialog({
             </div>
           </div>
 
-          <div className="h-[32%] min-h-[140px] shrink-0 overflow-hidden">
-            <div className="px-3 pt-1.5 flex items-center justify-between">
+          {/* Lower: timeline in floating card */}
+          <div className="pm-msg-dialog-card h-[32%] min-h-[140px] shrink-0 overflow-hidden flex flex-col">
+            <div className="px-3 pt-2 pb-1 flex items-center justify-between shrink-0">
               <p className="pm-label">Timeline</p>
-              <p className="pm-meta">
-                Click a node to open Timeline view
-              </p>
+              <p className="pm-meta">Click a node to open Timeline view</p>
             </div>
             {collectionId && ownerId && (
               <MiniChainGraph
                 collectionId={collectionId}
                 nodeId={ownerId}
-                className="h-[calc(100%-22px)]"
+                className="flex-1 min-h-0"
                 onNodeClick={(nid, cid) => {
-                  // Parent closes dialog + delays timeline switch for exit motion
                   onNavigateToNode?.(nid, cid)
                 }}
               />

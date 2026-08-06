@@ -4188,21 +4188,13 @@ def upload_file_to_folder(
                     task_id = task.id
                     chunk_count = -1  # pending, actual count unknown yet
                 except Exception as e:
+                    # No second system_version row — "Initial upload" is created below.
                     logger.warning(
                         "Failed to queue ingest task for file %s (%s): %s",
                         file_id, safe_name, e,
                     )
-                    err_msg_id = uuid.uuid4().hex
-                    conn.execute(
-                        """INSERT INTO messages
-                           (message_id, owner_type, owner_id, source_node_id, body,
-                            author_type, author_id, created_at, edited_at, edited_by, version)
-                           VALUES (?, 'system_version', ?, NULL, ?,
-                            'system', 'system', ?, NULL, NULL, 1)""",
-                        (err_msg_id, file_id, f"Failed to queue ingest: {e}", now),
-                    )
 
-            # 8. Create system version message
+            # 8. Exactly one system_version message for v1 (never a separate file message)
             message_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO messages
@@ -4435,7 +4427,9 @@ def upload_file_version(
                 (new_version_id, unsupported, file_id),
             )
 
-            # 5. Create system version message (editable note; default body)
+            # 5. Create exactly ONE system_version message for this version.
+            # User's Update-dialog note (commit_message) becomes this message body —
+            # never create a separate owner_type=file message for it.
             message_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO messages
@@ -4476,25 +4470,13 @@ def upload_file_version(
                     )
                     task_id = task.id
                 except Exception as e:
+                    # Do NOT insert a second system_version row — that would look
+                    # like an "extra" message next to the user's version note.
                     logger.warning(
                         "Failed to queue version ingest for file %s (%s): %s",
                         file_id,
                         safe_name,
                         e,
-                    )
-                    err_msg_id = uuid.uuid4().hex
-                    conn.execute(
-                        """INSERT INTO messages
-                           (message_id, owner_type, owner_id, source_node_id, body,
-                            author_type, author_id, created_at, edited_at, edited_by, version)
-                           VALUES (?, 'system_version', ?, NULL, ?,
-                            'system', 'system', ?, NULL, NULL, 1)""",
-                        (
-                            err_msg_id,
-                            file_id,
-                            f"Failed to queue ingest: {e}",
-                            now,
-                        ),
                     )
 
             # 6b. Always refresh files.json so display_name / original_ext match

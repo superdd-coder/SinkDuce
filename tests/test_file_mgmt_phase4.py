@@ -336,15 +336,23 @@ def test_upload_version():
         ).fetchone()
         assert f_row["current_version_id"] == new_vers["version_id"]
 
-        # Version message created
-        m_row = conn.execute(
+        # Version message created — exactly one system_version for this upload,
+        # body = commit_message (not a separate owner_type=file message).
+        m_rows = conn.execute(
             """SELECT * FROM messages
                WHERE owner_type='system_version' AND owner_id=?
-               ORDER BY created_at DESC LIMIT 1""",
+               ORDER BY created_at DESC""",
             (file_id,),
-        ).fetchone()
-        assert m_row is not None
-        assert "Updated to v2" in (m_row["body"] or "")
+        ).fetchall()
+        # v1 "Initial upload" + v2 "Updated to v2"
+        assert len(m_rows) == 2
+        assert "Updated to v2" in (m_rows[0]["body"] or "")
+        file_msgs = conn.execute(
+            """SELECT * FROM messages
+               WHERE owner_type='file' AND owner_id=?""",
+            (file_id,),
+        ).fetchall()
+        assert len(file_msgs) == 0
 
         # Old version blob still on disk (version-level archive, not deleted)
         from src.file_mgmt.storage_paths import resolve_version_blob

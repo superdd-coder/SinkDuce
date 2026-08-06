@@ -5,7 +5,7 @@ import {
   useMemo,
   useRef,
 } from "react"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ChevronLeft, X } from "lucide-react"
 import { toast } from "sonner"
@@ -827,15 +827,16 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     >
       <DialogContent
         showCloseButton
+        /* Popup + backdrop share pm-dialog-overlay--silk / pm-dialog--silk clock */
+        overlayClassName="pm-dialog-overlay--silk"
         className={cn(
-          "pm-dialog pm-workspace pm-ws-dialog",
+          "pm-dialog pm-dialog--silk pm-workspace pm-ws-dialog",
           "!max-w-[92vw] !w-[92vw] h-[85vh] p-0 !gap-0 flex flex-col overflow-hidden",
-          // Enter/exit driven by CSS on .pm-ws-dialog (data-starting/ending-style)
-          // so close motion runs while still mounted (see notes-card open lifecycle).
-          "duration-300"
+          /* Strip Dialog keyframe utilities — silk CSS owns opacity/scale */
+          "!animate-none data-open:!animate-none data-closed:!animate-none"
         )}
       >
-        {/* Global chrome — sidebar toggle only */}
+        {/* Global chrome — same DialogTitle language as other pm-dialogs */}
         <div className="pm-ws-chrome">
           <Button
             variant="ghost"
@@ -851,7 +852,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
               )}
             />
           </Button>
-          <span className="flex-1 pm-label text-[var(--pm-faint)]">Notes</span>
+          <DialogTitle className="pm-ws-chrome-title flex-1 min-w-0 text-left">
+            Notes
+          </DialogTitle>
           {/* room for dialog close button */}
           <div className="w-8" />
         </div>

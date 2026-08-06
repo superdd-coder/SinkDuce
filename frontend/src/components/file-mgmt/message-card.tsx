@@ -1,8 +1,8 @@
-import { Bot, Clock, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { Bot, Clock } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeRaw from "rehype-raw"
-import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { Message } from "@/types/file-mgmt"
 
@@ -346,6 +346,57 @@ export function MessageCard({
   const isNodeSource = (msg.owner_type || "").toLowerCase() === "node"
   const isCurrentFolder = !!sourceTag?.isCurrentFolder
 
+  /** Two-step delete (× → DELETE) — same anti-mis-tap pattern as distill blocks */
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const deleteBtnRef = useRef<HTMLButtonElement>(null)
+
+  const disarmDelete = useCallback(() => {
+    setDeleteArmed(false)
+    if (deleteArmTimerRef.current) {
+      clearTimeout(deleteArmTimerRef.current)
+      deleteArmTimerRef.current = null
+    }
+  }, [])
+
+  const armDelete = useCallback(() => {
+    setDeleteArmed(true)
+    if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    deleteArmTimerRef.current = setTimeout(() => disarmDelete(), 4000)
+  }, [disarmDelete])
+
+  useEffect(() => {
+    if (!deleteArmed) return
+    const onPointerDown = (ev: Event) => {
+      const t = ev.target as Node | null
+      if (t && deleteBtnRef.current?.contains(t)) return
+      disarmDelete()
+    }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") disarmDelete()
+    }
+    const t = window.setTimeout(() => {
+      document.addEventListener("pointerdown", onPointerDown, true)
+      document.addEventListener("keydown", onKey, true)
+    }, 0)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [deleteArmed, disarmDelete])
+
+  useEffect(() => {
+    return () => {
+      if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    }
+  }, [])
+
+  // Reset confirm when card / selection changes
+  useEffect(() => {
+    disarmDelete()
+  }, [msg.message_id, isActive, disarmDelete])
+
   return (
     <div
       className={cn(
@@ -417,18 +468,45 @@ export function MessageCard({
           </button>
         ) : null}
         {!isSystem && (
-          <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 shrink-0">
-            <Button
-              size="icon-xs"
-              variant="ghost"
+          <div
+            className={cn(
+              "ml-auto flex gap-0.5 shrink-0 transition-opacity",
+              deleteArmed
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100"
+            )}
+          >
+            <button
+              ref={deleteBtnRef}
+              type="button"
+              className={cn("pm-msg-delete", deleteArmed && "is-confirm")}
+              title={
+                deleteArmed
+                  ? "Click again to delete"
+                  : "Delete message"
+              }
+              aria-label={
+                deleteArmed
+                  ? "Confirm delete message"
+                  : "Delete message"
+              }
+              aria-expanded={deleteArmed}
               onClick={(e) => {
+                e.preventDefault()
                 e.stopPropagation()
+                if (!deleteArmed) {
+                  armDelete()
+                  return
+                }
+                disarmDelete()
                 onDelete()
               }}
-              className="h-5 w-5 text-destructive"
             >
-              <Trash2 className="h-2.5 w-2.5" />
-            </Button>
+              <span className="pm-msg-delete-x" aria-hidden>
+                ×
+              </span>
+              <span className="pm-msg-delete-label">Delete</span>
+            </button>
           </div>
         )}
       </div>

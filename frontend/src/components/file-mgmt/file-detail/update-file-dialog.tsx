@@ -81,12 +81,30 @@ export function UpdateFileDialog({
   /** Local temp preview — always revoked on replace / cancel / unmount. */
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [message, setMessage] = useState("")
+  /** Latest TipTap markdown — avoid stale state if user clicks Upload mid-keystroke. */
+  const messageRef = useRef("")
   const [busy, setBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const previewUrlRef = useRef<string | null>(null)
   /** Prevent double-submit; only set true inside explicit Upload click. */
   const uploadStartedRef = useRef(false)
+
+  /**
+   * TipTap empty doc often yields "" or whitespace-only markdown.
+   * Empty note → backend stores default "version update".
+   * Non-empty → becomes the single system_version log body (not a file message).
+   */
+  const normalizeVersionNote = (raw: string): string => {
+    const t = (raw || "").trim()
+    if (!t) return ""
+    // Strip common empty markdown shells
+    const plain = t
+      .replace(/<[^>]+>/g, "")
+      .replace(/[#>*_`~\-\[\]()]/g, "")
+      .replace(/\s+/g, "")
+    return plain ? t : ""
+  }
 
   const revokePreview = useCallback(() => {
     if (previewUrlRef.current) {
@@ -132,6 +150,7 @@ export function UpdateFileDialog({
     if (!open) {
       clearPending()
       setMessage("")
+      messageRef.current = ""
       setBusy(false)
       setDragOver(false)
     }
@@ -153,6 +172,7 @@ export function UpdateFileDialog({
       // Cancel: discard staged File + object URL only (no server cleanup needed)
       clearPending()
       setMessage("")
+      messageRef.current = ""
     }
     onOpenChange(next)
   }
@@ -161,6 +181,9 @@ export function UpdateFileDialog({
    * Queue new version + full async ingest (same pipeline as folder upload).
    * Does not wait for MinerU / embed — returns as soon as the task is queued.
    * Preview / cancel / clear must never call this.
+   *
+   * The note is sent as commit_message only → backend writes ONE
+   * system_version message for this version (not a separate file message).
    */
   const handleConfirmUpload = async () => {
     if (!pendingFile || !fileId) {
@@ -171,14 +194,19 @@ export function UpdateFileDialog({
     uploadStartedRef.current = true
     setBusy(true)
     try {
+      // Prefer ref (latest editor emit) over React state
+      const versionNote = normalizeVersionNote(
+        messageRef.current || message
+      )
       const result = await uploadFileVersion(
         collectionId,
         fileId,
         pendingFile,
-        message.trim()
+        versionNote
       )
       clearPending()
       setMessage("")
+      messageRef.current = ""
       onOpenChange(false)
       // Refresh metadata immediately (version row / message); chunks when task done
       onSuccess?.()
@@ -214,7 +242,7 @@ export function UpdateFileDialog({
           "h-[min(88vh,900px)] flex flex-col gap-0 p-0 overflow-hidden"
         )}
       >
-        <DialogHeader className="px-4 py-3 shrink-0 space-y-1 shadow-[inset_0_-1px_0_color-mix(in_srgb,var(--pm-ink)_8%,transparent)]">
+        <DialogHeader className="px-4 py-3 shrink-0 space-y-1">
           <DialogTitle>Update file</DialogTitle>
           <DialogDescription className="pm-meta">
             {currentFilename
@@ -341,18 +369,27 @@ export function UpdateFileDialog({
             )}
           </div>
 
-          {/* Right: same MarkdownEditor as other message editors (Tiptap MD) */}
+          {/*
+            Right: version note — becomes the single system_version Log entry
+            for this upload (commit_message). Never creates a separate file message.
+          */}
           <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden p-3">
             <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1.5 shrink-0">
-              Message (optional)
+              Version note (optional)
             </label>
+            <p className="pm-meta mb-1.5 shrink-0 text-[var(--pm-faint)]">
+              Saved on this version&apos;s Update log — not a separate message.
+            </p>
             <div className="flex-1 min-h-0 min-w-0 overflow-auto rounded border border-border">
               {/* Remount when dialog opens so placeholder is never stuck from a prior session */}
               {open && (
                 <MarkdownEditor
                   key="update-file-message"
                   value={message}
-                  onChange={setMessage}
+                  onChange={(v) => {
+                    messageRef.current = v
+                    setMessage(v)
+                  }}
                   minHeight="100%"
                   placeholder={MESSAGE_EDITOR_PLACEHOLDER}
                   showToolbar={false}

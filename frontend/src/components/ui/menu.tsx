@@ -1,36 +1,56 @@
 import * as React from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { cn } from "@/lib/utils"
 
 /** Open/close duration — keep in sync with CSS `--pm-menu-ms` */
 export const MENU_MS = 180
 
-function Menu({ className, ...props }: React.ComponentProps<"div">) {
+const Menu = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentProps<"div">
+>(function Menu({ className, ...props }, ref) {
   return (
     <div
+      ref={ref}
       data-slot="menu"
       role="menu"
       className={cn("pm-menu", className)}
       {...props}
     />
   )
-}
+})
 
 /**
  * Soft float menu shell — same motion language as DropdownSelect.
  * Mounts closed → rAF open; on close waits MENU_MS then unmounts.
+ *
+ * `portal` + `anchorRef`: render fixed to document.body so overflow:hidden
+ * ancestors (e.g. .pm-fmt-inner) cannot clip secondary menus.
  */
 function SoftMenu({
   open,
   className,
   children,
+  portal = false,
+  anchorRef,
+  align = "start",
   ...props
 }: Omit<React.ComponentProps<"div">, "children"> & {
   open: boolean
   children: React.ReactNode
+  /** Portal to body with fixed position under anchor (toolbar submenus). */
+  portal?: boolean
+  anchorRef?: React.RefObject<HTMLElement | null>
+  /** Horizontal alignment relative to anchor when portaled */
+  align?: "start" | "center" | "end"
 }) {
   const [mounted, setMounted] = useState(false)
   const [shown, setShown] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null
+  )
 
   useEffect(() => {
     let exitTimer: ReturnType<typeof setTimeout> | null = null
@@ -58,16 +78,66 @@ function SoftMenu({
     }
   }, [open])
 
+  useLayoutEffect(() => {
+    if (!open || !portal || !anchorRef?.current) {
+      if (!open) setCoords(null)
+      return
+    }
+    const place = () => {
+      const el = anchorRef.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      let left = r.left
+      if (align === "center") left = r.left + r.width / 2
+      else if (align === "end") left = r.right
+      setCoords({ top: r.bottom + 6, left })
+    }
+    place()
+    window.addEventListener("scroll", place, true)
+    window.addEventListener("resize", place)
+    return () => {
+      window.removeEventListener("scroll", place, true)
+      window.removeEventListener("resize", place)
+    }
+  }, [open, portal, anchorRef, align, mounted])
+
   if (!mounted) return null
 
-  return (
+  const portalStyle: React.CSSProperties | undefined =
+    portal && coords
+      ? {
+          position: "fixed",
+          top: coords.top,
+          left: coords.left,
+          zIndex: 400,
+          margin: 0,
+        }
+      : undefined
+
+  const menu = (
     <Menu
-      className={cn("pm-menu--soft", shown && "is-open", className)}
+      ref={menuRef}
+      data-menu-portal={portal ? "true" : undefined}
+      data-menu-align={portal ? align : undefined}
+      className={cn(
+        "pm-menu--soft",
+        shown && "is-open",
+        portal && "pm-menu--portal",
+        portal && align === "center" && "is-align-center",
+        portal && align === "end" && "is-align-end",
+        className
+      )}
+      style={{ ...portalStyle, ...(props.style as React.CSSProperties) }}
       {...props}
     >
       {children}
     </Menu>
   )
+
+  if (portal && typeof document !== "undefined") {
+    return createPortal(menu, document.body)
+  }
+  return menu
 }
 
 function MenuItem({

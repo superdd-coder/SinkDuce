@@ -749,6 +749,7 @@ export function MessageStreamSidebar({
         title={addHint}
         initialContent=""
         onSave={handleAdd}
+        readonly={false}
       />
     </div>
   )

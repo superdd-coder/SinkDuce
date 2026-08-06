@@ -1691,59 +1691,101 @@ input[type="checkbox"] {
   font-family: inherit !important;
 }
 
-/* ── Global chrome toolbar (search / zoom / download / print) ──
-   Soft float pill — hug content, right-aligned; matches Premium ghost chrome. */
+/* Host shell: pure white stage — no grey title strip behind tools */
+.sinkduce-file-viewer .file-viewer-web-shell {
+  position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  background: #ffffff !important;
+  overflow: hidden !important;
+}
+.sinkduce-file-viewer .file-viewer-web-content {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  background: #ffffff !important;
+  /* Room so floating pills never cover first line of non-PDF docs permanently;
+     PDF overlays content (tools are glass pills). */
+  position: relative !important;
+}
+
+/* ── Global chrome toolbar — one clean float pill (no full-bleed band) ──
+   Structure: [ Search field · Search · < > ] · Download · Print
+   Room for prev/next result buttons; PDF zoom lives on left float, not here. */
 .sinkduce-file-viewer .file-viewer-web-toolbar {
   display: flex !important;
   justify-content: flex-end !important;
   align-items: center !important;
   flex-wrap: nowrap !important;
   width: auto !important;
-  max-width: 100% !important;
-  margin-left: auto !important;
+  max-width: min(calc(100% - 20px), 640px) !important;
   border: 1px solid var(--fv-border) !important;
   border-bottom: 1px solid var(--fv-border) !important;
   background: #ffffff !important;
   box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
   backdrop-filter: none !important;
-  min-height: 36px !important;
-  padding: 4px 8px !important;
-  gap: 6px !important;
+  -webkit-backdrop-filter: none !important;
+  min-height: 38px !important;
+  height: 38px !important;
+  padding: 4px 10px 4px 6px !important;
+  gap: 4px !important;
   border-radius: var(--fv-r-pill) !important;
+  /* visible so < > are never clipped by pill */
   overflow: visible !important;
+  box-sizing: border-box !important;
 }
-/* Shell toolbar row: floating pill, not full-bleed bar */
+/* Float over content — never a title-band row behind the pill */
 .sinkduce-file-viewer .file-viewer-web-shell > .file-viewer-web-toolbar {
-  align-self: flex-end !important;
-  width: fit-content !important;
-  max-width: min(100%, 640px) !important;
-  margin: 8px 10px 0 auto !important;
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  left: auto !important;
+  z-index: 40 !important;
+  align-self: auto !important;
+  width: max-content !important;
+  max-width: min(calc(100% - 20px), 640px) !important;
+  margin: 0 !important;
   border-radius: var(--fv-r-pill) !important;
 }
-/* Group chips: soft wash, no hard 1px grid cages */
+/*
+ * Flatten groups — no pill-in-pill wash (was reading as messy nested chips).
+ * Search field is the only “inset” surface.
+ */
 .sinkduce-file-viewer .file-viewer-web-toolbar-group {
+  display: inline-flex !important;
+  align-items: center !important;
   border: none !important;
-  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
-  border-radius: var(--fv-r-pill) !important;
-  padding: 2px 4px !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
   gap: 2px !important;
   box-shadow: none !important;
   flex-shrink: 0 !important;
+  min-width: 0 !important;
 }
 .sinkduce-file-viewer .file-viewer-web-search {
-  gap: 4px !important;
+  display: inline-flex !important;
+  gap: 3px !important;
+  flex: 0 0 auto !important;
   flex-shrink: 0 !important;
+  min-width: 0 !important;
+  max-width: none !important;
   overflow: visible !important;
   align-items: center !important;
+  background: transparent !important;
+  padding: 0 !important;
 }
-/* Full "Search document" placeholder — soft field */
+/* Wider search field — full "Search document" placeholder readable */
 .sinkduce-file-viewer .file-viewer-web-search input {
-  width: 148px !important;
-  min-width: 148px !important;
-  max-width: 180px !important;
+  width: 200px !important;
+  min-width: 180px !important;
+  max-width: 240px !important;
+  flex: 0 0 200px !important;
   box-sizing: border-box !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
 }
 .sinkduce-file-viewer .file-viewer-web-toolbar button,
 .sinkduce-file-viewer .file-viewer-web-toolbar input,
@@ -1759,15 +1801,35 @@ input[type="checkbox"] {
 .sinkduce-file-viewer .file-viewer-web-toolbar button {
   font-weight: 400 !important;
   min-width: auto !important;
-  height: 26px !important;
+  height: 28px !important;
   padding: 0 8px !important;
   border: none !important;
   border-radius: var(--fv-r-pill) !important;
   background: transparent !important;
   box-shadow: none !important;
+  flex-shrink: 0 !important;
   transition:
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
+}
+/* Search nav < > × — always visible, never clipped */
+.sinkduce-file-viewer .file-viewer-web-search button {
+  width: 28px !important;
+  min-width: 28px !important;
+  max-width: 28px !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+  flex-shrink: 0 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+/* "Search" text action keeps horizontal pad */
+.sinkduce-file-viewer .file-viewer-web-search button:first-of-type,
+.sinkduce-file-viewer .file-viewer-web-search button[aria-label*="Search" i]:not([aria-label*="next" i]):not([aria-label*="prev" i]):not([aria-label*="clear" i]):not([aria-label*="Previous" i]):not([aria-label*="Next" i]):not([aria-label*="Clear" i]) {
+  width: auto !important;
+  min-width: auto !important;
+  max-width: none !important;
+  padding: 0 8px !important;
 }
 .sinkduce-file-viewer .file-viewer-web-toolbar button:hover:not(:disabled) {
   background: var(--fv-green-wash) !important;
@@ -1805,10 +1867,14 @@ input[type="checkbox"] {
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
   font-variant-numeric: tabular-nums;
   color: var(--fv-green) !important;
-  min-width: 36px !important;
-  opacity: 0.9;
+  min-width: 0 !important;
+  padding: 0 4px !important;
+  opacity: 0.85;
 }
-
+/* Search hit counter: hide idle 0/0 so it doesn't look like broken page meter */
+.sinkduce-file-viewer .file-viewer-web-search-count:is(:empty, [data-count="0"], [data-total="0"]) {
+  display: none !important;
+}
 /* Hide HTML export / dark-mode / 1:1 reset */
 .sinkduce-file-viewer .file-viewer-web-toolbar button[data-part*="theme"],
 .sinkduce-file-viewer .file-viewer-web-toolbar [class*="theme-toggle"],
@@ -1828,7 +1894,9 @@ input[type="checkbox"] {
 }
 
 /*
- * PDF open: hide GLOBAL (library) zoom strip — PDF bar owns zoom/rotate.
+ * PDF open: web bar must NEVER show zoom / page / scale.
+ * (Library aria-labels vary; use multiple selectors + :has.)
+ * Zoom lives only on .pdf-toolbar left float; page on nav head.
  */
 .sinkduce-file-viewer:has(.pdf-shell)
   .file-viewer-web-toolbar-group[aria-label="Zoom controls"],
@@ -1837,77 +1905,100 @@ input[type="checkbox"] {
 .sinkduce-file-viewer:has(.pdf-shell)
   .file-viewer-web-toolbar-group[aria-label*="Zoom" i],
 .sinkduce-file-viewer:has(.pdf-shell)
-  .file-viewer-web-toolbar-group[aria-label*="缩放"] {
-  display: none !important;
-}
+  .file-viewer-web-toolbar-group[aria-label*="缩放"],
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group:has(.file-viewer-web-zoom-meter),
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group:has(.file-viewer-web-zoom-meter--readonly),
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group:has(button[aria-label*="Zoom" i]),
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar-group:has(button[title*="Zoom" i]),
 .sinkduce-file-viewer:has(.pdf-shell)
   .file-viewer-web-toolbar
   .file-viewer-web-zoom-meter,
 .sinkduce-file-viewer:has(.pdf-shell)
   .file-viewer-web-toolbar
-  .file-viewer-web-zoom-meter--readonly {
+  .file-viewer-web-zoom-meter--readonly,
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar
+  .pdf-toolbar-group,
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar
+  .pdf-page-meter,
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar
+  .pdf-toolbar-group--zoom,
+.sinkduce-file-viewer:has(.pdf-shell)
+  .file-viewer-web-toolbar
+  .pdf-toolbar-group--rotate {
   display: none !important;
 }
 
 /*
  * PDF chrome layout
  * ----------------
- * Wide: one visual top row — left slot for zoom/rotate (pdf-toolbar pulled up),
- *       right for Search / Download / Print.
- * Narrow: stack two rows so controls never overlap (no shared absolute slot).
- *
- * container-type on shell so we react to *viewer* width, not only viewport.
+ * Two independent floating pills over a pure white stage:
+ *   · Right: Search / Download / Print (web toolbar) — no padding slot for zoom
+ *   · Left:  Zoom / Rotate (pdf-toolbar re-homed) — own soft glass pill
+ * Nav: floating nested white card with slide open/close (not a full-height rail).
  */
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-shell {
   display: flex !important;
   flex-direction: column !important;
   overflow: hidden !important;
+  background: #ffffff !important;
   container-type: inline-size !important;
   container-name: fv-shell !important;
 }
+/* PDF: same clean right pill — wider so Search + < > stay fully visible */
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-shell > .file-viewer-web-toolbar {
   display: flex !important;
-  width: fit-content !important;
-  max-width: min(100%, 720px) !important;
-  align-self: flex-end !important;
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  left: auto !important;
+  z-index: 40 !important;
+  width: max-content !important;
+  max-width: min(calc(100% - 24px), 640px) !important;
+  align-self: auto !important;
   align-items: center !important;
   justify-content: flex-end !important;
-  gap: 6px !important;
-  /* Soft float pill — not full-bleed bar */
-  margin: 8px 10px 4px auto !important;
-  border-radius: var(--fv-r-pill) !important;
-  border: 1px solid var(--fv-border) !important;
-  border-bottom: 1px solid var(--fv-border) !important;
-  background: #ffffff !important;
-  box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
-  /* Left slot for zoom/rotate when single-row mode */
-  padding-left: min(188px, 34%) !important;
-  padding-right: 8px !important;
-  height: 36px !important;
-  min-height: 36px !important;
+  gap: 4px !important;
+  margin: 0 !important;
+  padding: 4px 10px 4px 6px !important;
+  height: 38px !important;
+  min-height: 38px !important;
   box-sizing: border-box !important;
   flex-shrink: 0 !important;
-  position: relative !important;
-  z-index: 2 !important;
   flex-wrap: nowrap !important;
-  overflow: hidden !important; /* clip rather than paint over zoom */
+  overflow: visible !important;
+  border-radius: var(--fv-r-pill) !important;
+  border: 1px solid var(--fv-border) !important;
+  background: #ffffff !important;
+  box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
-/* Search can shrink so Download/Print stay visible */
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-search {
-  flex: 1 1 auto !important;
-  min-width: 72px !important;
-  max-width: 220px !important;
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  overflow: visible !important;
 }
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-search input {
-  min-width: 0 !important;
-  width: 100% !important;
+  width: 200px !important;
+  min-width: 180px !important;
+  max-width: 240px !important;
+  flex: 0 0 200px !important;
 }
 .sinkduce-file-viewer:has(.pdf-shell) .file-viewer-web-content {
   flex: 1 1 auto !important;
   min-height: 0 !important;
-  overflow: hidden !important; /* do not let page chrome spill into top bar */
+  overflow: hidden !important;
   position: relative !important;
   z-index: 1 !important;
+  background: #ffffff !important;
 }
 .sinkduce-file-viewer:has(.pdf-shell) .pdf-shell {
   display: flex !important;
@@ -1916,50 +2007,77 @@ input[type="checkbox"] {
   min-height: 0 !important;
   overflow: hidden !important;
   position: relative !important;
-  background: var(--fv-bg) !important;
+  background: #ffffff !important;
 }
 
-/* Zoom/rotate: sit in the left slot of the Search pill (wide only) */
+/*
+ * Default library PDF toolbar is a full-bleed grey bar — hide until re-homed
+ * so it never paints a second strip under the clean float pills.
+ */
+.sinkduce-file-viewer .pdf-toolbar:not([data-sinkduce-bar="top-left"]) {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  z-index: -1 !important;
+}
+/* Zoom/rotate — clean left float pill (only −  %  + · rotate) */
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] {
   display: flex !important;
   flex-wrap: nowrap !important;
   align-items: center !important;
   justify-content: flex-start !important;
-  gap: 4px !important;
+  gap: 2px !important;
   width: auto !important;
-  max-width: min(190px, 30%) !important;
+  max-width: none !important;
+  min-width: max-content !important;
   min-height: 36px !important;
   height: 36px !important;
-  padding: 4px 6px 4px 10px !important;
-  /* Align into the floating pill row (margin top of toolbar ≈ 8px + height 36) */
-  margin: calc(-36px - 4px) 0 0 10px !important;
-  border: none !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  overflow: hidden !important;
-  position: relative !important;
-  z-index: 20 !important;
+  padding: 3px 8px !important;
+  margin: 0 !important;
+  border: 1px solid var(--fv-border) !important;
+  border-radius: var(--fv-r-pill) !important;
+  background: #ffffff !important;
+  box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  /* visible — scale label "125%" must not clip after zoom */
+  overflow: visible !important;
+  position: absolute !important;
+  top: 10px !important;
+  left: 10px !important;
+  z-index: 40 !important;
   flex-shrink: 0 !important;
   pointer-events: auto !important;
+  opacity: 1 !important;
 }
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-toolbar-group--zoom,
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-toolbar-group--rotate {
   display: inline-flex !important;
   align-items: center !important;
-  height: 26px !important;
-  min-height: 26px !important;
-  padding: 0 4px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 2px !important;
   gap: 2px !important;
   border: none !important;
-  border-radius: var(--fv-r-pill) !important;
-  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
   box-shadow: none !important;
   flex-shrink: 0 !important;
   visibility: visible !important;
   opacity: 1 !important;
+  overflow: visible !important;
 }
-/* Page / sidebar controls belong in nav head — never on the top overlay row */
-.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] > .pdf-icon-button,
+/* Page meter / labels stay out of the left float bar (live in nav head) */
 .sinkduce-file-viewer
   .pdf-toolbar[data-sinkduce-bar="top-left"]
   > .pdf-toolbar-group:not(.pdf-toolbar-group--zoom):not(.pdf-toolbar-group--rotate),
@@ -1967,90 +2085,110 @@ input[type="checkbox"] {
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-page-label {
   display: none !important;
 }
-.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-icon-button,
-.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-scale-button,
-.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-rotation-meter {
-  height: 22px !important;
-  min-width: 22px !important;
+/*
+ * ± zoom icons + **sidebar toggle** — must stay on the left float pill.
+ * Toggle cannot live only in the nav pane: when closed, pane is pointer-events:none.
+ */
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-icon-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 26px !important;
+  width: 26px !important;
+  min-width: 26px !important;
+  max-width: 26px !important;
   font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
   font-weight: 400 !important;
   color: var(--fv-green) !important;
   border: none !important;
   background: transparent !important;
   border-radius: var(--fv-r-pill) !important;
-  padding: 0 5px !important;
+  padding: 0 !important;
+  flex-shrink: 0 !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+/* Nav / sidebar toggle — product hides PDF page sidebar entirely */
+.sinkduce-file-viewer .pdf-toolbar .pdf-icon-button:has(.pdf-panel-icon),
+.sinkduce-file-viewer .pdf-toolbar .pdf-icon-button[data-sinkduce-nav-toggle],
+.sinkduce-file-viewer .pdf-toolbar .pdf-icon-button[aria-label*="navigation" i],
+.sinkduce-file-viewer .pdf-toolbar .pdf-icon-button[aria-label*="sidebar" i],
+.sinkduce-file-viewer .pdf-toolbar .pdf-icon-button[title*="navigation" i] {
+  display: none !important;
+}
+/*
+ * Scale label ("100%", "125%", …) — MUST stay wide enough after zoom.
+ * Was min-width:22px + parent overflow:hidden → percent vanished when text grew.
+ */
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-scale-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 26px !important;
+  width: auto !important;
+  min-width: 44px !important;
+  max-width: none !important;
+  padding: 0 6px !important;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  font-variant-numeric: tabular-nums !important;
+  letter-spacing: 0.02em !important;
+  color: var(--fv-green) !important;
+  border: none !important;
+  background: transparent !important;
+  border-radius: var(--fv-r-pill) !important;
+  flex-shrink: 0 !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-rotation-meter {
+  height: 26px !important;
+  min-width: 28px !important;
+  padding: 0 4px !important;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  color: var(--fv-green) !important;
+  border: none !important;
+  background: transparent !important;
+  border-radius: var(--fv-r-pill) !important;
+  flex-shrink: 0 !important;
+  white-space: nowrap !important;
 }
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-icon-button:hover,
 .sinkduce-file-viewer .pdf-toolbar[data-sinkduce-bar="top-left"] .pdf-scale-button:hover {
   background: var(--fv-green-wash) !important;
 }
-.sinkduce-file-viewer:has(.pdf-shell) .pdf-content {
+/* Viewport always full width — nav is an overlay float card */
+.sinkduce-file-viewer:has(.pdf-shell) .pdf-content,
+.sinkduce-file-viewer:has(.pdf-shell) .pdf-shell--nav-hidden .pdf-content {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
   flex: 1 1 auto !important;
   min-height: 0 !important;
   overflow: hidden !important;
+  position: relative !important;
+  background: #ffffff !important;
 }
 
-/*
- * Narrow viewer: abandon single-row overlay — two clear rows, no overlap.
- * container = .file-viewer-web-shell (viewer width, not whole browser).
- */
-@container fv-shell (max-width: 720px) {
-  .file-viewer-web-toolbar {
-    padding-left: 8px !important;
-    justify-content: flex-start !important;
+@container fv-shell (max-width: 640px) {
+  .file-viewer-web-shell > .file-viewer-web-toolbar {
+    max-width: calc(100% - 20px) !important;
     flex-wrap: wrap !important;
-    row-gap: 4px !important;
     height: auto !important;
     min-height: 36px !important;
-    overflow: visible !important;
-    width: calc(100% - 20px) !important;
-    max-width: none !important;
-    margin: 8px 10px 4px !important;
-    align-self: stretch !important;
   }
   .file-viewer-web-search {
-    flex: 1 1 120px !important;
-    max-width: none !important;
-    min-width: 64px !important;
+    min-width: 100px !important;
+  }
+  .file-viewer-web-search input {
+    width: 120px !important;
+    min-width: 100px !important;
   }
   .pdf-toolbar[data-sinkduce-bar="top-left"] {
-    margin: 0 10px 0 !important;
     max-width: calc(100% - 20px) !important;
-    width: calc(100% - 20px) !important;
-    height: 32px !important;
-    min-height: 32px !important;
-    padding: 2px 8px !important;
-    border: none !important;
-    border-radius: var(--fv-r-pill) !important;
-    background: #ffffff !important;
-    box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
-    z-index: 1 !important;
-  }
-}
-
-/* Viewport fallback (outer dialog / no container support) */
-@media (max-width: 900px) {
-  .sinkduce-file-viewer:has(.pdf-shell)
-    .file-viewer-web-shell
-    > .file-viewer-web-toolbar {
-    padding-left: 8px !important;
-    justify-content: flex-start !important;
-    flex-wrap: wrap !important;
-    height: auto !important;
-    overflow: visible !important;
-    width: calc(100% - 20px) !important;
-    max-width: none !important;
-    margin: 8px 10px 4px !important;
-    align-self: stretch !important;
-  }
-  .sinkduce-file-viewer:has(.pdf-shell) .pdf-toolbar[data-sinkduce-bar="top-left"] {
-    margin: 0 10px !important;
-    max-width: calc(100% - 20px) !important;
-    width: calc(100% - 20px) !important;
-    border: none !important;
-    border-radius: var(--fv-r-pill) !important;
-    background: #ffffff !important;
-    box-shadow: var(--pm-shadow-sm, 0 1px 2px rgba(18, 20, 16, 0.04)) !important;
   }
 }
 
@@ -2060,220 +2198,31 @@ input[type="checkbox"] {
   touch-action: pan-x pan-y !important;
 }
 
-/* ── PDF left nav: text list only (no number tiles) ──
-   DOM: button.pdf-page-button > span.pdf-page-thumb + span.pdf-page-label */
+/* ── PDF shell: no page/outline sidebar (product choice) ── */
 .sinkduce-file-viewer .pdf-shell {
-  background: var(--fv-bg) !important;
+  background: #ffffff !important;
   color: inherit !important;
   font-weight: 300 !important;
 }
-.sinkduce-file-viewer .pdf-nav-pane {
-  width: 140px !important;
-  min-width: 120px !important;
-  max-width: 160px !important;
-  border-right: 1px solid var(--fv-border) !important;
-  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #ffffff) !important;
-  box-shadow: none !important;
-}
-.sinkduce-file-viewer .pdf-nav-tabs {
-  border-color: var(--fv-border) !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  padding: 4px 8px 8px !important;
-}
-/*
- * Nav head = sidebar toggle + page (1/24) only.
- * "PAGE NAVIGATION" title is removed by layoutPdfChrome; keep hidden as fallback.
- */
-.sinkduce-file-viewer .pdf-nav-head {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
-  gap: 4px !important;
-  min-height: 28px !important;
-  padding: 6px 8px 4px !important;
-  border: none !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-/* Never show library title / page-count label */
-.sinkduce-file-viewer .pdf-nav-head > span:not(.pdf-page-meter):not(.pdf-panel-icon),
-.sinkduce-file-viewer .pdf-nav-head > strong {
-  display: none !important;
-}
-/* Compact sidebar toggle in nav head */
-.sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button {
-  width: 24px !important;
-  min-width: 24px !important;
-  height: 24px !important;
-  padding: 0 !important;
-  border: none !important;
-  border-radius: var(--fv-r-pill) !important;
-  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
-  color: var(--fv-green) !important;
-  box-shadow: none !important;
-  flex-shrink: 0 !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-}
-.sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button .pdf-panel-icon {
-  width: 12px !important;
-  height: 12px !important;
-  font-size: 11px !important;
-  transform: scale(0.85);
-}
-.sinkduce-file-viewer .pdf-nav-head > .pdf-icon-button:hover {
-  background: var(--fv-green-wash) !important;
-}
-/* Compact page group (‹ 1/24 ›) in nav head */
-.sinkduce-file-viewer .pdf-nav-head > .pdf-toolbar-group {
-  display: inline-flex !important;
-  align-items: center !important;
-  height: 24px !important;
-  min-height: 24px !important;
-  gap: 1px !important;
-  padding: 0 4px !important;
-  border: none !important;
-  border-radius: var(--fv-r-pill) !important;
-  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
-  box-shadow: none !important;
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-  justify-content: center !important;
-}
-.sinkduce-file-viewer .pdf-nav-head .pdf-icon-button {
-  width: 18px !important;
-  min-width: 18px !important;
-  height: 18px !important;
-  font-size: 11px !important;
-  padding: 0 !important;
-  border: none !important;
-  border-radius: var(--fv-r-pill) !important;
-  color: var(--fv-green) !important;
-  background: transparent !important;
-}
-.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter,
-.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter strong,
-.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter span {
-  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 400 !important;
-  letter-spacing: 0.02em !important;
-  min-width: 0 !important;
-  color: var(--fv-green) !important;
-  line-height: 1 !important;
-  white-space: nowrap !important;
-}
-.sinkduce-file-viewer .pdf-nav-head .pdf-page-meter strong {
-  font-weight: 400 !important;
-}
-
-/* Pages / Outline — soft segment like pm-ws-seg */
-.sinkduce-file-viewer .pdf-nav-tabs {
-  display: flex !important;
-  gap: 4px !important;
-  padding: 0 8px 8px !important;
-}
-.sinkduce-file-viewer .pdf-nav-tabs button {
-  flex: 1 1 auto !important;
-  height: 26px !important;
-  border: none !important;
-  border-radius: var(--fv-r-pill) !important;
-  border-bottom: none !important;
-  background: transparent !important;
-  color: var(--fv-muted) !important;
-  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 400 !important;
-  letter-spacing: 0.04em !important;
-  box-shadow: none !important;
-  transition:
-    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
-}
-.sinkduce-file-viewer .pdf-nav-tabs button:hover {
-  color: var(--fv-green) !important;
-  background: var(--fv-green-wash) !important;
-}
-.sinkduce-file-viewer .pdf-nav-tabs button.active {
-  border-bottom-color: transparent !important;
-  background: var(--fv-green-wash) !important;
-  color: var(--fv-green) !important;
-}
+/* Hard-hide nav chrome even if library still mounts it */
+.sinkduce-file-viewer .pdf-nav-pane,
+.sinkduce-file-viewer .pdf-nav-head,
+.sinkduce-file-viewer .pdf-nav-tabs,
 .sinkduce-file-viewer .pdf-page-list,
 .sinkduce-file-viewer .pdf-outline-list {
-  display: flex !important;
-  flex-direction: column !important;
-  padding: 2px 6px 10px !important;
-  gap: 1px !important;
-}
-/* Kill grid layout that stacks number tile + label out of alignment */
-.sinkduce-file-viewer .pdf-page-button,
-.sinkduce-file-viewer .pdf-page-button--with-thumbnail,
-.sinkduce-file-viewer .pdf-outline-button {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
-  grid-template-columns: none !important;
-  width: 100% !important;
-  box-sizing: border-box !important;
-  border: none !important;
-  border-radius: var(--fv-r, 8px) !important;
-  background: transparent !important;
-  color: var(--fv-text) !important;
-  font: var(--pm-t-title, 400 13px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
-  font-weight: 400 !important;
-  letter-spacing: 0.01em !important;
-  min-height: 30px !important;
-  height: auto !important;
-  padding: 6px 10px !important;
-  margin: 0 !important;
-  box-shadow: none !important;
-  text-align: left !important;
-  gap: 0 !important;
-  line-height: 1.35 !important;
-  transition:
-    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) !important;
-}
-/* Hide the number square (pdf-page-thumb); keep only "Page N" label */
-.sinkduce-file-viewer .pdf-page-button > .pdf-page-thumb,
-.sinkduce-file-viewer .pdf-page-thumb:not(.pdf-page-thumb--thumbnail) {
   display: none !important;
-}
-.sinkduce-file-viewer .pdf-page-label,
-.sinkduce-file-viewer .pdf-outline-title {
-  display: block !important;
-  flex: 1 1 auto !important;
+  width: 0 !important;
   min-width: 0 !important;
-  font: inherit !important;
-  color: inherit !important;
-  line-height: inherit !important;
-  white-space: nowrap !important;
+  max-width: 0 !important;
   overflow: hidden !important;
-  text-overflow: ellipsis !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
 }
-.sinkduce-file-viewer .pdf-page-button:hover,
-.sinkduce-file-viewer .pdf-outline-button:hover {
-  background: var(--fv-green-wash) !important;
-  color: var(--fv-green) !important;
+.sinkduce-file-viewer .pdf-content,
+.sinkduce-file-viewer .pdf-shell--nav-hidden .pdf-content {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
 }
-/* Selected row — green wash + left inset (Collections language) */
-.sinkduce-file-viewer .pdf-page-button--active,
-.sinkduce-file-viewer .pdf-page-button.pdf-page-button--active {
-  background: var(--fv-green-soft) !important;
-  color: var(--fv-green) !important;
-  border: none !important;
-  box-shadow: inset 2px 0 0 0 var(--fv-green) !important;
-  font-weight: 400 !important;
-  transform: none !important;
-  outline: none !important;
-}
-.sinkduce-file-viewer .pdf-page-button--active .pdf-page-label {
-  color: var(--fv-green) !important;
-  font-weight: 400 !important;
-}
-.sinkduce-file-viewer .pdf-outline-empty,
 .sinkduce-file-viewer .pdf-state {
   border: none !important;
   background: transparent !important;
@@ -2312,7 +2261,11 @@ input[type="checkbox"] {
   border-color: transparent !important;
 }
 .sinkduce-file-viewer .pdf-wrapper {
-  background: var(--fv-surface) !important;
+  /* Pure white page stage (Premium nested) */
+  background: #ffffff !important;
+}
+.sinkduce-file-viewer .pdf-viewport {
+  background: #ffffff !important;
 }
 
 /* Spreadsheet sheet tabs (bottom bar) */
@@ -2749,7 +2702,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   hyphens: auto;
 }
 
-/* Blurb (Consolidate lives on Summary header) */
+/* Project definition — fixed 3-line band; overflow ellipsis */
 .pm-blurb-row {
   display: block;
   margin: 0 0 var(--pm-ov-gap, 14px);
@@ -2757,9 +2710,25 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   width: 100%;
 }
 .pm-blurb {
+  --pm-blurb-lh: 1.55;
+  --pm-blurb-lines: 3;
   font: var(--pm-t-meta);
+  font-weight: 300;
   color: var(--pm-muted);
-  line-height: 1.55;
+  line-height: var(--pm-blurb-lh);
+  /* Fixed band height (3 lines) — does not grow with content */
+  height: calc(1em * var(--pm-blurb-lh) * var(--pm-blurb-lines));
+  max-height: calc(1em * var(--pm-blurb-lh) * var(--pm-blurb-lines));
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  text-overflow: ellipsis;
+  /* Clamp + justify looks cleaner than justified truncated lines */
+  text-align: left !important;
+  text-align-last: left !important;
+  word-break: break-word;
 }
 
 /* Summary header — same full width as body */
@@ -2843,9 +2812,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 
 /*
  * Overview layout (canonical)
- * 1) Left: chrome sticky (tabs → Consolidate); only body scrolls.
- * 2) Right: full stage height, bottom aligns with left content area bottom.
- * 3) To-do height = chrome measure; Notes/Meetings expand into remaining space.
+ * 1) Left: tab bar pinned; rest of column scrolls as one unit.
+ * 2) Right: full stage height; To-do = 2/5 of rail; Notes/Meetings fill rest.
  */
 .pm-overview {
   /*
@@ -2877,30 +2845,29 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: transparent;
 }
 
-/* Left column: chrome fixed + body scroll */
+/* Left column: tab bar pinned; everything below scrolls together */
 .pm-overview-left {
   min-width: 0;
   min-height: 0;
   max-height: 100%;
   display: flex;
   flex-direction: column;
-  /* visible so stats soft-shadows aren’t clipped; body still scrolls */
-  overflow: visible;
+  overflow: hidden;
   box-sizing: border-box;
 }
+/* Tabs only — no longer part of a sticky chrome block */
+.pm-overview-tabs {
+  flex: 0 0 auto;
+  z-index: 2;
+  margin-bottom: var(--pm-ov-gap, 14px);
+  background: transparent;
+}
+/* Legacy class kept for any leftover callers — no longer sticky band */
 .pm-overview-chrome {
   width: 100%;
   flex: 0 0 auto;
-  z-index: 2;
-  /* sits on .pm-stage surface */
   background: transparent;
   overflow: visible;
-  padding: 3px;
-  margin: -3px -3px 0;
-  box-sizing: content-box;
-}
-.pm-overview-tabs {
-  margin-bottom: var(--pm-ov-gap, 14px);
 }
 .pm-overview-left-scroll {
   flex: 1 1 0;
@@ -2908,11 +2875,16 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: none;
-  padding-bottom: var(--pm-overview-fab-pad);
+  padding: 3px 3px var(--pm-overview-fab-pad);
+  margin: -3px 0 0;
   box-sizing: border-box;
 }
 .pm-overview-left-body {
-  margin-top: 6px;
+  margin-top: 0;
+}
+/* Space between summary header and body when both are in the scroll column */
+.pm-overview-left-body .pm-summary-h {
+  margin-bottom: 6px;
 }
 
 /* Right: full stage height — portal host for Quick Chat (absolute inset-0) */
@@ -2965,13 +2937,19 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   }
 }
 
-/* To-do: fixed height from chrome measure; list scrolls inside card */
+/*
+ * To-do: 2/5 of the right rail card stack (not linked to left chrome).
+ * Remaining 3/5 goes to Notes + Meetings via .pm-rail-lower flex-grow.
+ */
 .pm-todo-fixed {
-  flex: 0 0 auto;
-  min-height: 120px;
+  flex: 0 0 40%;
+  height: 40%;
+  max-height: 40%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: visible;
+  box-sizing: border-box;
 }
 .pm-todo-fixed > .todo-card,
 .pm-todo-fixed > .pm-rail-card {
@@ -3819,19 +3797,191 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border-radius: var(--pm-r-lg, 20px);
 }
 
-/* Soft dialog surface (opt-in via class on DialogContent) */
-.pm-dialog {
-  background: var(--pm-surface) !important;
+/*
+ * Soft dialog shell — one shared stage color for ALL pm-dialogs
+ * (compact forms, All Files, Note workspace, File detail…).
+ * Nested white cards float on this canvas; do not reintroduce surface/white shells.
+ */
+.pm-dialog,
+.pm-dialog[data-slot="dialog-content"] {
+  background: var(--pm-canvas, #f6f5f1) !important;
   border-radius: var(--pm-r-lg) !important;
   box-shadow: var(--pm-shadow) !important;
   ring: none;
   border: none;
 }
+/* Title row: no band, no hairline — same canvas as body */
+.pm-dialog [data-slot="dialog-header"] {
+  background: transparent !important;
+  border: none !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+}
+/*
+ * Silk open/close — shared by todo create/edit AND Note workspace dialog.
+ * Parent must keep mounted while open→false (Base UI data-ending-style).
+ *
+ * Keep motion simple (opacity + scale only). Do NOT animate `translate` /
+ * own centering — that broke Note open fade and made close feel odd.
+ * Do NOT set Tailwind duration-0 on these nodes.
+ */
+.pm-dialog.pm-dialog--silk[data-slot="dialog-content"],
+.pm-dialog--silk[data-slot="dialog-content"] {
+  --pm-dialog-silk-ms: 280ms;
+  --pm-dialog-silk-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center center;
+  opacity: 1;
+  scale: 1;
+  filter: blur(0);
+  animation: none !important;
+  /* Beat DialogContent duration-300 / animate-in utilities */
+  transition:
+    opacity var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease),
+    scale var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease),
+    filter var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease) !important;
+  will-change: opacity, scale;
+}
+.pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-starting-style],
+.pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-ending-style],
+.pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-closed],
+.pm-dialog--silk[data-slot="dialog-content"][data-starting-style],
+.pm-dialog--silk[data-slot="dialog-content"][data-ending-style],
+.pm-dialog--silk[data-slot="dialog-content"][data-closed] {
+  opacity: 0 !important;
+  scale: 0.97;
+  filter: blur(0.5px);
+}
+/*
+ * Silk backdrop — DialogContent overlayClassName="pm-dialog-overlay--silk"
+ *
+ * Drive visibility with data-open (not only starting/ending), so open/close
+ * always interpolates opacity even if one of the transition-status attrs
+ * is briefly missing. Matches popup silk clock (280ms).
+ *
+ * Pattern:
+ *  - default / closed / starting / ending → opacity 0
+ *  - data-open without starting/ending → opacity 1  (enter transition)
+ *  - leave data-open → opacity 0                 (exit transition)
+ */
+[data-slot="dialog-overlay"].pm-dialog-overlay--silk {
+  --pm-dialog-silk-ms: 280ms;
+  --pm-dialog-silk-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  animation: none !important;
+  /* Kill TW bg-black/15 + blur utilities — own the surface so opacity is the only dim */
+  background: rgba(18, 20, 16, 0.16) !important;
+  backdrop-filter: blur(3px) !important;
+  -webkit-backdrop-filter: blur(3px) !important;
+  opacity: 0;
+  transition:
+    opacity var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease) !important;
+  will-change: opacity;
+  /* Base UI sets hidden when unmounted — don't fight display during ending */
+  pointer-events: none;
+}
+/* Fully open (not mid enter/exit) */
+[data-slot="dialog-overlay"].pm-dialog-overlay--silk[data-open]:not(
+    [data-starting-style]
+  ):not([data-ending-style]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Explicit closed / mid-transition targets (same as default 0, keep for clarity) */
+[data-slot="dialog-overlay"].pm-dialog-overlay--silk[data-starting-style],
+[data-slot="dialog-overlay"].pm-dialog-overlay--silk[data-ending-style],
+[data-slot="dialog-overlay"].pm-dialog-overlay--silk[data-closed],
+[data-slot="dialog-overlay"].pm-dialog-overlay--silk:not([data-open]) {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+/* Fallback: any overlay next to a silk popup in the same portal root */
+[data-slot="dialog-portal"]:has(.pm-dialog--silk) [data-slot="dialog-overlay"] {
+  animation: none !important;
+  transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+[data-slot="dialog-portal"]:has(.pm-dialog--silk)
+  [data-slot="dialog-overlay"]:not([data-open]),
+[data-slot="dialog-portal"]:has(.pm-dialog--silk)
+  [data-slot="dialog-overlay"][data-starting-style],
+[data-slot="dialog-portal"]:has(.pm-dialog--silk)
+  [data-slot="dialog-overlay"][data-ending-style],
+[data-slot="dialog-portal"]:has(.pm-dialog--silk)
+  [data-slot="dialog-overlay"][data-closed] {
+  opacity: 0 !important;
+}
+[data-slot="dialog-portal"]:has(.pm-dialog--silk)
+  [data-slot="dialog-overlay"][data-open]:not([data-starting-style]):not(
+    [data-ending-style]
+  ) {
+  opacity: 1;
+}
+/* Compact markdown field inside todo create (message-like, no slash) */
+.pm-todo-md-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 9.5rem;
+  max-height: 16rem;
+  overflow: hidden;
+  border-radius: var(--pm-r-sm, 8px);
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  background: #ffffff;
+  box-sizing: border-box;
+}
+.pm-todo-md-host:focus-within {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 35%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+}
+.pm-todo-md-host--readonly {
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #fff);
+  pointer-events: none;
+}
+.pm-todo-md-host--readonly:focus-within {
+  border-color: color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  box-shadow: none;
+}
+.pm-todo-md-host .pm-todo-md-editor,
+.pm-todo-md-host .tiptap-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+.pm-todo-md-host .pm-fmt-toolbar {
+  flex-shrink: 0;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+}
+.pm-todo-md-host .ProseMirror {
+  min-height: 6.5rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  padding: 8px 12px 12px !important;
+  font: var(--pm-t-prose, 300 14px/1.55 "Source Serif 4 Variable", Georgia, serif) !important;
+  color: var(--pm-text, #2c2e2a);
+}
+.pm-todo-md-host .ProseMirror p {
+  margin: 0.35em 0;
+}
+.pm-todo-md-host .ProseMirror p:first-child {
+  margin-top: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-dialog.pm-dialog--silk[data-slot="dialog-content"],
+  .pm-dialog--silk[data-slot="dialog-content"],
+  [data-slot="dialog-overlay"].pm-dialog-overlay--silk {
+    transition-duration: 1ms !important;
+    filter: none !important;
+    scale: 1 !important;
+  }
+}
+/* All soft dialog titles: default title role + uppercase chrome (no band) */
 .pm-dialog [data-slot="dialog-title"] {
   font: var(--pm-t-title);
   font-weight: 400;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--pm-ink);
+  background: transparent !important;
 }
 .pm-dialog [data-slot="dialog-footer"] {
   background: transparent !important;
@@ -3907,6 +4057,42 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   transform: translateY(0) scale(1);
   pointer-events: auto;
 }
+/*
+ * Drop-up SoftMenu (file detail Archive / Delete foot dock).
+ * Opens above the trigger — origin bottom, enter from below, exit reverse.
+ * Same duration/ease as default SoftMenu (open/close symmetric).
+ */
+.pm-menu.pm-menu--soft.pm-menu--drop-up {
+  transform-origin: bottom center;
+  transform: translateY(6px) scale(0.98);
+}
+.pm-menu.pm-menu--soft.pm-menu--drop-up.is-open {
+  transform: translateY(0) scale(1);
+}
+/* Portaled SoftMenus (format toolbar + / heading) — fixed under trigger */
+.pm-menu.pm-menu--soft.pm-menu--portal {
+  position: fixed;
+  z-index: 400;
+  margin: 0;
+  transform-origin: top center;
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-align-center {
+  transform: translateX(-50%) translateY(-6px) scale(0.98);
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-align-center.is-open {
+  transform: translateX(-50%) translateY(0) scale(1);
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-align-end {
+  transform: translateX(-100%) translateY(-6px) scale(0.98);
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-align-end.is-open {
+  transform: translateX(-100%) translateY(0) scale(1);
+}
+/* Format palette when portaled — no absolute offsets */
+.pm-menu.pm-menu--portal.pm-fmt-palette {
+  min-width: 0 !important;
+  width: max-content;
+}
 .pm-menu-item {
   display: flex;
   width: 100%;
@@ -3958,29 +4144,38 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   }
 }
 
-/* ── Slash command menu (Premium SoftMenu language) ── */
+/*
+ * Slash command menu — Premium SoftMenu language
+ * Soft float (no hard grid), Geist chrome, green wash selection,
+ * air between groups instead of 1px rules (SPEC §1 soft structure).
+ */
 .pm-slash-menu {
+  --pm-slash-ms: 180ms;
+  --pm-slash-ease: cubic-bezier(0.32, 0.72, 0, 1);
   position: fixed;
   z-index: 260;
   display: flex;
   flex-direction: column;
-  width: 240px;
-  max-height: min(280px, 50vh);
+  width: 268px;
+  max-height: min(320px, 52vh);
   box-sizing: border-box;
   padding: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
-  border-radius: var(--pm-r-sm, 8px);
+  border: none;
+  border-radius: var(--pm-r, 16px);
   background: #ffffff;
   color: var(--pm-ink, #121410);
-  box-shadow: var(--pm-shadow);
+  box-shadow:
+    0 1px 2px rgba(18, 20, 16, 0.04),
+    0 10px 28px -8px rgba(18, 20, 16, 0.14),
+    0 20px 48px -16px rgba(18, 20, 16, 0.1);
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   opacity: 0;
-  transform: translateY(4px) scale(0.98);
+  transform: translateY(6px) scale(0.98);
   transform-origin: top left;
   transition:
-    opacity 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+    opacity var(--pm-slash-ms) var(--pm-slash-ease),
+    transform var(--pm-slash-ms) var(--pm-slash-ease);
   will-change: opacity, transform;
 }
 .pm-slash-menu.is-open {
@@ -3989,34 +4184,42 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-slash-menu__search {
   flex-shrink: 0;
-  padding: 8px 10px 6px;
-  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  padding: 10px 10px 8px;
+  /* Soft edge under search — no hard 1px rule */
+  background: linear-gradient(
+    to bottom,
+    #ffffff 0%,
+    #ffffff 70%,
+    color-mix(in srgb, var(--pm-canvas, #f6f5f1) 28%, #ffffff) 100%
+  );
 }
 .pm-slash-menu__input {
   display: block;
   width: 100%;
   box-sizing: border-box;
-  height: 28px;
+  height: 30px;
   margin: 0;
-  padding: 0 8px;
-  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 70%, #fff);
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(18, 20, 16, 0.05);
   color: var(--pm-ink, #121410);
-  font: var(--pm-t-body, 300 13px/1.4 var(--pm-ff, system-ui, sans-serif));
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
   font-weight: 400;
+  letter-spacing: 0.01em;
   outline: none;
   transition:
-    border-color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     box-shadow 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-slash-menu__input::placeholder {
   color: var(--pm-faint, #969c96);
 }
 .pm-slash-menu__input:focus {
-  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 38%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
-  background: #fff;
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 32%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
 }
 .pm-slash-menu__list {
   flex: 1 1 auto;
@@ -4024,7 +4227,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 4px;
+  padding: 4px 6px 8px;
   scrollbar-width: none;
 }
 .pm-slash-menu__list::-webkit-scrollbar {
@@ -4032,70 +4235,75 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-slash-menu__group {
   margin: 0;
-  padding: 6px 8px 4px;
+  padding: 10px 10px 4px;
   font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
   font-weight: 400;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--pm-faint, #969c96);
   user-select: none;
 }
+/* Air between groups — no hard divider */
 .pm-slash-menu__group:not(:first-child) {
-  margin-top: 2px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: none;
 }
 .pm-slash-menu__item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  min-height: 32px;
-  margin: 0;
-  padding: 5px 8px;
+  min-height: 36px;
+  margin: 0 0 2px;
+  padding: 6px 10px;
   box-sizing: border-box;
   border: none;
-  border-radius: calc(var(--pm-r-sm, 8px) - 2px);
+  border-radius: var(--pm-r-sm, 8px);
   background: transparent;
   color: var(--pm-text, #2a2e2a);
-  font: var(--pm-t-body, 300 13px/1.35 var(--pm-ff, system-ui, sans-serif));
+  font: var(--pm-t-title, 400 13px/1.35 var(--pm-ff, system-ui, sans-serif));
   font-weight: 400;
   text-align: left;
   cursor: pointer;
   transition:
-    background 120ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    color 120ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-slash-menu__item:hover,
-.pm-slash-menu__item.is-on {
-  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+.pm-slash-menu__item:hover {
+  background: rgba(18, 20, 16, 0.04);
   color: var(--pm-ink, #121410);
 }
 .pm-slash-menu__item.is-on {
-  background: var(--pm-green-soft, rgba(26, 94, 61, 0.10));
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
   color: var(--pm-green, #1a5e3d);
+}
+.pm-slash-menu__item.is-on:hover {
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
 }
 .pm-slash-menu__icon {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 80%, #fff);
-  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: rgba(18, 20, 16, 0.04);
+  border: none;
   color: var(--pm-muted, #6a706a);
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-slash-menu__item.is-on .pm-slash-menu__icon {
   color: var(--pm-green, #1a5e3d);
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, #fff);
-  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 18%, transparent);
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
 }
 .pm-slash-menu__label {
   flex: 1 1 auto;
@@ -4103,11 +4311,12 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font: var(--pm-t-title, 400 13px/1.35 var(--pm-ff, system-ui, sans-serif));
   font-weight: 400;
 }
 .pm-slash-menu__desc {
   flex-shrink: 0;
-  max-width: 42%;
+  max-width: 44%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4115,10 +4324,10 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-faint, #969c96);
 }
 .pm-slash-menu__item.is-on .pm-slash-menu__desc {
-  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 70%, var(--pm-faint, #969c96));
+  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 55%, var(--pm-faint, #969c96));
 }
 .pm-slash-menu__empty {
-  padding: 16px 12px;
+  padding: 20px 14px;
   text-align: center;
   font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
   color: var(--pm-faint, #969c96);
@@ -4361,11 +4570,29 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: var(--pm-canvas, #f6f5f1) !important;
   letter-spacing: normal;
 }
-/* Dialog title slot is often a row of chips + name — don't force Geist title */
+/*
+ * Workspace dialog titles:
+ * - Chrome title (Note "Notes") → same as default DialogTitle (title + uppercase)
+ * - File detail header may wrap .pm-ws-title (document name) → keep serif, no caps
+ */
 .pm-workspace [data-slot="dialog-title"] {
-  font: inherit !important;
+  font: var(--pm-t-title) !important;
   font-weight: 400 !important;
-  letter-spacing: normal !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  color: var(--pm-ink) !important;
+}
+.pm-workspace [data-slot="dialog-title"] .pm-ws-title {
+  font: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-weight: 300 !important;
+  letter-spacing: -0.015em !important;
+  text-transform: none !important;
+  color: var(--pm-ink) !important;
+}
+/* Note workspace chrome title row */
+.pm-ws-chrome-title {
+  margin: 0 !important;
+  line-height: 1.3 !important;
 }
 /* Buttons / tabs inside workspace stay Geist even if parent is serif */
 .pm-workspace [data-slot="button"],
@@ -4379,15 +4606,17 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   font: var(--pm-t-label) !important;
   font-weight: 400 !important;
 }
-/* Top chrome bar — no hard rule; soft spacing only */
+/* Top chrome bar — same canvas as dialog shell; no band / hairline */
 .pm-ws-chrome {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 18px 10px;
+  padding: 14px 20px 8px;
   flex-shrink: 0;
-  border-bottom: none;
-  background: transparent;
+  border: none;
+  border-bottom: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 .pm-ws-icon-btn {
   display: inline-flex !important;
@@ -4422,9 +4651,9 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   flex: 1 1 0;
   min-height: 0;
   min-width: 0;
-  gap: 10px;
-  /* Inset so float shadow + focus bloom (~4px ring) clear the stage edges */
-  padding: 8px 14px 14px;
+  gap: 12px;
+  /* Slightly airier inset — shadows + focus bloom clear stage edges */
+  padding: 12px 18px 16px;
   box-sizing: border-box;
   background: transparent;
   /* visible: let soft shadows breathe; scrolling lives inside cards */
@@ -4621,48 +4850,11 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 
 /*
- * Large workspace dialog — silk open/close.
- * Base UI keeps the popup mounted with data-ending-style while closing;
- * parent must set open=false BEFORE unmounting (see notes-card).
- *
- * Use opacity + scale (not transform) so we don't fight Tailwind
- * -translate-x/y-1/2 centering.
+ * Note workspace dialog layout only — open/close motion is pm-dialog--silk
+ * (same as todo create/edit). Do not reintroduce custom translate/sink motion.
  */
 .pm-ws-dialog[data-slot="dialog-content"] {
-  --pm-ws-dialog-ms: 300ms;
-  --pm-ws-dialog-ease: cubic-bezier(0.22, 1, 0.36, 1);
   transform-origin: center center;
-  opacity: 1;
-  scale: 1;
-  filter: blur(0);
-  transition:
-    opacity var(--pm-ws-dialog-ms) var(--pm-ws-dialog-ease),
-    scale var(--pm-ws-dialog-ms) var(--pm-ws-dialog-ease),
-    filter var(--pm-ws-dialog-ms) var(--pm-ws-dialog-ease);
-  will-change: opacity, scale;
-}
-.pm-ws-dialog[data-slot="dialog-content"][data-starting-style],
-.pm-ws-dialog[data-slot="dialog-content"][data-ending-style],
-.pm-ws-dialog[data-slot="dialog-content"][data-closed] {
-  opacity: 0;
-  scale: 0.97;
-  filter: blur(0.6px);
-}
-/* Backdrop: soft with workspace stage */
-[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"] {
-  transition:
-    opacity var(--pm-ws-dialog-ms, 300ms) var(--pm-ws-dialog-ease, cubic-bezier(0.22, 1, 0.36, 1));
-}
-[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"][data-starting-style],
-[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"][data-ending-style],
-[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"][data-closed] {
-  opacity: 0;
-}
-@media (prefers-reduced-motion: reduce) {
-  .pm-ws-dialog[data-slot="dialog-content"] {
-    transition-duration: 1ms !important;
-    filter: none !important;
-  }
 }
 /*
  * Distill rail — width curtain *inside* the group (after the editor card).
@@ -5225,6 +5417,24 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   /* Smooth wheel; own compositor layer without parent transform */
   -webkit-overflow-scrolling: touch;
 }
+/*
+ * Format-strip slot above the scroller — fixed min height so note switch
+ * never reflows prose when toolbar mounts/unmounts or opacity toggles.
+ * Matches .pm-fmt-inner height (28px) + vertical padding.
+ */
+.pm-ws-fmt-slot {
+  flex-shrink: 0;
+  min-height: 30px;
+  box-sizing: border-box;
+  /* Submenus portal to body; slot itself must not clip triggers */
+  overflow: visible;
+  position: relative;
+  z-index: 30;
+}
+.pm-ws-fmt-slot--placeholder {
+  /* First load before TipTap ready — same 30px so content doesn't jump down */
+  min-height: 30px;
+}
 /* ═══════════════════════════════════════════════════════════════════
    Premium format toolbar (R2 whisper strip) + marker highlight
    ═══════════════════════════════════════════════════════════════════ */
@@ -5234,6 +5444,9 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   padding: 0 12px 2px 14px;
   opacity: 0;
   pointer-events: none;
+  /* Keep layout height when idle (opacity 0) — never collapse and jump prose */
+  min-height: 28px;
+  box-sizing: border-box;
   transition: opacity 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 /* Note workspace: toolbar sits above .pm-ws-editor — snug to first line */
@@ -6054,22 +6267,481 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   font-size: 0.92em;
 }
 
-/* File detail workspace — body uses shared .pm-ws-body; main/side layout only */
+/* File detail workspace — left main card + right rail cards */
 .pm-ws-main {
   display: flex;
   flex-direction: column;
-  flex: 1 1 68%;
+  flex: 1 1 58%;
   min-width: 0;
   min-height: 0;
+}
+/* Large left content card (Preview / Parse / Summary / Chunks) — slightly narrower */
+.pm-ws-card.pm-ws-card--main {
+  flex: 1 1 58%;
+  min-width: 0;
+  min-height: 0;
+  /*
+   * Override .pm-ws-card overflow:hidden — same node would clip box-shadow.
+   * Clip lives on the Tabs child instead.
+   */
+  overflow: visible !important;
+}
+.pm-ws-card.pm-ws-card--main > * {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  background: #ffffff;
+}
+.pm-ws-card--main .pm-ws-main-head {
+  border-radius: var(--pm-r-lg, 20px) var(--pm-r-lg, 20px) 0 0;
+  background: #ffffff;
+}
+.pm-ws-card--main .pm-ws-doc-stage {
+  border-radius: 0 0 var(--pm-r-lg, 20px) var(--pm-r-lg, 20px);
+}
+/* Tab row sits on same white as the content card — no tint / band */
+.pm-ws-main-head {
+  padding: 10px 14px 6px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+/* White reading / preview stage inside main card */
+.pm-ws-doc-stage {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+.pm-ws-doc-stage > .sinkduce-file-viewer {
+  border: none !important;
+  border-radius: 0 !important;
+  background: #ffffff !important;
 }
 .pm-ws-side {
   display: flex;
   flex-direction: column;
-  flex: 0 0 32%;
-  min-width: 260px;
-  max-width: 420px;
+  flex: 0 0 36%;
+  min-width: 288px;
+  max-width: 440px;
   min-height: 0;
-  gap: 12px;
+  gap: 10px;
+  /*
+   * Shadow gutter: padding so card box-shadow isn't clipped by neighbors.
+   * overflow:visible — parent dialog body already has pad; cards clip themselves.
+   */
+  overflow: visible;
+  padding: 3px;
+  margin: -3px;
+  box-sizing: border-box;
+  /* Metadata (top) + side-lower (flex fill) + actions (bottom) */
+}
+/*
+ * Paths / Nodes / Log stack — fixed total height (Overview .pm-rail-lower).
+ * Accordion: exactly one .is-expanded; that card flex-grows to fill.
+ * Shell flex-basis stays auto; only flex-grow interpolates (no flash).
+ */
+.pm-ws-side-lower {
+  --pm-ws-side-ms: 280ms;
+  --pm-ws-side-ease: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: visible;
+}
+/*
+ * Card surface + soft shadow.
+ * - Shell owns full border-radius + white fill (collapsed = correct 4-corner pill).
+ * - Children stay transparent so they never paint square bottoms over the radius.
+ * - overflow:visible so box-shadow is not self-clipped; body clips scroll content.
+ */
+.pm-ws-side-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  border: none;
+  overflow: visible;
+  flex-grow: 0;
+  flex-shrink: 0;
+  flex-basis: auto;
+  transition: box-shadow 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Accordion cards inside fixed-height lower stack */
+.pm-ws-side-lower > .pm-ws-side-card {
+  flex-grow: 0;
+  flex-shrink: 0;
+  flex-basis: auto;
+  transition:
+    box-shadow 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    flex-grow var(--pm-ws-side-ms) var(--pm-ws-side-ease);
+}
+.pm-ws-side-lower > .pm-ws-side-card.is-expanded {
+  flex-grow: 1;
+  flex-shrink: 1;
+  min-height: 0;
+  /* flex-basis stays auto */
+}
+.pm-ws-side-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 14px 2px;
+  flex-shrink: 0;
+  flex-grow: 0;
+}
+/* Metadata: tighter title row + compact body (no Ext/By, definitive in header) */
+.pm-ws-side-card--meta > .pm-ws-side-h {
+  min-height: 36px;
+  padding: 8px 10px 4px 14px;
+  gap: 6px;
+}
+.pm-ws-side-pad--meta {
+  padding: 4px 14px 10px !important;
+}
+/* Body under title — air between header row and first item */
+.pm-ws-side-pad {
+  padding: 10px 12px 12px;
+  box-sizing: border-box;
+}
+.pm-ws-side-pad.pt-0 {
+  padding-top: 10px;
+}
+/* Title row pinned — never in body height tween. */
+.pm-ws-side-card > .pm-collapse-h {
+  flex: 0 0 auto;
+  padding-bottom: 2px;
+  background: transparent;
+  border-radius: 0;
+}
+/*
+ * Kill global .pm-collapse-h:hover square wash on file-detail cards.
+ * Collapsed: header fills the pill → inherit card radius so hover is round.
+ * Expanded: no full-row wash (avoids square corners on the title band).
+ */
+.pm-ws-side-card > .pm-collapse-h:hover {
+  background: transparent;
+}
+.pm-ws-side-lower > .pm-ws-side-card:not(.is-expanded) > .pm-collapse-h {
+  border-radius: inherit;
+}
+.pm-ws-side-lower > .pm-ws-side-card:not(.is-expanded) > .pm-collapse-h:hover {
+  background: rgba(18, 20, 16, 0.03);
+}
+.pm-ws-side-card > .pm-ws-side-h {
+  background: transparent;
+  border-radius: 0;
+}
+.pm-ws-side-card > .pm-ws-side-pad {
+  background: transparent;
+  border-radius: 0;
+}
+/*
+ * Accordion body (Paths / Nodes / Log) — pure flex-grow under header.
+ * Shell owns full radius; body only clips scroll, with matching bottom radius
+ * when open so content doesn't square-out the pill corners.
+ */
+.pm-ws-side-lower > .pm-ws-side-card > .pm-ws-side-collapse {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 0;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  border-radius: 0;
+  background: transparent;
+  transition: flex-grow var(--pm-ws-side-ms) var(--pm-ws-side-ease);
+}
+.pm-ws-side-lower > .pm-ws-side-card > .pm-ws-side-collapse.is-open {
+  flex-grow: 1;
+  border-radius: 0 0 var(--pm-r, 16px) var(--pm-r, 16px);
+}
+.pm-ws-side-lower
+  > .pm-ws-side-card
+  > .pm-ws-side-collapse
+  > .pm-ws-side-collapse-inner {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+}
+.pm-ws-side-lower
+  > .pm-ws-side-card
+  > .pm-ws-side-collapse.is-open
+  > .pm-ws-side-collapse-inner {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+/* Fallback (Metadata / outside lower): content-height grid if ever used */
+.pm-ws-side-collapse {
+  min-height: 0;
+  overflow: hidden;
+}
+.pm-ws-side-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.pm-ws-side-log-body {
+  max-height: none;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-ws-side-card,
+  .pm-ws-side-lower > .pm-ws-side-card,
+  .pm-ws-side-lower > .pm-ws-side-card > .pm-ws-side-collapse {
+    transition-duration: 1ms !important;
+  }
+}
+/*
+ * Paths / Nodes / Log list items — soft float language:
+ * no border cages, no hairline dividers, no green “blocks”.
+ * Separation = airy gap + quiet ink hover (Overview rail rows).
+ */
+.pm-ws-list,
+.pm-ws-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0 2px;
+  opacity: 1;
+  transition: opacity 140ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pm-ws-list-item,
+.pm-ws-log-item {
+  margin: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--pm-r-sm, 8px);
+  background: transparent;
+  cursor: default;
+  /* Compact rail density — not prose reading size */
+  font: var(--pm-t-meta) !important;
+  font-weight: 300 !important;
+  color: var(--pm-text);
+  transition: background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Log body copy was prose (14.5px serif) — too large for the rail card */
+.pm-ws-log-item .pm-ws-msg-md,
+.pm-ws-log-item .pm-ws-msg-md p,
+.pm-ws-log-item .pm-ws-msg-md li,
+.pm-ws-log-item > p {
+  font: var(--pm-t-meta) !important;
+  font-weight: 300 !important;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  line-height: 1.45 !important;
+  color: var(--pm-muted) !important;
+  max-width: none !important;
+}
+.pm-ws-log-item .pm-ws-badge {
+  font: var(--pm-t-meta) !important;
+  font-weight: 300 !important;
+  padding: 1px 6px !important;
+}
+.pm-ws-list-item.is-clickable,
+.pm-ws-log-item.is-clickable {
+  cursor: pointer;
+}
+/* Quiet ink wash — not green tiles */
+.pm-ws-list-item:hover,
+.pm-ws-log-item:hover {
+  background: rgba(18, 20, 16, 0.04);
+}
+/*
+ * Version log rows: no fill block.
+ * Green dot sits in the first flex row (items-center) — never absolute top.
+ */
+.pm-ws-log-item.is-version {
+  background: transparent;
+}
+.pm-ws-log-item.is-version:hover {
+  background: rgba(18, 20, 16, 0.04);
+}
+.pm-ws-log-dot {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--pm-green, #1a5e3d);
+  opacity: 0.55;
+  /* center with badge/meta line via parent items-center */
+  margin: 0;
+}
+/*
+ * Bottom action dock — pinned to rail bottom.
+ * Three equal columns (Update · Archive · Delete).
+ * Update = soft green; Archive = quiet ghost; Delete = danger wash.
+ */
+.pm-ws-side-actions {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding: 10px 2px 2px;
+  background: transparent;
+}
+.pm-ws-side-actions-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 6px;
+  width: 100%;
+}
+.pm-ws-foot-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 5px !important;
+  height: 32px !important;
+  padding: 0 8px !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  border: none !important;
+  border-radius: 999px !important;
+  cursor: pointer;
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  box-shadow: none !important;
+  background: transparent !important;
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-foot-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Update — soft primary (green wash) */
+.pm-ws-foot-btn--pri {
+  color: var(--pm-green) !important;
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1)) !important;
+}
+.pm-ws-foot-btn--pri:hover:not(:disabled) {
+  color: var(--pm-green-deep, #0f4a2d) !important;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent) !important;
+}
+/* Archive — quiet ghost wash */
+.pm-ws-foot-btn--ghost {
+  color: var(--pm-muted) !important;
+  background: rgba(18, 20, 16, 0.05) !important;
+}
+.pm-ws-foot-btn--ghost:hover:not(:disabled) {
+  color: var(--pm-ink) !important;
+  background: rgba(18, 20, 16, 0.09) !important;
+}
+.pm-ws-foot-btn--ghost.is-on {
+  color: var(--pm-green) !important;
+  background: var(--pm-green-wash) !important;
+}
+/* Delete — danger wash */
+.pm-ws-foot-btn--danger {
+  color: var(--pm-danger) !important;
+  background: color-mix(in srgb, var(--pm-danger) 7%, transparent) !important;
+}
+.pm-ws-foot-btn--danger:hover:not(:disabled),
+.pm-ws-foot-btn--danger.is-on {
+  color: var(--pm-danger) !important;
+  background: color-mix(in srgb, var(--pm-danger) 12%, transparent) !important;
+}
+.pm-ws-foot-btn svg {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+}
+/* Dropdown hosts also take equal third of the row */
+.pm-ws-side-actions-row > .relative {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+}
+.pm-ws-side-actions-row > .relative .pm-ws-foot-btn {
+  width: 100%;
+  flex: 1 1 auto;
+}
+/* Definitive soft toggle chip */
+.pm-ws-definitive {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  background: rgba(18, 20, 16, 0.05);
+  color: var(--pm-muted);
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.03em;
+  transition:
+    background 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Compact chip for Metadata title row */
+.pm-ws-definitive--header {
+  margin-top: 0;
+  height: 26px;
+  padding: 0 8px;
+  gap: 4px;
+  max-width: min(160px, 46vw);
+}
+.pm-ws-definitive--header .pm-ws-definitive-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pm-ws-definitive:hover:not(:disabled) {
+  background: rgba(18, 20, 16, 0.08);
+  color: var(--pm-ink);
+}
+.pm-ws-definitive.is-on {
+  background: var(--pm-green-soft);
+  color: var(--pm-green);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green) 18%, transparent);
+}
+.pm-ws-definitive.is-on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-green) 16%, transparent);
+  color: var(--pm-green-deep, #0f4a2d);
+}
+.pm-ws-definitive:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pm-ws-definitive-star {
+  flex-shrink: 0;
+  transition:
+    transform 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    fill 180ms ease,
+    color 180ms ease;
+  color: inherit;
+  fill: transparent;
+}
+.pm-ws-definitive-star.is-filled {
+  fill: currentColor;
+  transform: scale(1.06);
+}
+.pm-ws-definitive-label {
+  white-space: nowrap;
 }
 .pm-ws-nested {
   height: 100%;
@@ -6085,6 +6757,14 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border: none !important;
   border-radius: inherit !important;
   background: #ffffff !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-ws-side-collapse,
+  .pm-ws-side-card,
+  .pm-ws-definitive,
+  .pm-ws-definitive-star {
+    transition-duration: 1ms !important;
+  }
 }
 .pm-ws-section-label {
   margin: 0 0 8px;
@@ -6137,7 +6817,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-ws-meta-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 12px;
+  gap: 3px 10px;
   font: var(--pm-t-meta) !important;
   color: var(--pm-text);
 }
@@ -6284,16 +6964,23 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-faint);
   line-height: 1.35;
 }
+/* Path / Node row — borderless list row (same language as log items) */
 .pm-ws-path-row {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: var(--pm-r-sm);
-  border: 1px solid color-mix(in srgb, var(--pm-ink) 7%, transparent);
-  background: #ffffff;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: var(--pm-r-sm, 8px);
+  border: none;
+  background: transparent;
   font: var(--pm-t-meta) !important;
   color: var(--pm-text);
+  box-sizing: border-box;
+  transition: background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-path-row:hover {
+  background: rgba(18, 20, 16, 0.04);
 }
 .pm-ws-path-row button {
   font: inherit;
@@ -6302,25 +6989,101 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-ws-path-row button:hover {
   color: var(--pm-green);
 }
+/* Node row is a full-width button using path-row chrome */
+button.pm-ws-path-row {
+  cursor: pointer;
+  text-align: left;
+}
+/*
+ * All | Versions — soft segment + sliding green-wash pill (tabs language).
+ * Indicator left/width measured in JS; content list uses sequential fade.
+ */
 .pm-ws-scope {
+  --pm-ws-scope-ms: 320ms;
+  --pm-ws-scope-ease: var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  position: relative;
   display: inline-flex;
-  border-radius: var(--pm-r-sm);
+  align-items: stretch;
+  height: 26px;
+  border-radius: 999px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
-  background: #ffffff;
+  border: none;
+  background: rgba(18, 20, 16, 0.05);
+  box-sizing: border-box;
+  padding: 2px;
+  gap: 0;
+}
+.pm-ws-scope-ind {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 0;
+  border-radius: 999px;
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
+  pointer-events: none;
+  z-index: 0;
+  transition:
+    transform var(--pm-ws-scope-ms) var(--pm-ws-scope-ease),
+    width var(--pm-ws-scope-ms) var(--pm-ws-scope-ease);
+  will-change: transform, width;
 }
 .pm-ws-scope-btn {
-  padding: 4px 10px;
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 10px;
   font: var(--pm-t-label) !important;
   font-weight: 400 !important;
   letter-spacing: 0.04em;
   color: var(--pm-faint);
-  background: transparent;
+  background: transparent !important;
   border: none;
   cursor: pointer;
+  box-sizing: border-box;
+  border-radius: 999px;
+  transition: color 200ms var(--pm-ws-scope-ease);
+}
+.pm-ws-scope-btn:hover:not(.is-on) {
+  color: var(--pm-muted);
+  background: transparent !important;
+}
+.pm-ws-scope-btn.is-on {
+  color: var(--pm-green);
+  background: transparent !important;
+}
+/* Log "Add" — same height as All/Versions scope */
+.pm-ws-log-add {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 10px !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  color: var(--pm-muted) !important;
+  background: rgba(18, 20, 16, 0.05) !important;
+  border: none !important;
+  border-radius: var(--pm-r-sm, 8px) !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  box-sizing: border-box;
   transition:
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-log-add:hover:not(:disabled) {
+  color: var(--pm-ink) !important;
+  background: rgba(18, 20, 16, 0.08) !important;
+}
+.pm-ws-log-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Workspace utility: ensure .pm-label / .pm-meta stay Geist when nested */
@@ -6345,15 +7108,46 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   overflow: visible;
   text-overflow: clip;
 }
+/* no hard divider between All / Versions — pill indicator is the active cue */
 .pm-ws-scope-btn + .pm-ws-scope-btn {
-  border-left: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  border-left: none;
 }
-.pm-ws-scope-btn.is-on {
-  color: var(--pm-green);
-  background: var(--pm-green-wash);
+/*
+ * Log list filter swap — sequential opacity (out 140ms → in 200ms).
+ * Driven by .is-out / .is-in from File detail (not dual crossfade).
+ */
+.pm-ws-log-list {
+  transition: opacity 140ms cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 1;
 }
-.pm-ws-scope-btn:hover:not(.is-on) {
-  background: color-mix(in srgb, var(--pm-ink) 3%, transparent);
+.pm-ws-log-list.is-out {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pm-ws-log-list.is-in {
+  opacity: 1;
+  animation: pm-ws-log-list-in 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+  pointer-events: none;
+}
+@keyframes pm-ws-log-list-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-ws-scope-ind {
+    transition-duration: 1ms !important;
+  }
+  .pm-ws-log-list,
+  .pm-ws-log-list.is-out,
+  .pm-ws-log-list.is-in {
+    transition-duration: 1ms !important;
+    animation: none !important;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -6406,33 +7200,58 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   box-sizing: border-box;
 }
 .pm-files-right {
-  flex: 0 0 var(--pm-files-rail-w);
-  width: var(--pm-files-rail-w);
-  min-width: var(--pm-files-rail-w);
-  max-width: var(--pm-files-rail-w);
+  /*
+   * Track = panel width + shadow gutter (border-box).
+   * --pm-shadow-sm spreads ~14–16px; gutter must be ≥ that or the curtain’s
+   * overflow:hidden slices the soft float. Right pad stays 0 so the rail’s
+   * right edge still matches Overview (CHECKLIST).
+   */
+  --pm-files-rail-shadow-gutter: 16px;
+  flex: 0 0 calc(var(--pm-files-rail-w) + var(--pm-files-rail-shadow-gutter));
+  width: calc(var(--pm-files-rail-w) + var(--pm-files-rail-shadow-gutter));
+  min-width: calc(var(--pm-files-rail-w) + var(--pm-files-rail-shadow-gutter));
+  max-width: calc(var(--pm-files-rail-w) + var(--pm-files-rail-shadow-gutter));
   min-height: 0;
   height: auto;
   align-self: stretch;
-  padding: 0;
+  /* L/T/B gutter inside clip; R = 0 (edge align) */
+  padding: var(--pm-files-rail-shadow-gutter) 0
+    var(--pm-files-rail-shadow-gutter) var(--pm-files-rail-shadow-gutter);
   box-sizing: border-box;
-  /* curtain aperture — clips the fixed-width panel */
+  /* Curtain aperture — keep hidden so expand/collapse never half-reflows the card */
   overflow: hidden;
   transition:
     flex-basis var(--pm-files-rail-ms) var(--pm-files-rail-ease),
     width var(--pm-files-rail-ms) var(--pm-files-rail-ease),
     min-width var(--pm-files-rail-ms) var(--pm-files-rail-ease),
-    max-width var(--pm-files-rail-ms) var(--pm-files-rail-ease);
+    max-width var(--pm-files-rail-ms) var(--pm-files-rail-ease),
+    padding var(--pm-files-rail-ms) var(--pm-files-rail-ease);
 }
 .pm-files.is-msg-collapsed .pm-files-right {
   flex-basis: 0;
   width: 0;
   min-width: 0;
   max-width: 0;
+  padding: 0;
   /* no absolute jump mid-anim — stay in flow, just zero width */
   pointer-events: none;
 }
 .pm-files.is-msg-collapsed .pm-files-right .pm-rail-stack {
   overflow: visible;
+}
+/*
+ * Quick Chat covers this rail. Lift any residual clip so the float’s
+ * soft box-shadow is not sliced (Files curtain not needed while QC is open).
+ */
+.pm-files-right.is-qc-covered,
+[data-pm-rail-anchor].is-qc-covered {
+  overflow: visible;
+}
+/* Stack must not re-clip the panel shadow */
+.pm-files-right > .pm-rail-stack {
+  overflow: visible;
+  min-height: 0;
+  height: 100%;
 }
 /* Nested white panel — fixed open width, pin to right so clip wipes left→right */
 .pm-files-msg-panel {
@@ -6445,6 +7264,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   height: 100%;
   min-height: 0;
   margin-left: auto; /* stick to right edge of shrinking track */
+  /* Clip list scroll only; own box-shadow still paints outside this box */
   overflow: hidden;
   border-radius: var(--pm-r, 16px);
   background: #ffffff;
@@ -6868,6 +7688,325 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: var(--pm-green-soft);
   box-shadow: none;
 }
+/*
+ * Message card two-step delete — same anti-mis-tap language as distill × → Delete.
+ */
+.pm-msg-delete {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 0;
+  padding: 2px 5px;
+  min-height: 20px;
+  max-width: 20px;
+  border: none;
+  background: transparent;
+  color: var(--pm-faint, #9a9c96);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 999px;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    padding 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    gap 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    background 160ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.pm-msg-delete-x {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+.pm-msg-delete-label {
+  display: inline-block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1;
+  transition:
+    max-width 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    opacity 160ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.pm-msg-delete:hover {
+  color: var(--pm-danger, #c43c3c);
+  background: color-mix(in srgb, var(--pm-danger, #c43c3c) 8%, transparent);
+}
+.pm-msg-delete.is-confirm {
+  max-width: 5.25rem;
+  gap: 3px;
+  padding: 3px 7px 3px 5px;
+  color: #ffffff;
+  background: var(--pm-danger, #c43c3c);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--pm-danger, #c43c3c) 35%, transparent);
+}
+.pm-msg-delete.is-confirm:hover {
+  color: #ffffff;
+  background: color-mix(in srgb, var(--pm-danger, #c43c3c) 88%, #000);
+}
+.pm-msg-delete.is-confirm .pm-msg-delete-label {
+  max-width: 3.75rem;
+  opacity: 1;
+}
+.pm-msg-delete:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-ink, #121410) 20%, transparent);
+  outline-offset: 1px;
+}
+/*
+ * Message editor dialog (Add / Edit message)
+ * Title = silk DialogTitle. Save matches X size (icon-sm = 28px).
+ */
+.pm-msg-dialog.pm-dialog {
+  background: var(--pm-canvas, #f6f5f1) !important;
+  /* icon-sm = size-7 = 28px — shared by Save + X */
+  --pm-msg-action-h: 28px;
+  /* Stage / card horizontal inset — X right edge aligns with card right edge */
+  --pm-msg-stage-x: 16px;
+}
+.pm-msg-dialog-chrome {
+  position: relative;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  /* Title row; tight bottom so card sits closer under chrome */
+  padding: 20px 20px 8px;
+  padding-right: calc(var(--pm-msg-stage-x) + 7rem); /* Save + X + card-aligned inset */
+  box-sizing: border-box;
+  background: transparent !important;
+  border: none !important;
+  gap: 0 !important;
+  text-align: left;
+}
+.pm-msg-dialog-chrome [data-slot="dialog-title"] {
+  text-align: left !important;
+  margin: 0 !important;
+  line-height: 1.3 !important;
+}
+/*
+ * X: right edge flush with editor card right edge
+ * (= stage horizontal padding --pm-msg-stage-x)
+ */
+.pm-msg-dialog [data-slot="dialog-close"] {
+  top: 10px !important;
+  right: var(--pm-msg-stage-x) !important;
+  transform: none !important;
+  margin: 0 !important;
+  width: var(--pm-msg-action-h) !important;
+  height: var(--pm-msg-action-h) !important;
+}
+/* Save: same top + height as X; sits just left of X */
+.pm-msg-dialog-actions {
+  position: absolute;
+  top: 10px;
+  right: calc(var(--pm-msg-stage-x) + var(--pm-msg-action-h) + 8px);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  height: var(--pm-msg-action-h);
+  gap: 8px;
+}
+.pm-msg-dialog-actions .pm-btn-pri,
+.pm-msg-dialog-actions .pm-btn-ghost {
+  height: var(--pm-msg-action-h) !important;
+  min-height: var(--pm-msg-action-h) !important;
+  box-sizing: border-box !important;
+  padding: 0 14px !important;
+  font: var(--pm-t-label) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1 !important;
+  border-radius: var(--pm-r-sm, 8px) !important;
+}
+.pm-msg-dialog-actions .pm-btn-pri {
+  min-width: 4.5rem;
+}
+.pm-msg-dialog-actions .pm-btn-ghost:disabled,
+.pm-msg-dialog-actions .pm-btn-pri:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+/*
+ * Version Update · Message card title actions
+ * Idle: pill Edit on the right
+ * Editing: Cancel + Save slide out to the left (grid 0fr↔1fr, open/close same clock)
+ */
+.pm-log-msg-card-actions {
+  --pm-log-msg-action-h: 28px;
+  --pm-log-msg-action-ms: 280ms;
+  --pm-log-msg-action-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: var(--pm-log-msg-action-h);
+  gap: 0;
+}
+/* Width curtain — grows left of Edit (parent is right-aligned) */
+.pm-log-msg-expand {
+  display: grid;
+  grid-template-columns: 0fr;
+  min-width: 0;
+  overflow: hidden;
+  transition: grid-template-columns var(--pm-log-msg-action-ms)
+    var(--pm-log-msg-action-ease);
+}
+.pm-log-msg-card-actions.is-editing .pm-log-msg-expand {
+  grid-template-columns: 1fr;
+}
+.pm-log-msg-expand-inner {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  /* Start slightly right → settle left into place */
+  transform: translateX(10px);
+  pointer-events: none;
+  transition:
+    opacity var(--pm-log-msg-action-ms) var(--pm-log-msg-action-ease),
+    transform var(--pm-log-msg-action-ms) var(--pm-log-msg-action-ease);
+}
+.pm-log-msg-card-actions.is-editing .pm-log-msg-expand-inner {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+  /* Gap between Save and Edit pill while both animate */
+  padding-right: 8px;
+}
+.pm-log-msg-action-btn {
+  height: var(--pm-log-msg-action-h) !important;
+  min-height: var(--pm-log-msg-action-h) !important;
+  box-sizing: border-box !important;
+  padding: 0 14px !important;
+  font: var(--pm-t-label) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1 !important;
+  border-radius: 999px !important;
+  white-space: nowrap;
+}
+.pm-log-msg-card-actions .pm-btn-pri.pm-log-msg-action-btn {
+  min-width: 4.5rem;
+}
+.pm-log-msg-card-actions .pm-log-msg-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+/* Pill Edit — collapses when editing so Cancel/Save own the row */
+.pm-log-msg-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: var(--pm-log-msg-action-h);
+  min-height: var(--pm-log-msg-action-h);
+  padding: 0 14px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 999px;
+  background: rgba(18, 20, 16, 0.05);
+  color: var(--pm-text, #2a2e2a);
+  font: var(--pm-t-label);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  max-width: 5.5rem;
+  opacity: 1;
+  overflow: hidden;
+  transition:
+    max-width var(--pm-log-msg-action-ms) var(--pm-log-msg-action-ease),
+    opacity calc(var(--pm-log-msg-action-ms) * 0.75) var(--pm-log-msg-action-ease),
+    padding var(--pm-log-msg-action-ms) var(--pm-log-msg-action-ease),
+    background 160ms var(--pm-log-msg-action-ease),
+    color 160ms var(--pm-log-msg-action-ease);
+}
+.pm-log-msg-edit:hover {
+  background: rgba(18, 20, 16, 0.08);
+  color: var(--pm-ink, #121410);
+}
+.pm-log-msg-edit:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-ink, #121410) 20%, transparent);
+  outline-offset: 1px;
+}
+.pm-log-msg-card-actions.is-editing .pm-log-msg-edit {
+  max-width: 0;
+  opacity: 0;
+  padding-left: 0;
+  padding-right: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-log-msg-expand,
+  .pm-log-msg-expand-inner,
+  .pm-log-msg-edit {
+    transition-duration: 1ms !important;
+  }
+  .pm-log-msg-expand-inner {
+    transform: none !important;
+  }
+}
+/* Tighter gap under title → floating editor card */
+.pm-msg-dialog-stage {
+  padding: 2px var(--pm-msg-stage-x, 16px) 16px;
+  box-sizing: border-box;
+  background: transparent;
+}
+.pm-msg-dialog-card {
+  border-radius: var(--pm-r-lg, 20px);
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(18, 20, 16, 0.04),
+    0 8px 24px -6px rgba(18, 20, 16, 0.12),
+    0 16px 40px -12px rgba(18, 20, 16, 0.08);
+  border: none;
+  overflow: hidden;
+  min-height: 0;
+}
+/* Message editor body inside silk dialogs */
+.pm-msg-editor-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  background: #ffffff;
+}
+.pm-msg-editor-host .pm-fmt-toolbar {
+  flex-shrink: 0;
+  padding: 6px 10px 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+}
+.pm-msg-editor-host .ProseMirror {
+  min-height: 12rem;
+  padding: 12px 16px 20px !important;
+  font: var(--pm-t-prose, 300 14px/1.55 "Source Serif 4 Variable", Georgia, serif) !important;
+  color: var(--pm-text, #2c2e2a);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-msg-delete,
+  .pm-msg-delete-label {
+    transition: none;
+  }
+}
 .pm-files-msg-title {
   font: var(--pm-t-label);
   font-weight: 400;
@@ -6951,7 +8090,294 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   box-shadow: var(--pm-shadow);
 }
 
-/* All Files list rows */
+/* ── All Files dialog (Premium silk shell + soft list stage) ──
+ * Shell = canvas beige (same as page). White stage is only the file list card.
+ * Chrome type: label / meta / title tokens — never prose serif.
+ */
+.pm-all-files.pm-dialog {
+  color: var(--pm-text, #2a2e2a);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+/* Header padding only — bg/border already cleared on all pm-dialog headers */
+.pm-all-files-header,
+.pm-all-files [data-slot="dialog-header"] {
+  padding: 18px 22px 8px;
+  padding-right: 2.75rem; /* room for dialog × */
+}
+/* All Files title — same as default DialogTitle (title + uppercase + ink);
+ * only layout helpers for the leading icon. */
+.pm-all-files-title,
+.pm-all-files.pm-dialog [data-slot="dialog-title"].pm-all-files-title {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+.pm-all-files-title svg {
+  color: var(--pm-muted, #6a706a);
+  opacity: 0.9;
+  flex-shrink: 0;
+}
+.pm-all-files-sub {
+  margin: 6px 0 0;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+  color: var(--pm-faint, #969c96) !important;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* Coverage: flat meta line on canvas — never a card / wash pill */
+.pm-all-files-coverage {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  flex-shrink: 0;
+  margin: 0 22px 10px;
+  padding: 0;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+.pm-all-files-coverage .pm-label {
+  margin: 0;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: var(--pm-faint, #969c96) !important;
+}
+.pm-all-files-coverage .pm-meta {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+  color: var(--pm-muted, #6a706a) !important;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* List stage — soft white card; larger radius than default stage */
+.pm-all-files-body {
+  margin: 4px 14px 14px;
+  min-height: 0;
+  border-radius: 24px;
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  box-shadow: var(--pm-shadow-sm);
+  overflow: hidden;
+}
+.pm-all-files-list {
+  padding: 12px;
+}
+.pm-all-files-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 16px;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+  color: var(--pm-faint, #969c96) !important;
+}
+.pm-all-files-empty .pm-meta {
+  font: inherit !important;
+  color: inherit !important;
+}
+.pm-all-files-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pm-all-files-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-all-files-row:hover {
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+}
+.pm-all-files-row.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pm-all-files-row.is-history {
+  align-items: flex-start;
+}
+.pm-all-files-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pm-all-files-tags {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 4.25rem;
+}
+/* File name — title token (Geist 13 / 400), not serif prose */
+.pm-all-files-name {
+  font: var(--pm-t-title, 400 13px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  color: var(--pm-ink, #121410) !important;
+  letter-spacing: 0.01em;
+}
+.pm-all-files-chunks {
+  flex-shrink: 0;
+  min-width: 4.5rem;
+  text-align: right;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+  color: var(--pm-faint, #969c96) !important;
+}
+.pm-all-files-def {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 3px 8px 3px 6px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-faint, #969c96);
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+.pm-all-files-def:hover {
+  color: var(--pm-ink, #121410);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-all-files-def.is-on {
+  color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.08));
+}
+.pm-all-files-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 18%, transparent);
+  font-size: 10px;
+  line-height: 1;
+  color: transparent;
+  background: transparent;
+}
+.pm-all-files-def.is-on .pm-all-files-check {
+  border-color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green, #1a5e3d);
+  color: #fff;
+}
+.pm-all-files-del {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--pm-r-sm, 8px);
+  background: transparent;
+  cursor: pointer;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+  color: var(--pm-danger, #b42318);
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    background 140ms ease;
+}
+.pm-all-files-row:hover .pm-all-files-del,
+.pm-all-files-row:focus-within .pm-all-files-del {
+  opacity: 1;
+}
+.pm-all-files-del:hover {
+  background: color-mix(in srgb, var(--pm-danger, #b42318) 8%, transparent);
+}
+.pm-all-files-history {
+  border-top: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #fff);
+}
+.pm-all-files-history-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--pm-muted, #6a706a);
+  transition: color 140ms ease, background 140ms ease;
+}
+.pm-all-files-history-toggle:hover {
+  color: var(--pm-ink, #121410);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 3%, transparent);
+}
+.pm-all-files-history-toggle .pm-label {
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: inherit !important;
+}
+.pm-all-files-history-count {
+  margin-left: auto;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-green, #1a5e3d);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.08));
+}
+.pm-all-files-history-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  max-height: min(32vh, 260px);
+  padding: 0 12px 12px;
+}
+.pm-all-files-history-list .pm-meta {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+  color: var(--pm-muted, #6a706a) !important;
+}
+/* Scoped utility type inside All Files (beats generic .pm-meta/.pm-title) */
+.pm-all-files .pm-meta {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 300 !important;
+}
+.pm-all-files .pm-label {
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+}
+.pm-all-files .pm-files-tag {
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif)) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+}
+
+/* Legacy All Files list rows (kept for any leftover callers) */
 .pm-files-list-row {
   display: flex;
   align-items: center;
@@ -6974,12 +8400,12 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  padding: 2px 6px;
-  border-radius: 4px;
+  min-width: 3.25rem;
+  padding: 2px 7px;
+  border-radius: 999px;
   font: var(--pm-t-label);
   font-weight: 400;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   line-height: 1.35;
   color: var(--pm-green);
@@ -7279,6 +8705,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Clip inner thread only — own box-shadow still paints outside this box */
   overflow: hidden;
   border-radius: var(--pm-r-lg, 20px);
   /* same tier as To-do / Notes / Meetings — whiter than stage */
@@ -7287,10 +8714,18 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border: none;
   z-index: 30;
 }
-/* Portaled into [data-pm-rail-anchor] — always fills the right rail box */
+/*
+ * Portaled into [data-pm-rail-anchor].
+ * Slight inset leaves room for soft shadow inside hosts that still clip
+ * (and matches Files msg-panel shadow gutter). Right edge stays flush.
+ */
 .pm-qc-float--rail {
+  --pm-qc-float-gutter: 8px;
   position: absolute;
-  inset: 0;
+  top: var(--pm-qc-float-gutter);
+  right: 0;
+  bottom: var(--pm-qc-float-gutter);
+  left: var(--pm-qc-float-gutter);
   width: auto;
   height: auto;
 }
@@ -7878,15 +9313,27 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   cursor: pointer;
   transition:
     background 140ms ease,
-    color 140ms ease;
+    color 140ms ease,
+    box-shadow 140ms ease;
 }
-.pm-qc-web-btn:hover:not(:disabled) {
+/* Off only — hover must not win over .is-on (same or lower specificity was overriding ON) */
+.pm-qc-web-btn:hover:not(:disabled):not(.is-on) {
   color: var(--pm-green, #1a5e3d);
   background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
 }
+/* ON: solid green pill — stays solid on hover so state is always readable */
 .pm-qc-web-btn.is-on {
   background: var(--pm-green, #1a5e3d);
   color: var(--pm-on, #f7faf6);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 35%, transparent);
+}
+.pm-qc-web-btn.is-on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 86%, #0a1f14);
+  color: #ffffff;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 50%, transparent);
+}
+.pm-qc-web-btn.is-on:active:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 78%, #000);
 }
 /* Text field flush in pill — no second frame / no own breath */
 .pm-qc-input-frame {

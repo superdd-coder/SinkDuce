@@ -38,6 +38,8 @@ interface MarkdownEditorProps {
    * Note pane uses outer px/py so toolbar can sit tight above prose.
    */
   flush?: boolean
+  /** Enable `/` slash menu. Default true. Todo description etc. pass false. */
+  enableSlash?: boolean
 }
 
 // ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
@@ -60,6 +62,7 @@ function TyporaEditor({
   stickyToolbarOffset,
   toolbarActions,
   flush,
+  enableSlash,
 }: Omit<MarkdownEditorProps, "variant">) {
   return (
     <TiptapEditor
@@ -79,6 +82,7 @@ function TyporaEditor({
       stickyToolbarOffset={stickyToolbarOffset}
       toolbarActions={toolbarActions}
       flush={flush}
+      enableSlash={enableSlash}
     />
   )
 }

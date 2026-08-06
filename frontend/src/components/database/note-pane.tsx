@@ -311,6 +311,11 @@ export function NotePane({
           if (cancelled || swapGenRef.current !== gen) return
           setLoading(false)
           setHasLoadedOnce(true)
+          // Scroll to top while still transparent — avoid inheriting previous note scroll
+          const scroller = containerRef.current?.querySelector(
+            ".pm-ws-editor"
+          ) as HTMLElement | null
+          if (scroller) scroller.scrollTop = 0
           // Double rAF so browser paints opacity:0 with new doc before fade-in
           await new Promise<void>((r) => {
             requestAnimationFrame(() => {
@@ -330,6 +335,10 @@ export function NotePane({
           if (cancelled || swapGenRef.current !== gen) return
           setLoading(false)
           setHasLoadedOnce(true)
+          const scroller = containerRef.current?.querySelector(
+            ".pm-ws-editor"
+          ) as HTMLElement | null
+          if (scroller) scroller.scrollTop = 0
           setDocSwapPhase("in")
           await wait(SWAP_IN_MS)
           if (cancelled || swapGenRef.current !== gen) return
@@ -1244,8 +1253,24 @@ export function NotePane({
             docSwapPhase === "idle" && "is-doc-idle"
           )}
         >
-          {editorInstance && !swapBusy && (
-            <EditorToolbar editor={editorInstance} />
+          {/*
+            Keep toolbar mounted during soft swap. Unmounting on swapBusy
+            collapsed the strip (~28px) and made prose jump down when it returned.
+            Opacity-only hide while busy is fine — parent is already fading.
+          */}
+          {editorInstance ? (
+            <div
+              className={cn(
+                "pm-ws-fmt-slot shrink-0",
+                swapBusy && "pointer-events-none"
+              )}
+              aria-hidden={swapBusy}
+            >
+              <EditorToolbar editor={editorInstance} />
+            </div>
+          ) : (
+            /* Reserve same chrome height before editor ready (first load) */
+            <div className="pm-ws-fmt-slot pm-ws-fmt-slot--placeholder shrink-0" aria-hidden />
           )}
           {distilling && (
             <div className="pm-ws-status-bar">

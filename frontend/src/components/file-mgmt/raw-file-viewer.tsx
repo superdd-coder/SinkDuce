@@ -21,19 +21,16 @@ import textRenderer from "@file-viewer/renderer-text"
 import { cn } from "@/lib/utils"
 
 /**
- * Re-home PDF chrome (stable — never move zoom/rotate out of `.pdf-shell`):
- * - Sidebar toggle + page → nav head
- * - Zoom + rotate stay in `.pdf-toolbar`, positioned by CSS into the top-left
- *   red-box slot (same visual row as Search). Moving them into the web toolbar
- *   was destroyed whenever File Viewer re-rendered that bar.
+ * Re-home PDF chrome (sidebar/nav removed product-side):
+ * - Zoom + rotate stay in `.pdf-toolbar` as left float pill
+ * - Page meter / nav toggle hidden via CSS (navigation: false in options)
  * - Ctrl/⌘+wheel and two-finger pinch on the PDF viewport
  */
 function layoutPdfChrome(root: HTMLElement) {
   const pdfTb = root.querySelector<HTMLElement>(".pdf-toolbar")
-  const navHead = root.querySelector<HTMLElement>(".pdf-nav-head")
   if (!pdfTb) return
 
-  // If a previous broken layout parked tools in the web toolbar, put them back
+  // If a previous layout parked tools in the web toolbar, put them back
   const strandedZoom = root.querySelector<HTMLElement>(
     ".file-viewer-web-toolbar .pdf-toolbar-group--zoom, .sinkduce-pdf-tools-left .pdf-toolbar-group--zoom"
   )
@@ -46,52 +43,23 @@ function layoutPdfChrome(root: HTMLElement) {
   if (strandedRotate && strandedRotate.parentElement !== pdfTb) {
     pdfTb.appendChild(strandedRotate)
   }
-  // Remove empty left slot if present
   root.querySelectorAll(".sinkduce-pdf-tools-left").forEach((el) => {
     if (!el.querySelector(".pdf-toolbar-group")) el.remove()
   })
 
-  const page = Array.from(
-    pdfTb.querySelectorAll<HTMLElement>(":scope > .pdf-toolbar-group")
-  ).find(
-    (el) =>
-      !el.classList.contains("pdf-toolbar-group--zoom") &&
-      !el.classList.contains("pdf-toolbar-group--rotate")
-  )
-  const pageOrphan = root.querySelector<HTMLElement>(
-    '.pdf-nav-head .pdf-toolbar-group[data-sinkduce-homed="nav"]'
-  )
-  const toggle = Array.from(
-    pdfTb.querySelectorAll<HTMLElement>(":scope > .pdf-icon-button")
-  ).find(
-    (el) =>
-      el.querySelector(".pdf-panel-icon") ||
-      el.getAttribute("aria-pressed") != null
-  )
-  const toggleOrphan = root.querySelector<HTMLElement>(
-    '.pdf-nav-head > .pdf-icon-button[data-sinkduce-homed="nav"]'
-  )
-
-  if (navHead) {
-    if (!navHead.dataset.sinkduceHomed) {
-      navHead.replaceChildren()
-      navHead.dataset.sinkduceHomed = "1"
-    }
-    const toggleEl = toggle || toggleOrphan
-    if (toggleEl && toggleEl.parentElement !== navHead) {
-      navHead.appendChild(toggleEl)
-      toggleEl.dataset.sinkduceHomed = "nav"
-    }
-    const pageEl = page || pageOrphan
-    if (pageEl && pageEl.parentElement !== navHead) {
-      navHead.appendChild(pageEl)
-      pageEl.dataset.sinkduceHomed = "nav"
-    }
-  }
-
-  // Mark toolbar for CSS: only zoom/rotate remain here, float into top row
+  // Mark toolbar for CSS: zoom + rotate float top-left
   pdfTb.dataset.sinkduceBar = "top-left"
   delete pdfTb.dataset.sinkduceEmpty
+
+  // Web bar: hide idle "0/0" search counters (reads like a broken page meter)
+  root.querySelectorAll(".file-viewer-web-search-count").forEach((el) => {
+    const t = (el.textContent || "").trim().replace(/\s+/g, "")
+    if (t === "0/0" || t === "0of0" || t === "-/-") {
+      ;(el as HTMLElement).style.display = "none"
+    } else {
+      ;(el as HTMLElement).style.display = ""
+    }
+  })
 
   attachPdfPinchAndWheelZoom(root)
 }
@@ -473,6 +441,12 @@ export function RawFileViewer({
     }
   }, [url, supported, safeName])
 
+  /** PDF owns zoom/rotate on its left float pill — web bar is Search + Download + Print only. */
+  const isPdfFile = useMemo(
+    () => mimeForName(safeName).includes("pdf") || /\.pdf$/i.test(safeName),
+    [safeName]
+  )
+
   const viewerOptions = useMemo(
     () =>
       ({
@@ -487,16 +461,18 @@ export function RawFileViewer({
           density: "compact" as const,
           surfaceBackground: "transparent",
         },
-        // Compact top strip. Zoom kept for Office/text; PDF uses its own
-        // zoom row — CSS hides the global zoom group when .pdf-shell is open
-        // so scale controls never double up. 1:1 / zoom-reset is always off.
+        /*
+         * Web toolbar = Search · Download · Print (clean single pill).
+         * Zoom lives on PDF's own chrome for PDFs; Office/text keep web zoom.
+         * Never double zoom + page meter into the search bar (causes 0/0 100% clutter).
+         */
         toolbar: {
           position: "top" as const,
           exportHtml: false,
           theme: false,
           print: true,
           download: true,
-          zoom: true,
+          zoom: !isPdfFile,
           search: true,
           items: {
             "zoom-reset": false,
@@ -506,14 +482,14 @@ export function RawFileViewer({
           },
         },
         pdf: {
-          navigation: true,
-          defaultNavigationVisible: true,
+          // Product: no page/outline sidebar — full-bleed preview only
+          navigation: false,
+          defaultNavigationVisible: false,
           toolbar: true,
-          // No thumbnail tiles — host CSS also hides number squares
           thumbnails: false,
         },
       }) as const,
-    []
+    [isPdfFile]
   )
 
   const downloadName =
@@ -632,7 +608,7 @@ export function RawFileViewer({
     <div
       ref={hostRef}
       className={cn(
-        "sinkduce-file-viewer h-full min-h-0 w-full overflow-hidden rounded-lg border border-border",
+        "sinkduce-file-viewer h-full min-h-0 w-full overflow-hidden bg-white",
         className
       )}
     >

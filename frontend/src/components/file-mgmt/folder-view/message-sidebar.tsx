@@ -209,9 +209,22 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
     [collectionId, currentFolderMessages]
   )
 
-  const handleCloseDialog = useCallback((open: boolean) => {
-    if (!open) setEditingMsg(null)
-    setDialogOpen(open)
+  const dialogCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const DIALOG_CLOSE_MS = 320
+
+  const handleCloseDialog = useCallback((next: boolean) => {
+    if (dialogCloseTimerRef.current) {
+      clearTimeout(dialogCloseTimerRef.current)
+      dialogCloseTimerRef.current = null
+    }
+    setDialogOpen(next)
+    if (!next) {
+      // Keep message for exit anim (silk ~280ms) — same as Note / Todo
+      dialogCloseTimerRef.current = setTimeout(() => {
+        setEditingMsg(null)
+        dialogCloseTimerRef.current = null
+      }, DIALOG_CLOSE_MS)
+    }
   }, [])
 
   const atRoot = !focusFolderId && !currentFolderId
@@ -468,7 +481,12 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
         message={logOpen?.message ?? null}
         version={logOpen?.version ?? null}
         isCurrentVersion={!!logOpen?.isCurrent}
-        onSaved={() => {
+        onSaved={(updated) => {
+          setLogOpen((prev) =>
+            prev && prev.message.message_id === updated.message_id
+              ? { ...prev, message: updated }
+              : prev
+          )
           void refreshMessages(collectionId, { silent: true })
         }}
         onVersionDeleted={() => {

@@ -59,36 +59,11 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
    * (grid 0fr↔1fr — the only height animation). See index.css rail motion notes.
    */
   const [openRail, setOpenRail] = useState<RailPanel>(null)
-  /**
-   * To-do fixed height = left chrome (tabs → Consolidate bottom).
-   * Measured so top aligns with tab bar, bottom with Consolidate.
-   */
-  const chromeRef = useRef<HTMLDivElement>(null)
+  /** To-do height is CSS 2/5 of the rail stack — not tied to left chrome. */
   const notesCardRef = useRef<NotesCardHandle>(null)
-  const [todoHeight, setTodoHeight] = useState<number | null>(null)
 
   const { setSidebarView, setActiveMeeting, setPendingOpenFile, collections } = useAppStore()
   const collectionName = collections.find(c => c.id === collection)?.name || collection
-
-  // Keep To-do height locked to left chrome (tabs through Consolidate)
-  useEffect(() => {
-    const el = chromeRef.current
-    if (!el || typeof ResizeObserver === "undefined") return
-    const measure = () => {
-      // Round up slightly so To-do bottom doesn't fall short of Consolidate
-      const h = Math.ceil(el.getBoundingClientRect().height)
-      if (h > 0) setTodoHeight(h)
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    // Tabs fonts / layout settle after paint
-    const raf = requestAnimationFrame(measure)
-    return () => {
-      ro.disconnect()
-      cancelAnimationFrame(raf)
-    }
-  }, [collection, projectDescription, consolidating, tabsSlot, docCount, notesCount, meetings.length, conflicts.length])
 
   // Track activity edges so we only silent-refresh when work finishes
   const wasConsolidatingRef = useRef(false)
@@ -369,15 +344,16 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
     >
       {/*
         LEFT column:
-        - Chrome (tabs → Consolidate) is sticky / non-scrolling
-        - Only body (summary text, definitive, conflicts) scrolls
+        - Tab bar only stays pinned (does not scroll)
+        - Stats → definition → summary → definitive → conflicts all scroll together
       */}
       <div className="pm-overview-left">
-        <div ref={chromeRef} className="pm-overview-chrome">
-          {tabsSlot && (
-            <div className="pm-overview-tabs min-w-0">{tabsSlot}</div>
-          )}
+        {tabsSlot && (
+          <div className="pm-overview-tabs min-w-0 shrink-0">{tabsSlot}</div>
+        )}
 
+        <div className="pm-overview-left-scroll">
+        <div className="pm-read-column pm-overview-left-body">
           <div className="pm-health">
             <div className="pm-h-cell">
               <span className="pm-h-num">{docCount}</span>
@@ -406,7 +382,14 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
           </div>
 
           <div className="pm-blurb-row">
-            <p className="pm-blurb pm-read-text">
+            <p
+              className="pm-blurb pm-read-text"
+              title={
+                projectDescription?.trim()
+                  ? projectDescription.trim()
+                  : undefined
+              }
+            >
               {projectDescription?.trim()
                 ? projectDescription
                 : "No project description yet. Upload sources and consolidate to build context."}
@@ -438,10 +421,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
               </Button>
             </div>
           </div>
-        </div>
 
-        <div className="pm-overview-left-scroll">
-        <div className="pm-read-column pm-overview-left-body">
           {summaryLoading && !summary ? (
             <div className="flex items-center justify-center py-8 gap-2">
               <Loader2 className="h-5 w-5 animate-spin text-[var(--pm-faint)]" />
@@ -604,7 +584,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
 
       {/*
         RIGHT: pinned to stage height (same bottom edge as left content area).
-        To-do = chrome height; Notes/Meetings expand into remaining space.
+        To-do = 2/5 of rail stack (CSS); Notes/Meetings fill the rest.
         data-pm-rail-anchor: Quick Chat float card matches this box and covers it.
       */}
       <aside
@@ -616,10 +596,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
       >
         {/* Stack fades in place when Quick Chat covers the rail */}
         <div className="pm-rail-stack">
-        <div
-          className="pm-todo-fixed"
-          style={todoHeight != null ? { height: todoHeight } : undefined}
-        >
+        <div className="pm-todo-fixed">
           <TodoCard collection={collection} variant="card" />
         </div>
 

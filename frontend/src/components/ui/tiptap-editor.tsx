@@ -2947,6 +2947,11 @@ interface MarkdownEditorProps {
    * so body width matches plain text siblings.
    */
   flush?: boolean
+  /**
+   * Enable `/` slash command menu. Default true (message / note surfaces).
+   * Compact fields (e.g. todo description) pass false — toolbar still available.
+   */
+  enableSlash?: boolean
 }
 
 // ──────────────────────────────────────────────
@@ -3125,13 +3130,21 @@ function ColorPaletteMenu({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const anchorRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) {
-        setOpen(false)
+      const t = e.target as Node
+      if (ref.current?.contains(t)) return
+      // Portaled SoftMenu lives under body — still treat as "inside"
+      if (
+        t instanceof Element &&
+        t.closest('[data-slot="menu"][data-menu-portal="true"]')
+      ) {
+        return
       }
+      setOpen(false)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
@@ -3148,6 +3161,7 @@ function ColorPaletteMenu({
     <div ref={ref} className="relative">
       {compact ? (
         <button
+          ref={anchorRef}
           type="button"
           title={kind === "highlight" ? "Highlight" : "Text color"}
           className={cn("pm-fmt-compact", open && "is-on")}
@@ -3184,6 +3198,7 @@ function ColorPaletteMenu({
         </button>
       ) : (
         <button
+          ref={anchorRef}
           type="button"
           title={kind === "highlight" ? "More highlights" : "More text colors"}
           className={cn("pm-fmt-more", open && "is-on")}
@@ -3194,7 +3209,10 @@ function ColorPaletteMenu({
       )}
       <SoftMenu
         open={open}
-        className="pm-fmt-palette absolute top-full left-1/2 z-50 mt-1.5 -translate-x-1/2"
+        portal
+        anchorRef={anchorRef}
+        align="center"
+        className="pm-fmt-palette"
       >
         {/* Single compact row of chips — none (hl only) + presets */}
         <div className="pm-fmt-palette-row">
@@ -3244,6 +3262,7 @@ function ColorPaletteMenu({
 function HeadingDropdown({ editor }: { editor: Editor }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const anchorRef = useRef<HTMLButtonElement>(null)
 
   const level = ([1, 2, 3] as const).find((l) =>
     editor.isActive("heading", { level: l }),
@@ -3255,9 +3274,15 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) {
-        setOpen(false)
+      const t = e.target as Node
+      if (ref.current?.contains(t)) return
+      if (
+        t instanceof Element &&
+        t.closest('[data-slot="menu"][data-menu-portal="true"]')
+      ) {
+        return
       }
+      setOpen(false)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
@@ -3266,6 +3291,7 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
   return (
     <div ref={ref} className="relative">
       <button
+        ref={anchorRef}
         type="button"
         title="Heading"
         className={cn("pm-fmt-hd", level && "is-on")}
@@ -3278,7 +3304,10 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
       </button>
       <SoftMenu
         open={open}
-        className="pm-fmt-hd-menu absolute top-full left-0 z-50 mt-1.5 min-w-[11rem]"
+        portal
+        anchorRef={anchorRef}
+        align="start"
+        className="pm-fmt-hd-menu min-w-[11rem]"
       >
         {([1, 2, 3] as const).map((l) => (
           <MenuItem
@@ -3347,8 +3376,15 @@ export function EditorToolbar({
       const bar = barRef.current
       const ae = document.activeElement
       if (bar && ae && bar.contains(ae)) return
-      // Open SoftMenu keeps buttons non-focused; treat open menu as still editing
-      if (bar?.querySelector('[data-slot="menu"].is-open, .pm-menu--soft.is-open')) {
+      // Open SoftMenu (incl. body-portaled submenus) keeps toolbar "editing"
+      if (
+        bar?.querySelector(
+          '[data-slot="menu"].is-open, .pm-menu--soft.is-open'
+        ) ||
+        document.querySelector(
+          '[data-slot="menu"][data-menu-portal="true"].is-open, [data-slot="menu"][data-menu-portal="true"].pm-menu--soft.is-open'
+        )
+      ) {
         return
       }
       setEditing(false)
@@ -3656,6 +3692,7 @@ export function TiptapEditor({
   showToolbar = true,
   stickyToolbarOffset, toolbarActions,
   flush = false,
+  enableSlash = true,
 }: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
@@ -3667,12 +3704,17 @@ export function TiptapEditor({
   onEditorFocusRef.current = onEditorFocus
   // Placeholder extension is configured once; read latest text via ref so
   // prop updates / HMR are not stuck on the first mount string.
-  const placeholderRef = useRef(placeholder || MESSAGE_EDITOR_PLACEHOLDER)
-  placeholderRef.current = placeholder || MESSAGE_EDITOR_PLACEHOLDER
+  const defaultPlaceholder = enableSlash
+    ? MESSAGE_EDITOR_PLACEHOLDER
+    : "Write…"
+  const placeholderRef = useRef(placeholder || defaultPlaceholder)
+  placeholderRef.current = placeholder || defaultPlaceholder
 
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
-  const SlashCmd = useRef(createSlashCommandExtension(onImageUpload)).current
+  const SlashCmd = useRef(
+    enableSlash ? createSlashCommandExtension(onImageUpload) : null
+  ).current
   const ResizableImage = useRef(createResizableImageExtension()).current
 
   // Markdown Hover Extension
@@ -3750,12 +3792,14 @@ export function TiptapEditor({
       Table.configure({ resizable: true }), TableRow, TableCell, TableHeader,
       TaskList, TaskItem.configure({ nested: true }),
       Placeholder.configure({
-        placeholder: () => placeholderRef.current || MESSAGE_EDITOR_PLACEHOLDER,
+        placeholder: () =>
+          placeholderRef.current ||
+          (enableSlash ? MESSAGE_EDITOR_PLACEHOLDER : "Write…"),
         showOnlyWhenEditable: true,
         showOnlyCurrent: false,
         includeChildren: false,
       }),
-      SlashCmd,
+      ...(SlashCmd ? [SlashCmd] : []),
       Youtube.configure({ width: 640, height: 360 }),
       PremiumHighlight,
       TextStyle,

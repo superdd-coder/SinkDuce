@@ -22,11 +22,14 @@ import {
 import { cn } from "@/lib/utils"
 import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
 
-/** System UI ink green (#1A5E3D / --ze-green). */
+/**
+ * System / brand forest — `--pm-green` / `--ze-green`.
+ * Prefer this for Meeting · Notes · branch chrome so icons match Premium shell.
+ */
 export const ZE_GREEN = "#1A5E3D"
 
-/** Archived system folder — muted slate gray. */
-export const ARCHIVE_GRAY = "#94A3B8"
+/** Archived system folder — `--pm-faint` family (warm gray, not cool slate). */
+export const ARCHIVE_GRAY = "#969C96"
 
 /** Virtual focus id for nodes with no group. */
 export const UNCATEGORIZED_ID = "__uncategorized__"
@@ -57,22 +60,24 @@ export const LUCIDE_PRESETS: { key: string; Icon: LucideIcon; label: string }[] 
 ]
 
 /**
- * Morandi low-saturation palette — pairs with ink green (#1A5E3D)
- * while staying distinguishable from each other.
+ * Folder / node-group Lucide tints — clear hues, medium chroma.
+ *
+ * Need to read at ~16px: distinct hues + enough saturation (not gray sludge).
+ * Still below neon; brand green stays one option among a full ring.
  */
 export const ICON_COLORS = [
-  "#7A9A88", // sage green (near brand, softer)
-  "#7D93A8", // dusty blue-slate
-  "#9A8BA8", // muted mauve
-  "#B5A48A", // warm sand / taupe
-  "#B08A88", // dusty rose
-  "#7E9B98", // muted teal-gray
-  "#A39B90", // warm stone
-  "#8E9AAB", // cool slate
+  "#1A5E3D", // brand forest (--pm-green)
+  "#2A8A9A", // teal
+  "#3B6FBF", // blue
+  "#7B5CB8", // violet
+  "#C45A6A", // rose
+  "#D07A30", // orange
+  "#C4A020", // gold
+  "#3D8B5A", // leaf green (lighter than brand)
 ]
 
-/** Default Morandi color for new lucide icons. */
-export const DEFAULT_ICON_COLOR = ICON_COLORS[0]
+/** Default for new lucide icons — leaf green, clearer than muted teal-gray. */
+export const DEFAULT_ICON_COLOR = ICON_COLORS[7]
 
 const LUCIDE_MAP: Record<string, LucideIcon> = Object.fromEntries(
   LUCIDE_PRESETS.map((p) => [p.key, p.Icon])
@@ -339,10 +344,8 @@ export function IconPickerPanel({
 }) {
   return (
     <div>
-      <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1.5">
-        Icon
-      </label>
-      <div className="space-y-2">
+      <label className="pm-field-label block mb-1.5">Icon</label>
+      <div className="space-y-2.5">
         <div className="grid grid-cols-8 gap-1">
           {LUCIDE_PRESETS.map((p) => (
             <button
@@ -350,10 +353,12 @@ export function IconPickerPanel({
               type="button"
               title={p.label}
               className={cn(
-                "h-8 w-8 rounded border flex items-center justify-center transition-colors",
-                iconMode === "lucide" && iconKey === p.key
-                  ? "border-primary bg-primary/10 ring-1 ring-primary/30"
-                  : "border-border hover:bg-muted/40"
+                "h-8 w-8 rounded-[var(--pm-r-sm)] flex items-center justify-center transition-colors",
+                "border border-[color-mix(in_srgb,var(--pm-ink)_8%,transparent)]",
+                "bg-white hover:bg-[var(--pm-green-wash)]",
+                iconMode === "lucide" &&
+                  iconKey === p.key &&
+                  "border-[color-mix(in_srgb,var(--pm-green)_35%,transparent)] bg-[var(--pm-green-soft)] ring-1 ring-[color-mix(in_srgb,var(--pm-green)_20%,transparent)]"
               )}
               onClick={() => {
                 onIconMode("lucide")
@@ -369,16 +374,18 @@ export function IconPickerPanel({
           ))}
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
-          <span className="text-[10px] text-muted-foreground/60 mr-0.5">Color</span>
+          <span className="pm-meta mr-0.5 text-[var(--pm-faint)]">Color</span>
           {ICON_COLORS.map((c) => (
             <button
               key={c}
               type="button"
               className={cn(
-                "h-5 w-5 rounded-full border-2 transition-transform",
-                iconColor === c
-                  ? "border-foreground scale-110"
-                  : "border-transparent hover:scale-105"
+                "h-5 w-5 rounded-full transition-transform",
+                "border-2 border-transparent",
+                "shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--pm-ink)_10%,transparent)]",
+                iconColor.toLowerCase() === c.toLowerCase()
+                  ? "scale-110 border-[var(--pm-ink)]"
+                  : "hover:scale-105"
               )}
               style={{ background: c }}
               onClick={() => {
@@ -390,11 +397,11 @@ export function IconPickerPanel({
           ))}
         </div>
         <div>
-          <label className="text-[10px] text-muted-foreground/60 block mb-1">
+          <label className="pm-meta block mb-1 text-[var(--pm-faint)]">
             Custom
           </label>
           <input
-            className="w-full text-sm border rounded px-2 py-1.5 bg-background"
+            className="w-full pm-meta border border-[color-mix(in_srgb,var(--pm-ink)_10%,transparent)] rounded-[var(--pm-r-sm)] px-2 py-1.5 bg-white text-[var(--pm-text)]"
             value={symbol}
             onChange={(e) => {
               const next = limitSymbolInput(e.target.value)

@@ -2,7 +2,7 @@
  * Collection To-do card — Overview right rail + reusable list.
  * Spec: docs/superpowers/specs/2026-08-05-collection-todo-design.md
  */
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ChevronRight,
   GitBranch,
@@ -63,6 +63,9 @@ export function TodoCard({
   const [linkTodo, setLinkTodo] = useState<TodoItem | null>(null)
   const [detailTodo, setDetailTodo] = useState<TodoItem | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  /** Match pm-dialog--silk exit (~280ms + buffer) before clearing todo */
+  const detailCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const DETAIL_CLOSE_MS = 320
 
   const [internalCreateOpen, setInternalCreateOpen] = useState(false)
   const createOpen = createOpenProp ?? internalCreateOpen
@@ -183,6 +186,10 @@ export function TodoCard({
   }
 
   const openDetail = (t: TodoItem) => {
+    if (detailCloseTimerRef.current) {
+      clearTimeout(detailCloseTimerRef.current)
+      detailCloseTimerRef.current = null
+    }
     setDetailTodo(t)
     setDetailOpen(true)
   }
@@ -481,8 +488,18 @@ export function TodoCard({
         todo={detailTodo}
         open={detailOpen}
         onOpenChange={(o) => {
+          if (detailCloseTimerRef.current) {
+            clearTimeout(detailCloseTimerRef.current)
+            detailCloseTimerRef.current = null
+          }
           setDetailOpen(o)
-          if (!o) setDetailTodo(null)
+          if (!o) {
+            // Keep todo until silk exit finishes (same as Note / Create todo)
+            detailCloseTimerRef.current = setTimeout(() => {
+              setDetailTodo(null)
+              detailCloseTimerRef.current = null
+            }, DETAIL_CLOSE_MS)
+          }
         }}
         onUpdated={(updated) => {
           setTodos((prev) =>

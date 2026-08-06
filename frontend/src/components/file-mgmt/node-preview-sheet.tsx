@@ -202,7 +202,7 @@ export function NodePreviewSheet({
             )}
             onClick={(e) => e.stopPropagation()}
           >
-            <DialogHeader className="px-4 py-3 border-b border-border shrink-0 space-y-1 relative pr-12">
+            <DialogHeader className="px-4 py-3 shrink-0 space-y-1 relative pr-12">
               <DialogTitle className="text-sm">Node preview</DialogTitle>
               <DialogDescription className="text-[11px]">
                 Read-only preview from file detail. Does not switch to Timeline.

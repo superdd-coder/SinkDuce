@@ -337,9 +337,23 @@ export function NodeDetailSidebar({
     setMsgDialogOpen(true)
   }, [])
 
-  const handleCloseMsgDialog = useCallback((open: boolean) => {
-    if (!open) setEditingMsg(null)
-    setMsgDialogOpen(open)
+  const msgDialogCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const MSG_DIALOG_CLOSE_MS = 320
+
+  const handleCloseMsgDialog = useCallback((next: boolean) => {
+    if (msgDialogCloseTimerRef.current) {
+      clearTimeout(msgDialogCloseTimerRef.current)
+      msgDialogCloseTimerRef.current = null
+    }
+    setMsgDialogOpen(next)
+    if (!next) {
+      msgDialogCloseTimerRef.current = setTimeout(() => {
+        setEditingMsg(null)
+        msgDialogCloseTimerRef.current = null
+      }, MSG_DIALOG_CLOSE_MS)
+    }
   }, [])
 
   if (!nodeId) return null
