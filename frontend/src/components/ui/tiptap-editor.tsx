@@ -1118,142 +1118,207 @@ function createResizableImageExtension() {
 }  // end createResizableImageExtension
 
 // ──────────────────────────────────────────────
-// Image Floating Menu
+// Premium float bars (image / table) — fixed portal, SoftMenu surface
+// Avoid absolute top:-44px inside overflow:hidden pane cards (clipping).
 // ──────────────────────────────────────────────
 let _isPreviewMode = false
+let _floatBarCleanup: (() => void) | null = null
+let _floatBarAnchor: HTMLElement | null = null
+
+function dismissPremiumFloatBars() {
+  document.getElementById("image-floating-menu")?.remove()
+  document.getElementById("table-floating-menu")?.remove()
+  if (_floatBarCleanup) {
+    _floatBarCleanup()
+    _floatBarCleanup = null
+  }
+  _floatBarAnchor = null
+}
+
+/** Mount a Premium float bar on document.body (fixed) above `anchor`. */
+function mountPremiumFloatBar(
+  menu: HTMLElement,
+  anchor: HTMLElement,
+  opts?: { align?: "center" | "start" },
+) {
+  dismissPremiumFloatBars()
+  _floatBarAnchor = anchor
+  menu.classList.add("pm-float-bar")
+  menu.setAttribute("role", "toolbar")
+  document.body.appendChild(menu)
+
+  const place = () => {
+    if (!menu.isConnected || !anchor.isConnected) return
+    const r = anchor.getBoundingClientRect()
+    const mh = menu.offsetHeight || 36
+    const mw = menu.offsetWidth || 160
+    const gap = 8
+    // Clear sticky format strip + viewport chrome so bar isn't covered/clipped
+    let minTop = 8
+    const fmt = document.querySelector(
+      ".pm-fmt-toolbar.is-editing",
+    ) as HTMLElement | null
+    if (fmt) {
+      const fb = fmt.getBoundingClientRect().bottom
+      if (fb > 0) minTop = Math.max(minTop, fb + 6)
+    }
+    let top = r.top - mh - gap
+    // Flip below when not enough room under sticky format strip / viewport top
+    if (top < minTop) {
+      top = Math.min(r.bottom + gap, window.innerHeight - mh - 8)
+    }
+    let left =
+      opts?.align === "start"
+        ? r.left
+        : r.left + r.width / 2 - mw / 2
+    left = Math.max(8, Math.min(left, window.innerWidth - mw - 8))
+    menu.style.top = `${Math.round(top)}px`
+    menu.style.left = `${Math.round(left)}px`
+  }
+
+  // Enter animation after first layout
+  requestAnimationFrame(() => {
+    place()
+    menu.classList.add("is-open")
+    requestAnimationFrame(place)
+  })
+
+  const onReposition = () => place()
+  window.addEventListener("scroll", onReposition, true)
+  window.addEventListener("resize", onReposition)
+
+  const onOutside = (e: MouseEvent) => {
+    const t = e.target as Node
+    if (menu.contains(t) || anchor.contains(t)) return
+    dismissPremiumFloatBars()
+    document.removeEventListener("mousedown", onOutside, true)
+  }
+  // mousedown so we dismiss before other click handlers re-open
+  setTimeout(() => {
+    document.addEventListener("mousedown", onOutside, true)
+  }, 0)
+
+  _floatBarCleanup = () => {
+    window.removeEventListener("scroll", onReposition, true)
+    window.removeEventListener("resize", onReposition)
+    document.removeEventListener("mousedown", onOutside, true)
+  }
+}
+
+function makeFloatBarBtn(
+  title: string,
+  svg: string,
+  opts?: { active?: boolean; danger?: boolean; className?: string },
+): HTMLButtonElement {
+  const b = document.createElement("button")
+  b.type = "button"
+  b.className = [
+    "pm-float-bar-btn",
+    opts?.active ? "is-on" : "",
+    opts?.danger ? "is-danger" : "",
+    opts?.className || "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+  b.title = title
+  b.setAttribute("aria-label", title)
+  b.innerHTML = svg
+  return b
+}
+
+function makeFloatBarSep(): HTMLDivElement {
+  const d = document.createElement("div")
+  d.className = "pm-float-bar-sep"
+  d.setAttribute("aria-hidden", "true")
+  return d
+}
+
 function showImageFloatingMenu(
   container: HTMLElement,
   attrs: any,
   onUpdate: (attrs: any) => void,
 ) {
-  if (_isPreviewMode) return  // Don't show menus in preview
-  // Remove existing menu
-  const existingMenu = document.getElementById("image-floating-menu")
-  if (existingMenu) existingMenu.remove()
+  if (_isPreviewMode) return
+
+  // Anchor to the image frame (not full-width container) so the bar sits over the photo
+  const anchor =
+    (container.querySelector("img")?.parentElement as HTMLElement | null) ||
+    container
+
+  // Same image already open → keep
+  if (
+    document.getElementById("image-floating-menu") &&
+    _floatBarAnchor === anchor
+  ) {
+    return
+  }
 
   const menu = document.createElement("div")
   menu.id = "image-floating-menu"
-  menu.style.cssText = `
-    position: absolute;
-    top: -44px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #1e1e1e;
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-    padding: 6px;
-    display: flex;
-    gap: 4px;
-    z-index: 100;
-    white-space: nowrap;
-  `
+  menu.setAttribute("aria-label", "Image")
 
-  // Alignment options with SVG icons
+  // Prevent mousedown from stealing editor focus
+  menu.addEventListener("mousedown", (e) => {
+    if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault()
+  })
+  menu.addEventListener("click", (e) => e.stopPropagation())
+
   const alignmentOptions = [
     {
       value: "left",
-      svg: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M2 7h8M2 11h10M2 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+      svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M2 7h8M2 11h10M2 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
       label: "Align left",
     },
     {
       value: "center",
-      svg: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M4 7h8M3 11h10M5 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+      svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M4 7h8M3 11h10M5 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
       label: "Align center",
     },
     {
       value: "right",
-      svg: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M6 7h8M4 11h10M8 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+      svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M6 7h8M4 11h10M8 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
       label: "Align right",
     },
   ]
 
-  alignmentOptions.forEach(opt => {
-    const btn = document.createElement("button")
-    btn.innerHTML = opt.svg
-    btn.title = opt.label
-    btn.style.cssText = `
-      padding: 6px 8px;
-      border: none;
-      background: ${attrs.alignment === opt.value ? "rgba(255,255,255,0.2)" : "transparent"};
-      border-radius: 4px;
-      cursor: pointer;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.15s;
-    `
-    btn.addEventListener("mouseenter", () => { btn.style.background = "rgba(255,255,255,0.15)" })
-    btn.addEventListener("mouseleave", () => {
-      btn.style.background = attrs.alignment === opt.value ? "rgba(255,255,255,0.2)" : "transparent"
+  const currentAlign = attrs.alignment || "center"
+  alignmentOptions.forEach((opt) => {
+    const btn = makeFloatBarBtn(opt.label, opt.svg, {
+      active: currentAlign === opt.value,
+      className: "align-btn",
     })
+    btn.dataset.align = opt.value
     btn.addEventListener("click", (e) => {
       e.stopPropagation()
       attrs.alignment = opt.value
       onUpdate({ alignment: opt.value })
-      // Update visual highlight — re-style all buttons
-      menu.querySelectorAll("button.align-btn").forEach((b, i) => {
-        const el = b as HTMLElement
-        el.style.background = alignmentOptions[i].value === opt.value ? "rgba(255,255,255,0.2)" : "transparent"
+      menu.querySelectorAll("button.align-btn").forEach((b) => {
+        const el = b as HTMLButtonElement
+        el.classList.toggle("is-on", el.dataset.align === opt.value)
       })
-      // Don't remove menu so user can see effect and adjust further
     })
-    btn.className = "align-btn"
     menu.appendChild(btn)
   })
 
-  // Divider
-  const divider = document.createElement("div")
-  divider.style.cssText = `width: 1px; background: rgba(255,255,255,0.2); margin: 4px 2px;`
-  menu.appendChild(divider)
+  menu.appendChild(makeFloatBarSep())
 
-  // Caption button — inline editing instead of system prompt()
-  const captionBtn = document.createElement("button")
-  captionBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`
-  captionBtn.title = "Add caption"
-  captionBtn.style.cssText = `
-    padding: 6px 8px;
-    border: none;
-    background: transparent;
-    border-radius: 4px;
-    cursor: pointer;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s;
-  `
-  captionBtn.addEventListener("mouseenter", () => { captionBtn.style.background = "rgba(255,255,255,0.15)" })
-  captionBtn.addEventListener("mouseleave", () => { captionBtn.style.background = "transparent" })
+  const captionBtn = makeFloatBarBtn(
+    "Add caption",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+  )
   captionBtn.addEventListener("click", (e) => {
     e.stopPropagation()
-    menu.remove() // close floating menu
-
-    // Read current caption from attrs (fresh from doc, not stale closure)
     const currentAlt = attrs.alt || ""
-
-    // Dispatch a custom event to the container so the nodeView can show
-    // its inline editor. This keeps the input completely outside ProseMirror's DOM.
-    const ev = new CustomEvent("caption:edit", { bubbles: false, detail: { alt: currentAlt } })
+    dismissPremiumFloatBars()
+    const ev = new CustomEvent("caption:edit", {
+      bubbles: false,
+      detail: { alt: currentAlt },
+    })
     container.dispatchEvent(ev)
   })
   menu.appendChild(captionBtn)
 
-  // ── Visual Translate removed — image descriptions are now automatic during ingest ──
-
-
-  container.style.position = "relative"
-  container.appendChild(menu)
-
-  // Close menu when clicking outside
-  setTimeout(() => {
-    document.addEventListener("click", function closeMenu(e) {
-      if (!menu.contains(e.target as HTMLElement) && !container.contains(e.target as HTMLElement)) {
-        menu.remove()
-        document.removeEventListener("click", closeMenu)
-      }
-    })
-  }, 10)
+  mountPremiumFloatBar(menu, anchor, { align: "center" })
 }
 
 // ──────────────────────────────────────────────
@@ -1862,8 +1927,16 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 }
 
 // ──────────────────────────────────────────────
-// Callout Node Extension
+// Callout Node Extension — Premium soft rail card
 // ──────────────────────────────────────────────
+const CALLOUT_ICONS: Record<string, string> = {
+  // Lucide-weight monoline (currentColor)
+  info: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>`,
+  warning: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5L2.5 19.5h19L12 3.5z"/><path d="M12 10v4"/><path d="M12 17h.01"/></svg>`,
+  success: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>`,
+  error: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg>`,
+}
+
 function createCalloutExtension() {
   return Node.create({
     name: "callout",
@@ -1875,7 +1948,8 @@ function createCalloutExtension() {
       return {
         type: {
           default: "info",
-          parseHTML: (element: HTMLElement) => element.getAttribute("data-callout-type") || "info",
+          parseHTML: (element: HTMLElement) =>
+            element.getAttribute("data-callout-type") || "info",
           renderHTML: (attrs: any) => ({ "data-callout-type": attrs.type }),
         },
       }
@@ -1885,41 +1959,46 @@ function createCalloutExtension() {
       return [{ tag: 'div[data-type="callout"]' }]
     },
 
-    renderHTML({ HTMLAttributes }) {
-      return ["div", mergeAttributes(HTMLAttributes, { "data-type": "callout" })]
+    renderHTML({ HTMLAttributes, node }) {
+      const t = node?.attrs?.type || "info"
+      return [
+        "div",
+        mergeAttributes(HTMLAttributes, {
+          "data-type": "callout",
+          "data-callout-type": t,
+          class: `pm-callout pm-callout--${t}`,
+        }),
+        0,
+      ]
     },
 
     addNodeView() {
       return ({ node }) => {
         const dom = document.createElement("div")
-        dom.setAttribute("data-type", "callout")
-        dom.setAttribute("data-callout-type", node.attrs.type)
-
-        const colors: Record<string, { bg: string; border: string; icon: string }> = {
-          info: { bg: "rgba(26,94,61,0.06)", border: "#1A5E3D", icon: "💡" },
-          warning: { bg: "#fff3e0", border: "#f57c00", icon: "⚠️" },
-          success: { bg: "#e8f5e9", border: "#388e3c", icon: "✅" },
-          error: { bg: "#ffebee", border: "#d32f2f", icon: "❌" },
-        }
-
-        const color = colors[node.attrs.type] || colors.info
-        dom.style.cssText = `
-          border-left: 4px solid ${color.border}; background: ${color.bg};
-          border-radius: 4px; padding: 12px 16px; margin: 8px 0;
-        `
-
-        const icon = document.createElement("span")
-        icon.textContent = color.icon
-        icon.style.cssText = `margin-right: 8px;`
-
+        const iconEl = document.createElement("span")
+        iconEl.className = "pm-callout__icon"
+        iconEl.setAttribute("aria-hidden", "true")
         const content = document.createElement("div")
-        content.style.cssText = `display: inline;`
+        content.className = "pm-callout__body"
 
-        dom.append(icon, content)
+        const applyType = (type: string) => {
+          const t = CALLOUT_ICONS[type] ? type : "info"
+          dom.setAttribute("data-type", "callout")
+          dom.setAttribute("data-callout-type", t)
+          dom.className = `pm-callout pm-callout--${t}`
+          iconEl.innerHTML = CALLOUT_ICONS[t]
+        }
+        applyType(node.attrs.type || "info")
+        dom.append(iconEl, content)
 
         return {
           dom,
           contentDOM: content,
+          update: (updated: ProseMirrorNode) => {
+            if (updated.type.name !== "callout") return false
+            applyType(updated.attrs.type || "info")
+            return true
+          },
         }
       }
     },
@@ -1930,7 +2009,6 @@ function createCalloutExtension() {
 // Slash Command Extension
 // ──────────────────────────────────────────────
 function createSlashCommandExtension(
-  onDistill?: () => void,
   onImageUpload?: (file: File) => Promise<string>
 ) {
   return Extension.create({
@@ -1941,7 +2019,7 @@ function createSlashCommandExtension(
           const { from } = editor.state.selection
           const textBefore = editor.state.doc.textBetween(Math.max(0, from - 1), from, "")
           if (from === 1 || textBefore === "\n" || textBefore === "") {
-            showSlashMenu(editor, from, onDistill, onImageUpload)
+            showSlashMenu(editor, from, onImageUpload)
             return true
           }
           return false
@@ -1957,7 +2035,6 @@ function createSlashCommandExtension(
 function showSlashMenu(
   editor: any,
   position: number,
-  onDistill?: () => void,
   onImageUpload?: (file: File) => Promise<string>
 ) {
   const existingMenu = document.getElementById("slash-menu") as HTMLElement & {
@@ -2007,18 +2084,6 @@ function showSlashMenu(
             input.click()
           },
         },
-        {
-          label: "Video",
-          icon: "🎬",
-          desc: "YouTube embed",
-          action: () => {
-            const url = prompt("YouTube URL:")
-            if (url) {
-              const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/)
-              if (match) editor.chain().focus().setYoutubeVideo({ src: `https://www.youtube.com/watch?v=${match[1]}` }).run()
-            }
-          },
-        },
       ],
     },
     {
@@ -2026,45 +2091,49 @@ function showSlashMenu(
       commands: [
         { label: "Table", icon: "📊", desc: "Insert table", action: () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
         { label: "Code Block", icon: "💻", desc: "Code block", action: () => editor.chain().focus().toggleCodeBlock().run() },
-        { label: "Callout", icon: "💡", desc: "Info callout", action: () => editor.chain().focus().insertContent({ type: "callout", attrs: { type: "info" }, content: [{ type: "paragraph", content: [{ type: "text", text: "Callout" }] }] }).run() },
-      ],
-    },
-    {
-      label: "AI & Integration",
-      commands: [
-        { label: "Distill Block", icon: "🔗", desc: "Extract from note", action: () => onDistill ? onDistill() : alert("Drag a note to distill") },
+        {
+          label: "Callout",
+          icon: "💡",
+          desc: "Info callout",
+          action: () =>
+            editor
+              .chain()
+              .focus()
+              .insertContent({
+                type: "callout",
+                attrs: { type: "info" },
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "Note" }],
+                  },
+                ],
+              })
+              .run(),
+        },
       ],
     },
   ]
 
   const menu = document.createElement("div")
   menu.id = "slash-menu"
-  // Compact single-line rows; fixed height with internal scroll
-  menu.style.cssText = `
-    position: fixed;
-    background: white;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-    padding: 0;
-    z-index: 1000;
-    width: 220px;
-    height: 220px;
-    max-height: min(220px, 50vh);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  `
+  menu.className = "pm-slash-menu"
+  menu.setAttribute("role", "listbox")
+  menu.setAttribute("aria-label", "Insert block")
 
   const searchContainer = document.createElement("div")
-  searchContainer.style.cssText = `padding: 4px 8px; border-bottom: 1px solid #e0e0e0; flex-shrink: 0;`
+  searchContainer.className = "pm-slash-menu__search"
   const searchInput = document.createElement("input")
-  searchInput.placeholder = "Filter..."
-  searchInput.style.cssText = `width: 100%; border: none; outline: none; font-size: 12px; line-height: 20px; height: 24px; background: transparent;`
+  searchInput.className = "pm-slash-menu__input"
+  searchInput.type = "search"
+  searchInput.placeholder = "Filter commands…"
+  searchInput.setAttribute("aria-label", "Filter commands")
+  searchInput.autocomplete = "off"
+  searchInput.spellcheck = false
   searchContainer.appendChild(searchInput)
 
   const commandList = document.createElement("div")
-  commandList.style.cssText = `flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0;`
+  commandList.className = "pm-slash-menu__list"
   menu.append(searchContainer, commandList)
 
   let allCommands: any[] = []
@@ -2088,35 +2157,56 @@ function showSlashMenu(
     })
 
     if (filteredCommands.length === 0) {
-      commandList.innerHTML = '<div style="padding: 8px; text-align: center; color: #999; font-size: 12px;">No commands</div>'
+      const empty = document.createElement("div")
+      empty.className = "pm-slash-menu__empty"
+      empty.textContent = "No commands"
+      commandList.appendChild(empty)
       return
     }
 
-    const grouped: any = {}
+    const grouped: Record<string, any[]> = {}
     filteredCommands.forEach((cmd) => {
       if (!grouped[cmd.group]) grouped[cmd.group] = []
       grouped[cmd.group].push(cmd)
     })
 
     let itemIndex = 0
-    Object.entries(grouped).forEach(([, commands]) => {
-      ;(commands as any[]).forEach((cmd) => {
-        const item = document.createElement("div")
-        // Single-line row (~24px): small icon + label only
-        item.style.cssText = `
-          display: flex; align-items: center; gap: 6px;
-          height: 24px; padding: 0 8px; cursor: pointer;
-          box-sizing: border-box;
-        `
+    Object.entries(grouped).forEach(([groupLabel, commands]) => {
+      const groupEl = document.createElement("div")
+      groupEl.className = "pm-slash-menu__group"
+      groupEl.textContent = groupLabel
+      commandList.appendChild(groupEl)
+
+      commands.forEach((cmd) => {
+        const item = document.createElement("button")
+        item.type = "button"
+        item.className = "pm-slash-menu__item"
         item.dataset.index = String(itemIndex++)
+        item.setAttribute("role", "option")
 
-        item.innerHTML = `
-          <div style="width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border-radius: 3px; font-size: 10px; line-height: 1;">${cmd.icon}</div>
-          <div style="flex: 1; min-width: 0; font-size: 12px; font-weight: 500; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cmd.label}</div>
-        `
+        const icon = document.createElement("span")
+        icon.className = "pm-slash-menu__icon"
+        icon.setAttribute("aria-hidden", "true")
+        icon.textContent = cmd.icon
 
-        item.addEventListener("mouseenter", () => { item.style.background = "#f0f7ff" })
-        item.addEventListener("mouseleave", () => { item.style.background = "white" })
+        const label = document.createElement("span")
+        label.className = "pm-slash-menu__label"
+        label.textContent = cmd.label
+
+        const desc = document.createElement("span")
+        desc.className = "pm-slash-menu__desc"
+        desc.textContent = cmd.desc || ""
+
+        item.append(icon, label, desc)
+
+        item.addEventListener("mouseenter", () => {
+          selectedIndex = Number(item.dataset.index) || 0
+          updateSelection()
+        })
+        item.addEventListener("mousedown", (ev) => {
+          // Keep focus in filter; prevent editor blur before click
+          ev.preventDefault()
+        })
         item.addEventListener("click", (ev) => {
           ev.preventDefault()
           ev.stopPropagation()
@@ -2132,11 +2222,14 @@ function showSlashMenu(
   }
 
   function updateSelection() {
-    const items = commandList.querySelectorAll("div[data-index]")
+    const items = commandList.querySelectorAll(".pm-slash-menu__item[data-index]")
     items.forEach((item, i) => {
-      ;(item as HTMLElement).style.background = i === selectedIndex ? "#f0f7ff" : "white"
+      const el = item as HTMLElement
+      const on = i === selectedIndex
+      el.classList.toggle("is-on", on)
+      el.setAttribute("aria-selected", on ? "true" : "false")
     })
-    const selectedItem = items[selectedIndex] as HTMLElement
+    const selectedItem = items[selectedIndex] as HTMLElement | undefined
     if (selectedItem) selectedItem.scrollIntoView({ block: "nearest" })
   }
 
@@ -2227,16 +2320,13 @@ function showSlashMenu(
     renderCommands((e.target as HTMLInputElement).value)
   })
 
-  // Render commands FIRST so we measure actual menu dimensions
+  // Mount hidden → measure → place → soft open
   menu.style.visibility = "hidden"
-  menu.style.position = "fixed"
   document.body.appendChild(menu)
   renderCommands()
 
-  // Position menu with actual content dimensions
   const coords = editor.view.coordsAtPos(position)
   const PADDING = 12
-
   const menuRect = menu.getBoundingClientRect()
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
@@ -2244,19 +2334,28 @@ function showSlashMenu(
   let top = coords.bottom + 8
   let left = coords.left
 
-  if (left + menuRect.width > viewportWidth - PADDING) left = viewportWidth - menuRect.width - PADDING
+  if (left + menuRect.width > viewportWidth - PADDING) {
+    left = viewportWidth - menuRect.width - PADDING
+  }
   if (left < PADDING) left = PADDING
-  if (top + menuRect.height > viewportHeight - PADDING) top = coords.top - menuRect.height - 8
-  if (top < PADDING) { top = PADDING; menu.style.maxHeight = `${viewportHeight - PADDING * 2}px` }
+  if (top + menuRect.height > viewportHeight - PADDING) {
+    top = coords.top - menuRect.height - 8
+  }
+  if (top < PADDING) {
+    top = PADDING
+    menu.style.maxHeight = `${viewportHeight - PADDING * 2}px`
+  }
 
-  menu.style.top = `${top}px`
-  menu.style.left = `${left}px`
+  menu.style.top = `${Math.round(top)}px`
+  menu.style.left = `${Math.round(left)}px`
   menu.style.visibility = "visible"
+  requestAnimationFrame(() => {
+    menu.classList.add("is-open")
+  })
 
   searchInput.focus()
 
-  // Capture-phase pointerdown so clicks on editor / sidebar still dismiss
-  // (bubble-phase click was often swallowed by ProseMirror / React).
+  // Capture-phase pointerdown so clicks on editor / sidebar still dismiss.
   // Defer one frame so the opening keystroke doesn't immediately close.
   requestAnimationFrame(() => {
     document.addEventListener("pointerdown", onPointerDownOutside, true)
@@ -2331,17 +2430,18 @@ function showTableContextMenu(event: MouseEvent, editor: any) {
 // ──────────────────────────────────────────────
 function showTableFloatingMenu(table: HTMLElement, editor: any) {
   if (_isPreviewMode) return
-  const existing = document.getElementById("table-floating-menu")
-  if (existing) existing.remove()
+
+  // Same table already open → keep
+  if (
+    document.getElementById("table-floating-menu") &&
+    _floatBarAnchor === table
+  ) {
+    return
+  }
 
   const menu = document.createElement("div")
   menu.id = "table-floating-menu"
-  menu.style.cssText = `
-    position: absolute; top: -44px; left: 0; transform: none;
-    background: #1e1e1e; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-    padding: 6px; display: flex; gap: 4px; z-index: 100; white-space: nowrap;
-    align-items: center;
-  `
+  menu.setAttribute("aria-label", "Table")
 
   // ★ KEY FIX: prevent mousedown from stealing focus out of ProseMirror.
   // Without this, clicking a button causes the browser to blur the editor,
@@ -2350,119 +2450,26 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
   menu.addEventListener("mousedown", (e) => {
     if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault()
   })
-
-  const btnStyle = `
-    padding: 5px 7px; border: none; background: transparent;
-    border-radius: 4px; cursor: pointer; color: white;
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s; font-size: 14px;
-  `
-  const hover = (btn: HTMLButtonElement) => {
-    btn.addEventListener("mouseenter", () => { btn.style.background = "rgba(255,255,255,0.15)" })
-    btn.addEventListener("mouseleave", () => { btn.style.background = "transparent" })
-  }
-
-  const dismissFloatingMenu = () => {
-    menu.remove()
-  }
+  menu.addEventListener("click", (e) => e.stopPropagation())
 
   const makeBtn = (
     title: string,
     svg: string,
     action: () => void,
     /** Close the floating bar after the action (delete ops). */
-    closeAfter = false
+    closeAfter = false,
+    danger = false,
   ) => {
-    const b = document.createElement("button")
-    b.innerHTML = svg
-    b.title = title
-    b.style.cssText = btnStyle
-    hover(b)
+    const b = makeFloatBarBtn(title, svg, { danger })
     b.addEventListener("click", (e) => {
       e.stopPropagation()
       action()
-      if (closeAfter) dismissFloatingMenu()
+      if (closeAfter) dismissPremiumFloatBars()
     })
     return b
   }
 
-  const makeDivider = () => {
-    const d = document.createElement("div")
-    d.style.cssText = `width: 1px; background: rgba(255,255,255,0.2); margin: 2px; height: 22px;`
-    return d
-  }
-
-  // Row buttons
-  menu.appendChild(makeBtn("Insert row above",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M8 1v3M5 1l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="11" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addRowBefore().run()))
-  menu.appendChild(makeBtn("Insert row below",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12h12M8 15v-3M5 15l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="7" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addRowAfter().run()))
-
-  menu.appendChild(makeDivider())
-
-  // Column buttons
-  menu.appendChild(makeBtn("Insert column left",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 2v12M1 8h3M1 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="6" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="11" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addColumnBefore().run()))
-  menu.appendChild(makeBtn("Insert column right",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 2v12M15 8h-3M15 5l-3 3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="7" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addColumnAfter().run()))
-
-  menu.appendChild(makeDivider())
-
-  // Delete row/column — close bar after delete (stale selection otherwise)
-  menu.appendChild(makeBtn(
-    "Delete row",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 6h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 3l8 10M13 3L5 13" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteRow().run(),
-    true
-  ))
-  menu.appendChild(makeBtn(
-    "Delete column",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 5l10 8M3 13L13 5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteColumn().run(),
-    true
-  ))
-
-  menu.appendChild(makeDivider())
-
-  // Delete table — red icon; always dismiss menu
-  const delTableBtn = document.createElement("button")
-  delTableBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" stroke="#ef4444" stroke-width="1.3" rx="1"/><path d="M5 5l6 6M11 5l-6 6" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/></svg>`
-  delTableBtn.title = "Delete table"
-  delTableBtn.style.cssText = btnStyle
-  hover(delTableBtn)
-  delTableBtn.addEventListener("click", (e) => {
-    e.stopPropagation()
-    editor.chain().focus().deleteTable().run()
-    dismissFloatingMenu()
-  })
-  menu.appendChild(delTableBtn)
-
-  menu.appendChild(makeDivider())
-
-  // Resize grid button (9 rows × 5 columns grid + custom inputs)
-  const resizeWrap = document.createElement("div")
-  resizeWrap.style.cssText = `position: relative;`
-  const resizeBtn = document.createElement("button")
-  resizeBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="1" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/></svg>`
-  resizeBtn.title = "Resize table"
-  resizeBtn.style.cssText = btnStyle
-  hover(resizeBtn)
-  resizeWrap.appendChild(resizeBtn)
-
-  let dropdownEl: HTMLDivElement | null = null
-  let closeGridHandler: ((ev: MouseEvent) => void) | null = null
-
-  const closeDropdown = () => {
-    if (dropdownEl) { dropdownEl.remove(); dropdownEl = null }
-    if (closeGridHandler) { document.removeEventListener("click", closeGridHandler); closeGridHandler = null }
-  }
-
   // Find the position of a cell at (targetRow, targetCol) inside a SPECIFIC table node
-  // (not just the first table in the document)
   const findCellPos = (tablePos: number, targetRow: number, targetCol: number): number => {
     let result = -1
     let currentRow = -1
@@ -2499,7 +2506,6 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     editor.view.state.doc.descendants((node: ProseMirrorNode, pos: number) => {
       if (result >= 0) return false
       if (node.type.name === "table") {
-        // Check if this table node's DOM matches the clicked element
         const dom = editor.view.nodeDOM(pos) as HTMLElement | null
         if (dom === tableEl || dom?.contains(tableEl) || tableEl.contains(dom)) {
           result = pos
@@ -2523,7 +2529,6 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
       const curRows = tableNode.childCount
       const curCols = curRows > 0 ? tableNode.firstChild!.childCount : 0
 
-      // Helper: set cursor in target cell via editor.chain(), return true if succeeded
       const goTo = (row: number, col: number): boolean => {
         const cellPos = findCellPos(tablePos, row, col)
         if (cellPos < 0) return false
@@ -2569,29 +2574,45 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     } catch { /* table may become invalid during resize */ }
   }
 
+  // Resize grid button (9 rows × 5 columns grid + custom inputs)
+  const resizeWrap = document.createElement("div")
+  resizeWrap.style.cssText = `position: relative; display: inline-flex;`
+  const resizeBtn = makeFloatBarBtn(
+    "Resize table",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="1" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/></svg>`,
+  )
+  resizeWrap.appendChild(resizeBtn)
+
+  let dropdownEl: HTMLDivElement | null = null
+  let closeGridHandler: ((ev: MouseEvent) => void) | null = null
+
+  const closeDropdown = () => {
+    if (dropdownEl) { dropdownEl.remove(); dropdownEl = null }
+    if (closeGridHandler) {
+      document.removeEventListener("mousedown", closeGridHandler, true)
+      closeGridHandler = null
+    }
+    resizeBtn.classList.remove("is-on")
+  }
+
   resizeBtn.addEventListener("click", (e) => {
     e.stopPropagation()
     if (dropdownEl) { closeDropdown(); return }
 
     const dropdown = document.createElement("div")
-    dropdown.className = "table-resize-dropdown"
-    dropdown.style.cssText = `
-      position: absolute; top: 100%; left: 0; margin-top: 4px;
-      background: #2c2c2c; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      padding: 12px; z-index: 101;
-    `
+    dropdown.className = "pm-float-bar-panel table-resize-dropdown"
     dropdownEl = dropdown
+    resizeBtn.classList.add("is-on")
 
-    // 9 rows × 5 columns grid
     const GRID_ROWS = 9
     const GRID_COLS = 5
     const grid = document.createElement("div")
-    grid.style.cssText = `display: grid; grid-template-columns: repeat(${GRID_COLS}, 18px); gap: 2px; justify-content: center;`
+    grid.className = "pm-float-bar-grid"
+    grid.style.gridTemplateColumns = `repeat(${GRID_COLS}, 16px)`
     dropdown.appendChild(grid)
 
-    // Preview: target dimensions on hover
     const preview = document.createElement("div")
-    preview.style.cssText = `color: rgba(255,255,255,0.6); font-size: 11px; margin-top: 8px; text-align: center; min-height: 16px;`
+    preview.className = "pm-float-bar-panel-meta"
     preview.textContent = "hover to select"
     dropdown.appendChild(preview)
 
@@ -2599,23 +2620,14 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     for (let r = 1; r <= GRID_ROWS; r++) {
       for (let c = 1; c <= GRID_COLS; c++) {
         const cell = document.createElement("div")
+        cell.className = "pm-float-bar-grid-cell"
         cell.dataset.row = String(r)
         cell.dataset.col = String(c)
-        cell.style.cssText = `width: 18px; height: 18px;
-          border: 1px solid rgba(255,255,255,0.12); background: transparent;
-          border-radius: 2px; cursor: pointer; transition: background 0.06s, border-color 0.06s;`
         cell.addEventListener("mouseenter", () => {
-          // Highlight all cells from (1,1) to (r,c)
           cells.forEach((d) => {
             const cr = Number(d.dataset.row)
             const cc = Number(d.dataset.col)
-            if (cr <= r && cc <= c) {
-              d.style.background = "rgba(59,130,246,0.6)"
-              d.style.borderColor = "rgba(59,130,246,0.9)"
-            } else {
-              d.style.background = "transparent"
-              d.style.borderColor = "rgba(255,255,255,0.12)"
-            }
+            d.classList.toggle("is-hot", cr <= r && cc <= c)
           })
           preview.textContent = `${r} × ${c}`
         })
@@ -2623,66 +2635,56 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
           ev.stopPropagation()
           resizeTable(r, c)
           closeDropdown()
-          menu.remove()
+          dismissPremiumFloatBars()
         })
         cells.push(cell)
         grid.appendChild(cell)
       }
     }
 
-    // Reset grid highlight when mouse leaves grid area
     grid.addEventListener("mouseleave", () => {
-      cells.forEach((d) => {
-        d.style.background = "transparent"
-        d.style.borderColor = "rgba(255,255,255,0.12)"
-      })
+      cells.forEach((d) => d.classList.remove("is-hot"))
       preview.textContent = "hover to select"
     })
 
-    // Divider between grid and custom inputs
     const sep = document.createElement("div")
-    sep.style.cssText = `height: 1px; background: rgba(255,255,255,0.15); margin: 10px 0 8px;`
+    sep.className = "pm-float-bar-panel-rule"
     dropdown.appendChild(sep)
 
-    // Custom row/col inputs
     const inputRow = document.createElement("div")
-    inputRow.style.cssText = `display: flex; gap: 8px; align-items: center; justify-content: center;`
-
-    const inputStyle = `width: 48px; height: 26px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 4px; color: white; text-align: center; font-size: 12px; outline: none;`
-    const labelStyle = `color: rgba(255,255,255,0.5); font-size: 11px;`
+    inputRow.className = "pm-float-bar-panel-row"
 
     const rowsLabel = document.createElement("span")
-    rowsLabel.style.cssText = labelStyle
+    rowsLabel.className = "pm-float-bar-panel-label"
     rowsLabel.textContent = "rows"
     const rowsInput = document.createElement("input")
     rowsInput.type = "number"
     rowsInput.min = "1"
     rowsInput.value = String(table.querySelectorAll("tr").length)
-    rowsInput.style.cssText = inputStyle
+    rowsInput.className = "pm-float-bar-panel-input"
 
     const colsLabel = document.createElement("span")
-    colsLabel.style.cssText = labelStyle
+    colsLabel.className = "pm-float-bar-panel-label"
     colsLabel.textContent = "cols"
     const colsInput = document.createElement("input")
     colsInput.type = "number"
     colsInput.min = "1"
     colsInput.value = String(table.querySelector("tr")?.querySelectorAll("th,td").length || 3)
-    colsInput.style.cssText = inputStyle
+    colsInput.className = "pm-float-bar-panel-input"
 
     const applyBtn = document.createElement("button")
-    applyBtn.textContent = "✓"
-    applyBtn.style.cssText = `width: 26px; height: 26px; background: rgba(59,130,246,0.7); border: none;
-      border-radius: 4px; color: white; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center;`
-    applyBtn.addEventListener("mouseenter", () => { applyBtn.style.background = "rgba(59,130,246,0.9)" })
-    applyBtn.addEventListener("mouseleave", () => { applyBtn.style.background = "rgba(59,130,246,0.7)" })
+    applyBtn.type = "button"
+    applyBtn.className = "pm-float-bar-panel-apply"
+    applyBtn.title = "Apply"
+    applyBtn.setAttribute("aria-label", "Apply")
+    applyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.5 3.5L13 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`
 
     const applyCustom = () => {
       const r = Math.max(1, parseInt(rowsInput.value) || 1)
       const c = Math.max(1, parseInt(colsInput.value) || 1)
       resizeTable(r, c)
       closeDropdown()
-      menu.remove()
+      dismissPremiumFloatBars()
     }
     applyBtn.addEventListener("click", (ev) => { ev.stopPropagation(); applyCustom() })
     rowsInput.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") applyCustom() })
@@ -2697,38 +2699,78 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
     resizeWrap.appendChild(dropdown)
 
-    // Close dropdown when clicking outside it
     setTimeout(() => {
       closeGridHandler = (ev: MouseEvent) => {
-        if (dropdownEl && !dropdownEl.contains(ev.target as HTMLElement) && ev.target !== resizeBtn) {
+        if (
+          dropdownEl &&
+          !dropdownEl.contains(ev.target as HTMLElement) &&
+          ev.target !== resizeBtn &&
+          !resizeBtn.contains(ev.target as Node)
+        ) {
           closeDropdown()
         }
       }
-      document.addEventListener("click", closeGridHandler)
-    }, 10)
+      document.addEventListener("mousedown", closeGridHandler, true)
+    }, 0)
   })
 
-  // Insert resize button as FIRST element in the menu
-  menu.insertBefore(resizeWrap, menu.firstChild)
-  const resizeDivider = makeDivider()
-  menu.insertBefore(resizeDivider, resizeWrap.nextSibling)
+  menu.appendChild(resizeWrap)
+  menu.appendChild(makeFloatBarSep())
 
-  // Prevent clicks inside menu from bubbling to the table/ProseMirror
-  menu.addEventListener("click", (e) => e.stopPropagation())
+  // Row buttons
+  menu.appendChild(makeBtn(
+    "Insert row above",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M8 1v3M5 1l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="11" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addRowBefore().run(),
+  ))
+  menu.appendChild(makeBtn(
+    "Insert row below",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 12h12M8 15v-3M5 15l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="7" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addRowAfter().run(),
+  ))
 
-  table.style.position = "relative"
-  table.appendChild(menu)
+  menu.appendChild(makeFloatBarSep())
 
-  // Close menu when clicking outside the table
-  setTimeout(() => {
-    const close = (e: MouseEvent) => {
-      if (!table.contains(e.target as HTMLElement)) {
-        menu.remove()
-        document.removeEventListener("click", close)
-      }
-    }
-    document.addEventListener("click", close)
-  }, 10)
+  // Column buttons
+  menu.appendChild(makeBtn(
+    "Insert column left",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 2v12M1 8h3M1 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="6" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="11" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addColumnBefore().run(),
+  ))
+  menu.appendChild(makeBtn(
+    "Insert column right",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M12 2v12M15 8h-3M15 5l-3 3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="7" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addColumnAfter().run(),
+  ))
+
+  menu.appendChild(makeFloatBarSep())
+
+  // Delete row/column — Lucide-weight icons (row/col bands + small X), close after
+  menu.appendChild(makeBtn(
+    "Delete row",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2" width="13" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><rect x="1.5" y="6.8" width="8.2" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25"/><rect x="1.5" y="11.6" width="13" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><path d="M11.2 6.4l3.2 3.2M14.4 6.4l-3.2 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    () => editor.chain().focus().deleteRow().run(),
+    true,
+  ))
+  menu.appendChild(makeBtn(
+    "Delete column",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="1.5" width="2.4" height="13" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><rect x="6.8" y="1.5" width="2.4" height="8.2" rx="0.7" stroke="currentColor" stroke-width="1.25"/><rect x="11.6" y="1.5" width="2.4" height="13" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><path d="M6.4 11.2l3.2 3.2M9.6 11.2l-3.2 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    () => editor.chain().focus().deleteColumn().run(),
+    true,
+  ))
+
+  menu.appendChild(makeFloatBarSep())
+
+  // Delete table
+  menu.appendChild(makeBtn(
+    "Delete table",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" stroke="currentColor" stroke-width="1.3" rx="1"/><path d="M5 5l6 6M11 5l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    () => editor.chain().focus().deleteTable().run(),
+    true,
+    true,
+  ))
+
+  mountPremiumFloatBar(menu, table, { align: "start" })
 }
 
 // ──────────────────────────────────────────────
@@ -3579,7 +3621,7 @@ export function TiptapEditor({
 
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
-  const SlashCmd = useRef(createSlashCommandExtension(onDistill, onImageUpload)).current
+  const SlashCmd = useRef(createSlashCommandExtension(onImageUpload)).current
   const ResizableImage = useRef(createResizableImageExtension()).current
 
   // Markdown Hover Extension
@@ -3850,12 +3892,9 @@ export function TiptapEditor({
     (e: React.MouseEvent) => {
       const target = e.target as HTMLElement
 
-      // Table click → show floating menu (same pattern as image floating menu)
+      // Table click → Premium float bar (portal; same-table guard inside show)
       const tableEl = target.closest("table") as HTMLElement | null
       if (tableEl && editorRef.current) {
-        const existing = document.getElementById("table-floating-menu")
-        if (existing && tableEl.contains(existing)) return // already showing for this table
-        if (existing) existing.remove()
         showTableFloatingMenu(tableEl, editorRef.current)
       }
 
@@ -3984,31 +4023,7 @@ export function TiptapEditor({
           margin: 0 !important;
           line-height: 1.5 !important;
         }
-        /* Table styles — Typora-like */
-        .tiptap-editor table {
-          position: relative;
-          border-collapse: collapse;
-          width: 100%;
-          margin: 8px 0;
-          font-size: 0.875rem;
-        }
-        .tiptap-editor table td,
-        .tiptap-editor table th {
-          border: 1px solid var(--border, #c0c0c0);
-          padding: 6px 12px;
-          position: relative;
-          min-width: 60px;
-          text-align: left;
-        }
-        /* Zebra striping — odd rows gray, even rows white */
-        .tiptap-editor table tr:nth-child(odd) td,
-        .tiptap-editor table tr:nth-child(odd) th {
-          background: var(--muted, #f0f0f0) !important;
-        }
-        .tiptap-editor table tr:nth-child(even) td,
-        .tiptap-editor table tr:nth-child(even) th {
-          background: transparent !important;
-        }
+        /* Table / quote / callout chrome → index.css (.pm-prose-*) */
       `}</style>
       {!readonly && showToolbar && <EditorToolbar editor={editor} stickyOffset={stickyToolbarOffset} actions={toolbarActions} />}
       <EditorContent

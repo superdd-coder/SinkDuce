@@ -892,8 +892,8 @@ export function NotePane({
         className={cn("pm-ws-pane-h", showFocusChrome && "is-focus")}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* Row 1: title + close — inset so serif title isn’t flush to card edge */}
-        <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9">
+        {/* Row 1: title + close — fixed height (see .pm-ws-pane-h > div:first-child) */}
+        <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9 h-9 shrink-0 overflow-hidden">
           {editingTitle ? (
             <Input
               value={titleDraft}
@@ -976,10 +976,10 @@ export function NotePane({
           left  — Ingested status tag
           right — Detail · Ingest | Update▾ · ⋮ (Download / Delete)
         */}
-        <div className="flex flex-nowrap items-center gap-1 px-4 pb-2.5 min-w-0">
-          <div className="flex items-center min-w-0 flex-1">
+        <div className="flex flex-nowrap items-center gap-1 px-4 pb-2.5 min-h-8 shrink-0 overflow-hidden min-w-0">
+          <div className="flex items-center min-w-0 flex-1 overflow-hidden">
             {ingested && (
-              <span className="pm-ws-status">
+              <span className="pm-ws-status truncate max-w-full">
                 {needsReingest ? "Ingested · edited" : "Ingested"}
               </span>
             )}

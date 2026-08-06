@@ -1,7 +1,13 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react"
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { ChevronLeft } from "lucide-react"
+import { ChevronLeft, X } from "lucide-react"
 import { toast } from "sonner"
 import {
   getNotes,
@@ -30,6 +36,8 @@ interface NoteEditorDialogProps {
 type PaneDoc =
   | { kind: "note"; noteId: string }
   | { kind: "meeting"; meetingId: string; tabId: string }
+  /** Second page after Split — wait for list pick; never clone the same note. */
+  | { kind: "empty" }
 
 type EditorPane = {
   id: string
@@ -48,42 +56,131 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   const [panes, setPanes] = useState<EditorPane[]>(() => [
     { id: newPaneId(), doc: { kind: "note", noteId } },
   ])
+  const panesRef = useRef(panes)
+  panesRef.current = panes
+
   const [focusedPaneId, setFocusedPaneId] = useState<string>("")
-  /** Soft enter/exit for split panes (width + fade) */
+  const focusedPaneIdRef = useRef(focusedPaneId)
+  focusedPaneIdRef.current = focusedPaneId
+
+  /** Entering / exiting group ids for CSS classes only */
   const [enteringPaneId, setEnteringPaneId] = useState<string | null>(null)
-  /** First paint only — apply collapsed styles without transition */
-  const [enteringPrepId, setEnteringPrepId] = useState<string | null>(null)
   const [exitingPaneId, setExitingPaneId] = useState<string | null>(null)
-  /** Refs lock concurrent open/close — React state is too slow for double-clicks */
-  const enteringPaneIdRef = useRef<string | null>(null)
-  const exitingPaneIdRef = useRef<string | null>(null)
-  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const enterRafRef = useRef<number | null>(null)
-  const enterDoneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const PANE_MOTION_MS = 420
 
   /**
-   * Per-note meta cache — so each pane can open its own distill rail
-   * without waiting on a single global currentNote.
+   * Single rail owner. Resting rule: focused note with distill, else null.
+   * During merge, may stay on the exiting pane so rail collapses with it.
    */
+  const [railOwnerId, setRailOwnerId] = useState<string | null>(null)
+
+  /**
+   * Motion mutex — only one phase at a time.
+   * idle → rail_close | pane_split | pane_merge | rail_open → idle
+   */
+  type MotionPhase = "idle" | "rail_close" | "pane_split" | "pane_merge" | "rail_open"
+  const phaseRef = useRef<MotionPhase>("idle")
+  const [, setPhaseTick] = useState(0) // force re-render when phase changes (chrome lock)
+  const setPhase = useCallback((p: MotionPhase) => {
+    phaseRef.current = p
+    setPhaseTick((n) => n + 1)
+  }, [])
+
+  const enteringPaneIdRef = useRef<string | null>(null)
+  const exitingPaneIdRef = useRef<string | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rafRef = useRef<number[]>([])
+  const motionGenRef = useRef(0)
+
+  /** Unified duration — keep in sync with CSS --pm-ws-pane-ms / --pm-ws-rail-r-ms */
+  const MOTION_MS = 300
+
   const [noteMetaById, setNoteMetaById] = useState<Record<string, NoteDetail>>(
     {}
   )
+  const noteMetaByIdRef = useRef(noteMetaById)
+  noteMetaByIdRef.current = noteMetaById
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
+
+  const clearTimers = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    for (const id of rafRef.current) cancelAnimationFrame(id)
+    rafRef.current = []
+  }, [])
+
+  const bumpGen = useCallback(() => {
+    motionGenRef.current += 1
+    clearTimers()
+    return motionGenRef.current
+  }, [clearTimers])
+
+  const isBusy = useCallback(
+    () => phaseRef.current !== "idle",
+    []
+  )
+
+  const noteHasDistill = useCallback((nid: string) => {
+    const n = noteMetaByIdRef.current[nid]
+    if (!n) return false
+    return (
+      (n.references?.length ?? 0) > 0 || (n.extracted_into?.length ?? 0) > 0
+    )
+  }, [])
+
+  const paneHasDistill = useCallback(
+    (pane: EditorPane | null | undefined) => {
+      if (!pane || pane.doc.kind !== "note") return false
+      return noteHasDistill(pane.doc.noteId)
+    },
+    [noteHasDistill]
+  )
+
+  /** Resting rail owner from focus + meta */
+  const computeRailOwner = useCallback(
+    (focusId: string, list: EditorPane[]) => {
+      const p = list.find((x) => x.id === focusId)
+      if (!p || !paneHasDistill(p)) return null
+      return p.id
+    },
+    [paneHasDistill]
+  )
+
+  const railOpenForPane = useCallback(
+    (pane: EditorPane) => {
+      if (pane.doc.kind !== "note") return false
+      if (!noteHasDistill(pane.doc.noteId)) return false
+      return railOwnerId === pane.id
+    },
+    [railOwnerId, noteHasDistill]
+  )
 
   useEffect(() => {
     return () => {
-      if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
-      if (enterDoneTimerRef.current) clearTimeout(enterDoneTimerRef.current)
-      if (enterRafRef.current != null) cancelAnimationFrame(enterRafRef.current)
+      bumpGen()
+      phaseRef.current = "idle"
     }
-  }, [])
+  }, [bumpGen])
 
+  // Focus must always point at a live pane
   useEffect(() => {
-    if (!panes.find((p) => p.id === focusedPaneId) && panes[0]) {
-      setFocusedPaneId(panes[0].id)
+    if (panes.length === 0) return
+    if (!panes.some((p) => p.id === focusedPaneId)) {
+      const id = panes[0].id
+      setFocusedPaneId(id)
+      if (phaseRef.current === "idle") {
+        setRailOwnerId(computeRailOwner(id, panes))
+      }
     }
-  }, [panes, focusedPaneId])
+  }, [panes, focusedPaneId, computeRailOwner])
+
+  // When idle, keep rail owner in sync with focus + meta loads
+  useEffect(() => {
+    if (phaseRef.current !== "idle") return
+    if (!focusedPaneId) return
+    setRailOwnerId(computeRailOwner(focusedPaneId, panes))
+  }, [focusedPaneId, panes, noteMetaById, computeRailOwner])
 
   const focusedPane = useMemo(
     () => panes.find((p) => p.id === focusedPaneId) ?? panes[0] ?? null,
@@ -92,28 +189,6 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
   const focusedNoteId =
     focusedPane?.doc.kind === "note" ? focusedPane.doc.noteId : null
-
-  const noteHasDistill = useCallback((nid: string) => {
-    const n = noteMetaById[nid]
-    if (!n) return false
-    return (
-      (n.references?.length ?? 0) > 0 || (n.extracted_into?.length ?? 0) > 0
-    )
-  }, [noteMetaById])
-
-  /**
-   * Distill rail lives *inside* the pane group, snug after that pane.
-   * Open when focused + has distill. While that group is exiting, stay open so
-   * the rail collapses with the group as one unit (not a separate close).
-   */
-  const railOpenForPane = useCallback(
-    (pane: EditorPane) => {
-      if (pane.id !== focusedPaneId) return false
-      if (pane.doc.kind !== "note") return false
-      return noteHasDistill(pane.doc.noteId)
-    },
-    [focusedPaneId, noteHasDistill]
-  )
 
   const rememberNoteMeta = useCallback((note: NoteDetail) => {
     setNoteMetaById((prev) => {
@@ -146,7 +221,11 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       panes
         .filter((p) => p.doc.kind === "meeting")
         .map((p) => {
-          const d = p.doc as { kind: "meeting"; meetingId: string; tabId: string }
+          const d = p.doc as {
+            kind: "meeting"
+            meetingId: string
+            tabId: string
+          }
           return { meetingId: d.meetingId, tabId: d.tabId }
         }),
     [panes]
@@ -163,30 +242,22 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   useEffect(() => {
     if (!open) return
     const pid = newPaneId()
-    // Reset pane motion locks when dialog (re)opens
+    bumpGen()
+    phaseRef.current = "idle"
     enteringPaneIdRef.current = null
     exitingPaneIdRef.current = null
     setEnteringPaneId(null)
-    setEnteringPrepId(null)
     setExitingPaneId(null)
-    if (exitTimerRef.current) {
-      clearTimeout(exitTimerRef.current)
-      exitTimerRef.current = null
-    }
-    if (enterDoneTimerRef.current) {
-      clearTimeout(enterDoneTimerRef.current)
-      enterDoneTimerRef.current = null
-    }
     setPanes([{ id: pid, doc: { kind: "note", noteId } }])
     setFocusedPaneId(pid)
+    setRailOwnerId(null) // meta may load later → idle effect recomputes
     setSidebarTab("notes")
     setNoteMetaById({})
     setActiveBlockId(null)
-    // Refresh [spk:…] display names from latest meeting speaker maps
     void import("@/components/ui/tiptap-editor").then((m) => {
       m.invalidateMeetingSpeakerCache()
     })
-  }, [open, noteId])
+  }, [open, noteId, bumpGen])
 
   useEffect(() => {
     if (!open) return
@@ -200,22 +271,80 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
 
   // ── Pane helpers ──────────────────────────────────────
 
+  /**
+   * Load a document into the focused pane (or the empty sibling after Split).
+   * If this note/meeting is already open in a pane, only focus that pane —
+   * never mount two editors on the same document.
+   */
   const setFocusedDoc = useCallback(
     (doc: PaneDoc) => {
+      if (doc.kind === "empty") return
+      if (isBusy()) return
+
       setPanes((prev) => {
         if (prev.length === 0) {
           const id = newPaneId()
-          setFocusedPaneId(id)
+          queueMicrotask(() => {
+            setFocusedPaneId(id)
+            setRailOwnerId(
+              doc.kind === "note" && noteHasDistill(doc.noteId) ? id : null
+            )
+          })
           return [{ id, doc }]
         }
+
+        if (doc.kind === "note") {
+          const existing = prev.find(
+            (p) => p.doc.kind === "note" && p.doc.noteId === doc.noteId
+          )
+          if (existing) {
+            queueMicrotask(() => {
+              setFocusedPaneId(existing.id)
+              setRailOwnerId(computeRailOwner(existing.id, prev))
+            })
+            return prev
+          }
+        } else if (doc.kind === "meeting") {
+          const existing = prev.find(
+            (p) =>
+              p.doc.kind === "meeting" &&
+              p.doc.meetingId === doc.meetingId &&
+              p.doc.tabId === doc.tabId
+          )
+          if (existing) {
+            queueMicrotask(() => {
+              setFocusedPaneId(existing.id)
+              setRailOwnerId(null)
+            })
+            return prev
+          }
+        }
+
+        const empty = prev.find((p) => p.doc.kind === "empty")
+        if (empty) {
+          const next = prev.map((p) =>
+            p.id === empty.id ? { ...p, doc } : p
+          )
+          queueMicrotask(() => {
+            setFocusedPaneId(empty.id)
+            setRailOwnerId(computeRailOwner(empty.id, next))
+          })
+          return next
+        }
+
         const fid =
-          focusedPaneId && prev.some((p) => p.id === focusedPaneId)
-            ? focusedPaneId
+          focusedPaneIdRef.current &&
+          prev.some((p) => p.id === focusedPaneIdRef.current)
+            ? focusedPaneIdRef.current
             : prev[0].id
-        return prev.map((p) => (p.id === fid ? { ...p, doc } : p))
+        const next = prev.map((p) => (p.id === fid ? { ...p, doc } : p))
+        queueMicrotask(() => {
+          setRailOwnerId(computeRailOwner(fid, next))
+        })
+        return next
       })
     },
-    [focusedPaneId]
+    [isBusy, noteHasDistill, computeRailOwner]
   )
 
   const openNoteInFocused = useCallback(
@@ -238,116 +367,314 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     [setFocusedDoc]
   )
 
-  /** Soft enter animation for a newly added pane id (keep focus on source). */
-  const beginEnterMotion = useCallback((id: string) => {
-    enteringPaneIdRef.current = id
-    setEnteringPaneId(id)
-    setEnteringPrepId(id)
-    if (enterRafRef.current != null) cancelAnimationFrame(enterRafRef.current)
-    if (enterDoneTimerRef.current) clearTimeout(enterDoneTimerRef.current)
-    /*
-     * Frame 0: group is-entering + is-prep (collapsed, no transition)
-     * Frame 1: drop prep → transitions armed
-     * Frame 2: drop entering → group flex-grows; lock for full motion ms
-     */
-    enterRafRef.current = requestAnimationFrame(() => {
-      setEnteringPrepId(null)
-      enterRafRef.current = requestAnimationFrame(() => {
-        setEnteringPaneId(null)
-        enterRafRef.current = null
-        enterDoneTimerRef.current = setTimeout(() => {
-          if (enteringPaneIdRef.current === id) {
-            enteringPaneIdRef.current = null
-          }
-          enterDoneTimerRef.current = null
-        }, PANE_MOTION_MS)
-      })
-    })
-  }, [])
+  /** User clicked a pane chrome / body — switch focus (+ rail at rest). */
+  const focusPane = useCallback(
+    (paneId: string) => {
+      if (isBusy()) return
+      if (!panesRef.current.some((p) => p.id === paneId)) return
+      setFocusedPaneId(paneId)
+      setRailOwnerId(computeRailOwner(paneId, panesRef.current))
+    },
+    [isBusy, computeRailOwner]
+  )
 
   /**
-   * Open a document in the *other* pane without stealing focus.
-   * - Dual pane: load into non-focused pane
-   * - Single pane: soft-split and put doc in the new pane (rail stays on source)
+   * pane_split: mount new pane collapsed, expand together with source narrowing.
+   * (No pre-split empty half — that looked awkward.)
+   */
+  const runPaneSplit = useCallback(
+    (newPane: EditorPane, opts: { focusAfter: boolean }) => {
+      if (panesRef.current.length >= 2) return
+
+      const gen = bumpGen()
+      setPhase("pane_split")
+      enteringPaneIdRef.current = newPane.id
+      // Mount collapsed under is-entering; double-rAF then expand
+      setEnteringPaneId(newPane.id)
+      setPanes((prev) => {
+        if (prev.length >= 2) return prev
+        if (prev.some((p) => p.id === newPane.id)) return prev
+        return [...prev, newPane]
+      })
+
+      const r1 = requestAnimationFrame(() => {
+        if (motionGenRef.current !== gen) return
+        const el = document.querySelector(
+          ".pm-ws-pane-group.is-entering"
+        ) as HTMLElement | null
+        void el?.offsetWidth
+        const r2 = requestAnimationFrame(() => {
+          if (motionGenRef.current !== gen) return
+          setEnteringPaneId(null)
+          enteringPaneIdRef.current = null
+          timerRef.current = setTimeout(() => {
+            if (motionGenRef.current !== gen) return
+            if (opts.focusAfter) {
+              const list = panesRef.current
+              if (list.some((p) => p.id === newPane.id)) {
+                setFocusedPaneId(newPane.id)
+                setRailOwnerId(computeRailOwner(newPane.id, list))
+              }
+            }
+            setPhase("idle")
+            timerRef.current = null
+          }, MOTION_MS)
+        })
+        rafRef.current.push(r2)
+      })
+      rafRef.current.push(r1)
+    },
+    [bumpGen, setPhase, computeRailOwner]
+  )
+
+  /**
+   * Distill sidebar / open-beside: keep focus + rail; only split widths.
    */
   const openDocBeside = useCallback(
     (doc: PaneDoc) => {
-      setPanes((prev) => {
-        if (prev.length === 0) return prev
+      if (doc.kind === "empty") return
+      if (isBusy()) return
 
+      const live = panesRef.current
+
+      if (doc.kind === "note") {
+        if (
+          live.some(
+            (p) => p.doc.kind === "note" && p.doc.noteId === doc.noteId
+          )
+        ) {
+          return
+        }
+      } else if (doc.kind === "meeting") {
+        if (
+          live.some(
+            (p) =>
+              p.doc.kind === "meeting" &&
+              p.doc.meetingId === doc.meetingId &&
+              p.doc.tabId === doc.tabId
+          )
+        ) {
+          return
+        }
+      }
+
+      const empty = live.find((p) => p.doc.kind === "empty")
+      if (empty) {
+        setPanes((prev) =>
+          prev.map((p) => (p.id === empty.id ? { ...p, doc } : p))
+        )
+        return
+      }
+
+      if (live.length >= 2) {
         const fid =
-          focusedPaneId && prev.some((p) => p.id === focusedPaneId)
-            ? focusedPaneId
-            : prev[0].id
+          focusedPaneIdRef.current &&
+          live.some((p) => p.id === focusedPaneIdRef.current)
+            ? focusedPaneIdRef.current
+            : live[0]?.id
+        if (!fid) return
+        setPanes((prev) =>
+          prev.map((p) => (p.id === fid ? p : { ...p, doc }))
+        )
+        return
+      }
 
-        // Already dual — update the other pane only
-        if (prev.length >= 2) {
-          return prev.map((p) => (p.id === fid ? p : { ...p, doc }))
-        }
-
-        // Single — split; new pane gets the reference (do NOT focus it)
-        if (enteringPaneIdRef.current || exitingPaneIdRef.current) {
-          return prev
-        }
-        const id = newPaneId()
-        beginEnterMotion(id)
-        return [...prev, { id, doc }]
-      })
+      if (live.length === 0) return
+      // railOwnerId unchanged — source keeps distill
+      runPaneSplit({ id: newPaneId(), doc }, { focusAfter: false })
     },
-    [focusedPaneId, beginEnterMotion]
+    [isBusy, runPaneSplit]
   )
 
+  /**
+   * Split button: empty second page.
+   * If rail open → rail_close first, then pane_split, then focus empty.
+   */
   const addPane = useCallback(() => {
-    // Ref lock — ignore double Split while animating
-    if (enteringPaneIdRef.current || exitingPaneIdRef.current) {
+    if (isBusy()) return
+    if (panesRef.current.length >= 2) return
+
+    const live = panesRef.current
+    const focused =
+      live.find((p) => p.id === focusedPaneIdRef.current) ?? live[0] ?? null
+    const railIsOpen =
+      !!focused && railOwnerId === focused.id && paneHasDistill(focused)
+
+    const doSplit = () => {
+      runPaneSplit(
+        { id: newPaneId(), doc: { kind: "empty" } },
+        { focusAfter: true }
+      )
+    }
+
+    if (railIsOpen) {
+      const gen = bumpGen()
+      setPhase("rail_close")
+      setRailOwnerId(null)
+      timerRef.current = setTimeout(() => {
+        if (motionGenRef.current !== gen) return
+        doSplit()
+      }, MOTION_MS)
       return
     }
-    setPanes((prev) => {
-      if (prev.length >= 2) return prev
-      /*
-       * Principal: keep focus on the original pane so its distill rail stays put.
-       * Original group narrows left (rail rides with it); new group emerges right.
-       */
-      const source =
-        prev.find((p) => p.id === focusedPaneId) ?? prev[0] ?? null
-      const seed = source?.doc ?? { kind: "note" as const, noteId }
-      const id = newPaneId()
-      beginEnterMotion(id)
-      return [...prev, { id, doc: seed }]
-    })
-  }, [noteId, focusedPaneId, beginEnterMotion])
 
-  const closePane = useCallback((paneId: string) => {
-    // Synchronous lock — two quick X clicks must not remove both panes
-    if (exitingPaneIdRef.current || enteringPaneIdRef.current) return
+    doSplit()
+  }, [isBusy, railOwnerId, paneHasDistill, bumpGen, setPhase, runPaneSplit])
 
-    setPanes((prev) => {
-      if (prev.length <= 1) return prev
-      if (!prev.some((p) => p.id === paneId)) return prev
+  /**
+   * Close one pane (pane_merge).
+   *
+   * Case A — close unfocused (e.g. empty right split while left+distill focused):
+   *   Keep focus + rail on survivor; empty collapses; left group (editor+rail)
+   *   expands together so distill “slides” with the editor. Never close the rail.
+   *
+   * Case B — close focused pane that owns rail:
+   *   Rail rides the exiting group, then opens on survivor after merge if needed.
+   */
+  const closePane = useCallback(
+    (paneId: string) => {
+      if (exitingPaneIdRef.current === paneId) return
 
-      exitingPaneIdRef.current = paneId
-      setExitingPaneId(paneId)
-      if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
-      exitTimerRef.current = setTimeout(() => {
+      const live = panesRef.current
+      if (live.length <= 1) return
+      if (!live.some((p) => p.id === paneId)) return
+
+      // Still fully collapsed under is-entering — drop without anim
+      if (enteringPaneIdRef.current === paneId && enteringPaneId === paneId) {
+        bumpGen()
+        setPhase("idle")
+        enteringPaneIdRef.current = null
+        setEnteringPaneId(null)
         setPanes((cur) => {
-          // Never empty the deck — always keep at least one pane
           if (cur.length <= 1) return cur
           const next = cur.filter((p) => p.id !== paneId)
           if (next.length === 0) return cur
-          setFocusedPaneId((fid) =>
-            fid === paneId ? next[0].id : fid
+          const fid = next[0].id
+          setFocusedPaneId(fid)
+          setRailOwnerId(computeRailOwner(fid, next))
+          return next
+        })
+        return
+      }
+
+      if (isBusy() && phaseRef.current !== "pane_split") return
+      if (isBusy() && phaseRef.current === "pane_split") {
+        clearTimers()
+        enteringPaneIdRef.current = null
+        setEnteringPaneId(null)
+      }
+
+      const survivor = live.find((p) => p.id !== paneId)
+      if (!survivor) return
+
+      const closingIsFocused = focusedPaneIdRef.current === paneId
+      const closingOwnedRail = railOwnerId === paneId
+      const survivorKeepsRail =
+        railOwnerId === survivor.id ||
+        (!closingOwnedRail && paneHasDistill(survivor))
+
+      const gen = bumpGen()
+      setPhase("pane_merge")
+      exitingPaneIdRef.current = paneId
+      // Apply is-exiting immediately so flex transition starts with the click
+      setExitingPaneId(paneId)
+
+      if (closingIsFocused) {
+        // Focus moves to survivor; rail may still ride the exiting group
+        setFocusedPaneId(survivor.id)
+        if (closingOwnedRail) {
+          // keep railOwnerId === paneId for the exit duration
+        } else {
+          setRailOwnerId(
+            paneHasDistill(survivor) ? survivor.id : null
           )
+        }
+      } else {
+        /*
+         * Closing empty / unfocused right pane while left+distill is focused:
+         * pin focus + rail on survivor for the whole merge — distill stays open
+         * and slides as the left group flex-grows.
+         */
+        setFocusedPaneId(survivor.id)
+        if (survivorKeepsRail || paneHasDistill(survivor)) {
+          setRailOwnerId(survivor.id)
+        }
+        // else leave railOwner as-is / null
+      }
+
+      const r1 = requestAnimationFrame(() => {
+        if (motionGenRef.current !== gen) return
+        const el = document.querySelector(
+          ".pm-ws-pane-group.is-exiting"
+        ) as HTMLElement | null
+        void el?.offsetWidth
+      })
+      rafRef.current.push(r1)
+
+      timerRef.current = setTimeout(() => {
+        if (motionGenRef.current !== gen) return
+        let nextList: EditorPane[] | null = null
+        setPanes((cur) => {
+          if (cur.length <= 1) return cur
+          const next = cur.filter((p) => p.id !== paneId)
+          if (next.length === 0) return cur
+          nextList = next
           return next
         })
         if (exitingPaneIdRef.current === paneId) {
           exitingPaneIdRef.current = null
         }
         setExitingPaneId(null)
-        exitTimerRef.current = null
-      }, PANE_MOTION_MS)
-      return prev
-    })
-  }, [])
+
+        const list = nextList ?? panesRef.current
+        const fid = list.some((p) => p.id === survivor.id)
+          ? survivor.id
+          : list[0]?.id
+        if (!fid) {
+          setPhase("idle")
+          timerRef.current = null
+          return
+        }
+        setFocusedPaneId(fid)
+
+        if (closingOwnedRail) {
+          // Rail rode exit — open on survivor if it has distill (after width settles)
+          const nextRail = computeRailOwner(fid, list)
+          setRailOwnerId(null)
+          if (nextRail) {
+            setPhase("rail_open")
+            timerRef.current = setTimeout(() => {
+              if (motionGenRef.current !== gen) return
+              setRailOwnerId(nextRail)
+              timerRef.current = setTimeout(() => {
+                if (motionGenRef.current !== gen) return
+                setPhase("idle")
+                timerRef.current = null
+              }, MOTION_MS)
+            }, 16)
+          } else {
+            setPhase("idle")
+            timerRef.current = null
+          }
+        } else {
+          // Rail stayed on survivor (e.g. closed empty right) — recompute only, no close/reopen
+          setRailOwnerId(computeRailOwner(fid, list))
+          setPhase("idle")
+          timerRef.current = null
+        }
+      }, MOTION_MS)
+    },
+    [
+      bumpGen,
+      setPhase,
+      isBusy,
+      railOwnerId,
+      computeRailOwner,
+      paneHasDistill,
+      enteringPaneId,
+      clearTimers,
+    ]
+  )
 
   /** In-editor distill source click — replace focused pane (legacy). */
   const navigateSource = useCallback(
@@ -562,11 +889,13 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
             {panes.map((pane) => {
               const isExiting = exitingPaneId === pane.id
               const isEntering = enteringPaneId === pane.id
-              const isPrep = enteringPrepId === pane.id
+              const busy = phaseRef.current !== "idle"
               const docKey =
                 pane.doc.kind === "note"
                   ? `n-${pane.doc.noteId}`
-                  : `m-${pane.doc.meetingId}-${pane.doc.tabId}`
+                  : pane.doc.kind === "meeting"
+                    ? `m-${pane.doc.meetingId}-${pane.doc.tabId}`
+                    : `empty-${pane.id}`
               const paneNoteId =
                 pane.doc.kind === "note" ? pane.doc.noteId : null
               const paneMeta = paneNoteId
@@ -578,27 +907,30 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                 paneNoteId != null &&
                 noteHasDistill(paneNoteId) &&
                 showDistillRail
+              const paneFocused =
+                pane.id === focusedPaneId && !isExiting
+              /*
+               * Keep Split/Close chrome stable during width motion.
+               * Hiding both while busy made the title row jump mid-animation.
+               */
+              const paneChromeClose =
+                panes.length > 1 && !isExiting
+              const paneChromeSplit =
+                panes.length < 2 && !isEntering && !busy
 
               return (
                 /*
-                 * Pane group = editor card + optional distill rail as ONE flex unit.
-                 * Split: original group narrows (rail rides left), new group emerges.
-                 * Close: whole group collapses together (rail doesn't orphan).
-                 * Focus switch: rail open state transfers between groups.
+                 * Pane group = editor + optional distill rail.
+                 * Groups always equal flex; rail width is internal only.
                  */
                 <div
                   key={pane.id}
                   className={cn(
                     "pm-ws-pane-group",
                     isEntering && "is-entering",
-                    isPrep && "is-prep",
                     isExiting && "is-exiting",
                     showDistillRail && "has-rail",
-                    // Focus ring only when dual-pane (single window needs no selection chrome)
-                    panes.length > 1 &&
-                      pane.id === focusedPaneId &&
-                      !isExiting &&
-                      "is-focused"
+                    panes.length > 1 && paneFocused && "is-focused"
                   )}
                 >
                   <div className="pm-ws-pane-slot">
@@ -608,30 +940,16 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                           key={pane.id}
                           collection={collection}
                           noteId={pane.doc.noteId}
-                          focused={
-                            // Always track active pane for tools/meta; visual is-focus only in multi
-                            pane.id === focusedPaneId && !isExiting
-                          }
+                          focused={paneFocused}
                           showFocusChrome={
-                            panes.length > 1 &&
-                            pane.id === focusedPaneId &&
-                            !isExiting
+                            panes.length > 1 && paneFocused
                           }
                           onFocus={() => {
-                            if (!isExiting) setFocusedPaneId(pane.id)
+                            if (!isExiting) focusPane(pane.id)
                           }}
-                          showClose={
-                            panes.length > 1 &&
-                            !isExiting &&
-                            !exitingPaneId &&
-                            !enteringPaneId
-                          }
+                          showClose={paneChromeClose}
                           onClosePane={() => closePane(pane.id)}
-                          showSplit={
-                            panes.length < 2 &&
-                            !exitingPaneId &&
-                            !enteringPaneId
-                          }
+                          showSplit={paneChromeSplit}
                           onSplit={addPane}
                           onCloseDialog={() => onOpenChange(false)}
                           onTitleChange={handleTitleChange}
@@ -641,14 +959,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                           className="pm-ws-doc-surface"
                           docSwapKey={docKey}
                         />
-                      ) : (
+                      ) : pane.doc.kind === "meeting" ? (
                         (() => {
-                          const meetingDoc = pane.doc as Extract<
-                            PaneDoc,
-                            { kind: "meeting" }
-                          >
-                          const meetingFocused =
-                            pane.id === focusedPaneId && !isExiting
+                          const meetingDoc = pane.doc
                           return (
                             <div
                               key={docKey}
@@ -664,10 +977,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                                 ) {
                                   return
                                 }
-                                // Defer focus so body click-selection isn't interrupted
                                 const finish = () => {
                                   window.removeEventListener("mouseup", finish, true)
-                                  setFocusedPaneId(pane.id)
+                                  focusPane(pane.id)
                                 }
                                 window.addEventListener("mouseup", finish, true)
                               }}
@@ -677,26 +989,47 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                                 tabId={meetingDoc.tabId}
                                 paneChrome={{
                                   focused:
-                                    meetingFocused && panes.length > 1,
+                                    paneFocused && panes.length > 1,
                                   onFocus: () => {
-                                    if (!isExiting) setFocusedPaneId(pane.id)
+                                    if (!isExiting) focusPane(pane.id)
                                   },
-                                  showSplit:
-                                    panes.length < 2 &&
-                                    !exitingPaneId &&
-                                    !enteringPaneId,
+                                  showSplit: paneChromeSplit,
                                   onSplit: addPane,
-                                  showClose:
-                                    panes.length > 1 &&
-                                    !isExiting &&
-                                    !exitingPaneId &&
-                                    !enteringPaneId,
+                                  showClose: paneChromeClose,
                                   onClose: () => closePane(pane.id),
                                 }}
                               />
                             </div>
                           )
                         })()
+                      ) : (
+                        /* Empty second page after Split — pick hint only */
+                        <div
+                          className="relative flex-1 flex flex-col min-h-0 min-w-0 pm-ws-doc-surface"
+                          onMouseDown={() => {
+                            if (!isExiting) focusPane(pane.id)
+                          }}
+                        >
+                          {paneChromeClose && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="pm-ws-icon-btn !h-6 !w-6 absolute top-3 right-3 z-10"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                closePane(pane.id)
+                              }}
+                              title="Close page"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          <div className="flex-1 flex flex-col items-center justify-center px-8 text-center select-none">
+                            <p className="text-[13px] font-normal text-[var(--pm-muted)]">
+                              Select a note or meeting
+                            </p>
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>

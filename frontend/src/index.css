@@ -1011,7 +1011,7 @@ input[type="checkbox"] {
   max-height: var(--distill-collapsed-h);
   overflow: hidden;
   transition: max-height 380ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1));
-  will-change: max-height;
+  overscroll-behavior: contain;
 }
 .distill-block.is-expanded.is-overflow .distill-block__scroll {
   max-height: var(--distill-expanded-h);
@@ -1019,9 +1019,11 @@ input[type="checkbox"] {
 /* Only allow internal scroll after expand settles (not mid-animation) */
 .distill-block.is-expanded.is-overflow:not(.is-animating) .distill-block__scroll {
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .distill-block.is-animating .distill-block__scroll {
   overflow: hidden !important;
+  will-change: max-height;
 }
 @media (prefers-reduced-motion: reduce) {
   .distill-block__scroll {
@@ -3950,6 +3952,179 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
     transition-duration: 1ms !important;
   }
 }
+
+/* ── Slash command menu (Premium SoftMenu language) ── */
+.pm-slash-menu {
+  position: fixed;
+  z-index: 260;
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  max-height: min(280px, 50vh);
+  box-sizing: border-box;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  border-radius: var(--pm-r-sm, 8px);
+  background: #ffffff;
+  color: var(--pm-ink, #121410);
+  box-shadow: var(--pm-shadow);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  opacity: 0;
+  transform: translateY(4px) scale(0.98);
+  transform-origin: top left;
+  transition:
+    opacity 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  will-change: opacity, transform;
+}
+.pm-slash-menu.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.pm-slash-menu__search {
+  flex-shrink: 0;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+}
+.pm-slash-menu__input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  height: 28px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 70%, #fff);
+  color: var(--pm-ink, #121410);
+  font: var(--pm-t-body, 300 13px/1.4 var(--pm-ff, system-ui, sans-serif));
+  font-weight: 400;
+  outline: none;
+  transition:
+    border-color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-slash-menu__input::placeholder {
+  color: var(--pm-faint, #969c96);
+}
+.pm-slash-menu__input:focus {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 38%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+  background: #fff;
+}
+.pm-slash-menu__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  scrollbar-width: none;
+}
+.pm-slash-menu__list::-webkit-scrollbar {
+  display: none;
+}
+.pm-slash-menu__group {
+  margin: 0;
+  padding: 6px 8px 4px;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff, system-ui, sans-serif));
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pm-faint, #969c96);
+  user-select: none;
+}
+.pm-slash-menu__group:not(:first-child) {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+}
+.pm-slash-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  padding: 5px 8px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: calc(var(--pm-r-sm, 8px) - 2px);
+  background: transparent;
+  color: var(--pm-text, #2a2e2a);
+  font: var(--pm-t-body, 300 13px/1.35 var(--pm-ff, system-ui, sans-serif));
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 120ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 120ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-slash-menu__item:hover,
+.pm-slash-menu__item.is-on {
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+  color: var(--pm-ink, #121410);
+}
+.pm-slash-menu__item.is-on {
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.10));
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-slash-menu__icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 80%, #fff);
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  color: var(--pm-muted, #6a706a);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+.pm-slash-menu__item.is-on .pm-slash-menu__icon {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, #fff);
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 18%, transparent);
+}
+.pm-slash-menu__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.pm-slash-menu__desc {
+  flex-shrink: 0;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--pm-t-meta, 300 11px/1.3 var(--pm-ff, system-ui, sans-serif));
+  color: var(--pm-faint, #969c96);
+}
+.pm-slash-menu__item.is-on .pm-slash-menu__desc {
+  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 70%, var(--pm-faint, #969c96));
+}
+.pm-slash-menu__empty {
+  padding: 16px 12px;
+  text-align: center;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  color: var(--pm-faint, #969c96);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-slash-menu {
+    transition: none;
+    transform: none;
+  }
+}
+
 .pm-dialog .pm-field {
   display: block;
   width: 100%;
@@ -4243,8 +4418,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   min-height: 0;
   min-width: 0;
   gap: 10px;
-  /* Extra inset so card float shadows aren't clipped by the stage */
-  padding: 4px 14px 14px;
+  /* Inset so float shadow + focus bloom (~4px ring) clear the stage edges */
+  padding: 8px 14px 14px;
   box-sizing: border-box;
   background: transparent;
   /* visible: let soft shadows breathe; scrolling lives inside cards */
@@ -4288,13 +4463,14 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
  *    rail so the rail is “added on top” of an equal pane share, not carved out.
  */
 .pm-ws-panes {
-  --pm-ws-pane-ms: 420ms;
+  /* Unified motion clock — pane + rail share one duration/easing */
+  --pm-ws-pane-ms: 300ms;
   --pm-ws-pane-ease: cubic-bezier(0.32, 0.72, 0, 1);
   --pm-ws-rail-r-w: 13rem;
   --pm-ws-rail-r-gap: 10px;
-  --pm-ws-rail-r-ms: 360ms;
+  --pm-ws-rail-r-ms: 300ms;
   --pm-ws-rail-r-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  /* Extra basis so equal grow leaves equal editor widths when one rail is open */
+  /* Extra basis so equal grow leaves equal *editor* widths when one rail is open */
   --pm-ws-rail-r-extra: calc(var(--pm-ws-rail-r-w) + var(--pm-ws-rail-r-gap));
   display: flex;
   flex: 1 1 0;
@@ -4302,11 +4478,20 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   min-height: 0;
   gap: 12px;
   align-items: stretch;
-  /* Room for float shadows around cards */
-  padding: 2px 2px 6px;
+  padding: 0;
   box-sizing: border-box;
+  /* Shadows / focus rings paint outside cards */
   overflow: visible;
 }
+/* Block interaction only while a group is motioning — do not clip shadows */
+.pm-ws-panes:has(.is-entering),
+.pm-ws-panes:has(.is-exiting) {
+  pointer-events: none;
+}
+/*
+ * Groups share free space equally (grow 1, basis 0).
+ * .has-rail adds rail width on top so both editor cards stay the same width.
+ */
 .pm-ws-pane-group {
   display: flex;
   flex-direction: row;
@@ -4316,70 +4501,62 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   align-self: stretch;
   min-width: 0;
   min-height: 0;
-  max-width: 100%;
-  /* visible: card box-shadow must not clip; only collapse states hide overflow */
   overflow: visible;
   opacity: 1;
   transition:
     flex-grow var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
+    flex-shrink var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
     flex-basis var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
-    max-width var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
-    opacity 280ms var(--pm-ws-pane-ease);
+    opacity var(--pm-ws-pane-ms) var(--pm-ws-pane-ease);
 }
-/*
- * Rail open: this group is wider by the rail, so both groups still give their
- * editor slots the same free-space share (equal window widths).
- */
 .pm-ws-pane-group.has-rail {
   flex-basis: var(--pm-ws-rail-r-extra);
 }
-/* New split group: collapsed → expands (original group auto-narrows) */
+/* New sibling: collapsed → expands while source narrows together */
 .pm-ws-pane-group.is-entering {
-  flex-grow: 0.001;
-  max-width: 0;
+  flex-grow: 0.0001;
+  flex-shrink: 1;
+  flex-basis: 0%;
+  min-width: 0;
   opacity: 0;
+  overflow: hidden;
   pointer-events: none;
-  overflow: hidden; /* only while collapsing width */
-}
-.pm-ws-pane-group.is-entering.is-prep {
-  transition: none !important;
 }
 .pm-ws-pane-group.is-entering .pm-ws-card--pane {
-  transform: translateX(20px);
-  opacity: 0;
+  opacity: 0.4;
 }
-.pm-ws-pane-group:not(.is-entering) .pm-ws-card--pane {
-  transform: translateX(0);
-  opacity: 1;
-  transition:
-    transform var(--pm-ws-pane-ms) var(--pm-ws-pane-ease),
-    opacity 280ms var(--pm-ws-pane-ease),
-    box-shadow 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    border-color 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
-}
-/* Close: whole unit (pane + open distill) collapses; sibling group grows */
+/*
+ * Close: empty/unfocused sibling collapses while survivor (editor+rail) grows.
+ * Prefer width motion over a fast full fade — opacity 0 too early feels like a hard cut
+ * and hides the “distill slides with the editor” read.
+ */
 .pm-ws-pane-group.is-exiting {
-  flex-grow: 0.001 !important;
+  flex-grow: 0.0001 !important;
+  flex-shrink: 1 !important;
   flex-basis: 0% !important;
-  max-width: 0 !important;
   min-width: 0 !important;
   opacity: 0;
   pointer-events: none;
   overflow: hidden;
 }
-.pm-ws-pane-group.is-exiting .pm-ws-card--pane {
-  transform: translateX(12px);
-  opacity: 0;
+/* Keep rail open/transitions alive on the *survivor* during sibling exit */
+.pm-ws-pane-group:not(.is-exiting).has-rail .pm-ws-rail-r-host.is-open {
+  /* do not kill rail transitions while the other group exits */
+  transition:
+    flex-basis var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
+    margin-left var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
+    opacity var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease);
 }
 /* Editor slot fills remaining group width beside rail */
 .pm-ws-pane-slot {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 0%;
   min-width: 0;
   min-height: 0;
   height: auto;
-  /* visible so pane card float shadow is not cut by the slot */
+  /* visible so focus ring + float shadow paint outside the card */
   overflow: visible;
 }
 .pm-ws-pane-slot > .pm-ws-card--pane {
@@ -4395,40 +4572,50 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   height: 100%;
 }
 /*
- * Focus treatment — dual-pane only (.is-focused is never set when alone).
- *  - Unfocused sibling: softer float, quieter title
- *  - Focused: green ring + soft bloom + stronger lift
- *  - Single pane: plain card (no ring, no dimming)
+ * Focus treatment — dual-pane only (.is-focused never when alone).
+ *
+ * Silk rule: only animate *opacity* of a pre-painted green ring (compositor).
+ * Avoid transitioning multi-layer box-shadow / full-card opacity — that repaints
+ * the whole TipTap surface and feels like a hitch.
  */
-.pm-ws-pane-group:not(.is-focused) .pm-ws-card--pane {
-  box-shadow: var(--pm-shadow-sm);
+.pm-ws-pane-group .pm-ws-card--pane {
   border-color: color-mix(in srgb, var(--pm-ink, #121410) 4.5%, transparent);
+  box-shadow: var(--pm-shadow-sm);
+  transition: border-color 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-/* Dim non-focus only when a sibling exists (parent has at least one is-focused) */
-.pm-ws-panes:has(.pm-ws-pane-group.is-focused)
-  .pm-ws-pane-group:not(.is-focused)
-  .pm-ws-card--pane {
-  opacity: 0.94;
+.pm-ws-pane-group.is-focused .pm-ws-card--pane {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 38%, transparent);
 }
+/* Focus ring overlay on the slot (outside overflow:hidden card) */
+.pm-ws-pane-slot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--pm-r-lg, 20px);
+  pointer-events: none;
+  z-index: 3;
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--pm-green, #1a5e3d) 34%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+  opacity: 0;
+  transition: opacity 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-pane-group.is-focused .pm-ws-pane-slot::after {
+  opacity: 1;
+}
+/* Quiet title only — no full-card dim (that thrash-paints the editor) */
 .pm-ws-panes:has(.pm-ws-pane-group.is-focused)
   .pm-ws-pane-group:not(.is-focused)
   .pm-ws-pane-title {
   color: var(--pm-faint);
 }
-.pm-ws-pane-group.is-focused .pm-ws-card--pane {
-  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 38%, transparent);
-  box-shadow:
-    0 0 0 1.5px color-mix(in srgb, var(--pm-green, #1a5e3d) 32%, transparent),
-    0 0 0 4px color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, transparent),
-    var(--pm-shadow);
-  opacity: 1;
+.pm-ws-pane-group .pm-ws-card--rail-r {
+  border-color: color-mix(in srgb, var(--pm-ink, #121410) 4.5%, transparent);
+  box-shadow: var(--pm-shadow-sm);
+  transition: border-color 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-pane-group.is-focused .pm-ws-card--rail-r {
   border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent),
-    0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 7%, transparent),
-    var(--pm-shadow-sm);
 }
 
 /* Large workspace dialog — silk open/close */
@@ -4443,35 +4630,51 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 /*
  * Distill rail — width curtain *inside* the group (after the editor card).
- * Opens/closes without leaving the group; group flex carries position.
+ * Single flex-basis transition (not width+max-width+flex all at once).
  */
 .pm-ws-rail-r-host {
-  flex: 0 0 0;
-  width: 0;
+  position: relative;
+  flex: 0 0 0px;
+  width: auto;
   min-width: 0;
-  max-width: 0;
   margin-left: 0;
   align-self: stretch;
   min-height: 0;
-  /* Clip width curtain, but open state uses overflow visible for shadow */
   overflow: hidden;
   opacity: 0;
   pointer-events: none;
   transition:
-    width var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
-    max-width var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
     flex-basis var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
     margin-left var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease),
-    opacity 260ms var(--pm-ws-rail-r-ease);
+    opacity var(--pm-ws-rail-r-ms) var(--pm-ws-rail-r-ease);
 }
 .pm-ws-rail-r-host.is-open {
   flex: 0 0 var(--pm-ws-rail-r-w);
-  width: var(--pm-ws-rail-r-w);
-  max-width: var(--pm-ws-rail-r-w);
   margin-left: var(--pm-ws-rail-r-gap, 10px);
   opacity: 1;
   pointer-events: auto;
-  overflow: visible; /* distill card float shadow */
+  overflow: visible;
+}
+/* Focus ring on rail — opacity only (same idea as editor slot) */
+.pm-ws-rail-r-host.is-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--pm-r-lg, 20px);
+  pointer-events: none;
+  z-index: 3;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 24%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+  opacity: 0;
+  transition: opacity 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-pane-group.is-focused .pm-ws-rail-r-host.is-open::after {
+  opacity: 1;
+}
+.pm-ws-pane-group.is-entering .pm-ws-rail-r-host,
+.pm-ws-pane-group.is-exiting .pm-ws-rail-r-host {
+  overflow: hidden;
 }
 .pm-ws-card--rail-r {
   width: var(--pm-ws-rail-r-w, 13rem);
@@ -4479,22 +4682,13 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   max-width: var(--pm-ws-rail-r-w, 13rem);
   flex: none;
   height: 100%;
-  transform: translateX(10px);
-  opacity: 0.9;
-  transition:
-    transform var(--pm-ws-rail-r-ms, 360ms) var(--pm-ws-rail-r-ease, cubic-bezier(0.32, 0.72, 0, 1)),
-    opacity 260ms var(--pm-ws-rail-r-ease, cubic-bezier(0.32, 0.72, 0, 1));
-}
-.pm-ws-rail-r-host.is-open .pm-ws-card--rail-r {
-  transform: translateX(0);
+  min-height: 0;
   opacity: 1;
 }
-/* When group is exiting, kill rail's own opacity/transform fight — group owns fade */
+/* Exit: group opacity owns fade — kill competing rail transitions */
 .pm-ws-pane-group.is-exiting .pm-ws-rail-r-host,
 .pm-ws-pane-group.is-exiting .pm-ws-card--rail-r {
-  transition-duration: 1ms !important;
-  opacity: 1 !important;
-  transform: none !important;
+  transition: none !important;
 }
 @keyframes pm-ws-card-in {
   from {
@@ -4540,7 +4734,11 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   display: flex;
   flex-direction: column;
 }
-/* Soft note-switch: body fades/slides in when document identity changes */
+/*
+ * Soft note-switch: opacity only.
+ * Avoid transform here — fill-mode both + translateY(0) left a permanent
+ * containing block on .pm-ws-doc-body and broke nested editor scroll.
+ */
 .pm-ws-doc-body.is-doc-swap,
 .pm-ws-doc-surface.is-doc-swap {
   animation: pm-ws-doc-in 340ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
@@ -4548,11 +4746,9 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 @keyframes pm-ws-doc-in {
   from {
     opacity: 0;
-    transform: translateY(10px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 .pm-ws-doc-body {
@@ -4751,7 +4947,24 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: transparent;
   font-family: var(--pm-ff);
   position: relative;
-  transition: background 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  transition: background 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/*
+ * Pin title chrome height while pane width animates.
+ * Without this, wrap/button swap during split makes the header jump.
+ */
+.pm-ws-pane-h > div:first-child {
+  box-sizing: border-box;
+  min-height: 2.25rem; /* min-h-9 */
+  height: 2.25rem;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.pm-ws-pane-h > div:last-child {
+  box-sizing: border-box;
+  min-height: 2rem;
+  flex-shrink: 0;
+  overflow: hidden;
 }
 /* Hairline under title row — soft structure, not a hard grid rule */
 .pm-ws-pane-h::after {
@@ -4763,8 +4976,12 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   height: 1px;
   background: color-mix(in srgb, var(--pm-ink) 5%, transparent);
   pointer-events: none;
-  transition: background 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  opacity: 1;
+  transition:
+    background 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
+/* Green hairline as a second layer that fades in (gradient can't ease from solid) */
 .pm-ws-pane-h.is-focus::after {
   background: linear-gradient(
     90deg,
@@ -4788,7 +5005,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color 200ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  transition: color 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-ws-pane-h.is-focus .pm-ws-pane-title {
   color: var(--pm-ink);
@@ -4910,11 +5127,15 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   box-shadow: inset -12px 0 16px -16px color-mix(in srgb, var(--pm-ink) 8%, transparent);
 }
 .pm-ws-editor {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   /* match float beige — not a white paper island */
   background: transparent;
+  /* Smooth wheel; own compositor layer without parent transform */
+  -webkit-overflow-scrolling: touch;
 }
 /* ═══════════════════════════════════════════════════════════════════
    Premium format toolbar (R2 whisper strip) + marker highlight
@@ -4938,10 +5159,17 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-fmt-inner {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  /* nowrap: width shrink during split must not reflow to 2 lines (header jump) */
+  flex-wrap: nowrap;
   gap: 0;
-  row-gap: 4px;
   min-height: 28px;
+  height: 28px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.pm-fmt-inner::-webkit-scrollbar {
+  display: none;
 }
 .pm-fmt-grp {
   display: inline-flex;
@@ -5287,6 +5515,420 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   .pm-fmt-toolbar {
     transition: none;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Premium node float bars (image / table) — fixed portal, SoftMenu surface
+   ═══════════════════════════════════════════════════════════════════ */
+.pm-float-bar {
+  position: fixed;
+  z-index: 240;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 4px 5px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  background: #ffffff;
+  color: var(--pm-muted, #6a706a);
+  box-shadow: var(--pm-shadow-sm);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  white-space: nowrap;
+  pointer-events: auto;
+  /* enter */
+  opacity: 0;
+  transform: translateY(4px) scale(0.98);
+  transition:
+    opacity 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  will-change: opacity, transform;
+}
+.pm-float-bar.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.pm-float-bar-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--pm-muted, #6a706a);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-float-bar-btn:hover {
+  color: var(--pm-ink, #121410);
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-float-bar-btn.is-on {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent);
+}
+.pm-float-bar-btn.is-danger {
+  color: color-mix(in srgb, var(--pm-danger, #b42318) 88%, transparent);
+}
+.pm-float-bar-btn.is-danger:hover {
+  color: var(--pm-danger, #b42318);
+  background: color-mix(in srgb, var(--pm-danger, #b42318) 8%, transparent);
+}
+.pm-float-bar-btn svg {
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+.pm-float-bar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  border-radius: 1px;
+}
+/* Nested SoftMenu-style panel (table resize grid) */
+.pm-float-bar-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--pm-r-sm, 8px);
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  color: var(--pm-text, #2a2e2a);
+}
+.pm-float-bar-grid {
+  display: grid;
+  gap: 3px;
+  justify-content: center;
+}
+.pm-float-bar-grid-cell {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 12%, transparent);
+  background: transparent;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition:
+    background 60ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    border-color 60ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-float-bar-grid-cell.is-hot {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent);
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 48%, transparent);
+}
+.pm-float-bar-panel-meta {
+  margin-top: 8px;
+  text-align: center;
+  min-height: 16px;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  color: var(--pm-faint, #969c96);
+}
+.pm-float-bar-panel-rule {
+  height: 1px;
+  margin: 10px 0 8px;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+}
+.pm-float-bar-panel-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+.pm-float-bar-panel-label {
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  color: var(--pm-faint, #969c96);
+}
+.pm-float-bar-panel-input {
+  width: 44px;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 12%, transparent);
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 70%, #fff);
+  color: var(--pm-ink, #121410);
+  text-align: center;
+  font: var(--pm-t-meta, 300 11px/1.35 var(--pm-ff, system-ui, sans-serif));
+  outline: none;
+}
+.pm-float-bar-panel-input:focus {
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 42%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-green, #1a5e3d) 12%, transparent);
+}
+.pm-float-bar-panel-apply {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 12%, transparent);
+  color: var(--pm-green, #1a5e3d);
+  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-float-bar-panel-apply:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 20%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-float-bar {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Premium prose blocks — Quote · Table · Callout (note editor)
+   Soft rail / wash language; no loud gray grids or emoji callouts.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Quote (blockquote) ── */
+.tiptap-editor .ProseMirror blockquote,
+.pm-ws-editor .ProseMirror blockquote,
+.pm-ws-nested .ProseMirror blockquote {
+  position: relative;
+  margin: 1.15em 0 !important;
+  padding: 0.55em 0 0.55em 1.05rem !important;
+  border: none !important;
+  border-left: 2px solid
+    color-mix(in srgb, var(--pm-green, #1a5e3d) 42%, transparent) !important;
+  /* Match distill-block (14px); left rail stays square */
+  border-radius: 0 14px 14px 0;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 72%, #fff) !important;
+  quotes: none !important;
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font-weight: 300 !important;
+  font-style: italic !important;
+  font-size: 0.97em !important;
+  line-height: 1.7 !important;
+  letter-spacing: 0.005em;
+  color: var(--pm-muted, #6a706a) !important;
+  box-shadow: none !important;
+}
+.tiptap-editor .ProseMirror blockquote::before,
+.tiptap-editor .ProseMirror blockquote::after {
+  content: none !important;
+}
+.tiptap-editor .ProseMirror blockquote p,
+.pm-ws-editor .ProseMirror blockquote p,
+.pm-ws-nested .ProseMirror blockquote p {
+  font: inherit !important;
+  font-weight: inherit !important;
+  font-style: inherit !important;
+  color: inherit !important;
+  margin: 0.2em 0 !important;
+}
+.tiptap-editor .ProseMirror blockquote p:first-child,
+.pm-ws-editor .ProseMirror blockquote p:first-child {
+  margin-top: 0 !important;
+}
+.tiptap-editor .ProseMirror blockquote p:last-child,
+.pm-ws-editor .ProseMirror blockquote p:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* ── Table ── */
+.tiptap-editor .ProseMirror table,
+.pm-ws-editor .ProseMirror table,
+.pm-ws-nested .ProseMirror table {
+  position: relative;
+  width: 100%;
+  margin: 1.1em 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 13px !important;
+  font-weight: 300 !important;
+  line-height: 1.45 !important;
+  color: var(--pm-text, #2a2e2a) !important;
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+  border-radius: 14px; /* same as .distill-block */
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 color-mix(in srgb, #fff 80%, transparent) inset,
+    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 3%, transparent);
+}
+.tiptap-editor .ProseMirror th,
+.pm-ws-editor .ProseMirror th,
+.pm-ws-nested .ProseMirror th {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 6.5%, #fff) !important;
+  color: var(--pm-ink, #121410) !important;
+  font-family: inherit !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.03em;
+  text-align: left;
+  vertical-align: middle;
+  padding: 9px 12px !important;
+  border: none !important;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent) !important;
+  border-right: 1px solid
+    color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent) !important;
+  min-width: 3.25rem;
+}
+.tiptap-editor .ProseMirror td,
+.pm-ws-editor .ProseMirror td,
+.pm-ws-nested .ProseMirror td {
+  background: #ffffff !important;
+  color: var(--pm-text, #2a2e2a) !important;
+  font: inherit !important;
+  font-weight: 300 !important;
+  vertical-align: top;
+  padding: 8px 12px !important;
+  border: none !important;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent) !important;
+  border-right: 1px solid
+    color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent) !important;
+  min-width: 3.25rem;
+  position: relative;
+}
+.tiptap-editor .ProseMirror tr:last-child td,
+.pm-ws-editor .ProseMirror tr:last-child td {
+  border-bottom: none !important;
+}
+.tiptap-editor .ProseMirror th:last-child,
+.tiptap-editor .ProseMirror td:last-child,
+.pm-ws-editor .ProseMirror th:last-child,
+.pm-ws-editor .ProseMirror td:last-child {
+  border-right: none !important;
+}
+/* Soft canvas zebra — never loud gray bars */
+.tiptap-editor .ProseMirror tbody tr:nth-child(even) td,
+.pm-ws-editor .ProseMirror tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 58%, #fff) !important;
+}
+/* Selected cell (TipTap) */
+.tiptap-editor .ProseMirror .selectedCell,
+.tiptap-editor .ProseMirror td.selectedCell,
+.tiptap-editor .ProseMirror th.selectedCell,
+.pm-ws-editor .ProseMirror .selectedCell {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #fff) !important;
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+}
+/* Column resize handle */
+.tiptap-editor .ProseMirror .column-resize-handle,
+.pm-ws-editor .ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -1px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 42%, transparent);
+  pointer-events: none;
+}
+.tiptap-editor .ProseMirror .tableWrapper,
+.pm-ws-editor .ProseMirror .tableWrapper {
+  margin: 1.1em 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.tiptap-editor .ProseMirror .tableWrapper > table,
+.pm-ws-editor .ProseMirror .tableWrapper > table {
+  margin: 0;
+}
+
+/* ── Callout ── */
+.pm-callout,
+.tiptap-editor .ProseMirror [data-type="callout"],
+.pm-ws-editor .ProseMirror [data-type="callout"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0.95em 0;
+  padding: 11px 13px 11px 12px;
+  border-radius: 14px; /* same as .distill-block */
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  border-left-width: 2.5px;
+  border-left-style: solid;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #fff);
+  box-shadow: none;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  box-sizing: border-box;
+}
+.pm-callout__icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--pm-green, #1a5e3d);
+  opacity: 0.9;
+}
+.pm-callout__icon svg {
+  display: block;
+  stroke: currentColor;
+}
+.pm-callout__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: var(--pm-t-body, 300 13px/1.55 var(--pm-ff, system-ui, sans-serif));
+  font-weight: 300 !important;
+  color: var(--pm-text, #2a2e2a);
+}
+.pm-callout__body > *:first-child {
+  margin-top: 0 !important;
+}
+.pm-callout__body > *:last-child {
+  margin-bottom: 0 !important;
+}
+.pm-callout__body p {
+  margin: 0.2em 0 !important;
+  font: inherit !important;
+  font-weight: inherit !important;
+  color: inherit !important;
+  line-height: 1.55 !important;
+}
+/* Types — quiet wash + soft rail (Premium tokens) */
+.pm-callout--info,
+[data-callout-type="info"].pm-callout {
+  border-left-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 52%, transparent);
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+}
+.pm-callout--info .pm-callout__icon {
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-callout--success,
+[data-callout-type="success"].pm-callout {
+  border-left-color: color-mix(in srgb, var(--pm-green-deep, #0f4a2d) 48%, transparent);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, #fff);
+}
+.pm-callout--success .pm-callout__icon {
+  color: var(--pm-green-deep, #0f4a2d);
+}
+.pm-callout--warning,
+[data-callout-type="warning"].pm-callout {
+  border-left-color: color-mix(in srgb, #9a7428 50%, transparent);
+  background: color-mix(in srgb, #c4a35a 9%, #fff);
+}
+.pm-callout--warning .pm-callout__icon {
+  color: #8a6a28;
+}
+.pm-callout--error,
+[data-callout-type="error"].pm-callout {
+  border-left-color: color-mix(in srgb, var(--pm-danger, #b42318) 48%, transparent);
+  background: color-mix(in srgb, var(--pm-danger, #b42318) 6%, #fff);
+}
+.pm-callout--error .pm-callout__icon {
+  color: var(--pm-danger, #b42318);
 }
 
 /* Long reading — Source Serif prose (overrides Dialog text-sm + editor defaults) */

@@ -141,7 +141,7 @@ export function NoteSidebarRight({
             {hasReferences ? "Distill In" : "Distill Out"}
           </span>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           {hasReferences ? sourcesContent : injectedContent}
         </ScrollArea>
       </div>
@@ -162,7 +162,7 @@ export function NoteSidebarRight({
             </TabsTrigger>
           </TabsList>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           <TabsContent value="in" className="mt-0">
             {sourcesContent}
           </TabsContent>
