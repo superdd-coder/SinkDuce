@@ -1748,6 +1748,56 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           animateExpand(next)
         })
 
+        /**
+         * Wheel ownership:
+         * - Collapsed: never scroll inside the card — drive the outer note
+         *   scroller (.pm-ws-editor) so the document moves (not the browser
+         *   window / dialog, and not the clipped distill body).
+         * - Expanded: keep wheel inside the block; contain at ends.
+         */
+        const wheelDeltaY = (e: WheelEvent, linePx: number) => {
+          if (e.deltaMode === 1) return e.deltaY * 16
+          if (e.deltaMode === 2) return e.deltaY * linePx
+          return e.deltaY
+        }
+
+        const onWheel = (e: WheelEvent) => {
+          if (latestLoading || expandAnimating) return
+          if (e.deltaY === 0 && e.deltaX === 0) return
+
+          // Collapsed (or short content): scroll the note pane, not the block
+          if (
+            !dom.classList.contains("is-expanded") ||
+            !dom.classList.contains("is-overflow")
+          ) {
+            const outer =
+              (dom.closest(".pm-ws-editor") as HTMLElement | null) ||
+              (dom.closest(".ProseMirror")?.parentElement as HTMLElement | null)
+            if (!outer) return
+            e.preventDefault()
+            e.stopPropagation()
+            outer.scrollTop += wheelDeltaY(e, outer.clientHeight || 40)
+            return
+          }
+
+          // Expanded + long: internal scroll only
+          const el = contentWrapper
+          const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
+          if (maxScroll <= 0) return
+
+          const dy = wheelDeltaY(e, el.clientHeight || 40)
+          const top = el.scrollTop
+          const atTop = top <= 0
+          const atBottom = top >= maxScroll - 1
+          const canAbsorb =
+            (dy > 0 && !atBottom) || (dy < 0 && !atTop)
+
+          e.preventDefault()
+          e.stopPropagation()
+          if (canAbsorb) el.scrollTop = top + dy
+        }
+        dom.addEventListener("wheel", onWheel, { passive: false, capture: true })
+
         const setLoadingChrome = (loading: boolean) => {
           dom.classList.toggle("is-loading", loading)
           dom.setAttribute("data-loading", loading ? "true" : "false")
@@ -1900,6 +1950,7 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           destroy: () => {
             expandAnimCleanup?.()
             disarmDelete()
+            dom.removeEventListener("wheel", onWheel, true)
             window.removeEventListener(
               "meeting-speakers-changed",
               onSpeakersChanged,

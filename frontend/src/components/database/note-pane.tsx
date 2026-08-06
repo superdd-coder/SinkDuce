@@ -223,9 +223,28 @@ export function NotePane({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only on focus / note switch
   }, [focused, note?.id])
 
-  // Load note — chrome stays; body remounts with soft enter (no hard blank wipe)
+  /**
+   * Soft doc swap (no remount):
+   * idle → out (fade old) → in (swap content at opacity 0, fade up) → idle
+   */
+  type DocSwapPhase = "idle" | "out" | "in"
+  const [docSwapPhase, setDocSwapPhase] = useState<DocSwapPhase>("idle")
+  const prevNoteIdRef = useRef<string | null>(null)
+  const swapGenRef = useRef(0)
+  /** Fade timings — keep in sync with CSS --pm-ws-doc-swap-* */
+  const SWAP_OUT_MS = 280
+  const SWAP_IN_MS = 420
+
+  // Load note — chrome stays; soft crossfade between docs
   useEffect(() => {
     let cancelled = false
+    const gen = ++swapGenRef.current
+    const timers: ReturnType<typeof setTimeout>[] = []
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timers.push(setTimeout(resolve, ms))
+      })
+
     setEditingTitle(false)
     setPropagateDismissed(false)
     if (!noteId || !collection) {
@@ -233,34 +252,100 @@ export function NotePane({
       setContent("")
       contentRef.current = ""
       setNote(null)
+      setDocSwapPhase("idle")
       return
     }
+
+    const prevId = prevNoteIdRef.current
+    prevNoteIdRef.current = noteId
+    const isSoftSwitch = hasLoadedOnce && !!prevId && prevId !== noteId
+
+    // Flush pending save for the note we're leaving
+    if (prevId && prevId !== noteId && saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+      const leavingMd = contentRef.current
+      if (leavingMd && baselineRef.current) {
+        void updateNote(collection, prevId, { content: leavingMd }).catch(
+          () => {}
+        )
+      }
+    }
+
     setLoading(true)
-    baselineRef.current = ""
-    // Drop previous document body immediately; shell + dim overlay stay
-    setContent("")
-    contentRef.current = ""
-    setEditorInstance(null)
-    editorRef.current = null
+    const outStartedAt = performance.now()
+    // First paint only: blank. Soft switches keep body mounted for crossfade.
+    if (!hasLoadedOnce) {
+      baselineRef.current = ""
+      setContent("")
+      contentRef.current = ""
+      setEditorInstance(null)
+      editorRef.current = null
+      setDocSwapPhase("idle")
+    } else if (isSoftSwitch) {
+      // Start fade-out immediately (old body still showing)
+      setDocSwapPhase("out")
+    }
+
     ;(async () => {
       try {
         const n = await getNote(collection, noteId)
-        if (cancelled) return
+        if (cancelled || swapGenRef.current !== gen) return
+
         const c = n.content || ""
-        setContent(c)
-        contentRef.current = c
-        await applyMeta(n)
-        setLoading(false)
-        setHasLoadedOnce(true)
+
+        if (isSoftSwitch) {
+          // Let fade-out finish (don't cut mid-fade if network was fast)
+          const elapsed = performance.now() - outStartedAt
+          if (elapsed < SWAP_OUT_MS) {
+            await wait(SWAP_OUT_MS - elapsed)
+          }
+          // Brief hold at fully transparent so setContent isn't visible
+          await wait(40)
+          if (cancelled || swapGenRef.current !== gen) return
+
+          setContent(c)
+          contentRef.current = c
+          baselineRef.current = c
+          await applyMeta(n)
+          if (cancelled || swapGenRef.current !== gen) return
+          setLoading(false)
+          setHasLoadedOnce(true)
+          // Double rAF so browser paints opacity:0 with new doc before fade-in
+          await new Promise<void>((r) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => r())
+            })
+          })
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("in")
+          await wait(SWAP_IN_MS)
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("idle")
+        } else {
+          setContent(c)
+          contentRef.current = c
+          baselineRef.current = c
+          await applyMeta(n)
+          if (cancelled || swapGenRef.current !== gen) return
+          setLoading(false)
+          setHasLoadedOnce(true)
+          setDocSwapPhase("in")
+          await wait(SWAP_IN_MS)
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("idle")
+        }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && swapGenRef.current === gen) {
           toast.error("Failed to load note")
           setLoading(false)
+          setDocSwapPhase("idle")
         }
       }
     })()
     return () => {
       cancelled = true
+      for (const t of timers) clearTimeout(t)
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
@@ -301,6 +386,8 @@ export function NotePane({
 
   const handleChange = useCallback(
     (value: string) => {
+      // Block edits while soft-loading another note (old body still on screen)
+      if (loading) return
       setContent(value)
       contentRef.current = value
       if (!baselineRef.current) {
@@ -312,7 +399,7 @@ export function NotePane({
       }
       scheduleSave(value)
     },
-    [scheduleSave]
+    [scheduleSave, loading]
   )
 
   const handleImageUpload = useCallback(
@@ -796,6 +883,7 @@ export function NotePane({
 
   const softLoading = loading && hasLoadedOnce
   const hardLoading = loading && !hasLoadedOnce
+  const swapBusy = docSwapPhase === "out" || docSwapPhase === "in" || softLoading
 
   /**
    * Mark this pane as focused (for distill rail / chrome highlight).
@@ -921,7 +1009,11 @@ export function NotePane({
           ) : (
             <div className="pm-ws-title-cluster flex-1 min-w-0">
               <span
-                className="pm-ws-pane-title"
+                className={cn(
+                  "pm-ws-pane-title",
+                  docSwapPhase === "out" && "is-title-out",
+                  docSwapPhase === "in" && "is-title-in"
+                )}
                 onClick={claimFocus}
               >
                 {note?.title || "Note"}
@@ -975,8 +1067,9 @@ export function NotePane({
           Row 2 toolbar:
           left  — Ingested status tag
           right — Detail · Ingest | Update▾ · ⋮ (Download / Delete)
+          overflow must stay visible — SoftMenus are absolute under the triggers.
         */}
-        <div className="flex flex-nowrap items-center gap-1 px-4 pb-2.5 min-h-8 shrink-0 overflow-hidden min-w-0">
+        <div className="flex flex-nowrap items-center gap-1 px-4 pb-2.5 min-h-8 shrink-0 overflow-visible min-w-0">
           <div className="flex items-center min-w-0 flex-1 overflow-hidden">
             {ingested && (
               <span className="pm-ws-status truncate max-w-full">
@@ -985,7 +1078,7 @@ export function NotePane({
             )}
           </div>
 
-          <div className="flex items-center gap-0.5 shrink-0">
+          <div className="relative z-30 flex items-center gap-0.5 shrink-0">
             {managedFileId && (
               <Button
                 variant="ghost"
@@ -1138,21 +1231,20 @@ export function NotePane({
       </div>
 
       {hardLoading ? (
-        <div className="pm-ws-loading flex-1">
+        <div className="pm-ws-loading flex-1 is-doc-in">
           <Loader2 className="h-5 w-5 animate-spin" />
           Loading…
         </div>
       ) : (
         <div
-          key={docSwapKey ?? noteId}
-          className="pm-ws-doc-body relative flex-1 flex flex-col min-h-0 min-w-0 is-doc-swap"
-        >
-          {softLoading && (
-            <div className="absolute inset-0 z-[1] flex items-center justify-center pointer-events-none">
-              <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-muted)] opacity-70" />
-            </div>
+          className={cn(
+            "pm-ws-doc-body relative flex-1 flex flex-col min-h-0 min-w-0",
+            docSwapPhase === "out" && "is-doc-out",
+            docSwapPhase === "in" && "is-doc-in",
+            docSwapPhase === "idle" && "is-doc-idle"
           )}
-          {editorInstance && !softLoading && (
+        >
+          {editorInstance && !swapBusy && (
             <EditorToolbar editor={editorInstance} />
           )}
           {distilling && (
@@ -1161,25 +1253,29 @@ export function NotePane({
               Distilling…
             </div>
           )}
-          {!softLoading && (
-            <div className="pm-ws-editor">
-              <MarkdownEditor
-                value={content}
-                showToolbar={false}
-                onEditorReady={(editor) => {
-                  editorRef.current = editor
-                  setEditorInstance(editor)
-                }}
-                onEditorFocus={claimFocus}
-                onChange={handleChange}
-                onImageUpload={handleImageUpload}
-                onNoteLinkClick={(id) => onNavigateSource(id)}
-                className="px-6 pt-1 pb-5"
-                flush
-                placeholder="Start writing your note..."
-              />
-            </div>
-          )}
+          {/* Stable editor shell — content swaps only while opacity is 0 */}
+          <div
+            className={cn(
+              "pm-ws-editor",
+              swapBusy && "pointer-events-none select-none"
+            )}
+          >
+            <MarkdownEditor
+              value={content}
+              showToolbar={false}
+              onEditorReady={(editor) => {
+                editorRef.current = editor
+                setEditorInstance(editor)
+              }}
+              onEditorFocus={claimFocus}
+              onChange={handleChange}
+              onImageUpload={handleImageUpload}
+              onNoteLinkClick={(id) => onNavigateSource(id)}
+              className="px-6 pt-1 pb-5"
+              flush
+              placeholder="Start writing your note..."
+            />
+          </div>
         </div>
       )}
 

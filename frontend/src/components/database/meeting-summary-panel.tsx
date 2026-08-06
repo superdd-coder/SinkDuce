@@ -102,6 +102,9 @@ export function MeetingSummaryPanel({
   paneChrome,
 }: MeetingSummaryPanelProps) {
   const [loading, setLoading] = useState(true)
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
+  type DocSwapPhase = "idle" | "out" | "in"
+  const [docSwapPhase, setDocSwapPhase] = useState<DocSwapPhase>("idle")
   /**
    * Canonical raw markdown with real [ ] — used for viewer + disk.
    * Edit mode uses a protected copy for Tiptap only.
@@ -116,16 +119,32 @@ export function MeetingSummaryPanel({
   const baselineRef = useRef("")
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadKeyRef = useRef("")
+  const SWAP_OUT_MS = 280
+  const SWAP_IN_MS = 420
 
   useEffect(() => {
     let cancelled = false
     const loadKey = `${meetingId}:${tabId}`
     loadKeyRef.current = loadKey
+    const timers: ReturnType<typeof setTimeout>[] = []
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timers.push(setTimeout(resolve, ms))
+      })
+
     setLoading(true)
-    setRawContent("")
-    setEditContent("")
     setMode("view")
-    baselineRef.current = ""
+    const isSoft = hasLoadedOnce
+    const outStartedAt = performance.now()
+
+    if (!hasLoadedOnce) {
+      setRawContent("")
+      setEditContent("")
+      baselineRef.current = ""
+      setDocSwapPhase("idle")
+    } else {
+      setDocSwapPhase("out")
+    }
 
     ;(async () => {
       try {
@@ -160,11 +179,30 @@ export function MeetingSummaryPanel({
         if (cancelled || loadKeyRef.current !== loadKey) return
 
         const disk = raw ?? ""
-        // Repair files already corrupted by prior Tiptap escapes (\[ \] \~ \_)
         const text = unescapeMarkdownOverEscapes(disk)
+
+        if (isSoft) {
+          const elapsed = performance.now() - outStartedAt
+          if (elapsed < SWAP_OUT_MS) await wait(SWAP_OUT_MS - elapsed)
+          await wait(40)
+          if (cancelled || loadKeyRef.current !== loadKey) return
+        }
+
         setRawContent(text)
         baselineRef.current = text
         setLoading(false)
+        setHasLoadedOnce(true)
+
+        if (isSoft) {
+          await new Promise<void>((r) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => r()))
+          })
+        }
+        if (cancelled || loadKeyRef.current !== loadKey) return
+        setDocSwapPhase("in")
+        await wait(SWAP_IN_MS)
+        if (cancelled || loadKeyRef.current !== loadKey) return
+        setDocSwapPhase("idle")
 
         if (text !== disk && text) {
           saveSectionMd(meetingId, tabId, text).catch(() => {})
@@ -173,12 +211,14 @@ export function MeetingSummaryPanel({
         if (!cancelled) {
           toast.error("Failed to load meeting summary")
           setLoading(false)
+          setDocSwapPhase("idle")
         }
       }
     })()
 
     return () => {
       cancelled = true
+      for (const t of timers) clearTimeout(t)
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
@@ -235,11 +275,16 @@ export function MeetingSummaryPanel({
     }
   }
 
-  if (loading) {
+  const softLoading = loading && hasLoadedOnce
+  const hardLoading = loading && !hasLoadedOnce
+  const swapBusy =
+    docSwapPhase === "out" || docSwapPhase === "in" || softLoading
+
+  if (hardLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground min-h-0">
-        <Loader2 className="h-5 w-5 animate-spin mr-2" />
-        Loading...
+      <div className="pm-ws-loading flex-1 is-doc-in min-h-0">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Loading…
       </div>
     )
   }
@@ -324,7 +369,11 @@ export function MeetingSummaryPanel({
         >
           <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9">
             <span
-              className="pm-ws-pane-title flex-1 min-w-0"
+              className={cn(
+                "pm-ws-pane-title flex-1 min-w-0",
+                docSwapPhase === "out" && "is-title-out",
+                docSwapPhase === "in" && "is-title-in"
+              )}
               onClick={claimFocus}
             >
               {headerMeetingTitle}
@@ -380,24 +429,38 @@ export function MeetingSummaryPanel({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
-        {mode === "view" ? (
-          <SummaryMarkdownViewer
-            md={rawContent}
-            speakerNames={speakerNames}
-            onRefClick={() => {
-              /* note context: no transcript seek */
-            }}
-          />
-        ) : (
-          <MarkdownEditor
-            value={editContent}
-            onChange={handleEditChange}
-            showToolbar={false}
-            className="min-h-[200px]"
-            placeholder="Summary is empty..."
-          />
+      <div
+        className={cn(
+          "pm-ws-doc-body relative flex-1 min-h-0 flex flex-col",
+          docSwapPhase === "out" && "is-doc-out",
+          docSwapPhase === "in" && "is-doc-in",
+          docSwapPhase === "idle" && "is-doc-idle"
         )}
+      >
+        <div
+          className={cn(
+            "flex-1 overflow-y-auto min-h-0 px-6 py-4",
+            swapBusy && "pointer-events-none select-none"
+          )}
+        >
+          {mode === "view" ? (
+            <SummaryMarkdownViewer
+              md={rawContent}
+              speakerNames={speakerNames}
+              onRefClick={() => {
+                /* note context: no transcript seek */
+              }}
+            />
+          ) : (
+            <MarkdownEditor
+              value={editContent}
+              onChange={swapBusy ? () => {} : handleEditChange}
+              showToolbar={false}
+              className="min-h-[200px]"
+              placeholder="Summary is empty..."
+            />
+          )}
+        </div>
       </div>
     </div>
   )

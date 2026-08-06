@@ -379,8 +379,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
   )
 
   /**
-   * pane_split: mount new pane collapsed, expand together with source narrowing.
-   * (No pre-split empty half — that looked awkward.)
+   * pane_split (scheme A — dual slots always in DOM):
+   * Slot B is already mounted as is-slot-collapsed when single.
+   * Filling it only removes collapsed → flex animates 0→1 with no 1→2 child jump.
    */
   const runPaneSplit = useCallback(
     (newPane: EditorPane, opts: { focusAfter: boolean }) => {
@@ -389,7 +390,6 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       const gen = bumpGen()
       setPhase("pane_split")
       enteringPaneIdRef.current = newPane.id
-      // Mount collapsed under is-entering; double-rAF then expand
       setEnteringPaneId(newPane.id)
       setPanes((prev) => {
         if (prev.length >= 2) return prev
@@ -397,10 +397,11 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
         return [...prev, newPane]
       })
 
+      // Paint collapsed (is-entering + was is-slot-collapsed), then expand
       const r1 = requestAnimationFrame(() => {
         if (motionGenRef.current !== gen) return
         const el = document.querySelector(
-          ".pm-ws-pane-group.is-entering"
+          '.pm-ws-pane-group[data-slot="1"]'
         ) as HTMLElement | null
         void el?.offsetWidth
         const r2 = requestAnimationFrame(() => {
@@ -829,10 +830,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
         className={cn(
           "pm-dialog pm-workspace pm-ws-dialog",
           "!max-w-[92vw] !w-[92vw] h-[85vh] p-0 !gap-0 flex flex-col overflow-hidden",
-          // Stronger enter/exit than default dialog (large workspace stage)
-          "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-          "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[0.97] data-open:slide-in-from-bottom-2",
-          "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.97] data-closed:slide-out-to-bottom-2"
+          // Enter/exit driven by CSS on .pm-ws-dialog (data-starting/ending-style)
+          // so close motion runs while still mounted (see notes-card open lifecycle).
+          "duration-300"
         )}
       >
         {/* Global chrome — sidebar toggle only */}
@@ -882,90 +882,86 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
           <div
             className={cn(
               "pm-ws-panes",
-              // Keep split layout while a pane is exiting so sibling can ease wider
+              // Dual slots always mounted; is-split when second has content or is exiting
               (panes.length === 2 || !!exitingPaneId) && "is-split"
             )}
           >
-            {panes.map((pane) => {
-              const isExiting = exitingPaneId === pane.id
-              const isEntering = enteringPaneId === pane.id
+            {([0, 1] as const).map((slotIndex) => {
+              const pane = panes[slotIndex] ?? null
+              const isSlotCollapsed = pane == null
+              const isExiting = !!(pane && exitingPaneId === pane.id)
+              const isEntering = !!(pane && enteringPaneId === pane.id)
               const busy = phaseRef.current !== "idle"
-              const docKey =
-                pane.doc.kind === "note"
+              const dual = panes.length > 1 || !!exitingPaneId
+              const docKey = !pane
+                ? `slot-${slotIndex}-empty`
+                : pane.doc.kind === "note"
                   ? `n-${pane.doc.noteId}`
                   : pane.doc.kind === "meeting"
                     ? `m-${pane.doc.meetingId}-${pane.doc.tabId}`
                     : `empty-${pane.id}`
               const paneNoteId =
-                pane.doc.kind === "note" ? pane.doc.noteId : null
+                pane?.doc.kind === "note" ? pane.doc.noteId : null
               const paneMeta = paneNoteId
                 ? noteMetaById[paneNoteId] ?? null
                 : null
-              const showDistillRail = railOpenForPane(pane)
+              const showDistillRail = pane ? railOpenForPane(pane) : false
               const railHasContent =
+                !!pane &&
                 !!paneMeta &&
                 paneNoteId != null &&
                 noteHasDistill(paneNoteId) &&
                 showDistillRail
               const paneFocused =
-                pane.id === focusedPaneId && !isExiting
-              /*
-               * Keep Split/Close chrome stable during width motion.
-               * Hiding both while busy made the title row jump mid-animation.
-               */
-              const paneChromeClose =
-                panes.length > 1 && !isExiting
+                !!pane && pane.id === focusedPaneId && !isExiting
+              const paneChromeClose = dual && !!pane && !isExiting
               const paneChromeSplit =
-                panes.length < 2 && !isEntering && !busy
+                panes.length < 2 && !isEntering && !busy && slotIndex === 0
 
               return (
-                /*
-                 * Pane group = editor + optional distill rail.
-                 * Groups always equal flex; rail width is internal only.
-                 */
                 <div
-                  key={pane.id}
+                  key={`slot-${slotIndex}`}
+                  data-slot={slotIndex}
                   className={cn(
                     "pm-ws-pane-group",
+                    isSlotCollapsed && "is-slot-collapsed",
                     isEntering && "is-entering",
                     isExiting && "is-exiting",
                     showDistillRail && "has-rail",
-                    panes.length > 1 && paneFocused && "is-focused"
+                    dual && paneFocused && "is-focused"
                   )}
                 >
-                  <div className="pm-ws-pane-slot">
-                    <div className="pm-ws-card pm-ws-card--pane">
-                      {pane.doc.kind === "note" ? (
-                        <NotePane
-                          key={pane.id}
-                          collection={collection}
-                          noteId={pane.doc.noteId}
-                          focused={paneFocused}
-                          showFocusChrome={
-                            panes.length > 1 && paneFocused
-                          }
-                          onFocus={() => {
-                            if (!isExiting) focusPane(pane.id)
-                          }}
-                          showClose={paneChromeClose}
-                          onClosePane={() => closePane(pane.id)}
-                          showSplit={paneChromeSplit}
-                          onSplit={addPane}
-                          onCloseDialog={() => onOpenChange(false)}
-                          onTitleChange={handleTitleChange}
-                          onDeleted={(nid) => void handleNoteDeleted(nid)}
-                          onNoteMeta={rememberNoteMeta}
-                          onNavigateSource={navigateSource}
-                          className="pm-ws-doc-surface"
-                          docSwapKey={docKey}
-                        />
-                      ) : pane.doc.kind === "meeting" ? (
-                        (() => {
-                          const meetingDoc = pane.doc
-                          return (
+                  {!isSlotCollapsed && pane && (
+                    <>
+                      <div className="pm-ws-pane-slot">
+                        <div className="pm-ws-card pm-ws-card--pane">
+                          {pane.doc.kind === "note" ? (
+                            <NotePane
+                              key={pane.id}
+                              collection={collection}
+                              noteId={pane.doc.noteId}
+                              focused={paneFocused}
+                              showFocusChrome={dual && paneFocused}
+                              onFocus={() => {
+                                if (!isExiting) focusPane(pane.id)
+                              }}
+                              showClose={paneChromeClose}
+                              onClosePane={() => closePane(pane.id)}
+                              showSplit={paneChromeSplit}
+                              onSplit={addPane}
+                              onCloseDialog={() => onOpenChange(false)}
+                              onTitleChange={handleTitleChange}
+                              onDeleted={(nid) => void handleNoteDeleted(nid)}
+                              onNoteMeta={rememberNoteMeta}
+                              onNavigateSource={navigateSource}
+                              className="pm-ws-doc-surface"
+                              docSwapKey={docKey}
+                            />
+                          ) : pane.doc.kind === "meeting" ? (
                             <div
                               key={docKey}
                               className="flex-1 flex flex-col min-w-0 min-h-0 pm-ws-doc-surface is-doc-swap"
+                              /* key + is-doc-swap: soft enter when note↔meeting / section swaps */
                               onMouseDown={(e) => {
                                 if (isExiting) return
                                 if (pane.id === focusedPaneId) return
@@ -978,18 +974,25 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                                   return
                                 }
                                 const finish = () => {
-                                  window.removeEventListener("mouseup", finish, true)
+                                  window.removeEventListener(
+                                    "mouseup",
+                                    finish,
+                                    true
+                                  )
                                   focusPane(pane.id)
                                 }
-                                window.addEventListener("mouseup", finish, true)
+                                window.addEventListener(
+                                  "mouseup",
+                                  finish,
+                                  true
+                                )
                               }}
                             >
                               <MeetingSummaryPanel
-                                meetingId={meetingDoc.meetingId}
-                                tabId={meetingDoc.tabId}
+                                meetingId={pane.doc.meetingId}
+                                tabId={pane.doc.tabId}
                                 paneChrome={{
-                                  focused:
-                                    paneFocused && panes.length > 1,
+                                  focused: paneFocused && dual,
                                   onFocus: () => {
                                     if (!isExiting) focusPane(pane.id)
                                   },
@@ -1000,64 +1003,63 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                                 }}
                               />
                             </div>
-                          )
-                        })()
-                      ) : (
-                        /* Empty second page after Split — pick hint only */
-                        <div
-                          className="relative flex-1 flex flex-col min-h-0 min-w-0 pm-ws-doc-surface"
-                          onMouseDown={() => {
-                            if (!isExiting) focusPane(pane.id)
-                          }}
-                        >
-                          {paneChromeClose && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="pm-ws-icon-btn !h-6 !w-6 absolute top-3 right-3 z-10"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                closePane(pane.id)
+                          ) : (
+                            <div
+                              className="relative flex-1 flex flex-col min-h-0 min-w-0 pm-ws-doc-surface"
+                              onMouseDown={() => {
+                                if (!isExiting) focusPane(pane.id)
                               }}
-                              title="Close page"
                             >
-                              <X className="h-3.5 w-3.5" />
-                            </Button>
+                              {paneChromeClose && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="pm-ws-icon-btn !h-6 !w-6 absolute top-3 right-3 z-10"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    closePane(pane.id)
+                                  }}
+                                  title="Close page"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                              <div className="flex-1 flex flex-col items-center justify-center px-8 text-center select-none">
+                                <p className="text-[13px] font-normal text-[var(--pm-muted)]">
+                                  Select a note or meeting
+                                </p>
+                              </div>
+                            </div>
                           )}
-                          <div className="flex-1 flex flex-col items-center justify-center px-8 text-center select-none">
-                            <p className="text-[13px] font-normal text-[var(--pm-muted)]">
-                              Select a note or meeting
-                            </p>
-                          </div>
                         </div>
-                      )}
-                    </div>
-                  </div>
+                      </div>
 
-                  <div
-                    className={cn(
-                      "pm-ws-rail-r-host",
-                      showDistillRail && "is-open"
-                    )}
-                    aria-hidden={!showDistillRail}
-                  >
-                    {railHasContent && paneMeta && (
-                      <aside className="pm-ws-card pm-ws-card--rail-r">
-                        <NoteSidebarRight
-                          references={paneMeta.references ?? []}
-                          injectedInto={paneMeta.extracted_into ?? []}
-                          injectedIntoTitles={new Map(
-                            notesList.map((n) => [n.id, n.title])
-                          )}
-                          activeBlockId={
-                            showDistillRail ? activeBlockId : null
-                          }
-                          onSelectBlock={handleSelectBlock}
-                          onNavigateToNote={openReferenceBeside}
-                        />
-                      </aside>
-                    )}
-                  </div>
+                      <div
+                        className={cn(
+                          "pm-ws-rail-r-host",
+                          showDistillRail && "is-open"
+                        )}
+                        aria-hidden={!showDistillRail}
+                      >
+                        {railHasContent && paneMeta && (
+                          <aside className="pm-ws-card pm-ws-card--rail-r">
+                            <NoteSidebarRight
+                              references={paneMeta.references ?? []}
+                              injectedInto={paneMeta.extracted_into ?? []}
+                              injectedIntoTitles={new Map(
+                                notesList.map((n) => [n.id, n.title])
+                              )}
+                              activeBlockId={
+                                showDistillRail ? activeBlockId : null
+                              }
+                              onSelectBlock={handleSelectBlock}
+                              onNavigateToNote={openReferenceBeside}
+                            />
+                          </aside>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               )
             })}

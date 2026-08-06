@@ -45,13 +45,28 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
   ) {
     const [notes, setNotes] = useState<NoteListItem[]>([])
     const [loading, setLoading] = useState(false)
+    /** Note id kept mounted through close animation */
     const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
+    /** Dialog open flag — set false first so Base UI can play exit motion */
+    const [editorOpen, setEditorOpen] = useState(false)
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null)
     /** Like To-do "Completed" — extracted notes collapsed by default */
     const [extractedOpen, setExtractedOpen] = useState(false)
 
     const hasNotesLoadedRef = useRef(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const editorCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    /** Match .pm-ws-dialog close duration (+ small buffer) */
+    const EDITOR_CLOSE_MS = 340
+
+    const openEditor = useCallback((id: string) => {
+      if (editorCloseTimerRef.current) {
+        clearTimeout(editorCloseTimerRef.current)
+        editorCloseTimerRef.current = null
+      }
+      setActiveNoteId(id)
+      setEditorOpen(true)
+    }, [])
 
     const fetchNotes = useCallback(async (opts?: { silent?: boolean }) => {
       if (!collection) return
@@ -68,6 +83,34 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
       }
     }, [collection])
 
+    const handleEditorOpenChange = useCallback(
+      (v: boolean) => {
+        if (v) {
+          setEditorOpen(true)
+          return
+        }
+        // 1) open=false → exit animation  2) then unmount
+        setEditorOpen(false)
+        if (editorCloseTimerRef.current) {
+          clearTimeout(editorCloseTimerRef.current)
+        }
+        editorCloseTimerRef.current = setTimeout(() => {
+          setActiveNoteId(null)
+          editorCloseTimerRef.current = null
+          void fetchNotes()
+        }, EDITOR_CLOSE_MS)
+      },
+      [fetchNotes]
+    )
+
+    useEffect(() => {
+      return () => {
+        if (editorCloseTimerRef.current) {
+          clearTimeout(editorCloseTimerRef.current)
+        }
+      }
+    }, [])
+
     useEffect(() => {
       hasNotesLoadedRef.current = false
       void fetchNotes()
@@ -83,10 +126,10 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
     const { pendingOpenNote, setPendingOpenNote } = useAppStore()
     useEffect(() => {
       if (pendingOpenNote) {
-        setActiveNoteId(pendingOpenNote)
+        openEditor(pendingOpenNote)
         setPendingOpenNote(null)
       }
-    }, [pendingOpenNote, setPendingOpenNote])
+    }, [pendingOpenNote, setPendingOpenNote, openEditor])
 
     const handleCreate = useCallback(async () => {
       const title = new Date().toLocaleString(undefined, {
@@ -98,11 +141,11 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
         toast.success("Note created")
         await fetchNotes()
         triggerInfoRefresh({ collectionId: collection, reason: "manual" })
-        setActiveNoteId(res.id)
+        openEditor(res.id)
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to create note")
       }
-    }, [collection, fetchNotes])
+    }, [collection, fetchNotes, openEditor])
 
     const openImport = useCallback(() => {
       fileInputRef.current?.click()
@@ -132,7 +175,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
         toast.success(`Imported "${title}"`)
         await fetchNotes()
         triggerInfoRefresh({ collectionId: collection, reason: "manual" })
-        setActiveNoteId(res.id)
+        openEditor(res.id)
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Import failed")
       }
@@ -148,7 +191,14 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
       try {
         await deleteNote(collection, deleteTarget.id)
         toast.success(`Deleted "${deleteTarget.title}"`)
-        if (activeNoteId === deleteTarget.id) setActiveNoteId(null)
+        if (activeNoteId === deleteTarget.id) {
+          if (editorCloseTimerRef.current) {
+            clearTimeout(editorCloseTimerRef.current)
+            editorCloseTimerRef.current = null
+          }
+          setEditorOpen(false)
+          setActiveNoteId(null)
+        }
         setDeleteTarget(null)
         await fetchNotes()
         triggerInfoRefresh({ collectionId: collection, reason: "manual" })
@@ -189,10 +239,12 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
           borderRight: "none",
           borderTop: "none",
         }}
-        onClick={() => setActiveNoteId(note.id)}
+        onClick={() => openEditor(note.id)}
         role="button"
         tabIndex={0}
-        onKeyDown={(e) => { if (e.key === "Enter") setActiveNoteId(note.id) }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") openEditor(note.id)
+        }}
       >
         <div className="flex flex-col gap-0.5 flex-1 min-w-0">
           <span className="text-xs truncate text-[var(--pm-text,var(--foreground))]">
@@ -307,13 +359,8 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
           <NoteEditorDialog
             collection={collection}
             noteId={activeNoteId}
-            open
-            onOpenChange={(v) => {
-              if (!v) {
-                setActiveNoteId(null)
-                fetchNotes()
-              }
-            }}
+            open={editorOpen}
+            onOpenChange={handleEditorOpenChange}
           />
         ) : null}
 

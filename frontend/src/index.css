@@ -1011,15 +1011,20 @@ input[type="checkbox"] {
   max-height: var(--distill-collapsed-h);
   overflow: hidden;
   transition: max-height 380ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1));
-  overscroll-behavior: contain;
 }
 .distill-block.is-expanded.is-overflow .distill-block__scroll {
   max-height: var(--distill-expanded-h);
 }
-/* Only allow internal scroll after expand settles (not mid-animation) */
+/*
+ * Collapsed: overflow hidden — wheel must pass through to the outer editor
+ * (.pm-ws-editor), not scroll clipped body content.
+ * Expanded: internal scroll only after settle.
+ */
 .distill-block.is-expanded.is-overflow:not(.is-animating) .distill-block__scroll {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  overscroll-behavior-y: contain;
 }
 .distill-block.is-animating .distill-block__scroll {
   overflow: hidden !important;
@@ -4512,8 +4517,13 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-ws-pane-group.has-rail {
   flex-basis: var(--pm-ws-rail-r-extra);
 }
-/* New sibling: collapsed → expands while source narrows together */
-.pm-ws-pane-group.is-entering {
+/*
+ * Scheme A: slot B always in DOM. Collapsed = near-zero flex share (not unmounted).
+ * Opening a split only removes is-slot-collapsed / is-entering — no 1→2 child jump.
+ */
+.pm-ws-pane-group.is-slot-collapsed,
+.pm-ws-pane-group.is-entering,
+.pm-ws-pane-group.is-exiting {
   flex-grow: 0.0001;
   flex-shrink: 1;
   flex-basis: 0%;
@@ -4522,22 +4532,14 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   overflow: hidden;
   pointer-events: none;
 }
-.pm-ws-pane-group.is-entering .pm-ws-card--pane {
-  opacity: 0.4;
-}
-/*
- * Close: empty/unfocused sibling collapses while survivor (editor+rail) grows.
- * Prefer width motion over a fast full fade — opacity 0 too early feels like a hard cut
- * and hides the “distill slides with the editor” read.
- */
 .pm-ws-pane-group.is-exiting {
   flex-grow: 0.0001 !important;
   flex-shrink: 1 !important;
   flex-basis: 0% !important;
   min-width: 0 !important;
-  opacity: 0;
-  pointer-events: none;
-  overflow: hidden;
+}
+.pm-ws-pane-group.is-entering .pm-ws-card--pane {
+  opacity: 0.4;
 }
 /* Keep rail open/transitions alive on the *survivor* during sibling exit */
 .pm-ws-pane-group:not(.is-exiting).has-rail .pm-ws-rail-r-host.is-open {
@@ -4618,14 +4620,48 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
 }
 
-/* Large workspace dialog — silk open/close */
+/*
+ * Large workspace dialog — silk open/close.
+ * Base UI keeps the popup mounted with data-ending-style while closing;
+ * parent must set open=false BEFORE unmounting (see notes-card).
+ *
+ * Use opacity + scale (not transform) so we don't fight Tailwind
+ * -translate-x/y-1/2 centering.
+ */
 .pm-ws-dialog[data-slot="dialog-content"] {
+  --pm-ws-dialog-ms: 300ms;
+  --pm-ws-dialog-ease: cubic-bezier(0.22, 1, 0.36, 1);
   transform-origin: center center;
+  opacity: 1;
+  scale: 1;
+  filter: blur(0);
+  transition:
+    opacity var(--pm-ws-dialog-ms) var(--pm-ws-dialog-ease),
+    scale var(--pm-ws-dialog-ms) var(--pm-ws-dialog-ease),
+    filter var(--pm-ws-dialog-ms) var(--pm-ws-dialog-ease);
+  will-change: opacity, scale;
+}
+.pm-ws-dialog[data-slot="dialog-content"][data-starting-style],
+.pm-ws-dialog[data-slot="dialog-content"][data-ending-style],
+.pm-ws-dialog[data-slot="dialog-content"][data-closed] {
+  opacity: 0;
+  scale: 0.97;
+  filter: blur(0.6px);
+}
+/* Backdrop: soft with workspace stage */
+[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"] {
+  transition:
+    opacity var(--pm-ws-dialog-ms, 300ms) var(--pm-ws-dialog-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"][data-starting-style],
+[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"][data-ending-style],
+[data-slot="dialog-portal"]:has(.pm-ws-dialog) [data-slot="dialog-overlay"][data-closed] {
+  opacity: 0;
 }
 @media (prefers-reduced-motion: reduce) {
-  .pm-ws-dialog {
-    animation-duration: 1ms !important;
+  .pm-ws-dialog[data-slot="dialog-content"] {
     transition-duration: 1ms !important;
+    filter: none !important;
   }
 }
 /*
@@ -4733,15 +4769,51 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* Shared clock with note-pane SWAP_OUT_MS / SWAP_IN_MS */
+  --pm-ws-doc-out-ms: 280ms;
+  --pm-ws-doc-in-ms: 420ms;
+  --pm-ws-doc-ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --pm-ws-doc-ease-in: cubic-bezier(0.22, 1, 0.36, 1);
 }
 /*
- * Soft note-switch: opacity only.
- * Avoid transform here — fill-mode both + translateY(0) left a permanent
- * containing block on .pm-ws-doc-body and broke nested editor scroll.
+ * Soft doc crossfade — opacity only (no transform: avoids scroll containing-block).
+ * Phase machine: idle → out (fade old) → swap while 0 → in (fade new) → idle
  */
-.pm-ws-doc-body.is-doc-swap,
-.pm-ws-doc-surface.is-doc-swap {
-  animation: pm-ws-doc-in 340ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)) both;
+.pm-ws-doc-body {
+  --pm-ws-doc-out-ms: 280ms;
+  --pm-ws-doc-in-ms: 420ms;
+  --pm-ws-doc-ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --pm-ws-doc-ease-in: cubic-bezier(0.22, 1, 0.36, 1);
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+  transition: opacity var(--pm-ws-doc-out-ms) var(--pm-ws-doc-ease-out);
+  will-change: opacity;
+}
+.pm-ws-doc-body.is-doc-idle {
+  opacity: 1;
+  transition: none;
+  will-change: auto;
+}
+.pm-ws-doc-body.is-doc-out {
+  opacity: 0;
+  transition: opacity var(--pm-ws-doc-out-ms, 280ms) var(--pm-ws-doc-ease-out, cubic-bezier(0.4, 0, 0.2, 1));
+  pointer-events: none;
+}
+/* Enter: animation (not transition) so first mount and post-swap both ease from 0 */
+.pm-ws-doc-body.is-doc-in {
+  opacity: 1;
+  transition: none;
+  animation: pm-ws-doc-in var(--pm-ws-doc-in-ms, 420ms) var(--pm-ws-doc-ease-in, cubic-bezier(0.22, 1, 0.36, 1)) both;
+  pointer-events: none; /* until idle */
+}
+/* First load / meeting shell still use a gentle enter */
+.pm-ws-doc-surface.is-doc-swap,
+.pm-ws-loading.is-doc-in {
+  animation: pm-ws-doc-in var(--pm-ws-doc-in-ms, 420ms) var(--pm-ws-doc-ease-in, cubic-bezier(0.22, 1, 0.36, 1)) both;
 }
 @keyframes pm-ws-doc-in {
   from {
@@ -4751,22 +4823,34 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
     opacity: 1;
   }
 }
-.pm-ws-doc-body {
-  flex: 1 1 0;
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+/* Title follows the same phase as body */
+.pm-ws-pane-title {
+  transition: opacity var(--pm-ws-doc-out-ms, 280ms) var(--pm-ws-doc-ease-out, cubic-bezier(0.4, 0, 0.2, 1));
+}
+.pm-ws-pane-title.is-title-out {
+  opacity: 0;
+}
+.pm-ws-pane-title.is-title-in {
+  opacity: 1;
+  transition: opacity var(--pm-ws-doc-in-ms, 420ms) var(--pm-ws-doc-ease-in, cubic-bezier(0.22, 1, 0.36, 1));
 }
 @media (prefers-reduced-motion: reduce) {
   .pm-ws-pane-slot,
   .pm-ws-pane-slot.is-entering,
   .pm-ws-pane-slot.is-exiting,
-  .pm-ws-doc-body.is-doc-swap,
   .pm-ws-doc-surface.is-doc-swap,
+  .pm-ws-loading.is-doc-in,
   .pm-ws-card--rail,
   .pm-ws-card--rail-r {
     animation: none !important;
+    transition-duration: 1ms !important;
+  }
+  .pm-ws-doc-body,
+  .pm-ws-doc-body.is-doc-out,
+  .pm-ws-doc-body.is-doc-in,
+  .pm-ws-pane-title,
+  .pm-ws-pane-title.is-title-out,
+  .pm-ws-pane-title.is-title-in {
     transition-duration: 1ms !important;
   }
 }
@@ -4947,11 +5031,15 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: transparent;
   font-family: var(--pm-ff);
   position: relative;
+  /* Above .pm-ws-editor so absolute SoftMenus (Update / ⋮) paint over the doc */
+  z-index: 20;
   transition: background 300ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 /*
  * Pin title chrome height while pane width animates.
  * Without this, wrap/button swap during split makes the header jump.
+ * Title row may clip; toolbar row must stay overflow:visible so SoftMenus
+ * (absolute top-full) are not cut off.
  */
 .pm-ws-pane-h > div:first-child {
   box-sizing: border-box;
@@ -4964,7 +5052,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   box-sizing: border-box;
   min-height: 2rem;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 /* Hairline under title row — soft structure, not a hard grid rule */
 .pm-ws-pane-h::after {
