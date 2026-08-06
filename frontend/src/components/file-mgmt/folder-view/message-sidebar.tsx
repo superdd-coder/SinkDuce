@@ -138,7 +138,12 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
   const handleOpenForAdd = useCallback(() => {
     setEditingMsg(null)
     setDialogReadonly(false)
-    setDialogOpen(true)
+    setDialogOpen(false)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setDialogOpen(true)
+      })
+    })
   }, [])
 
   const handleOpenForView = useCallback(
@@ -202,9 +207,16 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
           /* fall through to plain message dialog */
         }
       }
+      // Enter path: set payload first, open=false, then open=true next frames
+      // so Base UI applies data-starting-style → silk fade-in (Note/Todo pattern).
       setEditingMsg(msg)
       setDialogReadonly(true)
-      setDialogOpen(true)
+      setDialogOpen(false)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setDialogOpen(true)
+        })
+      })
     },
     [collectionId, currentFolderMessages]
   )
@@ -222,6 +234,7 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
       // Keep message for exit anim (silk ~280ms) — same as Note / Todo
       dialogCloseTimerRef.current = setTimeout(() => {
         setEditingMsg(null)
+        setDialogReadonly(false)
         dialogCloseTimerRef.current = null
       }, DIALOG_CLOSE_MS)
     }
@@ -446,8 +459,8 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
         </ScrollArea>
 
       <MessageEditorDialog
-        // Key by message only — do not remount on close (keeps exit motion)
-        key={editingMsg?.message_id ?? "new"}
+        // Stable key — remount on message_id kills silk enter/exit
+        key="folder-message-editor"
         open={dialogOpen}
         onOpenChange={handleCloseDialog}
         title={editingMsg ? "Message" : "Add Message"}
@@ -463,11 +476,11 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
           setDialogReadonly(true)
         }}
         onNavigateToNode={(nodeId, chainId) => {
-          setDialogOpen(false)
-          setEditingMsg(null)
+          // Silk exit first — keep payload until animation ends
+          handleCloseDialog(false)
           window.setTimeout(() => {
             requestTimelineFocus(nodeId, chainId)
-          }, 280)
+          }, 320)
         }}
       />
 

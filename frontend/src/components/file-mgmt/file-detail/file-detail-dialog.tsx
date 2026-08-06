@@ -2829,6 +2829,7 @@ export function FileMgmtDetailDialog({
       <LogMessageDialog
         open={!!logMsgOpen}
         onOpenChange={(v) => {
+          // Clear immediately — LogMessageDialog.held keeps payload for exit silk
           if (!v) setLogMsgOpen(null)
         }}
         collectionId={collectionId}

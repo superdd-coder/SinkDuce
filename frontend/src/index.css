@@ -3818,12 +3818,15 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   box-shadow: none !important;
 }
 /*
- * Silk open/close — shared by todo create/edit AND Note workspace dialog.
+ * Silk open/close — shared by todo / Note / Message / File detail.
  * Parent must keep mounted while open→false (Base UI data-ending-style).
  *
- * Keep motion simple (opacity + scale only). Do NOT animate `translate` /
- * own centering — that broke Note open fade and made close feel odd.
- * Do NOT set Tailwind duration-0 on these nodes.
+ * Smooth exit rules (avoid “控件残留”):
+ * 1) Opacity + tiny scale only — NEVER filter:blur on the popup (re-rasterizes
+ *    children mid-fade → ghost icons/buttons).
+ * 2) isolation:isolate so chrome + nested cards fade as ONE layer.
+ * 3) Do NOT animate translate (centering is -translate-x/y on the shell).
+ * 4) Overlay fades opacity only; drop backdrop-filter on exit (blur lags opacity).
  */
 .pm-dialog.pm-dialog--silk[data-slot="dialog-content"],
 .pm-dialog--silk[data-slot="dialog-content"] {
@@ -3832,14 +3835,18 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   transform-origin: center center;
   opacity: 1;
   scale: 1;
-  filter: blur(0);
+  filter: none;
   animation: none !important;
-  /* Beat DialogContent duration-300 / animate-in utilities */
+  isolation: isolate;
+  /* Flatten children into this opacity group (reduces residual sublayers) */
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  /* Kill TW animate-in/out utilities if twMerge left any */
+  --tw-enter-opacity: initial;
+  --tw-exit-opacity: initial;
   transition:
     opacity var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease),
-    scale var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease),
-    filter var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease) !important;
-  will-change: opacity, scale;
+    scale var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease) !important;
 }
 .pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-starting-style],
 .pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-ending-style],
@@ -3848,8 +3855,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-dialog--silk[data-slot="dialog-content"][data-ending-style],
 .pm-dialog--silk[data-slot="dialog-content"][data-closed] {
   opacity: 0 !important;
-  scale: 0.97;
-  filter: blur(0.5px);
+  scale: 0.985;
+  filter: none !important;
 }
 /*
  * Silk backdrop — DialogContent overlayClassName="pm-dialog-overlay--silk"
@@ -3857,25 +3864,18 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
  * Drive visibility with data-open (not only starting/ending), so open/close
  * always interpolates opacity even if one of the transition-status attrs
  * is briefly missing. Matches popup silk clock (280ms).
- *
- * Pattern:
- *  - default / closed / starting / ending → opacity 0
- *  - data-open without starting/ending → opacity 1  (enter transition)
- *  - leave data-open → opacity 0                 (exit transition)
  */
 [data-slot="dialog-overlay"].pm-dialog-overlay--silk {
   --pm-dialog-silk-ms: 280ms;
   --pm-dialog-silk-ease: cubic-bezier(0.22, 1, 0.36, 1);
   animation: none !important;
-  /* Kill TW bg-black/15 + blur utilities — own the surface so opacity is the only dim */
-  background: rgba(18, 20, 16, 0.16) !important;
-  backdrop-filter: blur(3px) !important;
-  -webkit-backdrop-filter: blur(3px) !important;
+  /* Solid dim — no backdrop-filter (blur+opacity exit looks sticky / residual) */
+  background: rgba(18, 20, 16, 0.22) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   opacity: 0;
   transition:
     opacity var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease) !important;
-  will-change: opacity;
-  /* Base UI sets hidden when unmounted — don't fight display during ending */
   pointer-events: none;
 }
 /* Fully open (not mid enter/exit) */
@@ -3896,6 +3896,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 /* Fallback: any overlay next to a silk popup in the same portal root */
 [data-slot="dialog-portal"]:has(.pm-dialog--silk) [data-slot="dialog-overlay"] {
   animation: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1) !important;
 }
 [data-slot="dialog-portal"]:has(.pm-dialog--silk)
@@ -3913,6 +3915,15 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
     [data-ending-style]
   ) {
   opacity: 1;
+}
+/* During exit/enter: freeze interactive sub-motion (list focus, pane fade) */
+.pm-dialog--silk[data-ending-style] .pm-node-msg-focus,
+.pm-dialog--silk[data-starting-style] .pm-node-msg-focus,
+.pm-dialog--silk[data-closed] .pm-node-msg-focus,
+.pm-dialog--silk[data-ending-style] .pm-msg-pane-body,
+.pm-dialog--silk[data-starting-style] .pm-msg-pane-body,
+.pm-dialog--silk[data-closed] .pm-msg-pane-body {
+  transition: none !important;
 }
 /* Compact markdown field inside todo create (message-like, no slash) */
 .pm-todo-md-host {
@@ -6294,6 +6305,22 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   border-radius: inherit;
   background: #ffffff;
 }
+/*
+ * Update-file dialog — fill child under --main.
+ * Shell keeps overflow:visible (shadow); this node clips content to radius.
+ */
+.pm-update-main-stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+/* Version-note body: clip scroll only; side-card shell stays overflow:visible */
+.pm-update-side-body {
+  border-radius: 0 0 var(--pm-r, 16px) var(--pm-r, 16px);
+  min-height: 0;
+  background: transparent;
+}
 .pm-ws-card--main .pm-ws-main-head {
   border-radius: var(--pm-r-lg, 20px) var(--pm-r-lg, 20px) 0 0;
   background: #ffffff;
@@ -7780,17 +7807,32 @@ button.pm-ws-path-row {
   justify-content: flex-start !important;
   /* Title row; tight bottom so card sits closer under chrome */
   padding: 20px 20px 8px;
-  padding-right: calc(var(--pm-msg-stage-x) + 7rem); /* Save + X + card-aligned inset */
+  /* Default reserve Save+X (legacy). Prefer --title-only when actions live on card. */
+  padding-right: calc(var(--pm-msg-stage-x) + 7rem);
   box-sizing: border-box;
   background: transparent !important;
   border: none !important;
   gap: 0 !important;
   text-align: left;
 }
+/* Actions on message card — chrome only needs room for the close (X) control */
+.pm-msg-dialog-chrome--title-only {
+  padding-right: calc(var(--pm-msg-stage-x) + var(--pm-msg-action-h) + 8px);
+}
 .pm-msg-dialog-chrome [data-slot="dialog-title"] {
   text-align: left !important;
   margin: 0 !important;
   line-height: 1.3 !important;
+}
+/* Message card header — Edit/Save sit on the card (Version Update side-card language) */
+.pm-msg-dialog-card-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 14px 2px;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 /*
  * X: right edge flush with editor card right edge
@@ -7965,22 +8007,235 @@ button.pm-ws-path-row {
     transform: none !important;
   }
 }
-/* Tighter gap under title → floating editor card */
+/*
+ * Message dialog stage — beige canvas; nested white cards float with soft shadow.
+ * overflow:visible + pad ≥ shadow blur so box-shadow is not parent-clipped
+ * (same idea as .pm-ws-body). Scroll clips live inside each card body only.
+ */
 .pm-msg-dialog-stage {
-  padding: 2px var(--pm-msg-stage-x, 16px) 16px;
+  /* Shadow gutter: top was 2px (clipped); use ~12–14px for soft float */
+  padding: 12px var(--pm-msg-stage-x, 16px) 16px;
   box-sizing: border-box;
   background: transparent;
+  overflow: visible;
+  min-height: 0;
 }
+/* Upper dual pane — visible so left/right card shadows breathe */
+.pm-msg-dialog-upper,
+.pm-msg-dialog-main {
+  overflow: visible;
+  min-height: 0;
+}
+/*
+ * Float card shell: overflow visible so own/neighbor shadows paint.
+ * Inner scroll areas use .pm-msg-dialog-card-body / list overflow.
+ */
 .pm-msg-dialog-card {
   border-radius: var(--pm-r-lg, 20px);
   background: #ffffff;
-  box-shadow:
-    0 1px 2px rgba(18, 20, 16, 0.04),
-    0 8px 24px -6px rgba(18, 20, 16, 0.12),
-    0 16px 40px -12px rgba(18, 20, 16, 0.08);
+  box-shadow: var(--pm-shadow-sm);
   border: none;
-  overflow: hidden;
+  overflow: visible;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Clip only the scrollable body under chrome — keeps radius + shadow intact */
+.pm-msg-dialog-card > .pm-msg-dialog-card-h,
+.pm-msg-dialog-card > .pm-ws-side-h {
+  flex-shrink: 0;
+  border-radius: var(--pm-r-lg, 20px) var(--pm-r-lg, 20px) 0 0;
+}
+.pm-msg-dialog-card > .pm-msg-pane-body,
+.pm-msg-dialog-card > .pm-msg-dialog-card-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 0 0 var(--pm-r-lg, 20px) var(--pm-r-lg, 20px);
+  background: #ffffff;
+}
+/*
+ * Node message dialog · right rail
+ * Reuses File detail side cards (pm-ws-side / pm-ws-side-card) + Files
+ * Messages list (pm-msg-card). Only dialog-specific flex/title extras here.
+ */
+.pm-msg-dialog-stage .pm-node-rail.pm-ws-side {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  /* Shadow gutter already on .pm-ws-side (pad 3 / margin -3); do not clip */
+  overflow: visible;
+}
+/* Messages stack card: shell visible for shadow; list host clips scroll */
+.pm-node-msgs-card {
+  overflow: visible !important;
+  min-height: 0;
+}
+.pm-node-msgs-card > .pm-ws-side-h {
+  flex-shrink: 0;
+}
+.pm-node-msgs-card > .pm-node-msg-list,
+.pm-node-msgs-card > .pm-ws-side-pad {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: 0 0 var(--pm-r, 16px) var(--pm-r, 16px);
+  background: #ffffff;
+}
+/* Serif identity — normal case, not DialogTitle uppercase chrome */
+/* Title left · tags right (top-right stack, red-box placement) */
+.pm-node-id-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 12px;
+  min-width: 0;
+}
+.pm-node-id-main {
+  min-width: 0;
+}
+.pm-node-id-title {
+  margin: 0;
+  font: 300 16px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-weight: 300;
+  letter-spacing: -0.015em;
+  text-transform: none;
+  color: var(--pm-ink, #121410);
+  word-break: break-word;
+}
+/* Vertical tag stack — group then branch, right-aligned */
+.pm-node-tag-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  max-width: 42%;
+  padding-top: 1px; /* optical align with serif title cap */
+}
+.pm-node-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: var(--pm-t-meta);
+  color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pm-node-tag.is-branch {
+  /* Same language as group; branch gets a glyph, not a second accent color */
+  background: rgba(18, 20, 16, 0.05);
+  color: var(--pm-muted, #6a706a);
+}
+/* List excerpt under pm-msg-card meta row — body role, 2-line clamp */
+.pm-node-msg-excerpt {
+  margin: 0;
+  font: var(--pm-t-body);
+  color: var(--pm-text, #2a2e2a);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/*
+ * Node message list — sliding focus wash (same as .pm-tabs-indicator).
+ *
+ * Layering (important for hover → focus feel):
+ *   row hover wash  z=0  (stays while :hover — does NOT snap off on click)
+ *   focus pill      z=1  (slides over and covers hover; green-soft is translucent)
+ *   row text        z=2  (always readable above the pill)
+ *
+ * Animate top/height only after is-focus-tween (no first-frame jump from top:0).
+ */
+.pm-node-msg-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 10px 14px;
+  box-sizing: border-box;
+  overscroll-behavior: contain;
+}
+.pm-node-msg-focus {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  /* Above row hover bg, below text (see .pm-node-msg-row > *) */
+  z-index: 1;
+  border-radius: var(--pm-r-sm, 8px);
+  /* Translucent — text under the pill stays legible */
+  background: var(--pm-green-soft, rgba(26, 94, 61, 0.1));
+  pointer-events: none;
+  opacity: 0;
+  transition: none;
+}
+.pm-node-msg-focus.is-ready {
+  opacity: 1;
+}
+.pm-node-msg-list.is-focus-tween .pm-node-msg-focus.is-ready {
+  transition:
+    top 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    height 320ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-node-msg-list .pm-msg-card.pm-node-msg-row {
+  position: relative;
+  z-index: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  /* Hover wash lives on ::before so focus pill can paint over it */
+}
+.pm-node-msg-list .pm-msg-card.pm-node-msg-row::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: transparent;
+  pointer-events: none;
+  transition: background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Keep hover wash while :hover — including after click (is-focused).
+   Focus pill slides on top and covers it; no sudden hover snuff-out. */
+.pm-node-msg-list .pm-msg-card.pm-node-msg-row:hover::before {
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+}
+/* Content above focus pill */
+.pm-node-msg-list .pm-msg-card.pm-node-msg-row > * {
+  position: relative;
+  z-index: 2;
+}
+
+/*
+ * Message body sequential fade when switching list items.
+ * Out 140ms / in 180ms (ENGINEERING panel switch language).
+ */
+.pm-msg-pane-body {
+  opacity: 1;
+  transition: opacity 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-msg-pane-body.is-fading {
+  opacity: 0;
+  transition-duration: 140ms;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-node-msg-focus,
+  .pm-msg-pane-body {
+    transition-duration: 1ms !important;
+  }
 }
 /* Message editor body inside silk dialogs */
 .pm-msg-editor-host {

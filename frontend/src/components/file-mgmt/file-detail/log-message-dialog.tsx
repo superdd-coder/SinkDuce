@@ -73,7 +73,7 @@ function versionUpdateBody(body: string | null | undefined): string {
 
 const silkShell = cn(
   "pm-dialog pm-dialog--silk",
-  "animate-none data-open:animate-none data-closed:animate-none"
+  "!animate-none data-open:!animate-none data-closed:!animate-none"
 )
 
 const proseBodyClass =
@@ -375,34 +375,6 @@ export function LogMessageDialog({
     </div>
   )
 
-  /** Normal (single-column) message dialog chrome — Save | Edit only, no slide. */
-  const chromeActions = editing ? (
-    <button
-      type="button"
-      className="pm-btn-pri pm-btn-xs"
-      disabled={saving || !content.trim()}
-      onClick={() => void handleSave()}
-    >
-      {saving ? (
-        <>
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Saving…
-        </>
-      ) : (
-        "Save"
-      )}
-    </button>
-  ) : (
-    <button
-      type="button"
-      className="pm-btn-ghost pm-btn-xs gap-1"
-      onClick={() => setEditing(true)}
-    >
-      <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
-      Edit
-    </button>
-  )
-
   /** Preview body — click to enter edit (Version Update notes are always editable). */
   const messageEditorOrBody = (minHeight: string, allowEdit: boolean) =>
     editing ? (
@@ -613,7 +585,8 @@ export function LogMessageDialog({
           "h-[min(80vh,700px)] flex flex-col gap-0 p-0 overflow-hidden"
         )}
       >
-        <DialogHeader className="pm-msg-dialog-chrome shrink-0">
+        {/* Title only — Edit/Save live on the message card (not dialog chrome) */}
+        <DialogHeader className="pm-msg-dialog-chrome pm-msg-dialog-chrome--title-only shrink-0">
           <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
             <span className="shrink-0">Message</span>
             {authorLabel && (
@@ -630,12 +603,23 @@ export function LogMessageDialog({
               {formatTime(activeMessage.created_at)}
             </span>
           </DialogTitle>
-          {canEdit && (
-            <div className="pm-msg-dialog-actions">{chromeActions}</div>
-          )}
         </DialogHeader>
         <div className="pm-msg-dialog-stage flex-1 min-h-0 overflow-hidden flex flex-col">
           <div className="pm-msg-dialog-card flex-1 min-h-0 flex flex-col overflow-hidden">
+            {canEdit && (
+              <div className="pm-msg-dialog-card-h">
+                <span
+                  className="pm-label"
+                  style={{
+                    textTransform: "none",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  Message
+                </span>
+                <div className="ml-auto shrink-0">{messageCardActions}</div>
+              </div>
+            )}
             {messageEditorOrBody("280px", canEdit)}
           </div>
         </div>

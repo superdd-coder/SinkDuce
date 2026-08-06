@@ -693,7 +693,14 @@ export function MessageStreamSidebar({
               variant="ghost"
               size="icon-xs"
               title={addHint}
-              onClick={() => setAddDialogOpen(true)}
+              onClick={() => {
+                setAddDialogOpen(false)
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    setAddDialogOpen(true)
+                  })
+                })
+              }}
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
@@ -741,11 +748,13 @@ export function MessageStreamSidebar({
         </ScrollArea>
       </div>
 
-      {/* Add-only dialog (new message has no detail to show) */}
+      {/* Add-only dialog — silk enter/exit via stable mount + open flip */}
       <MessageEditorDialog
-        key="new-stream-msg"
+        key="stream-message-editor"
         open={addDialogOpen}
-        onOpenChange={setAddDialogOpen}
+        onOpenChange={(next) => {
+          setAddDialogOpen(next)
+        }}
         title={addHint}
         initialContent=""
         onSave={handleAdd}

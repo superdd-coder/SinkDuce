@@ -319,24 +319,6 @@ export function NodeDetailSidebar({
     [collectionId, detail, refreshMessages]
   )
 
-  const handleOpenForAdd = useCallback(() => {
-    setEditingMsg(null)
-    setMsgDialogReadonly(false)
-    setMsgDialogOpen(true)
-  }, [])
-
-  const handleOpenForView = useCallback((msg: Message) => {
-    setEditingMsg(msg)
-    setMsgDialogReadonly(true)
-    setMsgDialogOpen(true)
-  }, [])
-
-  const handleStartEdit = useCallback((msg: Message) => {
-    setEditingMsg(msg)
-    setMsgDialogReadonly(false)
-    setMsgDialogOpen(true)
-  }, [])
-
   const msgDialogCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
@@ -349,12 +331,47 @@ export function NodeDetailSidebar({
     }
     setMsgDialogOpen(next)
     if (!next) {
+      // Keep payload for silk exit (~280ms)
       msgDialogCloseTimerRef.current = setTimeout(() => {
         setEditingMsg(null)
+        setMsgDialogReadonly(false)
         msgDialogCloseTimerRef.current = null
       }, MSG_DIALOG_CLOSE_MS)
     }
   }, [])
+
+  /** Open message dialog with silk enter (closed → open next frames) */
+  const openMsgDialog = useCallback(
+    (opts: { msg?: Message | null; readonly: boolean }) => {
+      setEditingMsg(opts.msg ?? null)
+      setMsgDialogReadonly(opts.readonly)
+      setMsgDialogOpen(false)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setMsgDialogOpen(true)
+        })
+      })
+    },
+    []
+  )
+
+  const handleOpenForAdd = useCallback(() => {
+    openMsgDialog({ msg: null, readonly: false })
+  }, [openMsgDialog])
+
+  const handleOpenForView = useCallback(
+    (msg: Message) => {
+      openMsgDialog({ msg, readonly: true })
+    },
+    [openMsgDialog]
+  )
+
+  const handleStartEdit = useCallback(
+    (msg: Message) => {
+      openMsgDialog({ msg, readonly: false })
+    },
+    [openMsgDialog]
+  )
 
   if (!nodeId) return null
 
@@ -689,7 +706,7 @@ export function NodeDetailSidebar({
             </div>
 
             <MessageEditorDialog
-              key={editingMsg?.message_id || "new"}
+              key="node-message-editor"
               open={msgDialogOpen}
               onOpenChange={handleCloseMsgDialog}
               title={
