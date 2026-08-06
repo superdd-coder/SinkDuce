@@ -33,15 +33,20 @@ export function NoteSidebarRight({
 
   const [blockIndices, setBlockIndices] = useState<Map<string, number>>(new Map())
 
+  /**
+   * Distill In: open source note/meeting beside (parent handles split / other pane).
+   * Multi-block sources still cycle highlight on the *current* note's distill blocks.
+   */
   const handleSourceClick = useCallback(
     (sourceId: string, blockIds: string[]) => {
+      onNavigateToNote(sourceId)
       if (blockIds.length === 0) return
       const currentIndex = blockIndices.get(sourceId) || 0
       const nextIndex = (currentIndex + 1) % blockIds.length
       setBlockIndices((prev) => new Map(prev).set(sourceId, nextIndex))
       onSelectBlock(blockIds[nextIndex])
     },
-    [blockIndices, onSelectBlock]
+    [blockIndices, onSelectBlock, onNavigateToNote]
   )
 
   if (!hasReferences && !hasInjectedInto) return null

@@ -846,10 +846,367 @@ input[type="checkbox"] {
 }
 .tiptap-readonly [data-type="distill-block"] button,
 .tiptap-readonly [data-type="distill-block"] [data-action="expand"],
+.tiptap-readonly [data-type="distill-block"] .distill-block__pill,
+.tiptap-readonly [data-type="distill-block"] .distill-block__source,
+.tiptap-readonly [data-type="distill-block"] .distill-block__delete,
 .tiptap-readonly [data-type="distill-block"] [class*="expand"],
 .tiptap-readonly [data-type="distill-block"] [class*="show-more"] {
   pointer-events: auto !important;
   user-select: auto !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Distill block — Premium white card (D expand: fade + pill)
+   Spec: docs/superpowers/specs/2026-08-06-distill-block-premium-redesign.md
+   ═══════════════════════════════════════════════════════════════════ */
+.distill-block {
+  --distill-collapsed-h: 200px;
+  --distill-expanded-h: min(50vh, 28rem);
+  position: relative;
+  margin: 14px 0;
+  background: #ffffff;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 7%, transparent);
+  box-shadow:
+    0 1px 2px rgba(18, 20, 16, 0.04),
+    0 8px 22px rgba(18, 20, 16, 0.055);
+  overflow: hidden;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+}
+
+.distill-block__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 14px 8px;
+  background: transparent;
+}
+
+.distill-block__grip {
+  flex-shrink: 0;
+  color: var(--pm-faint, #9a9c96);
+  font-size: 13px;
+  letter-spacing: -1px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+}
+.distill-block__grip.is-disabled,
+.distill-block.is-loading .distill-block__grip {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.distill-block__source {
+  flex: 1 1 0%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pm-green, #1a5e3d);
+  cursor: pointer;
+  line-height: 1.3;
+}
+.distill-block__source:hover {
+  color: var(--pm-green-deep, #0f4a2d);
+}
+.distill-block__source:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 40%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Two-step delete: × → expands to "Delete" → second click removes */
+.distill-block__delete {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 0;
+  padding: 2px 6px;
+  min-height: 22px;
+  max-width: 22px;
+  border: none;
+  background: transparent;
+  color: var(--pm-faint, #9a9c96);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 999px;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    padding 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    gap 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    background 160ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.distill-block__delete-x {
+  flex-shrink: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+.distill-block__delete-label {
+  display: inline-block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1;
+  transition:
+    max-width 220ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1)),
+    opacity 160ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.distill-block__delete:hover {
+  color: var(--pm-danger, #c43c3c);
+  background: color-mix(in srgb, var(--pm-danger, #c43c3c) 8%, transparent);
+}
+.distill-block__delete.is-confirm {
+  max-width: 5.5rem;
+  gap: 4px;
+  padding: 3px 8px 3px 6px;
+  color: #ffffff;
+  background: var(--pm-danger, #c43c3c);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--pm-danger, #c43c3c) 35%, transparent);
+}
+.distill-block__delete.is-confirm:hover {
+  color: #ffffff;
+  background: color-mix(in srgb, var(--pm-danger, #c43c3c) 88%, #000);
+}
+.distill-block__delete.is-confirm .distill-block__delete-label {
+  max-width: 4rem;
+  opacity: 1;
+}
+.distill-block__delete:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-ink, #121410) 20%, transparent);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .distill-block__delete,
+  .distill-block__delete-label {
+    transition: none;
+  }
+}
+
+/* Scroll / clip region — height animates via max-height (JS sets px during toggle) */
+.distill-block__scroll {
+  position: relative;
+  max-height: var(--distill-collapsed-h);
+  overflow: hidden;
+  transition: max-height 380ms var(--pm-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  will-change: max-height;
+}
+.distill-block.is-expanded.is-overflow .distill-block__scroll {
+  max-height: var(--distill-expanded-h);
+}
+/* Only allow internal scroll after expand settles (not mid-animation) */
+.distill-block.is-expanded.is-overflow:not(.is-animating) .distill-block__scroll {
+  overflow-y: auto;
+}
+.distill-block.is-animating .distill-block__scroll {
+  overflow: hidden !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .distill-block__scroll {
+    transition: none;
+    will-change: auto;
+  }
+}
+
+.distill-block__body {
+  padding: 4px 16px 14px;
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--pm-text, #2c2e2a);
+}
+/* Tighten prose rhythm inside the card */
+.distill-block__body.prose {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--pm-text, #2c2e2a);
+}
+.distill-block__body.prose h1,
+.distill-block__body.prose h2,
+.distill-block__body.prose h3,
+.distill-block__body.prose h4 {
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-weight: 500;
+  color: var(--pm-ink, #121410);
+  letter-spacing: -0.01em;
+}
+.distill-block__body.prose h1 { font-size: 1.25em; margin: 0.85em 0 0.4em; }
+.distill-block__body.prose h2 { font-size: 1.12em; margin: 0.9em 0 0.35em; }
+.distill-block__body.prose h3 { font-size: 1.05em; margin: 0.75em 0 0.3em; }
+.distill-block__body.prose p {
+  margin: 0.45em 0;
+}
+.distill-block__body.prose ul,
+.distill-block__body.prose ol {
+  margin: 0.4em 0 0.55em;
+  padding-left: 1.25em;
+}
+.distill-block__body.prose li {
+  margin: 0.2em 0;
+}
+.distill-block__body.prose li > p {
+  margin: 0.15em 0;
+}
+.distill-block__body.prose code {
+  font-size: 0.9em;
+}
+.distill-block__body.prose pre {
+  margin: 0.55em 0;
+  font-size: 0.85em;
+}
+.distill-block__body.prose blockquote {
+  margin: 0.55em 0;
+}
+.distill-block__body > *:first-child {
+  margin-top: 0 !important;
+}
+.distill-block__body > *:last-child {
+  margin-bottom: 0 !important;
+}
+/* Room under last lines so fade doesn't hide too much when collapsed */
+.distill-block.is-overflow:not(.is-expanded) .distill-block__body {
+  padding-bottom: 44px;
+}
+.distill-block.is-expanded.is-overflow .distill-block__body {
+  padding-bottom: 52px;
+}
+
+.distill-block__loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 12px;
+  color: var(--pm-muted, #6a6c66);
+  padding: 2px 0 4px;
+}
+
+.distill-block__spinner {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid color-mix(in srgb, var(--pm-ink, #121410) 12%, transparent);
+  border-top-color: var(--pm-green, #1a5e3d);
+  border-radius: 50%;
+  animation: distill-spin 0.8s linear infinite;
+}
+@keyframes distill-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .distill-block__spinner {
+    animation: none;
+    border-top-color: color-mix(in srgb, var(--pm-ink, #121410) 25%, transparent);
+    opacity: 0.7;
+  }
+}
+
+/*
+ * D pattern: white fade + soft pill.
+ * Collapsed: absolute over clipped body.
+ * Expanded: sticky at bottom of internal scroll (always while expanded).
+ */
+.distill-block__fade {
+  display: none;
+  pointer-events: none;
+  z-index: 1;
+}
+.distill-block.is-overflow:not(.is-loading) .distill-block__fade {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 10px;
+}
+
+/* Collapsed (and mid-animation): absolute overlay at bottom of clip */
+.distill-block.is-overflow:not(.is-expanded) .distill-block__fade,
+.distill-block.is-animating.is-overflow .distill-block__fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 56px;
+  margin-top: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.92) 55%,
+    #ffffff 100%
+  );
+}
+
+/* Expanded settled: sticky fade bar inside scrollport */
+.distill-block.is-expanded.is-overflow:not(.is-animating) .distill-block__fade {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  margin-top: -56px;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.92) 55%,
+    #ffffff 100%
+  );
+}
+
+.distill-block__pill {
+  pointer-events: auto;
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(18, 20, 16, 0.06);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pm-green, #1a5e3d);
+  cursor: pointer;
+  line-height: 1.3;
+  white-space: nowrap;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.distill-block__pill:hover {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 5%, #ffffff);
+  box-shadow: 0 2px 8px rgba(18, 20, 16, 0.08);
+}
+.distill-block__pill:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-green, #1a5e3d) 40%, transparent);
+  outline-offset: 2px;
+}
+.distill-block.is-expanded .distill-block__pill {
+  box-shadow: 0 2px 8px rgba(18, 20, 16, 0.08);
 }
 
 /* ============================================================
@@ -3847,7 +4204,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px 8px;
+  padding: 12px 18px 10px;
   flex-shrink: 0;
   border-bottom: none;
   background: transparent;
@@ -4400,8 +4757,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-ws-pane-h::after {
   content: "";
   position: absolute;
-  left: 12px;
-  right: 12px;
+  left: 16px;
+  right: 16px;
   bottom: 0;
   height: 1px;
   background: color-mix(in srgb, var(--pm-ink) 5%, transparent);
@@ -4435,6 +4792,37 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-ws-pane-h.is-focus .pm-ws-pane-title {
   color: var(--pm-ink);
+}
+/*
+ * Title + rename: pencil sits at the end of the title text (not far right).
+ * Edit affordance only on hover / keyboard focus-within.
+ */
+.pm-ws-title-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+.pm-ws-title-cluster .pm-ws-pane-title {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+.pm-ws-title-cluster .pm-ws-title-edit {
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-ws-title-cluster:hover .pm-ws-title-edit,
+.pm-ws-title-cluster:focus-within .pm-ws-title-edit {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-ws-title-cluster .pm-ws-title-edit {
+    transition: none;
+  }
 }
 /* Toolbar action (Delete / Export / Ingest …) */
 .pm-ws-action {
@@ -4528,6 +4916,379 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   /* match float beige — not a white paper island */
   background: transparent;
 }
+/* ═══════════════════════════════════════════════════════════════════
+   Premium format toolbar (R2 whisper strip) + marker highlight
+   ═══════════════════════════════════════════════════════════════════ */
+/* Hidden while reading — shown only via .is-editing (focus-managed in JS) */
+.pm-fmt-toolbar {
+  /* Tight under pane chrome; small gap before prose */
+  padding: 0 12px 2px 14px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Note workspace: toolbar sits above .pm-ws-editor — snug to first line */
+.pm-ws-card--pane .pm-fmt-toolbar {
+  padding-bottom: 0;
+}
+.pm-fmt-toolbar.is-editing {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pm-fmt-inner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  row-gap: 4px;
+  min-height: 28px;
+}
+.pm-fmt-grp {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.pm-fmt-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  margin: 0 7px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 12%, transparent);
+}
+.pm-fmt-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--pm-muted, #6a706a);
+  cursor: pointer;
+  transition:
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-fmt-btn:hover {
+  color: var(--pm-ink, #121410);
+}
+.pm-fmt-btn.is-on,
+.pm-fmt-btn[data-active] {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 6%, transparent);
+}
+.pm-fmt-btn:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+.pm-fmt-btn svg {
+  stroke: currentColor;
+}
+
+/* Highlight swatches (half-fill) */
+.pm-fmt-hl {
+  width: 14px;
+  height: 14px;
+  margin: 0 2px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  flex-shrink: 0;
+  background: transparent;
+}
+/* Empty / none — clear highlight */
+.pm-fmt-hl.is-none {
+  background:
+    linear-gradient(
+      135deg,
+      transparent calc(50% - 0.5px),
+      color-mix(in srgb, var(--pm-faint, #969c96) 55%, transparent) calc(50% - 0.5px),
+      color-mix(in srgb, var(--pm-faint, #969c96) 55%, transparent) calc(50% + 0.5px),
+      transparent calc(50% + 0.5px)
+    ),
+    #fff !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 14%, transparent);
+}
+.pm-fmt-hl.is-on {
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 0 0 2.5px color-mix(in srgb, var(--pm-green, #1a5e3d) 38%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+}
+
+/* Text color A + bar (toolbar + compact trigger) */
+.pm-fmt-tc {
+  width: 20px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5px;
+  cursor: pointer;
+  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-fmt-tc-a {
+  font-family: var(--pm-ff, system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+.pm-fmt-tc-bar {
+  width: 9px;
+  height: 1.5px;
+  border-radius: 1px;
+}
+.pm-fmt-tc.is-on {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 5%, transparent);
+}
+.pm-fmt-tc:hover .pm-fmt-tc-a {
+  opacity: 0.9;
+}
+
+.pm-fmt-more {
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px dashed color-mix(in srgb, var(--pm-ink, #121410) 16%, transparent);
+  background: transparent;
+  color: var(--pm-faint, #969c96);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pm-fmt-more:hover,
+.pm-fmt-more.is-on {
+  color: var(--pm-green, #1a5e3d);
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 35%, transparent);
+}
+/* Color SoftMenus — single row; even jelly rim (no top-heavy inset layers) */
+.pm-fmt-palette {
+  min-width: 0 !important;
+  width: max-content;
+  padding: 7px 9px !important;
+}
+.pm-fmt-palette-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+}
+.pm-fmt-palette-row .pm-fmt-hl {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  border-radius: 3px;
+  flex-shrink: 0;
+  /* Symmetric soft ring — avoid stacked top/bottom inset “layers” */
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, #fff 88%, transparent),
+    0 0 0 2.5px color-mix(in srgb, var(--pm-ink, #121410) 9%, transparent);
+}
+.pm-fmt-palette-dot {
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  /* Even jelly: white halo + soft ink ring, same all around */
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, #fff 90%, transparent),
+    0 0 0 2.5px color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+  transition:
+    transform 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-fmt-palette-dot:hover {
+  transform: scale(1.06);
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 0 0 2.5px color-mix(in srgb, var(--pm-ink, #121410) 12%, transparent);
+}
+.pm-fmt-palette-dot.is-on {
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 36%, transparent);
+}
+.pm-fmt-palette-row .pm-fmt-hl.is-on {
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 0 0 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 36%, transparent);
+}
+.pm-fmt-palette-row .pm-fmt-hl.is-none {
+  width: 15px;
+  height: 15px;
+  background:
+    linear-gradient(
+      135deg,
+      transparent calc(50% - 0.4px),
+      color-mix(in srgb, var(--pm-faint, #969c96) 45%, transparent) calc(50% - 0.4px),
+      color-mix(in srgb, var(--pm-faint, #969c96) 45%, transparent) calc(50% + 0.4px),
+      transparent calc(50% + 0.4px)
+    ),
+    #fff !important;
+  box-shadow:
+    0 0 0 1.5px #fff,
+    0 0 0 2.5px color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent);
+}
+
+/* Heading menu — Geist chrome only (no document serif in SoftMenu) */
+.pm-fmt-hd-menu {
+  padding: 4px !important;
+  min-width: 10.5rem;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+}
+.pm-fmt-hd-item {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  width: 100%;
+  padding: 8px 10px !important;
+  border-radius: calc(var(--pm-r-sm, 8px) - 2px) !important;
+  font-family: inherit !important;
+}
+.pm-fmt-hd-item-label {
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.01em;
+  color: inherit;
+  line-height: 1.3;
+}
+/* Subtle size cue in the same UI face — not prose/serif */
+.pm-fmt-hd-item-label.is-h1 {
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.01em;
+}
+.pm-fmt-hd-item-label.is-h2 {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+}
+.pm-fmt-hd-item-label.is-h3 {
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+}
+.pm-fmt-hd-item-tag {
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font: var(--pm-t-label, 400 11px/1.3 var(--pm-ff)) !important;
+  font-size: 10px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase;
+  color: var(--pm-faint, #969c96);
+  flex-shrink: 0;
+}
+.pm-fmt-hd-item.is-on .pm-fmt-hd-item-tag,
+.pm-menu-item.is-on .pm-fmt-hd-item-tag {
+  color: color-mix(in srgb, var(--pm-green, #1a5e3d) 65%, var(--pm-faint));
+}
+
+/* Heading trigger — light meta type */
+.pm-fmt-hd {
+  height: 24px;
+  padding: 0 5px 0 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--pm-ff, system-ui, sans-serif);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--pm-muted, #6a706a);
+  cursor: pointer;
+}
+.pm-fmt-hd:hover {
+  color: var(--pm-ink, #121410);
+}
+.pm-fmt-hd.is-on {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 5%, transparent);
+}
+.pm-fmt-hd-chev {
+  font-size: 8px;
+  opacity: 0.45;
+  line-height: 1;
+}
+
+/* Compact color triggers (narrow toolbar) */
+.pm-fmt-compact {
+  height: 26px;
+  padding: 0 5px 0 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  color: var(--pm-muted, #6a706a);
+}
+.pm-fmt-compact:hover,
+.pm-fmt-compact.is-on {
+  color: var(--pm-green, #1a5e3d);
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 5%, transparent);
+}
+.pm-fmt-compact .pm-fmt-hl {
+  margin: 0;
+  pointer-events: none;
+}
+.pm-fmt-compact .pm-fmt-tc {
+  pointer-events: none;
+}
+.pm-fmt-compact-chev {
+  font-size: 8px;
+  opacity: 0.45;
+  line-height: 1;
+}
+
+/* Marker highlight — only lower half of glyphs */
+.ProseMirror mark.pm-mark-hl,
+.tiptap-editor mark.pm-mark-hl,
+.ProseMirror mark[data-color],
+.tiptap-editor mark[style*="background"] {
+  color: inherit !important;
+  border-radius: 0.05em;
+  padding: 0 0.04em;
+  background-color: transparent !important;
+  background-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 55%,
+    color-mix(in srgb, var(--pm-hl, #e8d48b) 88%, transparent) 55%,
+    color-mix(in srgb, var(--pm-hl, #e8d48b) 88%, transparent) 100%
+  ) !important;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-fmt-toolbar {
+    transition: none;
+  }
+}
+
 /* Long reading — Source Serif prose (overrides Dialog text-sm + editor defaults) */
 .pm-ws-editor .ProseMirror,
 .pm-ws-editor [data-slot="editor"],

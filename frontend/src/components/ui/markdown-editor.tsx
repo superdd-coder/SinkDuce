@@ -33,6 +33,11 @@ interface MarkdownEditorProps {
   stickyToolbarOffset?: number
   /** Extra toolbar actions rendered at the right side. */
   toolbarActions?: ReactNode
+  /**
+   * Remove default EditorContent padding (p-4).
+   * Note pane uses outer px/py so toolbar can sit tight above prose.
+   */
+  flush?: boolean
 }
 
 // ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
@@ -54,6 +59,7 @@ function TyporaEditor({
   showToolbar,
   stickyToolbarOffset,
   toolbarActions,
+  flush,
 }: Omit<MarkdownEditorProps, "variant">) {
   return (
     <TiptapEditor
@@ -72,6 +78,7 @@ function TyporaEditor({
       showToolbar={showToolbar}
       stickyToolbarOffset={stickyToolbarOffset}
       toolbarActions={toolbarActions}
+      flush={flush}
     />
   )
 }

@@ -238,6 +238,65 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     [setFocusedDoc]
   )
 
+  /** Soft enter animation for a newly added pane id (keep focus on source). */
+  const beginEnterMotion = useCallback((id: string) => {
+    enteringPaneIdRef.current = id
+    setEnteringPaneId(id)
+    setEnteringPrepId(id)
+    if (enterRafRef.current != null) cancelAnimationFrame(enterRafRef.current)
+    if (enterDoneTimerRef.current) clearTimeout(enterDoneTimerRef.current)
+    /*
+     * Frame 0: group is-entering + is-prep (collapsed, no transition)
+     * Frame 1: drop prep → transitions armed
+     * Frame 2: drop entering → group flex-grows; lock for full motion ms
+     */
+    enterRafRef.current = requestAnimationFrame(() => {
+      setEnteringPrepId(null)
+      enterRafRef.current = requestAnimationFrame(() => {
+        setEnteringPaneId(null)
+        enterRafRef.current = null
+        enterDoneTimerRef.current = setTimeout(() => {
+          if (enteringPaneIdRef.current === id) {
+            enteringPaneIdRef.current = null
+          }
+          enterDoneTimerRef.current = null
+        }, PANE_MOTION_MS)
+      })
+    })
+  }, [])
+
+  /**
+   * Open a document in the *other* pane without stealing focus.
+   * - Dual pane: load into non-focused pane
+   * - Single pane: soft-split and put doc in the new pane (rail stays on source)
+   */
+  const openDocBeside = useCallback(
+    (doc: PaneDoc) => {
+      setPanes((prev) => {
+        if (prev.length === 0) return prev
+
+        const fid =
+          focusedPaneId && prev.some((p) => p.id === focusedPaneId)
+            ? focusedPaneId
+            : prev[0].id
+
+        // Already dual — update the other pane only
+        if (prev.length >= 2) {
+          return prev.map((p) => (p.id === fid ? p : { ...p, doc }))
+        }
+
+        // Single — split; new pane gets the reference (do NOT focus it)
+        if (enteringPaneIdRef.current || exitingPaneIdRef.current) {
+          return prev
+        }
+        const id = newPaneId()
+        beginEnterMotion(id)
+        return [...prev, { id, doc }]
+      })
+    },
+    [focusedPaneId, beginEnterMotion]
+  )
+
   const addPane = useCallback(() => {
     // Ref lock — ignore double Split while animating
     if (enteringPaneIdRef.current || exitingPaneIdRef.current) {
@@ -253,33 +312,10 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
         prev.find((p) => p.id === focusedPaneId) ?? prev[0] ?? null
       const seed = source?.doc ?? { kind: "note" as const, noteId }
       const id = newPaneId()
-      // Do NOT steal focus — rail must stay on the source window
-      enteringPaneIdRef.current = id
-      setEnteringPaneId(id)
-      setEnteringPrepId(id)
-      if (enterRafRef.current != null) cancelAnimationFrame(enterRafRef.current)
-      if (enterDoneTimerRef.current) clearTimeout(enterDoneTimerRef.current)
-      /*
-       * Frame 0: group is-entering + is-prep (collapsed, no transition)
-       * Frame 1: drop prep → transitions armed
-       * Frame 2: drop entering → group flex-grows; lock for full motion ms
-       */
-      enterRafRef.current = requestAnimationFrame(() => {
-        setEnteringPrepId(null)
-        enterRafRef.current = requestAnimationFrame(() => {
-          setEnteringPaneId(null)
-          enterRafRef.current = null
-          enterDoneTimerRef.current = setTimeout(() => {
-            if (enteringPaneIdRef.current === id) {
-              enteringPaneIdRef.current = null
-            }
-            enterDoneTimerRef.current = null
-          }, PANE_MOTION_MS)
-        })
-      })
+      beginEnterMotion(id)
       return [...prev, { id, doc: seed }]
     })
-  }, [noteId, focusedPaneId])
+  }, [noteId, focusedPaneId, beginEnterMotion])
 
   const closePane = useCallback((paneId: string) => {
     // Synchronous lock — two quick X clicks must not remove both panes
@@ -313,6 +349,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
     })
   }, [])
 
+  /** In-editor distill source click — replace focused pane (legacy). */
   const navigateSource = useCallback(
     (sourceId: string) => {
       const parsed = parseMeetingDistillSource(sourceId)
@@ -323,6 +360,24 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       openNoteInFocused(sourceId)
     },
     [openMeetingTab, openNoteInFocused]
+  )
+
+  /**
+   * Distill In/Out rail click: open reference beside current view, never steal focus.
+   */
+  const openReferenceBeside = useCallback(
+    (sourceId: string) => {
+      const parsed = parseMeetingDistillSource(sourceId)
+      const doc: PaneDoc = parsed
+        ? {
+            kind: "meeting",
+            meetingId: parsed.meetingId,
+            tabId: parsed.tabId || "tab_general",
+          }
+        : { kind: "note", noteId: sourceId }
+      openDocBeside(doc)
+    },
+    [openDocBeside]
   )
 
   const handleCreateNote = useCallback(async () => {
@@ -665,7 +720,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                             showDistillRail ? activeBlockId : null
                           }
                           onSelectBlock={handleSelectBlock}
-                          onNavigateToNote={navigateSource}
+                          onNavigateToNote={openReferenceBeside}
                         />
                       </aside>
                     )}

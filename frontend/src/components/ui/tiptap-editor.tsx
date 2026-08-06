@@ -2,6 +2,11 @@ import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import remarkBreaks from "remark-breaks"
+import { unified } from "unified"
+import remarkParse from "remark-parse"
+import remarkRehype from "remark-rehype"
+import rehypeStringify from "rehype-stringify"
 import { useEditor, EditorContent } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
 import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table"
@@ -18,16 +23,17 @@ import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state"
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model"
 import type { EditorView } from "@tiptap/pm/view"
 import {
-  Bold, Italic, Strikethrough, Highlighter,
-  List, ListOrdered, ListTodo, Heading1, Heading2, Heading3,
-  ChevronDown,
+  Bold, Italic, Strikethrough,
+  List, ListOrdered, ListTodo,
 } from "lucide-react"
+import { SoftMenu, MenuItem } from "@/components/ui/menu"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * Click below the last content block (tall min-height ProseMirror pad) →
+ * Click *below* the last content block (tall min-height ProseMirror pad) →
  * place caret at end of document (Typora / Notes style).
+ * Left/right of text (same vertical band as a line) must NOT jump to end.
  */
 function placeCaretAtEndIfClickBelowContent(
   view: EditorView,
@@ -42,7 +48,7 @@ function placeCaretAtEndIfClickBelowContent(
     if (!view.hasFocus()) view.focus()
     return true
   }
-  // Only when click is clearly below the last block (not between lines)
+  // Only when click is clearly below the last block — not left/right margins
   const bottom = last.getBoundingClientRect().bottom
   if (event.clientY <= bottom + 2) return false
 
@@ -1346,8 +1352,9 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
     name: "distillBlock",
     group: "block",
     atom: true,
-    draggable: false,
-    selectable: false,
+    // Must be true so PM enables block drag (grip / card reorder)
+    draggable: true,
+    selectable: true,
     defining: true,
     isolating: true,
 
@@ -1394,123 +1401,328 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
     addNodeView() {
       return ({ node, getPos, editor }) => {
+        /** Collapsed max height (px) — keep in sync with CSS --distill-collapsed-h */
+        const COLLAPSED_MAX = 200
+
         const dom = document.createElement("div")
         dom.setAttribute("data-type", "distill-block")
         dom.setAttribute("data-block-id", node.attrs.blockId)
         dom.setAttribute("data-loading", node.attrs.loading ? "true" : "false")
         dom.className = "distill-block"
-        dom.style.cssText = `
-          border: 1px solid rgba(26,94,61,0.2); border-left: 4px solid #1A5E3D;
-          border-radius: 4px; margin: 12px 0; background: rgba(26,94,61,0.03);
-          overflow: hidden; position: relative;
-        `
+        if (node.attrs.loading) dom.classList.add("is-loading")
         dom.contentEditable = "false"
-        // Disable drag for loading blocks — ProseMirror sets draggable="true"
-        // on this element via node spec; dom.draggable property overrides it.
+
+        // Node is draggable:true — PM sets dom.draggable. Loading blocks must not move
+        // (result replace looks up by position / temp id).
         if (node.attrs.loading) {
           dom.draggable = false
-          dom.style.cursor = "default"
         }
 
-        // Header: title truncates as width shrinks so ✕ delete stays visible
+        // ── Header: grip · source · delete (no ID badge) ──
         const header = document.createElement("div")
-        header.style.cssText = `
-          display: flex; align-items: center; gap: 6px; padding: 6px 10px;
-          background: rgba(26,94,61,0.06); border-bottom: 1px solid rgba(26,94,61,0.12);
-          font-size: 12px; min-width: 0;
-        `
+        header.className = "distill-block__header"
 
         const handle = document.createElement("span")
+        handle.className = "distill-block__grip"
         handle.textContent = "⠿"
-        // Disable drag for loading blocks — dragging a loading placeholder
-        // moves it to a new position, so the distill result can't find it.
-        handle.style.cssText = node.attrs.loading
-          ? `cursor: not-allowed; color: #bbb; font-size: 14px; user-select: none; flex-shrink: 0;`
-          : `cursor: grab; color: #666; font-size: 14px; user-select: none; flex-shrink: 0;`
+        handle.setAttribute("aria-hidden", "true")
+        handle.title = "Drag to reorder"
         if (node.attrs.loading) {
-          handle.addEventListener("dragstart", (e) => { e.preventDefault(); e.stopPropagation() })
+          handle.classList.add("is-disabled")
+          handle.addEventListener("dragstart", (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          })
         }
 
+        // Use <span role="link"> not <button> — buttons suppress HTML5/PM drag from the card
         const link = document.createElement("span")
+        link.className = "distill-block__source"
+        link.setAttribute("role", "link")
+        link.tabIndex = 0
         const sourceTitle = (node.attrs.sourceTitle as string) || "source"
-        link.textContent = `📎 ${sourceTitle}`
+        link.textContent = sourceTitle
         link.title = sourceTitle
-        link.style.cssText = `
-          color: #1A5E3D; text-decoration: none; font-weight: 500; cursor: pointer;
-          flex: 1 1 0%; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-          white-space: nowrap;
-        `
-        link.addEventListener("click", (e) => {
+        const goSource = (e: Event) => {
           e.preventDefault()
           e.stopPropagation()
-          // Call navigation callback directly
-          if (onNavigate) {
-            onNavigate(node.attrs.sourceNoteId)
-          }
-        })
-        link.addEventListener("mouseenter", () => {
-          link.style.textDecoration = "underline"
-        })
-        link.addEventListener("mouseleave", () => {
-          link.style.textDecoration = "none"
+          if (onNavigate) onNavigate(node.attrs.sourceNoteId)
+        }
+        link.addEventListener("click", goSource)
+        link.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") goSource(e)
         })
 
-        const badge = document.createElement("span")
-        badge.textContent = node.attrs.sourceNoteId?.slice(-3) || "?"
-        badge.style.cssText = `
-          background: #1A5E3D; color: white; border-radius: 2px;
-          padding: 1px 5px; font-size: 10px; font-weight: 600;
-          flex-shrink: 0; max-width: 4.5rem; overflow: hidden; text-overflow: ellipsis;
-        `
-
+        // Two-step delete: × → expand "DELETE" → second click removes (avoids mis-tap)
         const delBtn = document.createElement("button")
         delBtn.type = "button"
-        delBtn.textContent = "✕"
+        delBtn.className = "distill-block__delete"
+        delBtn.innerHTML =
+          '<span class="distill-block__delete-x" aria-hidden="true">×</span><span class="distill-block__delete-label">Delete</span>'
         delBtn.title = "Remove distill block"
-        delBtn.style.cssText = `
-          background: none; border: none; cursor: pointer; color: #999;
-          font-size: 14px; padding: 0 2px; line-height: 1;
-          flex-shrink: 0; flex-grow: 0;
-        `
-        delBtn.addEventListener("click", () => {
-          if (typeof getPos === "function") {
-            const pos = getPos()
-            if (pos !== undefined) {
-              const blockId = node.attrs.blockId
-              const sourceNoteId = node.attrs.sourceNoteId
-              editor.chain().focus().deleteRange({ from: pos, to: pos + node.nodeSize }).run()
-              // Dispatch on editor.view.dom (always in document) — dom is detached
-              // after deleteRange, so events dispatched on it won't bubble.
-              if (blockId || sourceNoteId) {
-                const detail = { blockId, sourceNoteId }
-                const event = new CustomEvent("distill:block-remove", { bubbles: true, detail })
-                editor.view.dom.dispatchEvent(event)
-              }
-            }
+        delBtn.setAttribute("aria-label", "Remove distill block")
+        delBtn.setAttribute("aria-expanded", "false")
+
+        let deleteArmed = false
+        let deleteArmTimer: number | null = null
+        let deleteOutsideCleanup: (() => void) | null = null
+
+        const disarmDelete = () => {
+          deleteArmed = false
+          delBtn.classList.remove("is-confirm")
+          delBtn.setAttribute("aria-expanded", "false")
+          delBtn.setAttribute("aria-label", "Remove distill block")
+          delBtn.title = "Remove distill block"
+          if (deleteArmTimer != null) {
+            window.clearTimeout(deleteArmTimer)
+            deleteArmTimer = null
           }
+          deleteOutsideCleanup?.()
+          deleteOutsideCleanup = null
+        }
+
+        const armDelete = () => {
+          deleteArmed = true
+          delBtn.classList.add("is-confirm")
+          delBtn.setAttribute("aria-expanded", "true")
+          delBtn.setAttribute("aria-label", "Confirm delete distill block")
+          delBtn.title = "Click again to delete"
+          // Auto-collapse if user abandons
+          if (deleteArmTimer != null) window.clearTimeout(deleteArmTimer)
+          deleteArmTimer = window.setTimeout(() => disarmDelete(), 4000)
+          // Outside click / Escape cancels
+          deleteOutsideCleanup?.()
+          const onPointerDown = (ev: Event) => {
+            const t = ev.target as Node | null
+            if (t && delBtn.contains(t)) return
+            disarmDelete()
+          }
+          const onKey = (ev: KeyboardEvent) => {
+            if (ev.key === "Escape") disarmDelete()
+          }
+          // next tick so this click doesn't immediately disarm
+          window.setTimeout(() => {
+            document.addEventListener("pointerdown", onPointerDown, true)
+            document.addEventListener("keydown", onKey, true)
+          }, 0)
+          deleteOutsideCleanup = () => {
+            document.removeEventListener("pointerdown", onPointerDown, true)
+            document.removeEventListener("keydown", onKey, true)
+          }
+        }
+
+        const performDelete = () => {
+          if (typeof getPos !== "function") return
+          const pos = getPos()
+          if (pos === undefined) return
+          const blockId = node.attrs.blockId
+          const sourceNoteId = node.attrs.sourceNoteId
+          disarmDelete()
+          editor
+            .chain()
+            .focus()
+            .deleteRange({ from: pos, to: pos + node.nodeSize })
+            .run()
+          // Dispatch on editor.view.dom (always in document) — dom is detached
+          // after deleteRange, so events dispatched on it won't bubble.
+          if (blockId || sourceNoteId) {
+            const detail = { blockId, sourceNoteId }
+            const event = new CustomEvent("distill:block-remove", {
+              bubbles: true,
+              detail,
+            })
+            editor.view.dom.dispatchEvent(event)
+          }
+        }
+
+        delBtn.addEventListener("click", (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (!deleteArmed) {
+            armDelete()
+            return
+          }
+          performDelete()
         })
-        delBtn.addEventListener("mouseenter", () => { delBtn.style.color = "#f44336" })
-        delBtn.addEventListener("mouseleave", () => { delBtn.style.color = "#999" })
 
-        header.append(handle, link, badge, delBtn)
+        header.append(handle, link, delBtn)
 
-        // Content container with height limit
+        // ── Body scroll region + D fade/pill ──
         const contentWrapper = document.createElement("div")
-        contentWrapper.style.cssText = `
-          position: relative;
-          max-height: 200px;
-          overflow: hidden;
-          transition: max-height 0.3s ease;
-        `
+        contentWrapper.className = "distill-block__scroll"
 
         const content = document.createElement("div")
-        content.style.cssText = `padding: 10px 14px; font-size: 13px; line-height: 1.6; color: #333;`
+        // prose / prose-sm: match app markdown heading·list·code styles
+        content.className = "distill-block__body prose prose-sm max-w-none"
+
+        const fade = document.createElement("div")
+        fade.className = "distill-block__fade"
+        fade.setAttribute("aria-hidden", "true")
+
+        const pill = document.createElement("button")
+        pill.type = "button"
+        pill.className = "distill-block__pill"
+        pill.textContent = "Show more"
+        pill.setAttribute("data-action", "expand")
+        pill.setAttribute("aria-expanded", "false")
+
+        fade.appendChild(pill)
+        contentWrapper.append(content, fade)
 
         // Latest attrs for speaker re-paint (meeting names change while note stays open)
         let latestText = node.attrs.text as string
         let latestSourceId = node.attrs.sourceNoteId as string | null
         let latestLoading = !!node.attrs.loading
         let latestTitle = (node.attrs.sourceTitle as string) || "source"
+        let expandAnimating = false
+        let expandAnimCleanup: (() => void) | null = null
+
+        /** Cap expanded height: min(50vh, 28rem, content) — matches CSS --distill-expanded-h */
+        const expandedTargetPx = () => {
+          const rem =
+            parseFloat(getComputedStyle(document.documentElement).fontSize) ||
+            16
+          const cap = Math.min(window.innerHeight * 0.5, 28 * rem)
+          // Include fade strip so sticky less still fits when content is long
+          return Math.min(cap, Math.max(content.scrollHeight, COLLAPSED_MAX))
+        }
+
+        const prefersReducedMotion = () =>
+          typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+        const setExpandedChrome = (expanded: boolean) => {
+          dom.classList.toggle("is-expanded", expanded)
+          pill.textContent = expanded ? "Show less" : "Show more"
+          pill.setAttribute("aria-expanded", expanded ? "true" : "false")
+        }
+
+        /**
+         * Soft height tween between collapsed (200px) and expanded cap.
+         * Uses explicit px max-height so CSS transition always has concrete endpoints.
+         */
+        const animateExpand = (expand: boolean) => {
+          if (expandAnimating) return
+          if (latestLoading || !dom.classList.contains("is-overflow")) return
+
+          // Instant path
+          if (prefersReducedMotion()) {
+            setExpandedChrome(expand)
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            if (!expand) contentWrapper.scrollTop = 0
+            return
+          }
+
+          expandAnimCleanup?.()
+          expandAnimating = true
+          dom.classList.add("is-animating")
+          // Lock overflow while tweening
+          contentWrapper.style.overflow = "hidden"
+
+          const from = contentWrapper.getBoundingClientRect().height
+          const to = expand ? expandedTargetPx() : COLLAPSED_MAX
+
+          // Pin start height, then flip class + end height on next frame
+          contentWrapper.style.maxHeight = `${Math.round(from)}px`
+          // Force layout so the browser registers the start value
+          void contentWrapper.offsetHeight
+
+          if (expand) {
+            setExpandedChrome(true)
+          } else {
+            // Keep is-expanded until end so we still measure from open layout;
+            // label updates immediately for feedback
+            pill.textContent = "Show more"
+            pill.setAttribute("aria-expanded", "false")
+            contentWrapper.scrollTop = 0
+          }
+
+          contentWrapper.style.maxHeight = `${Math.round(to)}px`
+
+          const finish = () => {
+            contentWrapper.removeEventListener("transitionend", onEnd)
+            window.clearTimeout(fallbackTimer)
+            if (!expand) {
+              setExpandedChrome(false)
+              contentWrapper.scrollTop = 0
+            } else {
+              setExpandedChrome(true)
+            }
+            // Hand control back to CSS vars after settle
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            dom.classList.remove("is-animating")
+            expandAnimating = false
+            expandAnimCleanup = null
+          }
+
+          const onEnd = (ev: TransitionEvent) => {
+            if (ev.target !== contentWrapper) return
+            if (ev.propertyName !== "max-height") return
+            finish()
+          }
+
+          // Fallback if transitionend is skipped (display:none mid-flight, etc.)
+          const fallbackTimer = window.setTimeout(finish, 450)
+          contentWrapper.addEventListener("transitionend", onEnd)
+          expandAnimCleanup = () => {
+            contentWrapper.removeEventListener("transitionend", onEnd)
+            window.clearTimeout(fallbackTimer)
+            expandAnimating = false
+            expandAnimCleanup = null
+          }
+        }
+
+        pill.addEventListener("click", (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (latestLoading || !dom.classList.contains("is-overflow")) return
+          if (expandAnimating) return
+          const next = !dom.classList.contains("is-expanded")
+          animateExpand(next)
+        })
+
+        const setLoadingChrome = (loading: boolean) => {
+          dom.classList.toggle("is-loading", loading)
+          dom.setAttribute("data-loading", loading ? "true" : "false")
+          if (loading) {
+            dom.draggable = false
+            handle.classList.add("is-disabled")
+          } else {
+            dom.draggable = true
+            handle.classList.remove("is-disabled")
+          }
+        }
+
+        const remeasureOverflow = () => {
+          if (latestLoading) {
+            expandAnimCleanup?.()
+            dom.classList.remove("is-overflow", "is-expanded", "is-animating")
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            fade.setAttribute("aria-hidden", "true")
+            pill.textContent = "Show more"
+            pill.setAttribute("aria-expanded", "false")
+            return
+          }
+          // content.scrollHeight is full content height regardless of max-height clip
+          const overflow = content.scrollHeight > COLLAPSED_MAX + 1
+          dom.classList.toggle("is-overflow", overflow)
+          if (!overflow) {
+            expandAnimCleanup?.()
+            dom.classList.remove("is-expanded", "is-animating")
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            pill.textContent = "Show more"
+            pill.setAttribute("aria-expanded", "false")
+          }
+          fade.setAttribute("aria-hidden", overflow ? "false" : "true")
+          if (dom.classList.contains("is-expanded") && !expandAnimating) {
+            pill.textContent = "Show less"
+            pill.setAttribute("aria-expanded", "true")
+          }
+        }
 
         const paintContent = (
           text: string,
@@ -1522,45 +1734,38 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           latestSourceId = sourceId
           latestLoading = loading
           latestTitle = title
+          setLoadingChrome(loading)
+
           if (loading) {
-            content.innerHTML = `
-              <div style="display: flex; align-items: center; gap: 8px; color: #666;">
-                <div class="loading-spinner" style="
-                  width: 16px; height: 16px; border: 2px solid #e0e0e0;
-                  border-top: 2px solid #1A5E3D; border-radius: 50%;
-                  animation: spin 1s linear infinite;
-                "></div>
-                <span>⏳ Distilling content from "${title}"...</span>
-              </div>
-            `
-            if (!document.getElementById("distill-loading-style")) {
-              const style = document.createElement("style")
-              style.id = "distill-loading-style"
-              style.textContent = `
-                @keyframes spin {
-                  0% { transform: rotate(0deg); }
-                  100% { transform: rotate(360deg); }
-                }
-              `
-              document.head.appendChild(style)
-            }
+            content.replaceChildren()
+            const row = document.createElement("div")
+            row.className = "distill-block__loading"
+            const spin = document.createElement("span")
+            spin.className = "distill-block__spinner"
+            spin.setAttribute("aria-hidden", "true")
+            const label = document.createElement("span")
+            label.textContent = `Distilling from “${title}”…`
+            row.append(spin, label)
+            content.appendChild(row)
+            remeasureOverflow()
             return
           }
+
           // Sync first paint (IDs as Speaker N until names load)
           content.innerHTML = renderMarkdown(
-            applySpeakerDisplay(text || "", {})
+            applySpeakerDisplay(text || "", {}),
           )
+          requestAnimationFrame(remeasureOverflow)
+
           // Always re-fetch latest speaker names for meeting distill sources
-          void resolveDistillTextForDisplay(text || "", sourceId).then((resolved) => {
-            if (content.isConnected) {
-              content.innerHTML = renderMarkdown(resolved)
-              requestAnimationFrame(() => {
-                if (content.scrollHeight > 200) {
-                  expandBtn.style.display = "block"
-                }
-              })
-            }
-          })
+          void resolveDistillTextForDisplay(text || "", sourceId).then(
+            (resolved) => {
+              if (content.isConnected) {
+                content.innerHTML = renderMarkdown(resolved)
+                requestAnimationFrame(remeasureOverflow)
+              }
+            },
+          )
         }
 
         // Loading / body
@@ -1571,35 +1776,14 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           node.attrs.sourceTitle || "source",
         )
 
-        contentWrapper.appendChild(content)
-
-        // Expand button (only show if content is long)
-        const expandBtn = document.createElement("button")
-        expandBtn.textContent = "▼ Show more"
-        expandBtn.style.cssText = `
-          display: none;
-          width: 100%;
-          padding: 6px;
-          background: linear-gradient(transparent, rgba(26,94,61,0.03));
-          border: none;
-          border-top: 1px solid rgba(26,94,61,0.12);
-          color: #1A5E3D;
-          font-size: 12px;
-          cursor: pointer;
-          text-align: center;
-        `
-        expandBtn.addEventListener("click", () => {
-          const isExpanded = contentWrapper.style.maxHeight === "none"
-          contentWrapper.style.maxHeight = isExpanded ? "200px" : "none"
-          expandBtn.textContent = isExpanded ? "▼ Show more" : "▲ Show less"
-        })
-
-        dom.append(header, contentWrapper, expandBtn)
+        dom.append(header, contentWrapper)
 
         // Re-resolve speakers when names change (Meeting page) or tab becomes visible
         const onSpeakersChanged = (ev: Event) => {
           if (latestLoading || !content.isConnected) return
-          const detail = (ev as CustomEvent).detail as { meetingId?: string } | undefined
+          const detail = (ev as CustomEvent).detail as
+            | { meetingId?: string }
+            | undefined
           const parsed = parseMeetingSourceId(latestSourceId)
           if (
             detail?.meetingId &&
@@ -1608,7 +1792,12 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           ) {
             return
           }
-          paintContent(latestText, latestSourceId, latestLoading, latestTitle)
+          paintContent(
+            latestText,
+            latestSourceId,
+            latestLoading,
+            latestTitle,
+          )
         }
         const onVisible = () => {
           if (document.visibilityState === "visible") {
@@ -1618,12 +1807,8 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
         window.addEventListener("meeting-speakers-changed", onSpeakersChanged)
         document.addEventListener("visibilitychange", onVisible)
 
-        // Check if content overflows
-        requestAnimationFrame(() => {
-          if (content.scrollHeight > 200) {
-            expandBtn.style.display = "block"
-          }
-        })
+        // Initial overflow check after layout
+        requestAnimationFrame(remeasureOverflow)
 
         return {
           dom,
@@ -1639,41 +1824,21 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
             )
 
             const t = (updatedNode.attrs.sourceTitle as string) || "source"
-            link.textContent = `📎 ${t}`
+            link.textContent = t
             link.title = t
-            badge.textContent = updatedNode.attrs.sourceNoteId?.slice(-3) || "?"
             dom.setAttribute("data-block-id", updatedNode.attrs.blockId)
-            dom.setAttribute("data-loading", updatedNode.attrs.loading ? "true" : "false")
 
-            // Toggle handle drag state on loading transition
-            if (updatedNode.attrs.loading) {
-              handle.style.cursor = "not-allowed"
-              handle.style.color = "#bbb"
-              handle.setAttribute("draggable", "false")
-              dom.draggable = false
-              dom.style.cursor = "default"
-            } else {
-              handle.style.cursor = "grab"
-              handle.style.color = "#666"
-              handle.removeAttribute("draggable")
-              dom.draggable = true
-              dom.style.cursor = ""
-            }
-
-            // Re-check overflow
-            requestAnimationFrame(() => {
-              if (content.scrollHeight > 200) {
-                expandBtn.style.display = "block"
-              } else {
-                expandBtn.style.display = "none"
-              }
-            })
-
+            requestAnimationFrame(remeasureOverflow)
             return true
           },
           // Only clean listeners — do not flush note content here
           destroy: () => {
-            window.removeEventListener("meeting-speakers-changed", onSpeakersChanged)
+            expandAnimCleanup?.()
+            disarmDelete()
+            window.removeEventListener(
+              "meeting-speakers-changed",
+              onSpeakersChanged,
+            )
             document.removeEventListener("visibilitychange", onVisible)
           },
         }
@@ -2567,17 +2732,29 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 }
 
 // ──────────────────────────────────────────────
-// Utility: Simple Markdown Renderer
+// Utility: Markdown → HTML for distill NodeView body
+// (naive regex missed headings / GFM lists; use remark pipeline)
 // ──────────────────────────────────────────────
 function renderMarkdown(md: string): string {
-  return md
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/`(.+?)`/g, "<code>$1</code>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>")
-    .replace(/\n/g, "<br>")
+  if (!md) return ""
+  try {
+    return String(
+      unified()
+        .use(remarkParse)
+        .use(remarkGfm)
+        .use(remarkBreaks)
+        .use(remarkRehype)
+        .use(rehypeStringify)
+        .processSync(md),
+    )
+  } catch {
+    // Safe fallback: escape only
+    return md
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>")
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -2750,25 +2927,33 @@ function markdownToHtml(md: string): string {
 }
 
 // ──────────────────────────────────────────────
-// Editor Toolbar
+// Editor Toolbar — Premium R2 strip (Master locked)
 // ──────────────────────────────────────────────
 
-const HIGHLIGHT_PRESETS = [
-  { color: "#fef08a", label: "Yellow" },
-  { color: "#bbf7d0", label: "Green" },
-  { color: "#fca5a5", label: "Red" },
-  { color: "#c4b5fd", label: "Purple" },
-  { color: "#fdba74", label: "Orange" },
-]
+/** Solid hex for TipTap data-color + lower-half marker CSS via --pm-hl */
+const HIGHLIGHT_SWATCHES = [
+  { color: "#e8d48b", label: "Yellow", swatch: "#e8d48b" },
+  { color: "#c5dccf", label: "Green", swatch: "#c5dccf" },
+  { color: "#f0c9c4", label: "Rose", swatch: "#f0c9c4" },
+  { color: "#ddd6c8", label: "Warm gray", swatch: "#ddd6c8" },
+  { color: "#d4e0f0", label: "Cool mist", swatch: "#d4e0f0" },
+] as const
 
+/** Premium text colors — --pm-* family (no deep-green twin) */
 const TEXT_COLOR_PRESETS = [
-  { color: "#000000", label: "Black" },
-  { color: "#8C2E2E", label: "Red" },
-  { color: "#2D7A55", label: "Green" },
-  { color: "#3b82f6", label: "Blue" },
-  { color: "#a855f7", label: "Purple" },
-  { color: "#f97316", label: "Orange" },
-]
+  { color: "#121410", label: "Ink" },
+  { color: "#1a5e3d", label: "Green" },
+  { color: "#b42318", label: "Danger" },
+  { color: "#6a706a", label: "Muted" },
+  { color: "#8a7355", label: "Warm" },
+] as const
+
+const TEXT_COLOR_QUICK = TEXT_COLOR_PRESETS.slice(0, 3)
+const HIGHLIGHT_QUICK = HIGHLIGHT_SWATCHES.slice(0, 3)
+
+function FmtSep() {
+  return <span className="pm-fmt-sep" aria-hidden />
+}
 
 function ToolbarBtn({
   active, disabled, tooltip, onClick, children, className,
@@ -2783,19 +2968,15 @@ function ToolbarBtn({
       data-active={active || undefined}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        "h-7 w-7 p-0 flex items-center justify-center rounded-sm",
-        "transition-colors cursor-pointer",
-        "disabled:opacity-30 disabled:pointer-events-none",
-        className,
-      )}
+      className={cn("pm-fmt-btn", active && "is-on", className)}
     >
       {children}
     </button>
   )
 }
 
-function ColorSwatch({
+/** Highlight swatch — half-fill hints marker style */
+function HighlightSwatch({
   color, active, tooltip, onClick,
 }: {
   color: string; active: boolean; tooltip: string; onClick: () => void
@@ -2805,19 +2986,49 @@ function ColorSwatch({
       type="button"
       title={tooltip}
       onClick={onClick}
-      className={cn(
-        "h-5 w-5 rounded-full border border-border cursor-pointer transition-transform hover:scale-110",
-        active && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
-      )}
-      style={{ backgroundColor: color }}
+      className={cn("pm-fmt-hl", active && "is-on")}
+      style={{
+        background: `linear-gradient(to bottom, transparent 50%, ${color} 50%)`,
+      }}
     />
   )
 }
 
-function ColorDropdown({
-  trigger, presets, activeColor, onSelect,
+/** Text color — light A + thin bar */
+function TextColorSwatch({
+  color, active, tooltip, onClick,
 }: {
-  trigger: ReactNode; presets: typeof HIGHLIGHT_PRESETS; activeColor: string | null; onSelect: (color: string) => void
+  color: string; active: boolean; tooltip: string; onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={tooltip}
+      onClick={onClick}
+      className={cn("pm-fmt-tc", active && "is-on")}
+    >
+      <span className="pm-fmt-tc-a" style={{ color }}>A</span>
+      <span className="pm-fmt-tc-bar" style={{ backgroundColor: color }} />
+    </button>
+  )
+}
+
+function ColorPaletteMenu({
+  kind,
+  presets,
+  activeColor,
+  onSelect,
+  /** Highlight only: empty chip clears mark (no “Clear” text row) */
+  onClearHighlight,
+  /** Narrow bar: one trigger opens full palette (no inline swatches) */
+  compact = false,
+}: {
+  kind: "highlight" | "text"
+  presets: readonly { color: string; label: string; swatch?: string }[]
+  activeColor: string | null
+  onSelect: (color: string) => void
+  onClearHighlight?: () => void
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -2825,30 +3036,114 @@ function ColorDropdown({
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) {
+        setOpen(false)
+      }
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
   }, [open])
 
+  const preview = presets.find((p) => p.color === activeColor)
+  const previewSw =
+    preview && "swatch" in preview && preview.swatch
+      ? preview.swatch
+      : preview?.color ?? (kind === "highlight" ? "#e8d48b" : "#121410")
+  const noHighlight = kind === "highlight" && !activeColor
+
   return (
     <div ref={ref} className="relative">
-      <div onClick={() => setOpen(o => !o)} className="cursor-pointer">
-        {trigger}
-      </div>
-      {open && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 bg-popover border border-border rounded-md shadow-md p-2 flex gap-1.5">
-          {presets.map(p => (
-            <ColorSwatch
-              key={p.color}
-              color={p.color}
-              tooltip={p.label}
-              active={activeColor === p.color}
-              onClick={() => { onSelect(p.color); setOpen(false) }}
+      {compact ? (
+        <button
+          type="button"
+          title={kind === "highlight" ? "Highlight" : "Text color"}
+          className={cn("pm-fmt-compact", open && "is-on")}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {kind === "highlight" ? (
+            <span
+              className={cn("pm-fmt-hl", noHighlight && "is-none")}
+              style={
+                noHighlight
+                  ? undefined
+                  : {
+                      background: `linear-gradient(to bottom, transparent 50%, ${previewSw} 50%)`,
+                    }
+              }
             />
-          ))}
-        </div>
+          ) : (
+            <span className="pm-fmt-tc">
+              <span
+                className="pm-fmt-tc-a"
+                style={{ color: activeColor || "#121410" }}
+              >
+                A
+              </span>
+              <span
+                className="pm-fmt-tc-bar"
+                style={{ backgroundColor: activeColor || "#121410" }}
+              />
+            </span>
+          )}
+          <span className="pm-fmt-compact-chev" aria-hidden>
+            ▾
+          </span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          title={kind === "highlight" ? "More highlights" : "More text colors"}
+          className={cn("pm-fmt-more", open && "is-on")}
+          onClick={() => setOpen((o) => !o)}
+        >
+          +
+        </button>
       )}
+      <SoftMenu
+        open={open}
+        className="pm-fmt-palette absolute top-full left-1/2 z-50 mt-1.5 -translate-x-1/2"
+      >
+        {/* Single compact row of chips — none (hl only) + presets */}
+        <div className="pm-fmt-palette-row">
+          {kind === "highlight" && (
+            <button
+              type="button"
+              title="No highlight"
+              className={cn("pm-fmt-hl is-none", !activeColor && "is-on")}
+              onClick={() => {
+                onClearHighlight?.()
+                setOpen(false)
+              }}
+            />
+          )}
+          {presets.map((p) => {
+            const sw = "swatch" in p && p.swatch ? p.swatch : p.color
+            const isActive = activeColor === p.color
+            return (
+              <button
+                key={p.color}
+                type="button"
+                title={p.label}
+                className={cn(
+                  kind === "highlight" ? "pm-fmt-hl" : "pm-fmt-palette-dot",
+                  isActive && "is-on",
+                )}
+                style={
+                  kind === "highlight"
+                    ? {
+                        background: `linear-gradient(to bottom, transparent 48%, ${sw} 48%)`,
+                      }
+                    : { backgroundColor: sw }
+                }
+                onClick={() => {
+                  onSelect(p.color)
+                  setOpen(false)
+                }}
+              />
+            )
+          })}
+        </div>
+      </SoftMenu>
     </div>
   )
 }
@@ -2857,18 +3152,19 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  const levels: { level: 1 | 2 | 3; Icon: typeof Heading1; label: string }[] = [
-    { level: 1, Icon: Heading1, label: "Heading 1" },
-    { level: 2, Icon: Heading2, label: "Heading 2" },
-    { level: 3, Icon: Heading3, label: "Heading 3" },
-  ]
-
-  const activeLevel = levels.find(l => editor.isActive("heading", { level: l.level }))
+  const level = ([1, 2, 3] as const).find((l) =>
+    editor.isActive("heading", { level: l }),
+  )
+  // No Paragraph row — default trigger is “H” when body text
+  const triggerLabel =
+    level === 1 ? "H1" : level === 2 ? "H2" : level === 3 ? "H3" : "H"
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) {
+        setOpen(false)
+      }
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
@@ -2878,194 +3174,383 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
     <div ref={ref} className="relative">
       <button
         type="button"
-        title="Headings"
-        onClick={() => setOpen(o => !o)}
-        className={cn(
-          "h-7 px-1.5 flex items-center gap-0.5 rounded-sm text-muted-foreground text-xs font-medium cursor-pointer",
-          "hover:bg-accent hover:text-foreground transition-colors",
-          activeLevel && "bg-accent text-foreground",
-        )}
+        title="Heading"
+        className={cn("pm-fmt-hd", level && "is-on")}
+        onClick={() => setOpen((o) => !o)}
       >
-        {activeLevel ? <activeLevel.Icon className="h-4 w-4" /> : <Heading1 className="h-4 w-4" />}
-        <ChevronDown className="h-3 w-3" />
+        {triggerLabel}
+        <span className="pm-fmt-hd-chev" aria-hidden>
+          ▾
+        </span>
       </button>
-      {open && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 bg-popover border border-border rounded-md shadow-md p-1 flex gap-0.5">
-          {levels.map(({ level, Icon, label }) => (
-            <ToolbarBtn
-              key={level}
-              active={editor.isActive("heading", { level })}
-              tooltip={label}
-              onClick={() => { editor.chain().focus().toggleHeading({ level }).run(); setOpen(false) }}
-            >
-              <Icon className="h-4 w-4" />
-            </ToolbarBtn>
-          ))}
-        </div>
-      )}
+      <SoftMenu
+        open={open}
+        className="pm-fmt-hd-menu absolute top-full left-0 z-50 mt-1.5 min-w-[11rem]"
+      >
+        {([1, 2, 3] as const).map((l) => (
+          <MenuItem
+            key={l}
+            active={level === l}
+            className="pm-fmt-hd-item"
+            onClick={() => {
+              // Same level again → toggle off to paragraph (TipTap toggleHeading)
+              editor.chain().focus().toggleHeading({ level: l }).run()
+              setOpen(false)
+            }}
+          >
+            <span className={cn("pm-fmt-hd-item-label", `is-h${l}`)}>
+              Heading {l}
+            </span>
+            <span className="pm-fmt-hd-item-tag">H{l}</span>
+          </MenuItem>
+        ))}
+      </SoftMenu>
     </div>
   )
 }
 
-export function EditorToolbar({ editor, stickyOffset = 0, actions }: { editor: Editor; stickyOffset?: number; actions?: ReactNode }) {
-  // Force re-render on selection/content changes so active states stay in sync
+/** Collapse highlight + text-color swatches into ▾ menus below this width */
+const FMT_COMPACT_PX = 420
+
+export function EditorToolbar({
+  editor,
+  stickyOffset = 0,
+  actions,
+}: {
+  editor: Editor
+  stickyOffset?: number
+  actions?: ReactNode
+}) {
   const [, setTick] = useState(0)
-  useEffect(() => {
-    const cb = () => setTick(t => t + 1)
-    editor.on("selectionUpdate", cb)
-    editor.on("transaction", cb)
-    return () => { editor.off("selectionUpdate", cb); editor.off("transaction", cb) }
+  const barRef = useRef<HTMLDivElement>(null)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [compactColors, setCompactColors] = useState(false)
+  const [editing, setEditing] = useState(false)
+
+  const showToolbar = useCallback(() => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = null
+    }
+    setEditing(true)
+  }, [])
+
+  /** Debounced hide — avoids flash when PM blurs for a frame on toolbar click */
+  const scheduleHideToolbar = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = setTimeout(() => {
+      hideTimerRef.current = null
+      // Note switch / unmount: editor may already be destroyed
+      if (editor.isDestroyed) {
+        setEditing(false)
+        return
+      }
+      try {
+        if (editor.view.hasFocus()) return
+      } catch {
+        setEditing(false)
+        return
+      }
+      const bar = barRef.current
+      const ae = document.activeElement
+      if (bar && ae && bar.contains(ae)) return
+      // Open SoftMenu keeps buttons non-focused; treat open menu as still editing
+      if (bar?.querySelector('[data-slot="menu"].is-open, .pm-menu--soft.is-open')) {
+        return
+      }
+      setEditing(false)
+    }, 160)
   }, [editor])
 
-  // Find active highlight color
+  useEffect(() => {
+    let alive = true
+    const cb = () => {
+      if (!alive || editor.isDestroyed) return
+      setTick((t) => t + 1)
+    }
+    const onFocus = () => {
+      if (!alive || editor.isDestroyed) return
+      showToolbar()
+    }
+    const onBlur = () => {
+      if (!alive || editor.isDestroyed) return
+      scheduleHideToolbar()
+    }
+    editor.on("selectionUpdate", cb)
+    editor.on("transaction", cb)
+    editor.on("focus", onFocus)
+    editor.on("blur", onBlur)
+    try {
+      if (editor.view.hasFocus()) showToolbar()
+    } catch {
+      /* destroyed */
+    }
+    return () => {
+      alive = false
+      editor.off("selectionUpdate", cb)
+      editor.off("transaction", cb)
+      editor.off("focus", onFocus)
+      editor.off("blur", onBlur)
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current)
+        hideTimerRef.current = null
+      }
+    }
+  }, [editor, showToolbar, scheduleHideToolbar])
+
+  useEffect(() => {
+    const el = barRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0
+      setCompactColors(w > 0 && w < FMT_COMPACT_PX)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const activeHighlight: string | null = (() => {
-    const attrs = editor.getAttributes("highlight")
-    return attrs.color ?? (editor.isActive("highlight") ? "#fef08a" : null)
+    if (editor.isDestroyed) return null
+    try {
+      const attrs = editor.getAttributes("highlight")
+      return (
+        attrs.color ??
+        (editor.isActive("highlight") ? HIGHLIGHT_QUICK[0].color : null)
+      )
+    } catch {
+      return null
+    }
   })()
 
-  // Find active text color
   const activeTextColor: string | null = (() => {
-    const attrs = editor.getAttributes("textStyle")
-    return attrs.color ?? null
+    if (editor.isDestroyed) return null
+    try {
+      const attrs = editor.getAttributes("textStyle")
+      return attrs.color ?? null
+    } catch {
+      return null
+    }
   })()
+
+  const applyTextColor = (color: string) => {
+    if (color === "#121410" || color === "#000000") {
+      // Ink / legacy black → clear mark (default body color)
+      editor.chain().focus().unsetColor().run()
+    } else {
+      editor.chain().focus().setColor(color).run()
+    }
+  }
+
+  const toggleHighlight = (color: string) => {
+    if (activeHighlight === color) {
+      editor.chain().focus().unsetHighlight().run()
+    } else {
+      editor.chain().focus().toggleHighlight({ color }).run()
+    }
+  }
 
   return (
     <div
-      className="flex items-center gap-0.5 px-3 h-9 rounded-full mx-2 mt-2 mb-1 shrink-0 sticky z-10
-        [&_button]:text-[#1C2E24] [&_button]:hover:text-[#1A5E3D] [&_button]:hover:bg-[rgba(26,94,61,0.06)]
-        [&_button]:active:bg-[rgba(26,94,61,0.10)] [&_button[data-active]]:text-[#1A5E3D] [&_button[data-active]]:bg-[rgba(26,94,61,0.08)]
-        [&_.w-px]:bg-[rgba(26,94,61,0.15)] [&_svg]:stroke-current
-        [&>.cursor-pointer]:text-[#1C2E24] [&>.cursor-pointer:hover]:text-[#1A5E3D]
-        [&_.relative_.cursor-pointer]:text-[#1C2E24] [&_.relative_.cursor-pointer:hover]:text-[#1A5E3D]
-        animate-toolbar-float"
-      style={{
-        backgroundColor: "#FAFAF7",
-        border: "1px solid rgba(26,94,61,0.30)",
-        boxShadow:
-          "0 12px 40px -6px rgba(10,18,14,0.22)," +
-          "0 4px 12px -3px rgba(10,18,14,0.12)," +
-          "0 0 0 1px rgba(26,94,61,0.06) inset",
-        top: stickyOffset ?? 0,
+      ref={barRef}
+      className={cn(
+        "pm-fmt-toolbar shrink-0 sticky z-10",
+        editing && "is-editing",
+      )}
+      style={{ top: stickyOffset ?? 0 }}
+      onMouseDown={(e) => {
+        // Keep visible + keep PM selection (table-menu pattern)
+        showToolbar()
+        if ((e.target as HTMLElement).closest("button, [role='menu']")) {
+          e.preventDefault()
+        }
+      }}
+      onMouseLeave={() => {
+        try {
+          if (!editor.isDestroyed && !editor.view.hasFocus()) {
+            scheduleHideToolbar()
+          }
+        } catch {
+          scheduleHideToolbar()
+        }
       }}
     >
-      {/* Text style */}
-      <ToolbarBtn active={editor.isActive("bold")} tooltip="Bold (Ctrl+B)"
-        onClick={() => editor.chain().focus().toggleBold().run()}>
-        <Bold className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("italic")} tooltip="Italic (Ctrl+I)"
-        onClick={() => editor.chain().focus().toggleItalic().run()}>
-        <Italic className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("strike")} tooltip="Strikethrough"
-        onClick={() => editor.chain().focus().toggleStrike().run()}>
-        <Strikethrough className="h-4 w-4" />
-      </ToolbarBtn>
-
-      <div className="w-px h-5 bg-border mx-1" />
-
-      {/* Highlight — 2 primary + more dropdown */}
-      <ToolbarBtn
-        active={activeHighlight === "#fef08a"}
-        tooltip="Highlight Yellow"
-        onClick={() => editor.chain().focus().toggleHighlight({ color: "#fef08a" }).run()}
-      >
-        <div className="relative">
-          <Highlighter className="h-4 w-4" />
-          <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-yellow-300 border border-border" />
+      <div className="pm-fmt-inner">
+        <div className="pm-fmt-grp">
+          <ToolbarBtn
+            active={editor.isActive("bold")}
+            tooltip="Bold (Ctrl+B)"
+            onClick={() => editor.chain().focus().toggleBold().run()}
+          >
+            <Bold className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("italic")}
+            tooltip="Italic (Ctrl+I)"
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+          >
+            <Italic className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("strike")}
+            tooltip="Strikethrough"
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+          >
+            <Strikethrough className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </ToolbarBtn>
         </div>
-      </ToolbarBtn>
-      <ToolbarBtn
-        active={activeHighlight === "#bbf7d0"}
-        tooltip="Highlight Green"
-        onClick={() => editor.chain().focus().toggleHighlight({ color: "#bbf7d0" }).run()}
-      >
-        <div className="relative">
-          <Highlighter className="h-4 w-4" />
-          <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-300 border border-border" />
+
+        <FmtSep />
+
+        <div className="pm-fmt-grp">
+          {compactColors ? (
+            <ColorPaletteMenu
+              kind="highlight"
+              compact
+              presets={HIGHLIGHT_SWATCHES}
+              activeColor={activeHighlight}
+              onSelect={(c) => toggleHighlight(c)}
+              onClearHighlight={() =>
+                editor.chain().focus().unsetHighlight().run()
+              }
+            />
+          ) : (
+            <>
+              {HIGHLIGHT_QUICK.map((p) => (
+                <HighlightSwatch
+                  key={p.color}
+                  color={p.swatch}
+                  active={activeHighlight === p.color}
+                  tooltip={`Highlight ${p.label}`}
+                  onClick={() => toggleHighlight(p.color)}
+                />
+              ))}
+              <ColorPaletteMenu
+                kind="highlight"
+                presets={HIGHLIGHT_SWATCHES}
+                activeColor={activeHighlight}
+                onSelect={(c) => toggleHighlight(c)}
+                onClearHighlight={() =>
+                  editor.chain().focus().unsetHighlight().run()
+                }
+              />
+            </>
+          )}
         </div>
-      </ToolbarBtn>
-      <ColorDropdown
-        trigger={
-          <div className="h-7 w-5 flex items-center justify-center cursor-pointer">
-            <ChevronDown className="h-3 w-3" />
-          </div>
-        }
-        presets={HIGHLIGHT_PRESETS}
-        activeColor={activeHighlight}
-        onSelect={(color) => editor.chain().focus().toggleHighlight({ color }).run()}
-      />
 
-      <div className="w-px h-5 bg-border mx-1" />
+        <FmtSep />
 
-      {/* Text color — 3 primary + more dropdown */}
-      {TEXT_COLOR_PRESETS.slice(0, 3).map(p => (
-        <ToolbarBtn
-          key={p.color}
-          active={activeTextColor === p.color}
-          tooltip={`Text ${p.label}`}
-          onClick={() => {
-            if (p.color === "#000000") {
-              editor.chain().focus().unsetMark("textStyle").run()
-            } else {
-              editor.chain().focus().setColor(p.color).run()
-            }
-          }}
-        >
-          <div className="flex flex-col items-center">
-            <span className="text-xs font-bold leading-none" style={{ color: p.color }}>A</span>
-            <div className="w-3 h-0.5 rounded-full mt-0.5" style={{ backgroundColor: p.color }} />
-          </div>
-        </ToolbarBtn>
-      ))}
-      <ColorDropdown
-        trigger={
-          <div className="h-7 w-5 flex items-center justify-center cursor-pointer">
-            <ChevronDown className="h-3 w-3" />
-          </div>
-        }
-        presets={TEXT_COLOR_PRESETS}
-        activeColor={activeTextColor}
-        onSelect={(color) => {
-          if (color === "#000000") {
-            editor.chain().focus().unsetMark("textStyle").run()
-          } else {
-            editor.chain().focus().setColor(color).run()
-          }
-        }}
-      />
+        <div className="pm-fmt-grp">
+          {compactColors ? (
+            <ColorPaletteMenu
+              kind="text"
+              compact
+              presets={TEXT_COLOR_PRESETS}
+              activeColor={activeTextColor}
+              onSelect={applyTextColor}
+            />
+          ) : (
+            <>
+              {TEXT_COLOR_QUICK.map((p) => (
+                <TextColorSwatch
+                  key={p.color}
+                  color={p.color}
+                  active={
+                    p.color === "#121410"
+                      ? !activeTextColor ||
+                        activeTextColor === "#121410" ||
+                        activeTextColor === "#000000"
+                      : activeTextColor === p.color
+                  }
+                  tooltip={`Text ${p.label}`}
+                  onClick={() => applyTextColor(p.color)}
+                />
+              ))}
+              <ColorPaletteMenu
+                kind="text"
+                presets={TEXT_COLOR_PRESETS}
+                activeColor={activeTextColor}
+                onSelect={applyTextColor}
+              />
+            </>
+          )}
+        </div>
 
-      <div className="w-px h-5 bg-border mx-1" />
+        <FmtSep />
 
-      {/* Heading dropdown */}
-      <HeadingDropdown editor={editor} />
+        <HeadingDropdown editor={editor} />
 
-      <div className="w-px h-5 bg-border mx-1" />
+        <FmtSep />
 
-      {/* Lists */}
-      <ToolbarBtn active={editor.isActive("bulletList")} tooltip="Bullet List"
-        onClick={() => editor.chain().focus().toggleBulletList().run()}>
-        <List className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("orderedList")} tooltip="Numbered List"
-        onClick={() => editor.chain().focus().toggleOrderedList().run()}>
-        <ListOrdered className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("taskList")} tooltip="Task List"
-        onClick={() => editor.chain().focus().toggleTaskList().run()}>
-        <ListTodo className="h-4 w-4" />
-      </ToolbarBtn>
-      {actions && (
-        <>
-          <div className="w-px h-5 bg-border mx-1" />
-          <div className="flex items-center gap-1 ml-auto">
-            {actions}
-          </div>
-        </>
-      )}
+        <div className="pm-fmt-grp">
+          <ToolbarBtn
+            active={editor.isActive("bulletList")}
+            tooltip="Bullet list"
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+          >
+            <List className="h-4 w-4" strokeWidth={1.75} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("orderedList")}
+            tooltip="Numbered list"
+            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          >
+            <ListOrdered className="h-4 w-4" strokeWidth={1.75} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("taskList")}
+            tooltip="Task list"
+            onClick={() => editor.chain().focus().toggleTaskList().run()}
+          >
+            <ListTodo className="h-4 w-4" strokeWidth={1.75} />
+          </ToolbarBtn>
+        </div>
+
+        {actions && (
+          <>
+            <FmtSep />
+            <div className="pm-fmt-grp ml-auto">{actions}</div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
+
+/**
+ * Highlight mark: store color as --pm-hl for lower-half marker CSS.
+ * Merge parent attrs so TipTap Highlight schema stays compatible.
+ */
+const PremiumHighlight = Highlight.extend({
+  addAttributes() {
+    const parent = this.parent?.() ?? {}
+    return {
+      ...parent,
+      color: {
+        default: null,
+        parseHTML: (element: HTMLElement) => {
+          const raw =
+            element.getAttribute("data-color") ||
+            element.style.getPropertyValue("--pm-hl")?.trim() ||
+            element.style.backgroundColor ||
+            null
+          if (!raw) return null
+          // Normalize rgb(...) from older inline styles if needed — keep as-is for presets
+          return raw
+        },
+        renderHTML: (attributes: { color?: string | null }) => {
+          if (!attributes.color) {
+            return { class: "pm-mark-hl" }
+          }
+          return {
+            class: "pm-mark-hl",
+            "data-color": attributes.color,
+            style: `--pm-hl: ${attributes.color}`,
+          }
+        },
+      },
+    }
+  },
+}).configure({ multicolor: true })
 
 /** Shared empty-editor hint for message-style MarkdownEditors. */
 export const MESSAGE_EDITOR_PLACEHOLDER =
@@ -3179,7 +3664,7 @@ export function TiptapEditor({
       }),
       SlashCmd,
       Youtube.configure({ width: 640, height: 360 }),
-      Highlight.configure({ multicolor: true }),
+      PremiumHighlight,
       TextStyle,
       Color,
       Markdown.configure({
@@ -3276,32 +3761,56 @@ export function TiptapEditor({
     if (!shouldReload) return
     externalUpdateRef.current = true
     const { processed } = preprocessDistillBlocks(enriched)
-    // Preserve cursor — setContent often collapses to select-all / doc start
+    // Preserve cursor only for small in-place edits — full note switch resets caret.
+    // Restoring old note positions into a new doc (esp. with atom distill nodes) can throw.
     const prevSel = editor.state.selection
     const hadFocus = editor.isFocused
+    const prevSize = editor.state.doc.content.size
+    const isLikelyNoteSwitch =
+      Math.abs((enriched?.length ?? 0) - (lastEmitted.current?.length ?? 0)) > 80 ||
+      (lastEmitted.current === "" && (enriched?.length ?? 0) > 0) ||
+      ((lastEmitted.current?.length ?? 0) > 0 && enriched === "")
     try {
       // emitUpdate: false avoids cascading onUpdate during external reload
       editor.commands.setContent(processed, { emitUpdate: false })
-      // Restore selection; never leave a full-doc selection after reload
       try {
         const maxPos = editor.state.doc.content.size
-        let from = Math.min(Math.max(prevSel.from, 0), maxPos)
-        let to = Math.min(Math.max(prevSel.to, 0), maxPos)
-        if (maxPos > 2 && to - from >= maxPos - 2) {
-          // Collapse accidental all-select from setContent
-          from = Math.min(Math.max(from, 1), maxPos)
-          to = from
-        }
-        if (from !== to) {
-          editor.commands.setTextSelection({ from, to })
-        } else if (maxPos > 0) {
-          editor.commands.setTextSelection(Math.min(Math.max(from, 1), maxPos))
-        }
-        if (!hadFocus) {
-          editor.commands.blur()
+        if (maxPos <= 0) {
+          /* empty doc */
+        } else if (isLikelyNoteSwitch || !hadFocus) {
+          // Note switch / unfocused: safe start, never transplant foreign selection
+          editor.commands.setTextSelection(Math.min(1, maxPos))
+          if (!hadFocus) editor.commands.blur()
+        } else {
+          // Same note external update: try keep caret, collapse accidental all-select
+          let from = Math.min(Math.max(prevSel.from, 1), maxPos)
+          let to = Math.min(Math.max(prevSel.to, 1), maxPos)
+          if (maxPos > 2 && to - from >= maxPos - 2) {
+            from = Math.min(Math.max(from, 1), maxPos)
+            to = from
+          }
+          // If doc shrank a lot, clamp more aggressively
+          if (prevSize > 0 && maxPos < prevSize * 0.5) {
+            from = to = Math.min(1, maxPos)
+          }
+          try {
+            if (from !== to) {
+              editor.commands.setTextSelection({ from, to })
+            } else {
+              editor.commands.setTextSelection(from)
+            }
+          } catch {
+            editor.commands.setTextSelection(Math.min(1, maxPos))
+          }
         }
       } catch {
-        /* ignore selection restore */
+        try {
+          const maxPos = editor.state.doc.content.size
+          if (maxPos > 0) editor.commands.setTextSelection(Math.min(1, maxPos))
+          if (!hadFocus) editor.commands.blur()
+        } catch {
+          /* ignore selection restore */
+        }
       }
     } catch (err) {
       // Fallback: destroy-range replace can throw on corrupt intermediate state
@@ -3362,8 +3871,9 @@ export function TiptapEditor({
         const noteId = distillBlock.getAttribute("data-source-note-id")
         if (noteId) onNoteLinkClick?.(noteId)
       }
-      // Click on editor chrome / padding outside .ProseMirror (or below content):
-      // put caret at end of last line — same as empty pad under min-height body.
+      // Caret placement on chrome / empty pad:
+      // - Below last line only → end of document
+      // - Left/right margins → do nothing (no forced position)
       const editor = editorRef.current
       if (!editor || editor.isDestroyed || readonly) return
       const pmEl = editor.view.dom as HTMLElement
@@ -3371,12 +3881,13 @@ export function TiptapEditor({
       const belowContent =
         !last || e.clientY > last.getBoundingClientRect().bottom + 2
       const outsidePm = !pmEl.contains(target)
-      if (outsidePm || (belowContent && (target === pmEl || pmEl.contains(target)))) {
-        if (outsidePm || belowContent) {
-          e.preventDefault()
-          editor.chain().focus("end").run()
-        }
+      const onPmSurface = target === pmEl || pmEl.contains(target)
+
+      if (belowContent && (outsidePm || onPmSurface)) {
+        e.preventDefault()
+        editor.chain().focus("end").run()
       }
+      // Left/right gutters: leave selection alone (no focus("end"), no Y snap)
     },
     [onNoteLinkClick, readonly]
   )

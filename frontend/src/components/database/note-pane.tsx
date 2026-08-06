@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
-  Loader2, ArrowDownToLine, Pencil, Check, X, Trash2, Download,
+  Loader2, ArrowDownToLine, Pencil, X, Trash2, Download,
   PanelRight, Database, RefreshCw, Share2, Columns2, ChevronDown,
   MoreVertical,
 } from "lucide-react"
@@ -325,17 +325,37 @@ export function NotePane({
 
   // ── Title ─────────────────────────────────────────────
 
+  /** Commit title on blur / Enter; empty draft restores previous title. */
   const handleTitleSave = async () => {
-    if (!titleDraft.trim() || !note) return
+    if (!note) {
+      setEditingTitle(false)
+      return
+    }
+    const nextTitle = titleDraft.trim()
+    if (!nextTitle || nextTitle === note.title) {
+      setEditingTitle(false)
+      setTitleDraft(note.title || "")
+      return
+    }
     try {
-      await updateNote(collection, note.id, { title: titleDraft.trim() })
-      const next = { ...note, title: titleDraft.trim() }
+      await updateNote(collection, note.id, { title: nextTitle })
+      const next = { ...note, title: nextTitle }
       setNote(next)
-      onTitleChange?.(note.id, titleDraft.trim())
+      onTitleChange?.(note.id, nextTitle)
       onNoteMeta?.(next)
     } catch {
       toast.error("Failed to update title")
+      setTitleDraft(note.title || "")
     }
+    setEditingTitle(false)
+  }
+
+  /** Skip blur-save when Escape cancels (blur still fires on unmount). */
+  const titleCancelRef = useRef(false)
+
+  const handleTitleCancel = () => {
+    titleCancelRef.current = true
+    setTitleDraft(note?.title || "")
     setEditingTitle(false)
   }
 
@@ -872,47 +892,36 @@ export function NotePane({
         className={cn("pm-ws-pane-h", showFocusChrome && "is-focus")}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* Row 1: title + close */}
-        <div className="flex items-center gap-1 px-2.5 pt-2 pb-0.5 min-h-8">
+        {/* Row 1: title + close — inset so serif title isn’t flush to card edge */}
+        <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9">
           {editingTitle ? (
-            <div className="flex items-center gap-1 flex-1 min-w-0">
-              <Input
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void handleTitleSave()
-                  if (e.key === "Escape") setEditingTitle(false)
-                }}
-                className="h-7 pm-ws-pane-title flex-1 min-w-0"
-                autoFocus
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="pm-ws-icon-btn"
-                onClick={() => {
-                  claimFocus()
-                  void handleTitleSave()
-                }}
-              >
-                <Check className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="pm-ws-icon-btn"
-                onClick={() => {
-                  claimFocus()
-                  setEditingTitle(false)
-                }}
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+            <Input
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={() => {
+                if (titleCancelRef.current) {
+                  titleCancelRef.current = false
+                  return
+                }
+                void handleTitleSave()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault()
+                  handleTitleCancel()
+                }
+              }}
+              className="h-7 pm-ws-pane-title flex-1 min-w-0"
+              autoFocus
+            />
           ) : (
-            <>
+            <div className="pm-ws-title-cluster flex-1 min-w-0">
               <span
-                className="pm-ws-pane-title flex-1"
+                className="pm-ws-pane-title"
                 onClick={claimFocus}
               >
                 {note?.title || "Note"}
@@ -920,7 +929,7 @@ export function NotePane({
               <Button
                 variant="ghost"
                 size="sm"
-                className="pm-ws-icon-btn !h-6 !w-6"
+                className="pm-ws-icon-btn pm-ws-title-edit !h-6 !w-6"
                 onClick={() => {
                   claimFocus()
                   setTitleDraft(note?.title || "")
@@ -930,13 +939,13 @@ export function NotePane({
               >
                 <Pencil className="h-3 w-3" />
               </Button>
-            </>
+            </div>
           )}
           {showSplit && onSplit && (
             <Button
               variant="ghost"
               size="sm"
-              className="pm-ws-action"
+              className="pm-ws-icon-btn !h-6 !w-6"
               onClick={() => {
                 claimFocus()
                 onSplit()
@@ -944,7 +953,6 @@ export function NotePane({
               title="Split into second page"
             >
               <Columns2 className="h-3.5 w-3.5" />
-              Split
             </Button>
           )}
           {showClose && onClosePane && (
@@ -968,7 +976,7 @@ export function NotePane({
           left  — Ingested status tag
           right — Detail · Ingest | Update▾ · ⋮ (Download / Delete)
         */}
-        <div className="flex flex-nowrap items-center gap-1 px-2 pb-2 min-w-0">
+        <div className="flex flex-nowrap items-center gap-1 px-4 pb-2.5 min-w-0">
           <div className="flex items-center min-w-0 flex-1">
             {ingested && (
               <span className="pm-ws-status">
@@ -1166,7 +1174,8 @@ export function NotePane({
                 onChange={handleChange}
                 onImageUpload={handleImageUpload}
                 onNoteLinkClick={(id) => onNavigateSource(id)}
-                className="px-6 py-4"
+                className="px-6 pt-1 pb-5"
+                flush
                 placeholder="Start writing your note..."
               />
             </div>

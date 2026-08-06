@@ -322,9 +322,9 @@ export function MeetingSummaryPanel({
           className={cn("pm-ws-pane-h", paneChrome.focused && "is-focus")}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center gap-1 px-2.5 pt-2 pb-0.5 min-h-8">
+          <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9">
             <span
-              className="pm-ws-pane-title flex-1"
+              className="pm-ws-pane-title flex-1 min-w-0"
               onClick={claimFocus}
             >
               {headerMeetingTitle}
@@ -333,7 +333,7 @@ export function MeetingSummaryPanel({
               <Button
                 variant="ghost"
                 size="sm"
-                className="pm-ws-action"
+                className="pm-ws-icon-btn !h-6 !w-6"
                 onClick={() => {
                   claimFocus()
                   paneChrome.onSplit?.()
@@ -341,7 +341,6 @@ export function MeetingSummaryPanel({
                 title="Split into second page"
               >
                 <Columns2 className="h-3.5 w-3.5" />
-                Split
               </Button>
             )}
             {paneChrome.showClose && paneChrome.onClose && (
@@ -357,7 +356,7 @@ export function MeetingSummaryPanel({
             )}
           </div>
           {/* Row 2: section name · Download · Edit/Preview */}
-          <div className="flex flex-nowrap items-center gap-0.5 px-2 pb-2 min-w-0">
+          <div className="flex flex-nowrap items-center gap-0.5 px-4 pb-2.5 min-w-0">
             <span
               className="pm-meta truncate flex-1 min-w-0 text-[var(--pm-muted)]"
               title={sectionTitle}
