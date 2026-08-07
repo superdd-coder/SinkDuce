@@ -6,10 +6,10 @@ import {
   useRef,
   useMemo,
 } from "react"
+import { DatePicker } from "@/components/ui/date-picker"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import {
   X,
-  Calendar,
   Edit3,
   Plus,
   Clock,
@@ -67,7 +67,7 @@ function messagePlainExcerpt(body: string): string {
     .trim()
 }
 
-/** Normalize stored event_time to yyyy-mm-dd for <input type="date">. */
+/** Normalize stored event_time to yyyy-mm-dd for DatePicker. */
 function toDateInputValue(raw: string | null | undefined): string {
   if (!raw) return ""
   const m = raw.match(/^(\d{4}-\d{2}-\d{2})/)
@@ -139,7 +139,6 @@ export function NodeDetailSidebar({
   const [selectPreviewFile, setSelectPreviewFile] =
     useState<FileSummary | null>(null)
   const sidebarPanelRef = useRef<HTMLDivElement>(null)
-  const dateInputRef = useRef<HTMLInputElement>(null)
   const detailRef = useRef<NodeDetail | null>(null)
   detailRef.current = detail
   const switchGenRef = useRef(0)
@@ -613,17 +612,6 @@ export function NodeDetailSidebar({
     }
   }
 
-  const openDatePicker = () => {
-    const el = dateInputRef.current
-    if (!el) return
-    try {
-      el.showPicker?.()
-    } catch {
-      el.focus()
-      el.click()
-    }
-  }
-
   const handleSaveEventTime = async (value: string) => {
     if (!detail) return
     const next = value || null
@@ -1026,30 +1014,16 @@ export function NodeDetailSidebar({
                     Attachments
                   </button>
                   <div className="ml-auto flex items-center gap-1 shrink-0 min-w-0">
-                    <button
-                      type="button"
-                      className="pm-timeline-date-btn"
-                      onClick={openDatePicker}
-                      title="Set event date"
-                    >
-                      <Calendar
-                        className="h-3 w-3 shrink-0"
-                        strokeWidth={1.75}
-                      />
-                      <span className="truncate">
-                        {eventTime || "Set date"}
-                      </span>
-                    </button>
-                    <input
-                      ref={dateInputRef}
-                      type="date"
+                    <DatePicker
+                      size="sm"
+                      className="pm-timeline-date-picker"
                       value={eventTime}
-                      onChange={(e) => {
-                        setEventTime(e.target.value)
-                        void handleSaveEventTime(e.target.value)
+                      onChange={(v) => {
+                        setEventTime(v)
+                        void handleSaveEventTime(v)
                       }}
-                      className="sr-only"
-                      tabIndex={-1}
+                      placeholder="Set date"
+                      allowClear
                     />
                   </div>
                 </div>

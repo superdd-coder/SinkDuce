@@ -1,10 +1,17 @@
 /**
- * Todo detail preview / edit — same Premium silk shell as CreateTodoDialog.
+ * Todo detail / edit — same Premium silk shell as CreateTodoDialog.
  * Open todos: title, markdown body, ddl, chain editable.
- * Completed todos: read-only (can still open Add node from list).
+ * Completed todos: read-only.
  */
-import { useEffect, useMemo, useRef, useState } from "react"
-import { Loader2, X } from "lucide-react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react"
+import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -14,12 +21,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { DatePicker } from "@/components/ui/date-picker"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { FieldLabel } from "@/components/ui/field-label"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { cn } from "@/lib/utils"
 import { listChains, updateTodo } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
 import { triggerTodoRefresh } from "@/lib/todo-refresh"
+import type { Editor } from "@tiptap/core"
 
 interface TodoDetailDialogProps {
   collectionId: string
@@ -52,7 +62,15 @@ export function TodoDetailDialog({
   const [loadingChains, setLoadingChains] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editorKey, setEditorKey] = useState(0)
-  const ddlInputRef = useRef<HTMLInputElement>(null)
+  const titleInputRef = useRef<HTMLTextAreaElement>(null)
+  const descEditorRef = useRef<Editor | null>(null)
+
+  const syncTitleHeight = useCallback(() => {
+    const el = titleInputRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [])
 
   const mainChain = useMemo(
     () => chains.find((c) => c.is_main) ?? null,
@@ -83,17 +101,43 @@ export function TodoDetailDialog({
       .finally(() => setLoadingChains(false))
   }, [open, todo, collectionId])
 
-  const openDdlPicker = () => {
-    if (readonly) return
-    const el = ddlInputRef.current
-    if (!el) return
-    try {
-      el.showPicker?.()
-    } catch {
-      el.focus()
-      el.click()
-    }
-  }
+  useEffect(() => {
+    if (!open || readonly) return
+    const t = window.setTimeout(() => {
+      const el = titleInputRef.current
+      if (!el) return
+      el.focus({ preventScroll: true })
+      syncTitleHeight()
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [open, readonly, syncTitleHeight])
+
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(syncTitleHeight)
+  }, [open, title, syncTitleHeight])
+
+  /** Click empty pad under last line → caret at end (editable only) */
+  const focusDescEnd = useCallback(
+    (e: ReactMouseEvent) => {
+      if (readonly) return
+      const ed = descEditorRef.current
+      if (!ed || ed.isDestroyed) return
+      const t = e.target as HTMLElement
+      if (t.closest(".pm-fmt-toolbar")) return
+      const pm = ed.view.dom as HTMLElement
+      const last = pm.lastElementChild as HTMLElement | null
+      const below =
+        !last || e.clientY > last.getBoundingClientRect().bottom + 2
+      const onHost =
+        t === e.currentTarget || t.classList.contains("pm-todo-md-host")
+      if (below || onHost || t === pm) {
+        e.preventDefault()
+        ed.chain().focus("end").run()
+      }
+    },
+    [readonly]
+  )
 
   const dirty = useMemo(() => {
     if (!displayTodo || readonly) return false
@@ -166,36 +210,116 @@ export function TodoDetailDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="pm-dialog pm-dialog--silk sm:max-w-lg"
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-todo-dialog",
+          "sm:max-w-lg",
+          "!animate-none data-open:!animate-none data-closed:!animate-none"
+        )}
         overlayClassName="pm-dialog-overlay--silk"
       >
-        <DialogHeader>
-          <DialogTitle>
+        <DialogHeader className="pm-todo-dialog-head">
+          <DialogTitle className="pm-todo-dialog-title">
             {readonly ? "Todo detail" : "Edit todo"}
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-3 py-1">
+
+        <div className="pm-dialog-body pm-todo-dialog-body">
           {readonly && (
-            <p className="pm-meta rounded-[var(--pm-r-sm)] bg-[var(--pm-green-wash)] px-2.5 py-1.5 text-[var(--pm-muted)]">
+            <p className="pm-todo-readonly-banner" role="status">
               Completed todos are read-only.
             </p>
           )}
-          <div>
-            <label className="pm-field-label">Todo</label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={readonly}
-              className="pm-field"
-            />
+
+          <div className="pm-todo-top-row">
+            <section className="pm-todo-card pm-todo-card--title">
+              {/* Label pinned top-left; input centered in remaining height */}
+              <FieldLabel htmlFor="pm-todo-edit-title">Todo</FieldLabel>
+              <div className="pm-todo-title-block">
+                <textarea
+                  ref={titleInputRef}
+                  id="pm-todo-edit-title"
+                  rows={1}
+                  spellCheck={false}
+                  className={cn(
+                    "pm-node-id-title pm-node-id-title-input pm-todo-title-input",
+                    readonly && "is-readonly"
+                  )}
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value)
+                    requestAnimationFrame(syncTitleHeight)
+                  }}
+                  disabled={readonly}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.preventDefault()
+                  }}
+                  placeholder="Todo title"
+                  aria-label="Todo title"
+                />
+              </div>
+            </section>
+
+            <section className="pm-todo-card pm-todo-card--meta">
+              <div className="pm-todo-meta-stack">
+                <div className="pm-todo-meta-field min-w-0">
+                  <FieldLabel htmlFor="pm-todo-edit-chain">Chain</FieldLabel>
+                  <div className="relative">
+                    <DropdownSelect
+                      size="sm"
+                      value={selectedChainId}
+                      onChange={setSelectedChainId}
+                      disabled={readonly || loadingChains}
+                      placeholder={
+                        loadingChains ? "Loading chains…" : "Select chain"
+                      }
+                      options={sortedChains.map((c) => ({
+                        value: c.chain_id,
+                        label: chainOptionLabel(c),
+                      }))}
+                    />
+                    {loadingChains && (
+                      <Loader2
+                        className="pointer-events-none absolute right-8 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--pm-faint)]"
+                        aria-hidden
+                      />
+                    )}
+                  </div>
+                </div>
+                <div className="pm-todo-meta-field min-w-0">
+                  <FieldLabel htmlFor="pm-todo-edit-ddl">Deadline</FieldLabel>
+                  {readonly && !ddl ? (
+                    <span className="pm-todo-ddl-readonly-empty">
+                      No deadline
+                    </span>
+                  ) : (
+                    <DatePicker
+                      id="pm-todo-edit-ddl"
+                      size="sm"
+                      value={ddl}
+                      onChange={setDdl}
+                      placeholder="Optional"
+                      disabled={readonly}
+                      allowClear={!readonly}
+                    />
+                  )}
+                </div>
+              </div>
+            </section>
           </div>
-          <div>
-            <label className="pm-field-label">Description</label>
+
+          <section className="pm-todo-card pm-todo-card--desc">
+            <div className="pm-todo-desc-head">
+              <FieldLabel className="pm-todo-desc-label">Description</FieldLabel>
+              {!readonly && (
+                <span className="pm-todo-card-hint">Optional · markdown</span>
+              )}
+            </div>
             <div
               className={cn(
                 "pm-todo-md-host",
                 readonly && "pm-todo-md-host--readonly"
               )}
+              onMouseDown={focusDescEnd}
             >
               {open && (
                 <MarkdownEditor
@@ -212,93 +336,35 @@ export function TodoDetailDialog({
                       : "Details, context, acceptance criteria…"
                   }
                   className="pm-todo-md-editor"
+                  onEditorReady={(ed) => {
+                    descEditorRef.current = ed
+                  }}
                 />
               )}
             </div>
-          </div>
-          <div>
-            <label className="pm-field-label">Chain</label>
-            <div className="relative">
-              <DropdownSelect
-                size="sm"
-                value={selectedChainId}
-                onChange={setSelectedChainId}
-                disabled={readonly || loadingChains}
-                placeholder={
-                  loadingChains ? "Loading chains…" : "Select chain"
-                }
-                options={sortedChains.map((c) => ({
-                  value: c.chain_id,
-                  label: chainOptionLabel(c),
-                }))}
-              />
-              {loadingChains && (
-                <Loader2 className="absolute right-8 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-[var(--pm-faint)] pointer-events-none" />
-              )}
-            </div>
-          </div>
-          <div>
-            <label className="pm-field-label">Deadline</label>
-            <div className="relative flex items-center gap-1">
-              {!ddl && !readonly && (
-                <span
-                  className="pointer-events-none absolute left-3 pm-meta"
-                  aria-hidden
-                >
-                  No deadline
-                </span>
-              )}
-              {readonly && !ddl && (
-                <span className="pm-field text-[var(--pm-faint)]">
-                  No deadline
-                </span>
-              )}
-              {!(readonly && !ddl) && (
-                <input
-                  ref={ddlInputRef}
-                  type="date"
-                  value={ddl}
-                  onChange={(e) => setDdl(e.target.value)}
-                  onClick={openDdlPicker}
-                  onFocus={openDdlPicker}
-                  disabled={readonly}
-                  className={cn(
-                    "pm-field cursor-pointer disabled:cursor-default",
-                    ddl ? "text-[var(--pm-text)]" : "text-transparent",
-                    !ddl &&
-                      "[&::-webkit-datetime-edit]:text-transparent [&::-webkit-datetime-edit-fields-wrapper]:opacity-0"
-                  )}
-                />
-              )}
-              {ddl && !readonly && (
-                <button
-                  type="button"
-                  className="shrink-0 p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] transition-colors"
-                  title="Clear deadline"
-                  onClick={() => setDdl("")}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
+          </section>
         </div>
-        <DialogFooter className="gap-2 sm:gap-2">
+
+        <DialogFooter className="pm-todo-dialog-foot gap-2 sm:justify-end">
           <Button
             type="button"
             variant="ghost"
+            size="sm"
             onClick={() => onOpenChange(false)}
+            disabled={saving}
           >
             {readonly ? "Close" : "Cancel"}
           </Button>
           {!readonly && (
             <Button
               type="button"
+              variant="default"
+              size="sm"
               onClick={() => void handleSave()}
               disabled={saving || !dirty || !title.trim()}
             >
               {saving ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
               ) : (
                 "Save"
               )}

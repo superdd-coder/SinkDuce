@@ -31,8 +31,8 @@ type MenuPos = { top: number; left: number; width: number; maxHeight: number }
 
 /**
  * Soft float select — Premium green-wash selection (no native OS blue).
- * Menu enter/exit: opacity + soft scale/slide, open/close same duration.
- * Tag size portals the menu so accordion overflow cannot clip it.
+ * Menu always portals to document.body (fixed) so dialog/card overflow
+ * cannot clip it (todo Chain, node forms, rails, etc.).
  */
 export function DropdownSelect({
   value,
@@ -62,12 +62,16 @@ export function DropdownSelect({
     const trigger = triggerRef.current
     if (!trigger) return
     const rect = trigger.getBoundingClientRect()
-    const width = Math.max(11.5 * 16, rect.width)
+    /* Tag: min width; form: match trigger, never thinner than 10rem */
+    const width = isTag
+      ? Math.max(11.5 * 16, rect.width)
+      : Math.max(rect.width, 10 * 16)
     const gap = 6
     const pad = 8
     const maxH = 240 /* max-h-60 */
     let top = rect.bottom + gap
-    let left = rect.right - width
+    /* Tag aligns to trigger end; form fields open flush-left under trigger */
+    let left = isTag ? rect.right - width : rect.left
 
     /* Keep in viewport */
     left = Math.max(pad, Math.min(left, window.innerWidth - width - pad))
@@ -82,7 +86,7 @@ export function DropdownSelect({
     }
 
     setMenuPos({ top, left, width, maxHeight })
-  }, [])
+  }, [isTag])
 
   // Drive mount → shown (enter) / shown → unmount (exit).
   useEffect(() => {
@@ -112,20 +116,19 @@ export function DropdownSelect({
     }
   }, [open])
 
-  /* Tag menu: measure trigger → fixed coords (escapes overflow:hidden pads) */
+  /* Fixed coords for all sizes — escapes overflow:hidden dialogs / cards */
   useLayoutEffect(() => {
-    if (!isTag || (!open && !mounted)) return
+    if (!open && !mounted) return
     updateMenuPos()
     if (!open) return
     const onReposition = () => updateMenuPos()
     window.addEventListener("resize", onReposition)
-    /* capture scroll from accordion / rail ancestors */
     window.addEventListener("scroll", onReposition, true)
     return () => {
       window.removeEventListener("resize", onReposition)
       window.removeEventListener("scroll", onReposition, true)
     }
-  }, [open, mounted, isTag, updateMenuPos, options.length])
+  }, [open, mounted, updateMenuPos, options.length])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -150,58 +153,53 @@ export function DropdownSelect({
   const selectedLabel =
     options.find((o) => o.value === value)?.label || placeholder || "Select..."
 
-  const menu = mounted ? (
-    <div
-      ref={menuRef}
-      role="listbox"
-      className={cn(
-        "pm-select-menu max-h-60 overflow-y-auto",
-        isTag
-          ? "pm-select-menu--tag pm-select-menu--fixed"
-          : "absolute z-50 mt-1 w-full",
-        shown && "is-open"
-      )}
-      style={
-        isTag && menuPos
-          ? {
-              top: menuPos.top,
-              left: menuPos.left,
-              width: menuPos.width,
-              maxHeight: menuPos.maxHeight,
-            }
-          : undefined
-      }
-    >
-      {options.length === 0 ? (
-        <div className="pm-select-opt is-empty">No options</div>
-      ) : (
-        options.map((opt) => {
-          const on = opt.value === value
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              role="option"
-              aria-selected={on}
-              onClick={() => {
-                onChange(opt.value)
-                close()
-              }}
-              className={cn("pm-select-opt", on && "is-on")}
-            >
-              <span
-                className={cn("pm-select-dot shrink-0", on && "is-on")}
-                aria-hidden
-              />
-              <span className="pm-select-opt-label min-w-0 truncate">
-                {opt.label}
-              </span>
-            </button>
-          )
-        })
-      )}
-    </div>
-  ) : null
+  const menu =
+    mounted && menuPos ? (
+      <div
+        ref={menuRef}
+        role="listbox"
+        className={cn(
+          "pm-select-menu pm-select-menu--fixed max-h-60 overflow-y-auto",
+          isTag && "pm-select-menu--tag",
+          shown && "is-open"
+        )}
+        style={{
+          top: menuPos.top,
+          left: menuPos.left,
+          width: menuPos.width,
+          maxHeight: menuPos.maxHeight,
+        }}
+      >
+        {options.length === 0 ? (
+          <div className="pm-select-opt is-empty">No options</div>
+        ) : (
+          options.map((opt) => {
+            const on = opt.value === value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="option"
+                aria-selected={on}
+                onClick={() => {
+                  onChange(opt.value)
+                  close()
+                }}
+                className={cn("pm-select-opt", on && "is-on")}
+              >
+                <span
+                  className={cn("pm-select-dot shrink-0", on && "is-on")}
+                  aria-hidden
+                />
+                <span className="pm-select-opt-label min-w-0 truncate">
+                  {opt.label}
+                </span>
+              </button>
+            )
+          })
+        )}
+      </div>
+    ) : null
 
   return (
     <div
@@ -246,11 +244,9 @@ export function DropdownSelect({
         )}
       </button>
 
-      {isTag
-        ? typeof document !== "undefined" && menu && menuPos
-          ? createPortal(menu, document.body)
-          : null
-        : menu}
+      {typeof document !== "undefined" && menu
+        ? createPortal(menu, document.body)
+        : null}
     </div>
   )
 }

@@ -1,9 +1,16 @@
 /**
- * Modal to create a collection todo (title + optional markdown body + DDL + chain).
- * Description uses Premium MarkdownEditor without slash commands.
+ * Create collection to-do — Premium silk dialog (nested white cards).
+ * Layout language matches Create/Edit Group: float shell · FieldLabel · ui/* controls.
  */
-import { useEffect, useMemo, useRef, useState } from "react"
-import { Loader2, X } from "lucide-react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react"
+import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -13,11 +20,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { DatePicker } from "@/components/ui/date-picker"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { FieldLabel } from "@/components/ui/field-label"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { cn } from "@/lib/utils"
 import { createTodo, listChains } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
+import type { Editor } from "@tiptap/core"
 
 interface CreateTodoDialogProps {
   collectionId: string
@@ -47,20 +57,35 @@ export function CreateTodoDialog({
   const [selectedChainId, setSelectedChainId] = useState<string>("")
   const [loadingChains, setLoadingChains] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const ddlInputRef = useRef<HTMLInputElement>(null)
+  const titleInputRef = useRef<HTMLTextAreaElement>(null)
+  const descEditorRef = useRef<Editor | null>(null)
   /** Remount editor when dialog opens so TipTap starts clean */
   const [editorKey, setEditorKey] = useState(0)
 
-  const openDdlPicker = () => {
-    const el = ddlInputRef.current
-    if (!el) return
-    try {
-      el.showPicker?.()
-    } catch {
-      el.focus()
-      el.click()
+  /** Click empty pad under last line → caret at end so any host area is typeable */
+  const focusDescEnd = useCallback((e: ReactMouseEvent) => {
+    const ed = descEditorRef.current
+    if (!ed || ed.isDestroyed) return
+    const t = e.target as HTMLElement
+    if (t.closest(".pm-fmt-toolbar")) return
+    const pm = ed.view.dom as HTMLElement
+    const last = pm.lastElementChild as HTMLElement | null
+    const below =
+      !last || e.clientY > last.getBoundingClientRect().bottom + 2
+    const onHost = t === e.currentTarget || t.classList.contains("pm-todo-md-host")
+    if (below || onHost || t === pm) {
+      e.preventDefault()
+      ed.chain().focus("end").run()
     }
-  }
+  }, [])
+
+  /** Match Node detail title field — grow with content, no form box chrome */
+  const syncTitleHeight = useCallback(() => {
+    const el = titleInputRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [])
 
   const mainChain = useMemo(
     () => chains.find((c) => c.is_main) ?? null,
@@ -97,6 +122,23 @@ export function CreateTodoDialog({
       .finally(() => setLoadingChains(false))
   }, [open, collectionId, defaultChainId])
 
+  /* Focus title after silk enter so open fade isn’t interrupted */
+  useEffect(() => {
+    if (!open) return
+    const t = window.setTimeout(() => {
+      const el = titleInputRef.current
+      if (!el) return
+      el.focus({ preventScroll: true })
+      syncTitleHeight()
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [open, syncTitleHeight])
+
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(syncTitleHeight)
+  }, [open, title, syncTitleHeight])
+
   const handleSubmit = async () => {
     const t = title.trim()
     if (!t) {
@@ -109,7 +151,6 @@ export function CreateTodoDialog({
     }
     setSubmitting(true)
     try {
-      // Store null for main chain (API convention)
       const isMain = mainChain?.chain_id === selectedChainId
       const todo = await createTodo(collectionId, {
         title: t,
@@ -127,7 +168,6 @@ export function CreateTodoDialog({
     }
   }
 
-  // Main first, then branches by title
   const sortedChains = useMemo(() => {
     return [...chains].sort((a, b) => {
       if (a.is_main !== b.is_main) return a.is_main ? -1 : 1
@@ -138,30 +178,99 @@ export function CreateTodoDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="pm-dialog pm-dialog--silk sm:max-w-lg"
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-todo-dialog",
+          "sm:max-w-lg",
+          "!animate-none data-open:!animate-none data-closed:!animate-none"
+        )}
         overlayClassName="pm-dialog-overlay--silk"
       >
-        <DialogHeader>
-          <DialogTitle>New to-do</DialogTitle>
+        <DialogHeader className="pm-todo-dialog-head">
+          <DialogTitle className="pm-todo-dialog-title">New to-do</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3 py-1">
-          <div>
-            <label className="pm-field-label">Todo</label>
-            <input
-              autoFocus
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onKeyDown={(e) => {
-                // Enter must not submit — only the Create button does
-                if (e.key === "Enter") e.preventDefault()
-              }}
-              placeholder="What needs to be done?"
-              className="pm-field"
-            />
+
+        <div className="pm-dialog-body pm-todo-dialog-body">
+          {/* Top row: TODO (left) + Chain/DDL stack card (right) */}
+          <div className="pm-todo-top-row">
+            <section className="pm-todo-card pm-todo-card--title">
+              {/* Label pinned top-left; input centered in remaining height */}
+              <FieldLabel htmlFor="pm-todo-create-title">Todo</FieldLabel>
+              <div className="pm-todo-title-block">
+                <textarea
+                  ref={titleInputRef}
+                  id="pm-todo-create-title"
+                  rows={1}
+                  spellCheck={false}
+                  className="pm-node-id-title pm-node-id-title-input pm-todo-title-input"
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value)
+                    requestAnimationFrame(syncTitleHeight)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.preventDefault()
+                  }}
+                  placeholder="What needs to be done?"
+                  aria-label="Todo title"
+                />
+              </div>
+            </section>
+
+            <section className="pm-todo-card pm-todo-card--meta">
+              <div className="pm-todo-meta-stack">
+                <div className="pm-todo-meta-field min-w-0">
+                  <FieldLabel htmlFor="pm-todo-create-chain">Chain</FieldLabel>
+                  <div className="relative">
+                    <DropdownSelect
+                      size="sm"
+                      value={selectedChainId}
+                      onChange={setSelectedChainId}
+                      disabled={loadingChains || sortedChains.length === 0}
+                      placeholder={
+                        loadingChains
+                          ? "Loading chains…"
+                          : sortedChains.length === 0
+                            ? "No chains"
+                            : "Select chain"
+                      }
+                      options={sortedChains.map((c) => ({
+                        value: c.chain_id,
+                        label: chainOptionLabel(c),
+                      }))}
+                    />
+                    {loadingChains && (
+                      <Loader2
+                        className="pointer-events-none absolute right-8 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--pm-faint)]"
+                        aria-hidden
+                      />
+                    )}
+                  </div>
+                </div>
+                <div className="pm-todo-meta-field min-w-0">
+                  <FieldLabel htmlFor="pm-todo-create-ddl">Deadline</FieldLabel>
+                  <DatePicker
+                    id="pm-todo-create-ddl"
+                    size="sm"
+                    value={ddl}
+                    onChange={setDdl}
+                    placeholder="Optional"
+                    allowClear
+                  />
+                </div>
+              </div>
+            </section>
           </div>
-          <div>
-            <label className="pm-field-label">Description (optional)</label>
-            <div className="pm-todo-md-host">
+
+          {/* Description card — full width */}
+          <section className="pm-todo-card pm-todo-card--desc">
+            <div className="pm-todo-desc-head">
+              <FieldLabel className="pm-todo-desc-label">Description</FieldLabel>
+              <span className="pm-todo-card-hint">Optional · markdown</span>
+            </div>
+            <div
+              className="pm-todo-md-host"
+              onMouseDown={focusDescEnd}
+            >
               {open && (
                 <MarkdownEditor
                   key={editorKey}
@@ -172,82 +281,20 @@ export function CreateTodoDialog({
                   flush
                   placeholder="Details, context, acceptance criteria…"
                   className="pm-todo-md-editor"
+                  onEditorReady={(ed) => {
+                    descEditorRef.current = ed
+                  }}
                 />
               )}
             </div>
-          </div>
-          <div>
-            <label className="pm-field-label">Chain</label>
-            <div className="relative">
-              <DropdownSelect
-                size="sm"
-                value={selectedChainId}
-                onChange={setSelectedChainId}
-                disabled={loadingChains || sortedChains.length === 0}
-                placeholder={
-                  loadingChains
-                    ? "Loading chains…"
-                    : sortedChains.length === 0
-                      ? "No chains"
-                      : "Select chain"
-                }
-                options={sortedChains.map((c) => ({
-                  value: c.chain_id,
-                  label: chainOptionLabel(c),
-                }))}
-              />
-              {loadingChains && (
-                <Loader2 className="absolute right-8 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-[var(--pm-faint)] pointer-events-none" />
-              )}
-            </div>
-          </div>
-          <div>
-            <label className="pm-field-label">Deadline (optional)</label>
-            <div className="relative flex items-center gap-1">
-              {/* Empty: hide browser yyyy/mm/dd ghost text; click opens calendar */}
-              {!ddl && (
-                <span
-                  className="pointer-events-none absolute left-3 pm-meta"
-                  aria-hidden
-                >
-                  No deadline
-                </span>
-              )}
-              <input
-                ref={ddlInputRef}
-                type="date"
-                value={ddl}
-                onChange={(e) => setDdl(e.target.value)}
-                onClick={openDdlPicker}
-                onFocus={openDdlPicker}
-                className={cn(
-                  "pm-field cursor-pointer",
-                  ddl ? "text-[var(--pm-text)]" : "text-transparent",
-                  !ddl &&
-                    "[&::-webkit-datetime-edit]:text-transparent [&::-webkit-datetime-edit-fields-wrapper]:opacity-0 [&::-webkit-datetime-edit-text]:opacity-0"
-                )}
-              />
-              {ddl && (
-                <button
-                  type="button"
-                  className="shrink-0 p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] transition-colors"
-                  title="Clear deadline"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    setDdl("")
-                  }}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
+          </section>
         </div>
-        <DialogFooter className="gap-2 sm:gap-2">
+
+        <DialogFooter className="pm-todo-dialog-foot gap-2 sm:justify-end">
           <Button
             type="button"
             variant="ghost"
+            size="sm"
             onClick={() => onOpenChange(false)}
             disabled={submitting}
           >
@@ -255,13 +302,15 @@ export function CreateTodoDialog({
           </Button>
           <Button
             type="button"
+            variant="default"
+            size="sm"
             onClick={() => void handleSubmit()}
             disabled={
               submitting || !title.trim() || !selectedChainId || loadingChains
             }
           >
             {submitting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
             ) : (
               "Create"
             )}

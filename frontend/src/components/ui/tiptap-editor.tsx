@@ -34,29 +34,49 @@ import { SoftMenu, MenuItem } from "@/components/ui/menu"
  * Click *below* the last content block (tall min-height ProseMirror pad) →
  * place caret at end of document (Typora / Notes style).
  * Left/right of text (same vertical band as a line) must NOT jump to end.
+ * Also: posAtCoords null in empty pad → end (common when min-height expands PM).
  */
 function placeCaretAtEndIfClickBelowContent(
   view: EditorView,
   event: MouseEvent
 ): boolean {
   if (event.button !== 0) return false
-  const last = view.dom.lastElementChild as HTMLElement | null
-  if (!last) {
-    // Empty-ish doc: still focus end
+
+  const goEnd = () => {
+    event.preventDefault()
     const sel = TextSelection.atEnd(view.state.doc)
     view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
     if (!view.hasFocus()) view.focus()
+  }
+
+  const last = view.dom.lastElementChild as HTMLElement | null
+  if (!last) {
+    goEnd()
     return true
   }
-  // Only when click is clearly below the last block — not left/right margins
-  const bottom = last.getBoundingClientRect().bottom
-  if (event.clientY <= bottom + 2) return false
 
-  event.preventDefault()
-  const sel = TextSelection.atEnd(view.state.doc)
-  view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
-  if (!view.hasFocus()) view.focus()
-  return true
+  // Click clearly below the last block’s ink box
+  const bottom = last.getBoundingClientRect().bottom
+  if (event.clientY > bottom + 2) {
+    goEnd()
+    return true
+  }
+
+  /*
+   * Empty vertical pad: last block’s content box is short but ProseMirror is tall.
+   * posAtCoords may still resolve into the last node — prefer end when the hit
+   * is in the trailing empty fraction of the editor (below content mid-line).
+   */
+  const coords = view.posAtCoords({
+    left: event.clientX,
+    top: event.clientY,
+  })
+  if (!coords) {
+    goEnd()
+    return true
+  }
+
+  return false
 }
 
 // ──────────────────────────────────────────────

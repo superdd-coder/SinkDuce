@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import { Button } from "@/components/ui/button"
+import { DatePicker } from "@/components/ui/date-picker"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { FieldLabel } from "@/components/ui/field-label"
 import { Input } from "@/components/ui/input"
@@ -79,7 +80,6 @@ export function AddNodeDialog({
     useState<FileSummary | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const dateInputRef = useRef<HTMLInputElement>(null)
 
   const setSelectMode = (mode: "select" | null) => {
     setAttachMode(mode)
@@ -152,17 +152,6 @@ export function AddNodeDialog({
 
   const removePending = (key: string) => {
     setPending((prev) => prev.filter((p) => p.key !== key))
-  }
-
-  const openDatePicker = () => {
-    const el = dateInputRef.current
-    if (!el) return
-    try {
-      el.showPicker?.()
-    } catch {
-      el.focus()
-      el.click()
-    }
   }
 
   const handleDragOver = (e: DragEvent) => {
@@ -352,33 +341,14 @@ export function AddNodeDialog({
             </div>
 
             <div className="shrink-0">
-              <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                Event Time (optional)
-              </label>
-              <div className="flex items-center gap-1">
-                <input
-                  ref={dateInputRef}
-                  type="date"
-                  value={eventTime}
-                  onChange={(e) => setEventTime(e.target.value)}
-                  onClick={openDatePicker}
-                  className={cn(
-                    "w-full text-xs border rounded px-2 py-1.5 bg-background cursor-pointer",
-                    !eventTime &&
-                      "[&::-webkit-datetime-edit]:text-transparent [&::-webkit-datetime-edit-fields-wrapper]:opacity-0"
-                  )}
-                />
-                {eventTime && (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-foreground shrink-0 p-1"
-                    title="Clear date"
-                    onClick={() => setEventTime("")}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
+              <FieldLabel>Event Time</FieldLabel>
+              <DatePicker
+                size="sm"
+                value={eventTime}
+                onChange={setEventTime}
+                placeholder="Optional"
+                allowClear
+              />
             </div>
 
             {/* Attachments — fills remaining height under form fields */}
