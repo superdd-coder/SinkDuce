@@ -17,10 +17,6 @@ import { LogMessageDialog } from "../file-detail/log-message-dialog"
 import { getFileDetail } from "@/api/file-mgmt"
 import { cn } from "@/lib/utils"
 
-/** Symmetric open/close — Premium --pm-ease (matches Overview rail fade) */
-const EASE = "cubic-bezier(0.45, 0.05, 0.55, 0.95)"
-const SIDEBAR_MS = 200
-
 function findFolderInTree(
   tree: FolderTreeNode[],
   fid: string

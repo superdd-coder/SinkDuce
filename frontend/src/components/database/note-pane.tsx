@@ -155,7 +155,6 @@ export function NotePane({
   showSplit,
   onCloseDialog,
   className,
-  docSwapKey,
 }: NotePaneProps) {
   const [loading, setLoading] = useState(true)
   /** After first note loads, further switches keep chrome and soft-fade body */

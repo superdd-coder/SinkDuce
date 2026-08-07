@@ -1208,8 +1208,13 @@ function mountPremiumFloatBar(
   window.addEventListener("resize", onReposition)
 
   const onOutside = (e: MouseEvent) => {
-    const t = e.target as Node
-    if (menu.contains(t) || anchor.contains(t)) return
+    const t = e.target
+    if (
+      t instanceof globalThis.Node &&
+      (menu.contains(t) || anchor.contains(t))
+    ) {
+      return
+    }
     dismissPremiumFloatBars()
     document.removeEventListener("mousedown", onOutside, true)
   }
@@ -1578,8 +1583,8 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           // Outside click / Escape cancels
           deleteOutsideCleanup?.()
           const onPointerDown = (ev: Event) => {
-            const t = ev.target as Node | null
-            if (t && delBtn.contains(t)) return
+            const t = ev.target
+            if (t instanceof globalThis.Node && delBtn.contains(t)) return
             disarmDelete()
           }
           const onKey = (ev: KeyboardEvent) => {
@@ -2776,7 +2781,10 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
           dropdownEl &&
           !dropdownEl.contains(ev.target as HTMLElement) &&
           ev.target !== resizeBtn &&
-          !resizeBtn.contains(ev.target as Node)
+          !(
+            ev.target instanceof globalThis.Node &&
+            resizeBtn.contains(ev.target)
+          )
         ) {
           closeDropdown()
         }
@@ -3155,8 +3163,8 @@ function ColorPaletteMenu({
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (ref.current?.contains(t)) return
+      const t = e.target
+      if (t instanceof globalThis.Node && ref.current?.contains(t)) return
       // Portaled SoftMenu lives under body — still treat as "inside"
       if (
         t instanceof Element &&
@@ -3294,8 +3302,8 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (ref.current?.contains(t)) return
+      const t = e.target
+      if (t instanceof globalThis.Node && ref.current?.contains(t)) return
       if (
         t instanceof Element &&
         t.closest('[data-slot="menu"][data-menu-portal="true"]')
@@ -3707,7 +3715,7 @@ export const MESSAGE_EDITOR_PLACEHOLDER =
 
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
-  readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
+  readonly = false, onImageUpload, onNoteLinkClick, onDistillNavigate, onEditorReady,
   onEditorFocus,
   showToolbar = true,
   stickyToolbarOffset, toolbarActions,

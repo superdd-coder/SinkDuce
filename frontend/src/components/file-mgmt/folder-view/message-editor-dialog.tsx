@@ -29,7 +29,6 @@ import { cn } from "@/lib/utils"
 
 /** Content pane sequential fade — open/close symmetric (ENGINEERING §4) */
 const PANE_OUT_MS = 140
-const PANE_IN_MS = 180
 
 /** Plain excerpt for list rows — avoid markdown heading clutter in the deck. */
 function messagePlainExcerpt(body: string): string {
