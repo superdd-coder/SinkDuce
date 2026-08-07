@@ -5240,6 +5240,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 /*
  * Shared diamond plate — slides via `top`, spins via rotate.
  * Each view switch adds +90° so it rolls into place.
+ * White liquid-glass: translucent fill + blur + specular rim + soft lift
+ * (not mint wash; depth via layered box-shadow only).
  */
 .pm-shell-nav-plate {
   position: absolute;
@@ -5249,16 +5251,54 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   height: 48px;
   margin: 0;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 9%, #ffffff);
+  /* Frosted white glass over canvas */
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.96) 0%,
+      rgba(255, 255, 255, 0.78) 38%,
+      rgba(255, 255, 255, 0.9) 72%,
+      rgba(255, 255, 255, 0.84) 100%
+    );
+  backdrop-filter: blur(14px) saturate(1.25);
+  -webkit-backdrop-filter: blur(14px) saturate(1.25);
+  /* Hairline glass edge */
+  border: 1px solid color-mix(in srgb, #ffffff 78%, var(--pm-ink, #121410) 8%);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.9) inset,
-    0 2px 12px -4px color-mix(in srgb, var(--pm-green, #1a5e3d) 20%, transparent),
-    0 6px 16px -8px color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent);
+    /* Outer lift — soft float depth (kept light so no side looks heavy) */
+    0 1px 4px -1px color-mix(in srgb, var(--pm-ink, #121410) 9%, transparent),
+    0 6px 16px -8px color-mix(in srgb, var(--pm-ink, #121410) 12%, transparent),
+    0 10px 22px -12px color-mix(in srgb, var(--pm-ink, #121410) 9%, transparent),
+    /* Top specular rim */
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0.5px 0 0 rgba(255, 255, 255, 0.4),
+    /* Bottom glass thickness — thinner than before */
+    inset 0 -0.75px 1.25px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent),
+    /* Soft inner glow */
+    inset 0 0 10px rgba(255, 255, 255, 0.32);
   z-index: 0;
   pointer-events: none;
   will-change: transform, top;
   transition: none;
   opacity: 0;
+  isolation: isolate;
+  overflow: hidden;
+}
+/* Specular sheen — liquid highlight that travels with the rotating plate */
+.pm-shell-nav-plate::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 13px;
+  background: linear-gradient(
+    125deg,
+    rgba(255, 255, 255, 0.75) 0%,
+    rgba(255, 255, 255, 0.2) 28%,
+    rgba(255, 255, 255, 0) 48%,
+    rgba(255, 255, 255, 0.12) 100%
+  );
+  pointer-events: none;
+  z-index: 0;
 }
 .pm-shell-nav-plate.is-ready {
   opacity: 1;
