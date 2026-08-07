@@ -128,22 +128,8 @@ def create_session(body: SessionCreateRequest = Body(...)):
         session_id=body.id,
     )
 
-    # Meeting sessions: load transcript as system message
-    if session.id.startswith("meeting_"):
-        meeting_id = session.id[len("meeting_"):]
-        try:
-            from src.meeting.store import get_meeting, get_transcript
-            meeting = get_meeting(meeting_id)
-            transcript = get_transcript(meeting_id)
-            if transcript and transcript.segments:
-                lines = []
-                for i, seg in enumerate(transcript.segments, start=1):
-                    spk = seg.speaker_id or "unknown"
-                    lines.append(f"[{i}] {spk}: {seg.text}")
-                transcript_text = "\n".join(lines)
-                store.add_message(session.id, role="system", content=transcript_text)
-        except Exception:
-            logger.exception("Failed to load transcript for meeting %s", meeting_id)
+    # Meeting transcript is injected ephemerally in ChatboxAgent._build_messages
+    # (not persisted as a session system message).
 
     return _session_response(session, store)
 

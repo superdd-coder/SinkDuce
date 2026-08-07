@@ -640,14 +640,43 @@ class TestTranscriptionFactory:
 class TestDashScopeTranscription:
     """DashScope file and realtime transcription implementations."""
 
-    def test_file_transcription_fixed_model(self):
-        """DashScopeFileTranscription always uses fixed Qwen-Audio filetrans model."""
-        from src.meeting.transcription.dashscope_file import DashScopeFileTranscription
+    def test_file_transcription_respects_selected_model(self):
+        """DashScopeFileTranscription uses config.model when it is an allowed id."""
+        from src.meeting.transcription.dashscope_file import (
+            DashScopeFileTranscription,
+            MODEL_FUN_ASR,
+            MODEL_QWEN_FILETRANS,
+        )
 
         with patch("src.meeting.transcription.dashscope_file._HAS_DASHSCOPE", True):
-            cfg = TranscriptionProviderConfig(api_key="sk-test", model="fun-asr")
-            provider = DashScopeFileTranscription(cfg)
-            assert provider._model == "qwen-audio-3.0-asr-flash-filetrans"
+            fun = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_FUN_ASR)
+            )
+            assert fun._model == MODEL_FUN_ASR
+            assert fun._uses_precompiled_vocabulary() is True
+
+            qwen = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_QWEN_FILETRANS)
+            )
+            assert qwen._model == MODEL_QWEN_FILETRANS
+            assert qwen._uses_precompiled_vocabulary() is False
+
+    def test_file_transcription_unknown_model_falls_back_to_fun_asr(self):
+        """Unknown / empty model falls back to fun-asr."""
+        from src.meeting.transcription.dashscope_file import (
+            DashScopeFileTranscription,
+            MODEL_FUN_ASR,
+        )
+
+        with patch("src.meeting.transcription.dashscope_file._HAS_DASHSCOPE", True):
+            empty = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=None)
+            )
+            assert empty._model == MODEL_FUN_ASR
+            bad = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model="not-a-real-model")
+            )
+            assert bad._model == MODEL_FUN_ASR
 
     def test_build_instant_vocabulary_file(self):
         """Instant vocabulary maps app hot-word weights into DashScope 1–5 range."""
@@ -661,6 +690,23 @@ class TestDashScopeTranscription:
         assert vocab == {"SinkDuce": 3, "Qdrant": 5}
         assert _build_instant_vocabulary(None) is None
         assert _build_instant_vocabulary([]) is None
+
+    def test_build_precompiled_vocabulary_items(self):
+        """Fun-ASR precompiled vocabulary items include weight mapping and lang."""
+        from src.meeting.transcription.dashscope_file import (
+            _build_precompiled_vocabulary_items,
+        )
+
+        items = _build_precompiled_vocabulary_items([
+            {"text": "SinkDuce", "weight": 4, "lang": "zh"},
+            {"text": "Qdrant", "weight": 10},
+            {"text": "", "weight": 5},
+        ])
+        assert items == [
+            {"text": "SinkDuce", "weight": 3, "lang": "zh"},
+            {"text": "Qdrant", "weight": 5},
+        ]
+        assert _build_precompiled_vocabulary_items(None) is None
 
     def test_realtime_transcription_fixed_model(self):
         """DashScopeRealtimeTranscription always uses fixed Qwen-Audio streaming model."""

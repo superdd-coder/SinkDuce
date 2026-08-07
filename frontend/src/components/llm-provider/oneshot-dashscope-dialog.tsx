@@ -21,8 +21,9 @@ interface OneShotDashscopeDialogProps {
 }
 
 const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-// Fixed DashScope ASR models (no UI picker; adapters also hardcode these).
-const FILE_TRANS_MODEL = "qwen-audio-3.0-asr-flash-filetrans"
+// File ASR is selectable in Settings (fun-asr | qwen-audio-3.0-asr-flash-filetrans).
+// OneShot defaults to fun-asr (precompiled hot words + stable batch path).
+const FILE_TRANS_MODEL = "fun-asr"
 const RT_TRANS_MODEL = "qwen-audio-3.0-asr-flash-streaming"
 
 export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotDashscopeDialogProps) {

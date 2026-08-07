@@ -347,13 +347,13 @@ interface TranscriptionProviderCardProps {
   onTest: (id: string) => Promise<{ success: boolean; message?: string; error?: string }>
 }
 
-function TranscriptionProviderCard({ provider, kind, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
-  // DashScope adapters hardcode a single Qwen model (ignore stored config.model).
-  const modelLabel = provider.adapter?.startsWith("dashscope")
-    ? kind === "file"
-      ? "qwen-audio-3.0-asr-flash-filetrans"
-      : "qwen-audio-3.0-asr-flash-streaming"
-    : (provider.model || provider.adapter)
+function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
+  // Realtime DashScope still hardcodes streaming model; file DashScope uses config.model.
+  const modelLabel =
+    provider.adapter === "dashscope_funasr_realtime"
+      ? "qwen-audio-3.0-asr-flash-streaming"
+      : (provider.model || provider.adapter)
+
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
   const [testing, setTesting] = useState(false)
   const statusColor = status === "ready" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-muted-foreground/40"
@@ -820,7 +820,21 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         { key: "api_key", label: "API Key", type: "password", placeholder: "sk-or-v1-..." },
       ]
     }
-    // Remote adapters: only api_key
+    if (adapter === "dashscope_funasr") {
+      return [
+        ...fileTransFields,
+        {
+          key: "model",
+          label: "Model",
+          options: [
+            { value: "fun-asr", label: "fun-asr (FunASR cloud)" },
+            { value: "qwen-audio-3.0-asr-flash-filetrans", label: "qwen-audio-3.0-asr-flash-filetrans" },
+          ],
+        },
+        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+      ]
+    }
+    // Other remote adapters: only api_key
     return [
       ...fileTransFields,
       { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
