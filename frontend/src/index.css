@@ -5974,6 +5974,535 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   );
 }
 /*
+ * Add Node dialog — same soft language as Create Group / Create Todo:
+ * canvas shell · nested white cards · silk open/close + overlay.
+ * When Select opens, Preview is a **separate soft-float window** (gap + own shadow).
+ *
+ * Alignment contract (dual window):
+ *   pad-t / pad-x / pad-b identical on Preview panel + Main
+ *   chrome-h identical for PREVIEW title row + ADD NODE title row
+ *   body mt 10px identical → nested white content tops share a baseline
+ *   nested cards stretch to fill body (no orphan canvas strip at bottom)
+ */
+.pm-add-node-dialog.pm-dialog[data-slot="dialog-content"] {
+  /* Nested card soft-float gutter (matches Group §3.6 sm lobe) */
+  --pm-add-node-shadow-gutter: 12px;
+  /* Match Group/Todo shell pad: 22 top · 22 sides · 14 bottom */
+  --pm-add-node-pad-x: 22px;
+  --pm-add-node-pad-t: 22px;
+  --pm-add-node-pad-b: 14px;
+  /* Title chrome height — fits xs buttons + title baseline */
+  --pm-add-node-chrome-h: 28px;
+  --pm-add-node-main-w: min(820px, calc(100vw - 2rem));
+  --pm-add-node-preview-w: min(calc(85vh * 210 / 297), 48vw, 440px);
+  --pm-add-node-preview-gap: 16px;
+  --pm-add-node-shell-h: min(85vh, 780px);
+  /*
+   * Preview open/close — silk clock (slightly longer than dialog enter).
+   * Symmetric open/close; ease matches pm-dialog--silk.
+   */
+  --pm-add-node-preview-ms: 400ms;
+  --pm-add-node-preview-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  display: flex !important;
+  flex-direction: column !important;
+  width: var(--pm-add-node-main-w) !important;
+  max-width: min(98vw, calc(100vw - 1.5rem)) !important;
+  height: var(--pm-add-node-shell-h) !important;
+  max-height: var(--pm-add-node-shell-h) !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  animation: none !important;
+  animation-duration: 0s !important;
+  transition:
+    opacity var(--pm-dialog-silk-ms, 280ms) var(--pm-dialog-silk-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    scale var(--pm-dialog-silk-ms, 280ms) var(--pm-dialog-silk-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    width var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    background-color var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    box-shadow var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease) !important;
+  will-change: width;
+}
+/*
+ * Dual-window mode: host is transparent layout only.
+ * Preview + Main each carry their own canvas surface + soft shadow.
+ */
+.pm-add-node-dialog.pm-dialog[data-slot="dialog-content"].is-preview-open {
+  width: min(
+    calc(
+      var(--pm-add-node-main-w) + var(--pm-add-node-preview-w) +
+        var(--pm-add-node-preview-gap)
+    ),
+    98vw
+  ) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  /* Keep overflow hidden during tween so rail curtain clips cleanly;
+     shadows still paint inside shell (panel inset). */
+  overflow: hidden !important;
+}
+.pm-add-node-dialog.pm-dialog[data-slot="dialog-content"].is-preview-open.is-preview-settled {
+  /* After open settles, allow soft shadows to bloom past shell */
+  overflow: visible !important;
+}
+.pm-add-node-shell {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  gap: 0;
+  transition: gap var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease);
+}
+.pm-add-node-dialog.is-preview-open .pm-add-node-shell {
+  gap: var(--pm-add-node-preview-gap);
+  overflow: hidden;
+}
+.pm-add-node-dialog.is-preview-open.is-preview-settled .pm-add-node-shell {
+  overflow: visible;
+}
+/*
+ * Preview rail — curtain clip (ENGINEERING §4.5 language):
+ * rail width 0 ↔ full; panel stays fixed-width inside and soft-fades/slides.
+ * No min-width jump (that caused hard snaps). Symmetric open/close.
+ */
+.pm-add-node-preview {
+  flex: 0 0 0;
+  flex-grow: 0;
+  flex-shrink: 0;
+  flex-basis: 0;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  height: 100%;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  align-self: stretch;
+  box-sizing: border-box;
+  /* Opacity slightly lag on open, lead on close — feels silkier than lockstep */
+  transition:
+    flex-basis var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    width var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    max-width var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    opacity calc(var(--pm-add-node-preview-ms) * 0.85)
+      var(--pm-add-node-preview-ease);
+  will-change: width, opacity;
+}
+.pm-add-node-preview.is-open {
+  flex: 0 0 var(--pm-add-node-preview-w);
+  flex-basis: var(--pm-add-node-preview-w);
+  width: var(--pm-add-node-preview-w);
+  max-width: var(--pm-add-node-preview-w);
+  min-width: 0;
+  height: 100%;
+  opacity: 1;
+  pointer-events: auto;
+  /* Curtain while tweening — clips soft shadow corners if left on */
+  overflow: hidden;
+}
+/*
+ * §3.6 Soft float: after open settles, rail must NOT clip box-shadow.
+ * (Parent shell/dialog already flip to overflow:visible via is-preview-settled.)
+ */
+.pm-add-node-dialog.is-preview-settled .pm-add-node-preview.is-open {
+  overflow: visible;
+}
+/*
+ * Independent soft-float window — fixed footprint inside the rail
+ * (curtain: rail clips while tweening; panel does not squash).
+ * Silk fade + light drift. Shadow is on the panel shell only.
+ */
+.pm-add-node-preview-panel.pm-select-preview,
+.pm-add-node-preview-panel {
+  height: 100% !important;
+  /* Fixed panel width = open rail width (not 100% of collapsing rail) */
+  width: var(--pm-add-node-preview-w) !important;
+  max-width: var(--pm-add-node-preview-w) !important;
+  min-width: var(--pm-add-node-preview-w) !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: var(--pm-canvas, #f6f5f1) !important;
+  border: none !important;
+  border-radius: var(--pm-r-lg, 20px) !important;
+  /* Full soft float elevation — must not be clipped (see rail overflow above) */
+  box-shadow: var(--pm-shadow) !important;
+  padding: var(--pm-add-node-pad-t) var(--pm-add-node-pad-x)
+    var(--pm-add-node-pad-b) !important;
+  box-sizing: border-box !important;
+  /* Clip only *inner* content; own box-shadow paints outside this box */
+  overflow: hidden !important;
+  transform-origin: right center;
+  opacity: 0.55;
+  transform: translateX(14px) scale(0.985);
+  transition:
+    opacity var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    transform var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    box-shadow var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease);
+  will-change: transform, opacity;
+  /* Avoid filter/drop-shadow — §3.6 box-shadow only */
+  filter: none !important;
+}
+.pm-add-node-preview.is-open .pm-add-node-preview-panel.pm-select-preview,
+.pm-add-node-preview.is-open .pm-add-node-preview-panel {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+/* Settled open: drop will-change so GPU layer doesn’t soft-clip corner shadows */
+.pm-add-node-dialog.is-preview-settled
+  .pm-add-node-preview.is-open
+  .pm-add-node-preview-panel {
+  will-change: auto;
+  transform: none;
+}
+/* Preview title = Group/Todo dialog chrome (uppercase title role) */
+.pm-add-node-preview-panel .pm-select-preview-head {
+  display: flex !important;
+  flex: 0 0 var(--pm-add-node-chrome-h) !important;
+  min-height: var(--pm-add-node-chrome-h) !important;
+  max-height: var(--pm-add-node-chrome-h) !important;
+  height: var(--pm-add-node-chrome-h) !important;
+  margin: 0 0 2px !important;
+  padding: 0 !important;
+  align-items: center !important;
+  gap: 8px !important;
+  background: transparent !important;
+}
+.pm-add-node-preview-panel .pm-select-preview-title {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  font: var(--pm-t-title) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  color: var(--pm-ink) !important;
+  line-height: 1 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.pm-add-node-preview-panel .pm-select-preview-close {
+  flex-shrink: 0 !important;
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 999px !important;
+}
+/*
+ * Nested doc body — same top offset as main body (mt 10).
+ * Bottom sits on pad-b floor (no extra margin) so Preview white card bottom
+ * lines up with Attachments / Message card bottoms in the main window.
+ */
+.pm-add-node-preview-panel .pm-select-preview-body {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  margin: 10px 0 0 !important;
+  margin-inline: 0 !important;
+  margin-bottom: 0 !important;
+  border-radius: var(--pm-r, 16px) !important;
+  background: #ffffff !important;
+  box-shadow: var(--pm-shadow-sm) !important;
+  overflow: hidden !important;
+}
+.pm-add-node-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: var(--pm-add-node-main-w);
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: var(--pm-add-node-pad-t) var(--pm-add-node-pad-x)
+    var(--pm-add-node-pad-b);
+  box-sizing: border-box;
+  overflow: hidden;
+  /* Closed-preview: main is just the shell body (shell owns bg/shadow) */
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  transition:
+    background-color var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    box-shadow var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease),
+    border-radius var(--pm-add-node-preview-ms) var(--pm-add-node-preview-ease);
+  will-change: box-shadow, background-color;
+}
+/* Open-preview: main becomes its own soft-float window */
+.pm-add-node-dialog.is-preview-open .pm-add-node-main {
+  background: var(--pm-canvas, #f6f5f1);
+  border-radius: var(--pm-r-lg, 20px);
+  box-shadow: var(--pm-shadow);
+  flex: 0 0 var(--pm-add-node-main-w);
+  width: var(--pm-add-node-main-w);
+  max-width: var(--pm-add-node-main-w);
+  height: 100%;
+  align-self: stretch;
+  /* pad-b is the only bottom air under nested white cards */
+  overflow: hidden;
+}
+/*
+ * Title row — matches Group/Todo dialog chrome:
+ * Geist title · uppercase · wide tracking · fixed chrome height.
+ * Cancel / Add Node / close share one baseline (no absolute X).
+ */
+.pm-add-node-head {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  flex: 0 0 var(--pm-add-node-chrome-h) !important;
+  height: var(--pm-add-node-chrome-h) !important;
+  min-height: var(--pm-add-node-chrome-h) !important;
+  max-height: var(--pm-add-node-chrome-h) !important;
+  margin: 0 0 2px !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+  background: transparent !important;
+  border: none !important;
+}
+.pm-add-node-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  font: var(--pm-t-title) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  color: var(--pm-ink) !important;
+  text-align: left !important;
+  line-height: 1 !important;
+}
+.pm-add-node-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 100%;
+}
+/* Title-bar buttons keep label role (same as dialog footer chrome) */
+.pm-add-node-head-actions [data-slot="button"],
+.pm-add-node-head-actions button {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  height: 26px !important;
+  min-height: 26px !important;
+}
+.pm-add-node-head-close {
+  width: 26px !important;
+  height: 26px !important;
+  min-width: 26px !important;
+  padding: 0 !important;
+  color: var(--pm-faint) !important;
+}
+.pm-add-node-head-close:hover {
+  color: var(--pm-ink) !important;
+}
+/*
+ * Body: mt 10 matches Preview nested body top.
+ * Side gutter only for soft-float shadows — **no bottom pad** so card bottoms
+ * share the pad-b floor with Preview’s white surface (same outer pad-b: 14px).
+ */
+.pm-add-node-body {
+  display: flex !important;
+  flex: 1 1 0 !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  margin-top: 10px !important;
+  margin-bottom: 0 !important;
+  padding: 0 var(--pm-add-node-shadow-gutter) 0 !important;
+  margin-inline: calc(-1 * var(--pm-add-node-shadow-gutter)) !important;
+  min-height: 0 !important;
+  overflow: visible !important; /* let card bottom soft-shadow use pad-b air */
+  height: auto !important;
+}
+.pm-add-node-cols {
+  display: grid;
+  /* Left params/attach a bit wider; Message takes remaining */
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  gap: 12px;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  align-items: stretch;
+  align-content: stretch;
+}
+.pm-add-node-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  align-self: stretch;
+}
+/* Nested white soft-float cards on canvas */
+.pm-add-node-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-shadow-sm);
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  z-index: 0;
+  box-sizing: border-box;
+}
+.pm-add-node-card--params {
+  flex: 0 0 auto;
+  gap: 12px;
+}
+.pm-add-node-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+.pm-add-node-field .pm-field-label {
+  margin-bottom: 6px;
+}
+.pm-add-node-card--attach {
+  flex: 1 1 0;
+  min-height: 0;
+  gap: 10px;
+  overflow: hidden;
+  /* Stretch with left column so bottom matches Message + Preview */
+  align-self: stretch;
+}
+.pm-add-node-card--attach.is-selecting {
+  min-height: 0;
+}
+.pm-add-node-attach-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.pm-add-node-attach-labels {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.pm-add-node-attach-label {
+  margin-bottom: 0 !important;
+}
+/*
+ * Host Node-sidebar attach stack inside white card —
+ * fill remaining card height so tree/list can scroll.
+ */
+.pm-add-node-attach-stack.pm-timeline-attach-stack {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.pm-add-node-attach-stack .pm-timeline-attach-body {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.pm-add-node-attach-stack .pm-timeline-attach-tree-pane.is-open,
+.pm-add-node-attach-stack .pm-timeline-attach-list-pane.is-open {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.pm-add-node-card--message {
+  display: flex !important;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  align-self: stretch;
+  overflow: hidden;
+  z-index: 1;
+}
+.pm-add-node-msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.pm-add-node-msg-label {
+  margin-bottom: 0 !important;
+}
+.pm-add-node-md-host {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  -webkit-overflow-scrolling: touch;
+}
+.pm-add-node-md-host .pm-add-node-md-editor,
+.pm-add-node-md-host .tiptap-editor {
+  flex: 1 1 auto;
+  min-height: 100%;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+.pm-add-node-md-host .tiptap-editor .ProseMirror,
+.pm-add-node-md-host .ProseMirror {
+  min-height: 100%;
+  font: var(--pm-t-prose);
+  color: var(--pm-text);
+}
+.pm-add-node-md-host .pm-fmt-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in srgb, #ffffff 92%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+@media (max-width: 720px) {
+  .pm-add-node-cols {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  .pm-add-node-card--attach {
+    min-height: 180px;
+  }
+  .pm-add-node-card--message {
+    min-height: 220px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-add-node-dialog.pm-dialog[data-slot="dialog-content"],
+  .pm-add-node-shell,
+  .pm-add-node-preview,
+  .pm-add-node-preview-panel,
+  .pm-add-node-preview-panel.pm-select-preview,
+  .pm-add-node-main {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+}
+/*
  * Description editor — fills Description card; no wash fill (card is already white).
  * Host fills card; ProseMirror min-height 100% so empty pad is clickable → caret end.
  */
