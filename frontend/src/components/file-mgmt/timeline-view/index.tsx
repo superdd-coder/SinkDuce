@@ -235,6 +235,11 @@ interface TVP {
    * Used to ignore 0×0 measures and re-apply camera when re-shown.
    */
   active?: boolean
+  /**
+   * Quick Chat covers the right rail — fade Todo / Message stream / Node
+   * cards (same motion as Overview .pm-rail-stack + Files is-qc-covered).
+   */
+  railCovered?: boolean
 }
 interface CWN {chain:Chain;nodes:Node[]}
 
@@ -362,7 +367,11 @@ function assignBranchLevels(binfo: BranchInfo[]): void {
   }
 }
 
-export function TimelineView({ collectionId, active = true }: TVP) {
+export function TimelineView({
+  collectionId,
+  active = true,
+  railCovered = false,
+}: TVP) {
   const [chains,setChains]=useState<Chain[]>([])
   const [chainData,setChainData]=useState<Map<string,CWN>>(new Map())
   const [groups,setGroups]=useState<NodeGroup[]>([])
@@ -370,9 +379,6 @@ export function TimelineView({ collectionId, active = true }: TVP) {
   const [selId,setSelId]=useState<string|null>(null)
   const timelineNavRequest = useFileMgmtStore((s) => s.timelineNavRequest)
   const clearTimelineNavRequest = useFileMgmtStore((s) => s.clearTimelineNavRequest)
-  /** Keeps sidebar content mounted during close slide animation. */
-  const [panelNodeId, setPanelNodeId] = useState<string | null>(null)
-  const panelOpen = selId != null
   // Canvas pan/zoom
   const [scale, setScale] = useState(1)
   const [tx, setTx] = useState(0)
@@ -464,6 +470,17 @@ export function TimelineView({ collectionId, active = true }: TVP) {
     sourceNodeIds: [],
     messageId: null,
   })
+  /**
+   * Right-rail content mode with sequential fade (Todo ↔ Node Detail ↔ Messages).
+   * Switching nodes while already on Node Detail updates id without a full fade.
+   */
+  type RailMode = 'todo' | 'node' | 'msg'
+  const desiredRailMode: RailMode = msgMode ? 'msg' : selId ? 'node' : 'todo'
+  const [railMode, setRailMode] = useState<RailMode>('todo')
+  const [railNodeId, setRailNodeId] = useState<string | null>(null)
+  const [railPhase, setRailPhase] = useState<'shown' | 'hiding'>('shown')
+  const railMotionGen = useRef(0)
+  const RAIL_OUT_MS = 140
 
   /** @param silent — skip full-page Loading (use after drag/reorder so connectors are not unmounted). */
   const fetch=useCallback(async(opts?:{silent?:boolean})=>{
@@ -504,7 +521,6 @@ export function TimelineView({ collectionId, active = true }: TVP) {
     setMsgMode(false)
     setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
     setFocusGroupId(null)
-    setPanelNodeId(nodeId)
     setSelId(nodeId)
     navFocusRef.current = nodeId
     clearTimelineNavRequest()
@@ -526,7 +542,6 @@ export function TimelineView({ collectionId, active = true }: TVP) {
       setSelId(null)
       return
     }
-    setPanelNodeId(id)
     setSelId(id)
   }, [msgMode, chainData])
   const closeSidebar = useCallback(() => setSelId(null), [])
@@ -536,7 +551,6 @@ export function TimelineView({ collectionId, active = true }: TVP) {
       if (!on) {
         // entering: close node detail
         setSelId(null)
-        setPanelNodeId(null)
         setMsgFocus({ kind: 'main' })
         setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
         return true
@@ -570,14 +584,33 @@ export function TimelineView({ collectionId, active = true }: TVP) {
     return ids
   }, [msgMode, msgFocus, msgDetail, chains, chainData])
 
-  // When node loses focus, clear detail immediately → Todo rail
+  // Todo ↔ Node Detail ↔ Messages: sequential opacity fade (no hard cut)
   useEffect(() => {
-    if (selId) {
-      setPanelNodeId(selId)
+    // Same mode: only refresh node id when staying on node detail (no full fade)
+    if (desiredRailMode === railMode) {
+      if (desiredRailMode === 'node' && selId && selId !== railNodeId) {
+        setRailNodeId(selId)
+      }
       return
     }
-    setPanelNodeId(null)
-  }, [selId])
+    const gen = ++railMotionGen.current
+    setRailPhase('hiding')
+    const t = window.setTimeout(() => {
+      if (gen !== railMotionGen.current) return
+      setRailMode(desiredRailMode)
+      if (desiredRailMode === 'node' && selId) {
+        setRailNodeId(selId)
+      } else if (desiredRailMode !== 'node') {
+        // Leaving node mode — keep last id optional; clear on todo
+        if (desiredRailMode === 'todo') setRailNodeId(null)
+      }
+      setRailPhase('shown')
+    }, RAIL_OUT_MS)
+    return () => window.clearTimeout(t)
+    // railNodeId intentionally omitted — only used for in-branch compare above
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desiredRailMode, railMode, selId])
+
   const ref=useCallback(()=>{fetch({silent:true});setDrk(k=>k+1)},[fetch])
   const ncr=useCallback(()=>{setAddOpen(false);setAddTgt(null);fetch({silent:true})},[fetch])
   const ccr=useCallback(()=>{setCcOpen(false);setCcTgt(null);fetch({silent:true})},[fetch])
@@ -1875,17 +1908,15 @@ export function TimelineView({ collectionId, active = true }: TVP) {
   // a keepMounted tab or when silently refreshing after drag/reorder.
   if (loading && chains.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        <p className="text-sm">Loading...</p>
+      <div className="pm-timeline items-center justify-center">
+        <p className="pm-meta text-[var(--pm-muted)]">Loading…</p>
       </div>
     )
   }
   if (!mc) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        <div className="text-center">
-          <p className="text-sm">No main chain found</p>
-        </div>
+      <div className="pm-timeline items-center justify-center">
+        <p className="pm-meta text-[var(--pm-muted)]">No main chain found</p>
       </div>
     )
   }
@@ -1946,7 +1977,7 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                 >
                   {/* Continuous stem through the gap into the + (matches connector stroke) */}
                   <div
-                    className="absolute left-1/2 w-px -translate-x-1/2 pointer-events-none z-0 bg-muted-foreground/30"
+                    className="absolute left-1/2 w-px -translate-x-1/2 pointer-events-none z-0 bg-[color-mix(in_srgb,var(--pm-ink)_18%,transparent)]"
                     style={{
                       top: -CONN_GAP,
                       bottom: 20, // stop at vertical center of the 40px + button
@@ -1960,10 +1991,7 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                         'absolute z-10 -translate-y-1/2',
                         // Mid-gap, to the right of the stem (not on the line)
                         'left-1/2 ml-3',
-                        'w-6 h-6 rounded-full border border-dashed border-destructive/30',
-                        'bg-background flex items-center justify-center',
-                        'text-muted-foreground/40 hover:text-destructive hover:border-destructive/50',
-                        'transition-colors shadow-sm',
+                        'pm-timeline-add-slot is-danger w-6 h-6 rounded-full',
                       )}
                       style={{ top: -CONN_GAP / 2 }}
                       onClick={() => setConfirmDeleteBranchId(bi.bc.chain_id)}
@@ -1975,7 +2003,7 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                   <button
                     type="button"
                     data-branch-target
-                    className="relative z-[1] w-10 h-10 rounded-md border border-dashed border-muted-foreground/30 bg-background flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground/70 hover:border-muted-foreground/50 transition-colors shadow-sm"
+                    className="relative z-[1] pm-timeline-add-slot w-10 h-10"
                     onClick={() => {
                       const all = chainData.get(bi.bc.chain_id)?.nodes ?? []
                       const maxO = all.reduce((m, n) => Math.max(m, n.order), 0)
@@ -1994,10 +2022,12 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                       data-branch-msg-focus
                       title="Focus branch messages"
                       className={cn(
-                        'absolute -left-6 top-1/2 -translate-y-1/2 z-10 p-1 rounded border bg-background shadow-sm',
+                        'absolute -left-6 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full',
+                        'bg-white shadow-[var(--pm-shadow-sm)]',
+                        'transition-colors duration-150',
                         msgFocus.kind === 'chain' && msgFocus.chainId === bi.bc.chain_id
-                          ? 'border-primary text-primary'
-                          : 'border-border text-muted-foreground hover:text-foreground'
+                          ? 'text-[var(--pm-green)] bg-[var(--pm-green-wash)]'
+                          : 'text-[var(--pm-muted)] hover:text-[var(--pm-ink)]'
                       )}
                       onClick={(e) => {
                         e.stopPropagation()
@@ -2042,10 +2072,12 @@ export function TimelineView({ collectionId, active = true }: TVP) {
               {bi.done && !msgMode && (
                 <div className="flex items-center gap-2 mt-0.5 ml-2">
                   <button
-                    className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+                    type="button"
+                    className="pm-meta text-[var(--pm-faint)] hover:text-[var(--pm-green)] flex items-center gap-0.5 transition-colors"
                     onClick={() => ro(bi.bc.chain_id)}
                   >
-                    <RotateCcw className="h-2 w-2" />Reopen
+                    <RotateCcw className="h-2.5 w-2.5" />
+                    Reopen
                   </button>
                 </div>
               )}
@@ -2056,28 +2088,17 @@ export function TimelineView({ collectionId, active = true }: TVP) {
     )
   }
 
-  // Sidebar geometry — stays inside parent (page has px-10); keep right inset so border is not clipped.
-  const SIDEBAR_W = 300
-  const SIDEBAR_GAP_LEFT = 12
-  const SIDEBAR_INSET_RIGHT = 4
-  const SIDEBAR_INSET_BOTTOM = 12
-  /** Gap between message detail column and stream column (equal widths). */
-  const MSG_DETAIL_GAP = 12
-  // Todo list is the default right rail; messages / node detail take exclusive priority.
-  // Message detail expands an equal-width column left of the stream, squeezing the canvas.
+  // Right rail width = Files Messages / QC (--pm-collection-rail-w via CSS).
+  // Message detail = two equal columns of that width (data-msg-cols="2").
   const msgColumns = msgMode && msgDetail.open ? 2 : 1
-  const sidebarContentW =
-    SIDEBAR_W * msgColumns + (msgColumns > 1 ? MSG_DETAIL_GAP : 0)
-  const shellW =
-    sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT
   const mainChainId = chains.find((c) => c.is_main)?.chain_id ?? null
   const todoChainDefault = todoDefaultChainId || mainChainId
 
   return (
-    <div className="h-full min-h-0 flex overflow-hidden bg-muted/5">
+    <div className="pm-timeline">
       {/* Canvas — click empty area closes sidebar / exits group focus */}
       <div
-        className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden relative"
+        className="pm-timeline-canvas"
         onClick={(e) => {
           const t = e.target as HTMLElement
           if (t.closest('[data-node-card]')) return
@@ -2100,22 +2121,17 @@ export function TimelineView({ collectionId, active = true }: TVP) {
         }}
       >
         {/* Toolbar */}
-        <div className="absolute top-2 right-2 z-30 flex items-center gap-2" data-groups-menu>
+        <div className="pm-timeline-toolbar" data-groups-menu>
           <button
             type="button"
             title={msgMode ? 'Exit message stream' : 'Message stream'}
-            className={cn(
-              'h-8 px-2 rounded-md border text-[11px] flex items-center gap-1.5 transition-colors',
-              msgMode
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'border-border bg-background/90 text-muted-foreground hover:text-foreground'
-            )}
+            className={cn('pm-timeline-tb-btn', msgMode && 'is-on')}
             onClick={(e) => {
               e.stopPropagation()
               toggleMsgMode()
             }}
           >
-            <MessageSquareText className="h-3.5 w-3.5" />
+            <MessageSquareText />
             Messages
           </button>
           <GroupsMenu
@@ -2138,13 +2154,9 @@ export function TimelineView({ collectionId, active = true }: TVP) {
         >
           <div
             ref={viewportRef}
-            className="flex-1 min-h-0 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+            className="pm-timeline-viewport"
             style={{
-              backgroundImage: 'radial-gradient(circle,rgba(128,128,128,0.08) 1px,transparent 1px)',
-              backgroundSize: '20px 20px',
               backgroundPosition: `${tx}px ${ty}px`,
-              WebkitUserSelect: 'none',
-              userSelect: 'none',
             }}
             onPointerDown={(e) => {
               if (e.button !== 0) return
@@ -2194,8 +2206,12 @@ export function TimelineView({ collectionId, active = true }: TVP) {
               panDrag.current = null
             }}
           >
-            {/* World layer: pan + zoom. Hidden until first center so we never flash uncentered nodes. */}
+            {/* World layer: pan + zoom. Soft fade until first center (no hard cut / white flash). */}
             <div
+              className={cn(
+                'pm-timeline-world',
+                canvasReady ? 'is-ready' : 'is-pending',
+              )}
               style={{
                 // translate3d + rounded values reduce subpixel blur on scaled text
                 transform: `translate3d(${Math.round(tx)}px, ${Math.round(ty)}px, 0) scale(${scale})`,
@@ -2210,9 +2226,6 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                 // Avoid permanent will-change layer which often blurs text under scale
                 backfaceVisibility: 'hidden',
                 WebkitFontSmoothing: 'antialiased',
-                opacity: canvasReady ? 1 : 0,
-                // Keep layout measurable while gated (no display:none)
-                pointerEvents: canvasReady ? 'auto' : 'none',
               }}
             >
               <div
@@ -2222,7 +2235,7 @@ export function TimelineView({ collectionId, active = true }: TVP) {
               >
                 {/* Closed-loop branch connectors (behind cards) */}
                 <svg
-                  className="absolute inset-0 pointer-events-none z-0 overflow-visible"
+                  className="absolute inset-0 pointer-events-none z-0 overflow-visible pm-timeline-connector"
                   width="100%"
                   height="100%"
                   aria-hidden
@@ -2234,7 +2247,6 @@ export function TimelineView({ collectionId, active = true }: TVP) {
                       fill="none"
                       stroke="currentColor"
                       strokeWidth={1}
-                      className="text-muted-foreground/30"
                     />
                   ))}
                 </svg>
@@ -2283,7 +2295,7 @@ export function TimelineView({ collectionId, active = true }: TVP) {
           </div>
           <DragOverlay dropAnimation={null} style={{ cursor: 'grabbing' }}>
             {dragN ? (
-              <div className="opacity-95 shadow-xl rounded-md ring-2 ring-primary/30">
+              <div className="opacity-95 rounded-[var(--pm-r-sm)] shadow-[var(--pm-shadow)] ring-1 ring-[color-mix(in_srgb,var(--pm-green)_30%,transparent)]">
                 <NodeCard
                   node={dragN}
                   groupSource={groupSourceForNode(groups, dragN.group_id)}
@@ -2301,70 +2313,69 @@ export function TimelineView({ collectionId, active = true }: TVP) {
 
       {/*
         Right dock shell: always the rightmost flex child.
-        Width animates open/closed; inner panel slides.
+        Width animates open/closed; inner panel is nested white soft float.
         paddingLeft = gap from canvas, paddingRight = inset from page edge, paddingBottom = bottom margin.
       */}
       <div
-        className="h-full min-h-0 shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
-        style={{ width: shellW }}
-        onTransitionEnd={(e) => {
-          if (e.target !== e.currentTarget) return
-          if (e.propertyName === 'width' && !panelOpen) {
-            setPanelNodeId(null)
-          }
-        }}
+        className="pm-timeline-rail"
+        data-msg-cols={msgColumns > 1 ? 2 : 1}
       >
-        <div
-          className="h-full box-border flex justify-end"
-          style={{
-            width: sidebarContentW + SIDEBAR_GAP_LEFT + SIDEBAR_INSET_RIGHT,
-            paddingLeft: SIDEBAR_GAP_LEFT,
-            paddingRight: SIDEBAR_INSET_RIGHT,
-            paddingBottom: SIDEBAR_INSET_BOTTOM,
-          }}
-        >
+        <div className="pm-timeline-rail-inner">
           <div
             className={cn(
-              'h-full shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] translate-x-0',
+              'h-full shrink-0 pm-timeline-rail-content',
+              railPhase === 'hiding' ? 'is-out' : 'is-in',
+              railCovered && 'is-qc-covered',
             )}
-            style={{ width: sidebarContentW }}
             onClick={(e) => e.stopPropagation()}
-            data-todo-sidebar={!msgMode && !panelNodeId ? true : undefined}
+            data-todo-sidebar={railMode === 'todo' ? true : undefined}
+            data-pm-rail-anchor
           >
-            {msgMode ? (
-              <MessageStreamSidebar
-                collectionId={collectionId}
-                chains={chains}
-                chainNodes={chainNodesMap}
-                focus={msgFocus}
-                onClose={() => {
-                  setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
-                  setMsgMode(false)
-                }}
-                onFocusChange={setMsgFocus}
-                onDetailChange={setMsgDetail}
-                detailOpen={msgDetail.open}
-              />
-            ) : selId && panelNodeId ? (
-              <NodeDetailSidebar
-                collectionId={collectionId}
-                nodeId={panelNodeId}
-                onClose={closeSidebar}
-                hideCloseButton
-                onNodeUpdated={ref}
-                getGroupName={gn}
-                groups={groups}
-              />
-            ) : (
-              <div className="h-full rounded-lg border border-border/60 bg-background overflow-y-auto p-2">
-                <TodoCard
-                  key={todoSidebarKey}
-                  collection={collectionId}
-                  defaultChainId={todoChainDefault}
-                  variant="sidebar"
+            {/*
+              Fade stack under Quick Chat — same motion as Overview
+              .pm-rail-stack when .is-qc-covered.
+            */}
+            <div
+              className={cn(
+                'pm-timeline-rail-stack h-full min-h-0',
+                railCovered && 'is-covered',
+              )}
+            >
+              {railMode === 'msg' ? (
+                <MessageStreamSidebar
+                  collectionId={collectionId}
+                  chains={chains}
+                  chainNodes={chainNodesMap}
+                  focus={msgFocus}
+                  onClose={() => {
+                    setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
+                    setMsgMode(false)
+                  }}
+                  onFocusChange={setMsgFocus}
+                  onDetailChange={setMsgDetail}
+                  detailOpen={msgDetail.open}
                 />
-              </div>
-            )}
+              ) : railMode === 'node' && railNodeId ? (
+                <NodeDetailSidebar
+                  collectionId={collectionId}
+                  nodeId={railNodeId}
+                  onClose={closeSidebar}
+                  hideCloseButton
+                  onNodeUpdated={ref}
+                  getGroupName={gn}
+                  groups={groups}
+                />
+              ) : (
+                <div className="pm-timeline-todo-shell">
+                  <TodoCard
+                    key={todoSidebarKey}
+                    collection={collectionId}
+                    defaultChainId={todoChainDefault}
+                    variant="sidebar"
+                  />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -2415,20 +2426,26 @@ export function TimelineView({ collectionId, active = true }: TVP) {
           if (!v) setConfirmDeleteBranchId(null)
         }}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className="pm-dialog pm-dialog--silk max-w-sm"
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle className="text-sm">
+            <DialogTitle>
               Delete branch “{confirmDeleteBranchTitle}”?
             </DialogTitle>
           </DialogHeader>
-          <p className="text-xs text-muted-foreground">
-            This empty branch will be removed. You can create a new branch from
-            the same node later.
-          </p>
+          <div className="pm-dialog-body">
+            <p className="pm-meta text-[var(--pm-muted)]">
+              This empty branch will be removed. You can create a new branch from
+              the same node later.
+            </p>
+          </div>
           <DialogFooter className="gap-2 sm:justify-end">
             <Button
-              variant="outline"
+              variant="ghost"
               size="xs"
+              className="pm-btn-ghost"
               onClick={() => setConfirmDeleteBranchId(null)}
             >
               Cancel
@@ -2493,12 +2510,12 @@ function ChainStartDrop({ chainId }: { chainId: string }) {
     <div
       ref={setNodeRef}
       className={cn(
-        'flex items-center justify-center self-center w-4 h-14 rounded transition-colors shrink-0 -mr-1',
-        isOver ? 'bg-primary/15 ring-1 ring-primary/40' : 'bg-transparent',
+        'pm-timeline-drop-hint flex items-center justify-center self-center w-4 h-14 rounded transition-colors shrink-0 -mr-1',
+        isOver && 'is-over',
       )}
       title="Drop at start of chain"
     >
-      <div className={cn('w-0.5 h-8 rounded-full', isOver ? 'bg-primary/50' : 'bg-transparent')} />
+      <div className="pm-timeline-drop-bar" />
     </div>
   )
 }
@@ -2509,18 +2526,13 @@ function ChainEndDrop({ chainId }: { chainId: string }) {
     <div
       ref={setNodeRef}
       className={cn(
-        'flex items-center justify-center self-center mx-0.5 w-6 h-14 rounded transition-colors shrink-0',
-        isOver ? 'bg-primary/15 ring-1 ring-primary/40' : 'bg-transparent',
+        'pm-timeline-drop-hint flex items-center justify-center self-center mx-0.5 w-6 h-14 rounded transition-colors shrink-0',
+        isOver && 'is-over',
       )}
       title="Drop at end of chain"
     >
       {/* Only show a drop hint when hovering — idle vertical bar looked like a broken connector */}
-      <div
-        className={cn(
-          'w-0.5 h-8 rounded-full transition-colors',
-          isOver ? 'bg-primary/50' : 'bg-transparent',
-        )}
-      />
+      <div className="pm-timeline-drop-bar" />
     </div>
   )
 }
@@ -2544,8 +2556,8 @@ function ChainEndAddButton({
     <div
       ref={setNodeRef}
       className={cn(
-        'overflow-visible',
-        isOver && 'ring-2 ring-primary/20 rounded-md',
+        'overflow-visible rounded-[var(--pm-r-sm)]',
+        isOver && 'ring-2 ring-[color-mix(in_srgb,var(--pm-green)_22%,transparent)]',
       )}
     >
       <AddNodeTodoSplit
@@ -2619,18 +2631,15 @@ function ChainRow({
           data-branch-target
           data-empty-chain-placeholder
           className={cn(
-            'w-48 h-12 shrink-0 rounded-md border-2 border-dashed',
-            'border-muted-foreground/30 bg-background/60',
-            'flex items-center justify-center gap-2',
-            'text-muted-foreground/55 hover:text-muted-foreground',
-            'hover:border-muted-foreground/50 hover:bg-muted/30',
-            'transition-colors shadow-sm',
+            'pm-timeline-add-slot w-48 h-12 shrink-0 gap-2 px-3',
           )}
           onClick={() => onAddNode(chainId, 0)}
           title="Add first node to timeline"
         >
           <Plus className="h-4 w-4 shrink-0" />
-          <span className="text-xs font-medium truncate">Add first node</span>
+          <span className="pm-label truncate normal-case tracking-normal">
+            Add first node
+          </span>
         </button>
         <AddNodeTodoSplit
           onAddNode={() => onAddNode(chainId, 0)}
@@ -2701,7 +2710,7 @@ function ChainRow({
         {/* Continuous baseline through visual columns (spans Layout-B gaps) */}
         {drawBaseline && (
           <div
-            className="absolute top-1/2 h-px bg-muted-foreground/15 -translate-y-1/2 pointer-events-none z-0"
+            className="absolute top-1/2 h-px -translate-y-1/2 pointer-events-none z-0 bg-[color-mix(in_srgb,var(--pm-ink)_12%,transparent)]"
             style={{
               left: baselineLeft,
               width: baselineWidth,
@@ -2740,7 +2749,7 @@ function ChainRow({
                   }}
                   title="Insert node after"
                 >
-                  <div className="w-5 h-5 rounded-full border border-dashed border-muted-foreground/40 flex items-center justify-center text-muted-foreground/60 bg-background hover:border-primary/50 hover:text-primary shadow-sm">
+                  <div className="pm-timeline-add-slot w-5 h-5 rounded-full">
                     <Plus className="h-3 w-3" />
                   </div>
                 </button>
@@ -2932,7 +2941,7 @@ function ChainRow({
               <ChainEndDrop chainId={chainId} />
               <div className="flex flex-row items-center gap-0 shrink-0 relative z-10">
                 <div className="flex items-center justify-center self-center mx-1">
-                  <div className="w-8 h-px bg-muted-foreground/15" />
+                  <div className="w-8 h-px bg-[color-mix(in_srgb,var(--pm-ink)_12%,transparent)]" />
                 </div>
                 <AddNodeTodoSplit
                   onAddNode={() => {
@@ -3019,9 +3028,10 @@ function SW({
     >
       {!isFirst && (
         <div className="flex items-center justify-center self-center mx-1 w-8 h-8 relative group/conn">
-          <div className="w-8 h-px bg-muted-foreground/15" />
+          <div className="w-8 h-px bg-[color-mix(in_srgb,var(--pm-ink)_12%,transparent)]" />
           {showInsertBtn && onInsert && (
             <button
+              type="button"
               className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/conn:opacity-100 transition-opacity"
               onClick={e => {
                 e.stopPropagation()
@@ -3029,7 +3039,7 @@ function SW({
               }}
               title="Insert node after"
             >
-              <div className="w-4 h-4 rounded-full border border-dashed border-muted-foreground/30 flex items-center justify-center text-muted-foreground/50 bg-background hover:border-primary/50 hover:text-primary">
+              <div className="pm-timeline-add-slot w-4 h-4 rounded-full">
                 <Plus className="h-2.5 w-2.5" />
               </div>
             </button>
@@ -3039,7 +3049,7 @@ function SW({
       {/* Placeholder keeps the slot (covers baseline); DragOverlay is the floating card */}
       {isDragging ? (
         <div
-          className="w-48 h-12 rounded-md border-2 border-dashed border-primary/40 bg-background shrink-0"
+          className="pm-timeline-add-slot w-48 h-12 shrink-0 border-[color-mix(in_srgb,var(--pm-green)_40%,transparent)] bg-[var(--pm-green-wash)]"
           aria-hidden
         />
       ) : typeof children === 'function' ? (

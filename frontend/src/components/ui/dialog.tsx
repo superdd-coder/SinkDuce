@@ -58,6 +58,12 @@ function DialogContent({
   /** Optional backdrop classes (e.g. match silk dialog duration). */
   overlayClassName?: string
 }) {
+  /* Silk dialogs use CSS opacity/scale — never TW animate-in/out (hard flash). */
+  const isSilk =
+    typeof className === "string"
+      ? className.includes("pm-dialog--silk")
+      : false
+
   return (
     <DialogPortal>
       <DialogOverlay className={overlayClassName} />
@@ -72,12 +78,15 @@ function DialogContent({
           "border-0 shadow-[var(--pm-shadow)]",
           /*
            * Default compact dialogs: keyframe enter/exit.
-           * Silk / workspace pass animate-none + CSS transitions in className
-           * (must come after these so twMerge can drop animate-in/out).
+           * Silk: skip keyframes entirely (opacity/scale via .pm-dialog--silk).
            */
-          "duration-300",
-          "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
-          "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          isSilk
+            ? "animate-none duration-0 data-open:animate-none data-closed:animate-none"
+            : [
+                "duration-300",
+                "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
+                "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+              ],
           className
         )}
         {...props}

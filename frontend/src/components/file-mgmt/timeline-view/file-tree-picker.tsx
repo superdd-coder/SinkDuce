@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   Loader2,
+  Search,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { FileSummary, FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
@@ -108,70 +110,52 @@ function folderIsExpandable(node: PickerFolderNode): boolean {
   return (
     node.children.length > 0 ||
     node.files.length > 0 ||
-    node.file_count > 0
+    (node.file_count ?? 0) > 0
   )
 }
 
-/** Keep folders/files that match query (folder name or file name). */
 function filterTree(
   folders: PickerFolderNode[],
   rootFiles: FileSummary[],
-  query: string
-): { folders: PickerFolderNode[]; rootFiles: FileSummary[]; expandIds: string[] } {
-  const q = query.trim().toLowerCase()
-  if (!q) {
+  q: string
+): {
+  folders: PickerFolderNode[]
+  rootFiles: FileSummary[]
+  expandIds: string[]
+} {
+  const term = q.trim().toLowerCase()
+  if (!term) {
     return { folders, rootFiles, expandIds: [] }
   }
 
   const expandIds: string[] = []
 
-  const markAll = (nodes: PickerFolderNode[]) => {
-    for (const n of nodes) {
-      expandIds.push(n.folder_id)
-      markAll(n.children)
+  const filterNode = (node: PickerFolderNode): PickerFolderNode | null => {
+    const nameHit = node.name.toLowerCase().includes(term)
+    const kids = node.children
+      .map(filterNode)
+      .filter(Boolean) as PickerFolderNode[]
+    const files = node.files.filter((f) =>
+      (f.display_name || f.filename || "").toLowerCase().includes(term)
+    )
+    if (!nameHit && kids.length === 0 && files.length === 0) return null
+    if (kids.length > 0 || files.length > 0 || nameHit) {
+      expandIds.push(node.folder_id)
+    }
+    return {
+      ...node,
+      children: kids,
+      files,
     }
   }
 
-  const filterFolders = (list: PickerFolderNode[]): PickerFolderNode[] => {
-    const out: PickerFolderNode[] = []
-    for (const folder of list) {
-      const nameMatch = folder.name.toLowerCase().includes(q)
-      const matchedFiles = folder.files.filter((f) =>
-        f.filename.toLowerCase().includes(q)
-      )
-      const matchedChildren = filterFolders(folder.children)
-
-      if (nameMatch) {
-        expandIds.push(folder.folder_id)
-        markAll(folder.children)
-        out.push({
-          ...folder,
-          children: folder.children,
-          files: folder.files,
-        })
-      } else if (matchedFiles.length > 0 || matchedChildren.length > 0) {
-        expandIds.push(folder.folder_id)
-        out.push({
-          folder_id: folder.folder_id,
-          name: folder.name,
-          kind: folder.kind,
-          children: matchedChildren,
-          files: matchedFiles,
-          file_count: folder.file_count,
-          icon_type: folder.icon_type,
-          icon_value: folder.icon_value,
-          icon_color: folder.icon_color,
-        })
-      }
-    }
-    return out
-  }
-
-  return {
-    folders: filterFolders(folders),
-    rootFiles: rootFiles.filter((f) => f.filename.toLowerCase().includes(q)),
-    expandIds,
-  }
+  const nextFolders = folders
+    .map(filterNode)
+    .filter(Boolean) as PickerFolderNode[]
+  const nextRoot = rootFiles.filter((f) =>
+    (f.display_name || f.filename || "").toLowerCase().includes(term)
+  )
+  return { folders: nextFolders, rootFiles: nextRoot, expandIds }
 }
 
 function FolderRow({
@@ -197,16 +181,18 @@ function FolderRow({
     node.files.length +
     node.children.reduce((sum, c) => sum + c.files.length + c.file_count, 0)
   const boundGroup = groupByFolderId.get(node.folder_id) ?? null
+  const count =
+    node.files.length || node.file_count || childFileCount || 0
 
   return (
     <div>
       <div
-        className="w-full flex items-center gap-0.5 px-0.5 py-0.5 rounded text-[10px] hover:bg-muted/40 text-left"
-        style={{ paddingLeft: depth * 12 + 2 }}
+        className="pm-timeline-ftree-row"
+        style={{ paddingLeft: depth * 14 + 4 }}
       >
         <button
           type="button"
-          className="shrink-0 p-0.5 rounded hover:bg-muted/60 text-muted-foreground"
+          className={cn("pm-timeline-ftree-chev", isOpen && "is-open")}
           aria-label={isOpen ? "Collapse folder" : "Expand folder"}
           aria-expanded={isOpen}
           disabled={!expandable}
@@ -219,66 +205,73 @@ function FolderRow({
           {!expandable ? (
             <span className="inline-block w-3 h-3" />
           ) : isOpen ? (
-            <ChevronDown className="h-3 w-3" />
+            <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} />
           ) : (
-            <ChevronRight className="h-3 w-3" />
+            <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
           )}
         </button>
         <button
           type="button"
-          className="flex-1 min-w-0 flex items-center gap-1.5 py-0.5 text-left"
+          className={cn(
+            "pm-timeline-ftree-folder",
+            isOpen && "is-open"
+          )}
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
             if (expandable) onToggle(node.folder_id)
           }}
         >
-          {/* Fixed icon slot — prevents emoji/lucide from overlapping the name */}
-          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden">
+          <span className="pm-timeline-ftree-icon">
             <FolderRowIcon node={node} boundGroup={boundGroup} />
           </span>
-          <span className="min-w-0 flex-1 truncate font-medium text-left">
-            {node.name}
-          </span>
-          <span className="text-muted-foreground/50 shrink-0 tabular-nums pr-1">
-            {node.files.length || node.file_count || childFileCount || 0}
-          </span>
+          <span className="pm-timeline-ftree-name">{node.name}</span>
+          <span className="pm-timeline-ftree-count">{count}</span>
         </button>
       </div>
 
-      {isOpen && expandable && (
-        <div>
-          {node.children.map((child) => (
-            <FolderRow
-              key={child.folder_id}
-              node={child}
-              depth={depth + 1}
-              expanded={expanded}
-              onToggle={onToggle}
-              selectedSet={selectedSet}
-              onSelectFile={onSelectFile}
-              groupByFolderId={groupByFolderId}
-            />
-          ))}
-          {node.files.map((f) => (
-            <FileRow
-              key={f.file_id}
-              file={f}
-              depth={depth + 1}
-              selected={selectedSet.has(f.file_id)}
-              onSelect={onSelectFile}
-            />
-          ))}
-          {node.children.length === 0 && node.files.length === 0 && (
-            <p
-              className="text-[10px] text-muted-foreground/40 py-0.5"
-              style={{ paddingLeft: (depth + 1) * 12 + 20 }}
-            >
-              Empty
-            </p>
+      <div
+        className={cn(
+          "pm-timeline-ftree-kids",
+          isOpen && expandable && "is-open"
+        )}
+      >
+        <div className="pm-timeline-ftree-kids-inner">
+          {expandable && (
+            <>
+              {node.children.map((child) => (
+                <FolderRow
+                  key={child.folder_id}
+                  node={child}
+                  depth={depth + 1}
+                  expanded={expanded}
+                  onToggle={onToggle}
+                  selectedSet={selectedSet}
+                  onSelectFile={onSelectFile}
+                  groupByFolderId={groupByFolderId}
+                />
+              ))}
+              {node.files.map((f) => (
+                <FileRow
+                  key={f.file_id}
+                  file={f}
+                  depth={depth + 1}
+                  selected={selectedSet.has(f.file_id)}
+                  onSelect={onSelectFile}
+                />
+              ))}
+              {node.children.length === 0 && node.files.length === 0 && (
+                <p
+                  className="pm-timeline-ftree-empty"
+                  style={{ paddingLeft: (depth + 1) * 14 + 30 }}
+                >
+                  Empty
+                </p>
+              )}
+            </>
           )}
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -297,21 +290,15 @@ function FileRow({
   return (
     <button
       type="button"
-      className={cn(
-        "w-full flex items-center gap-1.5 px-1 py-0.5 rounded text-[10px] text-left",
-        selected
-          ? "bg-primary/10 text-primary"
-          : "hover:bg-muted/30 text-foreground"
-      )}
-      style={{ paddingLeft: depth * 12 + 20 }}
+      className={cn("pm-timeline-ftree-file", selected && "is-on")}
+      style={{ paddingLeft: depth * 14 + 28 }}
       onClick={(e) => {
         e.preventDefault()
         e.stopPropagation()
         onSelect(file)
       }}
     >
-      {/* Fixed slot so type badges (NOTE/MEET/PDF) cannot cover the filename */}
-      <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
+      <span className="pm-timeline-ftree-icon">
         <FileTypeIcon
           source={{
             filename: file.filename,
@@ -323,12 +310,19 @@ function FileRow({
           className="h-3.5 w-3.5"
         />
       </span>
-      <span className="min-w-0 flex-1 truncate">
+      <span className="pm-timeline-ftree-name">
         {file.display_name || file.filename}
       </span>
       {(file.archived || file.is_greyed) && (
-        <span className="text-[9px] text-amber-500 shrink-0">archived</span>
+        <span className="pm-meta text-[var(--pm-faint)] shrink-0">
+          archived
+        </span>
       )}
+      <Check
+        className="pm-timeline-ftree-check"
+        strokeWidth={2.25}
+        aria-hidden
+      />
     </button>
   )
 }
@@ -452,31 +446,34 @@ export function FileTreePicker({
   return (
     <div
       data-file-select-tree
-      className={cn("space-y-2 min-h-0 flex flex-col", className)}
+      className={cn("pm-timeline-ftree", className)}
     >
-      <input
-        className="w-full text-[10px] border rounded px-2 py-1 bg-background shrink-0"
-        placeholder="Search folders or files..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        autoFocus
-      />
+      <div className="pm-timeline-ftree-search-wrap">
+        <Search className="pm-timeline-ftree-search-icon" strokeWidth={1.75} />
+        <input
+          className="pm-timeline-ftree-search"
+          placeholder="Search folders or files…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          autoFocus
+        />
+      </div>
 
       <div
         className={cn(
-          "overflow-auto space-y-0.5 rounded border border-border/60 bg-background p-1 min-h-0 flex-1",
+          "pm-timeline-ftree-scroll",
           maxHeightClass
         )}
       >
         {loading && (
-          <div className="flex items-center justify-center gap-1.5 py-6 text-[10px] text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Loading files...
+          <div className="flex items-center justify-center gap-2 py-10">
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
+            <span className="pm-meta text-[var(--pm-muted)]">Loading files…</span>
           </div>
         )}
 
         {error && (
-          <p className="text-[10px] text-red-500 px-1.5 py-2">{error}</p>
+          <p className="pm-meta text-[var(--pm-danger)] px-3 py-3">{error}</p>
         )}
 
         {!loading && !error && (
@@ -504,7 +501,7 @@ export function FileTreePicker({
             ))}
             {filtered.folders.length === 0 &&
               filtered.rootFiles.length === 0 && (
-                <p className="text-[10px] text-muted-foreground/50 px-1.5 py-3 text-center">
+                <p className="pm-meta text-[var(--pm-faint)] px-3 py-8 text-center">
                   {search.trim()
                     ? "No matching folders or files"
                     : "No files found"}

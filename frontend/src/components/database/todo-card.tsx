@@ -381,14 +381,20 @@ export function TodoCard({
   const shell =
     variant === "card"
       ? "pm-rail-card todo-card h-full min-h-0 flex flex-col"
-      : "h-full flex flex-col min-h-0"
+      : "todo-card h-full flex flex-col min-h-0"
 
   return (
     <div className={cn(shell, className)}>
       <div className="flex items-center justify-between gap-2 mb-2 shrink-0">
         <span
-          className="pm-label"
-          style={{ textTransform: "none", letterSpacing: "0.02em" }}
+          className={
+            variant === "sidebar" ? "pm-timeline-panel-title" : "pm-label"
+          }
+          style={
+            variant === "sidebar"
+              ? undefined
+              : { textTransform: "none", letterSpacing: "0.02em" }
+          }
         >
           To-do
         </span>
@@ -419,17 +425,12 @@ export function TodoCard({
       </div>
 
       {loading ? (
-        <div className="flex flex-1 items-center gap-2 py-4 justify-center min-h-0">
+        <div className="todo-card-body flex flex-1 items-center gap-2 py-4 justify-center min-h-0">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--pm-faint)]" />
           <span className="pm-meta">Loading…</span>
         </div>
       ) : (
-        <div
-          className={cn(
-            "min-h-0 flex flex-col",
-            variant === "card" && "flex-1 overflow-auto"
-          )}
-        >
+        <div className="todo-card-body min-h-0 flex flex-col flex-1 overflow-auto">
           {openRows.length === 0 && completedRows.length === 0 ? (
             <p className="pm-meta py-2">No todos yet.</p>
           ) : (

@@ -191,13 +191,9 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     }
   }, [activeTab, stageTab, stagePhase])
 
-  // Close float when leaving rail tabs; always close on Config (FAB hidden there)
+  // Close float only on Config (FAB hidden). Timeline also has a right rail.
   useEffect(() => {
-    if (
-      quickChatOpen &&
-      (activeTab === "config" ||
-        (activeTab !== "info" && activeTab !== "files"))
-    ) {
+    if (quickChatOpen && activeTab === "config") {
       setQuickChatOpen(false)
     }
   }, [activeTab, quickChatOpen])
@@ -609,7 +605,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                          * Overview + Files: overflow visible so rail card shadows paint.
                          * Diamond is parked outside panels (data-pm-qc-fab-anchor).
                          */
-                        tab === "info" || tab === "files"
+                        tab === "info" || tab === "files" || tab === "timeline"
                           ? "overflow-visible"
                           : "overflow-hidden",
                         phaseClass,
@@ -635,7 +631,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                         </div>
                       )}
                       {tab === "timeline" && (
-                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
                           <TimelineView
                             collectionId={activeCollection}
                             /* Live only when fully shown — avoid pan/measure mid-fade */
@@ -645,6 +641,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                               stageTab === "timeline" &&
                               stagePhase === "shown"
                             }
+                            railCovered={quickChatOpen}
                           />
                         </div>
                       )}
@@ -700,8 +697,12 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
             setQuickChatOpen(true)
           }}
           onClose={() => setQuickChatOpen(false)}
-          /* Rail float cover only where right rail exists */
-          railActive={activeTab === "info" || activeTab === "files"}
+          /* Rail float cover — Overview / Files / Timeline all have a right rail */
+          railActive={
+            activeTab === "info" ||
+            activeTab === "files" ||
+            activeTab === "timeline"
+          }
           railKey={activeTab}
           /* Hide diamond on Collection Settings */
           fabVisible={activeTab !== "config"}

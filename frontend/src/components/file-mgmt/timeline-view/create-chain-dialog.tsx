@@ -1,6 +1,12 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { createChain, createNode } from "@/api/file-mgmt"
 
@@ -53,21 +59,22 @@ export function CreateChainDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent
+        className="pm-dialog pm-dialog--silk max-w-sm"
+        overlayClassName="pm-dialog-overlay--silk"
+      >
         <DialogHeader>
           <DialogTitle>Create Branch Chain</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3 mt-2">
-          <p className="text-xs text-muted-foreground">
+        <div className="pm-dialog-body space-y-3">
+          <p className="pm-meta text-[var(--pm-muted)]">
             A new branch chain will be created from this node, with its own
             branch folder and timeline. A start node will be added automatically.
           </p>
           <div>
-            <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-              Branch Title
-            </label>
+            <label className="pm-field-label">Branch Title</label>
             <input
-              className="w-full text-xs border rounded px-2 py-1.5 bg-background"
+              className="pm-field w-full"
               placeholder="Branch title..."
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -76,14 +83,24 @@ export function CreateChainDialog({
             />
           </div>
         </div>
-        <div className="flex justify-end gap-2 pt-3">
-          <Button variant="outline" size="sm" className="text-[10px] h-7" onClick={() => onOpenChange(false)}>
+        <DialogFooter className="gap-2 sm:justify-end">
+          <Button
+            variant="ghost"
+            size="xs"
+            className="pm-btn-ghost"
+            onClick={() => onOpenChange(false)}
+          >
             Cancel
           </Button>
-          <Button size="sm" className="text-[10px] h-7" onClick={handleSubmit} disabled={submitting}>
+          <Button
+            size="xs"
+            className="pm-btn-pri"
+            onClick={handleSubmit}
+            disabled={submitting}
+          >
             {submitting ? "Creating..." : "Create"}
           </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

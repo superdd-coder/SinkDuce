@@ -1,17 +1,20 @@
-import { useState, useEffect, useCallback, useRef } from "react"
-import { Button } from "@/components/ui/button"
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
-import { FieldLabel } from "@/components/ui/field-label"
 import {
   X,
   Calendar,
-  Trash2,
   Edit3,
-  Check,
-  Paperclip,
-  XCircle,
   Plus,
-  Star,
+  Clock,
+  Loader2,
+  Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -29,33 +32,44 @@ import {
   getFileMessages,
   createNodeMessage,
   updateMessage,
-  deleteMessage,
   detachFileFromNode,
 } from "@/api/file-mgmt"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { NodeFileAttach } from "./node-file-attach"
-import { MessageCard } from "../message-card"
 import { MessageEditorDialog } from "../folder-view/message-editor-dialog"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 import { FileSelectPreviewFloating } from "@/components/file-mgmt/file-select-preview-panel"
 
-/** Format ISO timestamp as yyyy/mm/dd HH:mm:ss (24h local). */
-function formatCreatedAt(iso: string): string {
+/** Short list time — same language as MessageEditorDialog node rail. */
+function formatMsgListTime(iso: string | null | undefined): string {
+  if (!iso) return ""
   const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, "0")
-  const day = String(d.getDate()).padStart(2, "0")
-  const h = String(d.getHours()).padStart(2, "0")
-  const min = String(d.getMinutes()).padStart(2, "0")
-  const s = String(d.getSeconds()).padStart(2, "0")
-  return `${y}/${m}/${day} ${h}:${min}:${s}`
+  if (Number.isNaN(d.getTime())) return ""
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+/** Plain excerpt for list rows (matches message-editor-dialog). */
+function messagePlainExcerpt(body: string): string {
+  return (body || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/!\[.*?\]\(.*?\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[*_~>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
 }
 
 /** Normalize stored event_time to yyyy-mm-dd for <input type="date">. */
 function toDateInputValue(raw: string | null | undefined): string {
   if (!raw) return ""
-  // Accept "2024-01-15", "2024-01-15T10:00:00", ISO, etc.
   const m = raw.match(/^(\d{4}-\d{2}-\d{2})/)
   if (m) return m[1]
   const d = new Date(raw)
@@ -83,48 +97,239 @@ export function NodeDetailSidebar({
   onClose,
   hideCloseButton = false,
   onNodeUpdated,
-  getGroupName,
   groups,
 }: NodeDetailSidebarProps) {
   const [detail, setDetail] = useState<NodeDetail | null>(null)
+  /** Only true for cold open (no shell yet) — never flash cards on refresh. */
   const [loading, setLoading] = useState(false)
+  /**
+   * Content crossfade when switching nodes (shell stays; body fades).
+   * out → swap data → in
+   */
+  const [bodyPhase, setBodyPhase] = useState<"in" | "out">("in")
   const [editingTitle, setEditingTitle] = useState(false)
   const [editTitle, setEditTitle] = useState("")
-  const [editingGroupId, setEditingGroupId] = useState(false)
-  const [newGroupId, setNewGroupId] = useState<string | null>(null)
+  const titleInputRef = useRef<HTMLTextAreaElement>(null)
+  /** Escape cancel must not race with blur/outside-click save */
+  const skipTitleSaveRef = useRef(false)
+  /** Latest draft for outside-click / blur (avoid stale closures) */
+  const editTitleRef = useRef(editTitle)
+  editTitleRef.current = editTitle
+  /** Sync flag so pointerdown + blur don't double-save */
+  const editingTitleRef = useRef(false)
+  editingTitleRef.current = editingTitle
+
   const [eventTime, setEventTime] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
   const [msgTab, setMsgTab] = useState<"all" | "node">("all")
-  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [attachOpen, setAttachOpen] = useState(false)
+  /** Select-existing tree open inside attach zone */
+  const [selectTreeOpen, setSelectTreeOpen] = useState(false)
+  /**
+   * Accordion: fixed rail height, only one expanded card at a time
+   * (Overview Notes/Meetings + File detail side-card language).
+   */
+  const [expandedCard, setExpandedCard] = useState<"node" | "messages">(
+    "messages"
+  )
   const [msgDialogOpen, setMsgDialogOpen] = useState(false)
   const [editingMsg, setEditingMsg] = useState<Message | null>(null)
   const [msgDialogReadonly, setMsgDialogReadonly] = useState(false)
-  /** Open unified file detail from attachment list. */
   const [detailFileId, setDetailFileId] = useState<string | null>(null)
-  /** External left preview while Select existing is open. */
   const [selectPreviewFile, setSelectPreviewFile] =
     useState<FileSummary | null>(null)
   const sidebarPanelRef = useRef<HTMLDivElement>(null)
   const dateInputRef = useRef<HTMLInputElement>(null)
+  const detailRef = useRef<NodeDetail | null>(null)
+  detailRef.current = detail
+  const switchGenRef = useRef(0)
+  /** Sequential silk: out → commit → in (match preview panel language) */
+  const BODY_OUT_MS = 160
 
   /**
-   * @param opts.silent Keep current UI mounted (no full-panel Loading).
-   *   Required when refreshing after multi-select attach — otherwise the
-   *   file tree unmounts and select mode is lost.
+   * Pixel-height accordion (Node ↔ Messages).
+   * flex-grow is not silk when the two cards have very different collapsed
+   * heights; we lock current px heights → set React state → tween to targets.
    */
-  const fetchDetail = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!nodeId) {
-        setDetail(null)
-        setMessages([])
-        setEventTime("")
-        return
-      }
-      const silent = !!opts?.silent
-      if (!silent) setLoading(true)
+  const ACC_MS = 280
+  const ACC_EASE = "cubic-bezier(0.45, 0.05, 0.55, 0.95)"
+  const accStackRef = useRef<HTMLDivElement>(null)
+  const nodeCardRef = useRef<HTMLElement | null>(null)
+  const msgsCardRef = useRef<HTMLElement | null>(null)
+  const accAnimGenRef = useRef(0)
+  const accClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingAccRef = useRef<{
+    fromNode: number
+    fromMsgs: number
+    next: "node" | "messages"
+  } | null>(null)
+
+  const clearAccInlineStyles = useCallback(() => {
+    for (const el of [nodeCardRef.current, msgsCardRef.current]) {
+      if (!el) continue
+      el.style.height = ""
+      el.style.flex = ""
+      el.style.flexGrow = ""
+      el.style.flexShrink = ""
+      el.style.flexBasis = ""
+      el.style.transition = ""
+      el.style.minHeight = ""
+      /* Don’t leave overflow:hidden from the tween — it clips soft card shadows */
+      el.style.overflow = ""
+    }
+  }, [])
+
+  /** Collapsed Node = 1/3 of the card stack (gap excluded). */
+  const NODE_COLLAPSED_RATIO = 1 / 3
+
+  const measureMsgsHeaderH = (msgs: HTMLElement) => {
+    const header = msgs.querySelector(".pm-ws-side-h") as HTMLElement | null
+    return Math.ceil(header?.offsetHeight ?? 44)
+  }
+
+  /** Start a silk height hand-off to `next` (call before/with setExpandedCard). */
+  const beginAccordionHandoff = useCallback((next: "node" | "messages") => {
+    const node = nodeCardRef.current
+    const msgs = msgsCardRef.current
+    if (!node || !msgs) return
+    const fromNode = node.getBoundingClientRect().height
+    const fromMsgs = msgs.getBoundingClientRect().height
+    pendingAccRef.current = { fromNode, fromMsgs, next }
+    // Freeze layout immediately so React reflow can't snap
+    node.style.flex = "0 0 auto"
+    msgs.style.flex = "0 0 auto"
+    node.style.height = `${fromNode}px`
+    msgs.style.height = `${fromMsgs}px`
+    node.style.transition = "none"
+    msgs.style.transition = "none"
+  }, [])
+
+  // After React commits expandedCard, tween frozen heights → targets
+  useLayoutEffect(() => {
+    const pending = pendingAccRef.current
+    if (!pending || pending.next !== expandedCard) return
+    pendingAccRef.current = null
+
+    const stack = accStackRef.current
+    const node = nodeCardRef.current
+    const msgs = msgsCardRef.current
+    if (!stack || !node || !msgs) return
+
+    const gen = ++accAnimGenRef.current
+    if (accClearTimerRef.current) {
+      clearTimeout(accClearTimerRef.current)
+      accClearTimerRef.current = null
+    }
+
+    const gap = 10
+    const available = Math.max(0, stack.clientHeight - gap)
+
+    // Re-assert freeze at pre-commit heights
+    node.style.flex = "0 0 auto"
+    msgs.style.flex = "0 0 auto"
+    node.style.height = `${pending.fromNode}px`
+    msgs.style.height = `${pending.fromMsgs}px`
+    node.style.transition = "none"
+    msgs.style.transition = "none"
+    node.style.overflow = "hidden"
+    msgs.style.overflow = "hidden"
+
+    const msgsHeader = measureMsgsHeaderH(msgs)
+
+    let toNode: number
+    let toMsgs: number
+    if (pending.next === "messages") {
+      // Node collapsed: fixed 1/3 of card area; Messages takes the rest
+      toNode = Math.round(available * NODE_COLLAPSED_RATIO)
+      toMsgs = Math.max(msgsHeader, available - toNode)
+      toNode = available - toMsgs
+    } else {
+      // Node expanded: Messages header only; Node fills remainder
+      toMsgs = Math.min(msgsHeader, available)
+      toNode = Math.max(0, available - toMsgs)
+    }
+
+    // Reflow, then animate both heights on the same clock
+    void node.offsetHeight
+    node.style.transition = `height ${ACC_MS}ms ${ACC_EASE}`
+    msgs.style.transition = `height ${ACC_MS}ms ${ACC_EASE}`
+
+    requestAnimationFrame(() => {
+      if (gen !== accAnimGenRef.current) return
+      node.style.height = `${Math.max(0, toNode)}px`
+      msgs.style.height = `${Math.max(0, toMsgs)}px`
+    })
+
+    accClearTimerRef.current = setTimeout(() => {
+      if (gen !== accAnimGenRef.current) return
+      clearAccInlineStyles()
+      accClearTimerRef.current = null
+    }, ACC_MS + 40)
+
+    return () => {
+      /* gen guard handles stale */
+    }
+  }, [expandedCard, clearAccInlineStyles])
+
+  useEffect(() => {
+    return () => {
+      if (accClearTimerRef.current) clearTimeout(accClearTimerRef.current)
+      accAnimGenRef.current += 1
+    }
+  }, [])
+
+  /** Two-step delete (× → DELETE) — same as Files MessageCard */
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const deleteBtnRef = useRef<HTMLButtonElement>(null)
+
+  const disarmDelete = useCallback(() => {
+    setDeleteArmed(false)
+    if (deleteArmTimerRef.current) {
+      clearTimeout(deleteArmTimerRef.current)
+      deleteArmTimerRef.current = null
+    }
+  }, [])
+
+  const armDelete = useCallback(() => {
+    setDeleteArmed(true)
+    if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    deleteArmTimerRef.current = setTimeout(() => disarmDelete(), 4000)
+  }, [disarmDelete])
+
+  useEffect(() => {
+    if (!deleteArmed) return
+    const onPointerDown = (ev: Event) => {
+      const t = ev.target as Node | null
+      if (t && deleteBtnRef.current?.contains(t)) return
+      disarmDelete()
+    }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") disarmDelete()
+    }
+    const t = window.setTimeout(() => {
+      document.addEventListener("pointerdown", onPointerDown, true)
+      document.addEventListener("keydown", onKey, true)
+    }, 0)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [deleteArmed, disarmDelete])
+
+  type LoadedNode = {
+    detail: NodeDetail
+    messages: Message[]
+    eventTime: string
+  }
+
+  /** Fetch only — does not write React state (commit happens after fade-out). */
+  const loadNodeBundle = useCallback(
+    async (id: string): Promise<LoadedNode | null> => {
       try {
-        const d = await getNodeDetail(collectionId, nodeId)
-        const nodeMsgs = await getNodeMessages(collectionId, nodeId)
+        const d = await getNodeDetail(collectionId, id)
+        const nodeMsgs = await getNodeMessages(collectionId, id)
         const fileMsgLists = await Promise.all(
           (d.attachments ?? []).map((a) =>
             getFileMessages(collectionId, a.file_id).catch(() => [] as Message[])
@@ -134,56 +339,274 @@ export function NodeDetailSidebar({
         const merged = [...nodeMsgs, ...fileMsgs].sort((a, b) =>
           (b.created_at || "").localeCompare(a.created_at || "")
         )
-        setDetail(d)
-        setMessages(merged)
-        setEventTime(toDateInputValue(d.event_time))
+        return {
+          detail: d,
+          messages: merged,
+          eventTime: toDateInputValue(d.event_time),
+        }
       } catch (err) {
         toast.error(
           `Failed to load node: ${err instanceof Error ? err.message : String(err)}`
         )
-        if (!silent) {
-          setDetail(null)
-          setEventTime("")
+        return null
+      }
+    },
+    [collectionId]
+  )
+
+  const commitBundle = useCallback((bundle: LoadedNode) => {
+    setDetail(bundle.detail)
+    setMessages(bundle.messages)
+    setEventTime(bundle.eventTime)
+  }, [])
+
+  /**
+   * Silent refresh of the *current* node (attach / edit / detach).
+   * Never triggers switch fade or Loading shell.
+   * Skips commit if user already switched away.
+   */
+  const fetchDetail = useCallback(
+    async (opts?: { silent?: boolean; forNodeId?: string | null }) => {
+      const id = opts?.forNodeId !== undefined ? opts.forNodeId : nodeId
+      if (!id) {
+        setDetail(null)
+        setMessages([])
+        setEventTime("")
+        return null
+      }
+      const silent =
+        opts?.silent !== undefined ? opts.silent : detailRef.current != null
+      if (!silent) setLoading(true)
+      try {
+        const bundle = await loadNodeBundle(id)
+        if (!bundle) {
+          if (!silent) {
+            setDetail(null)
+            setEventTime("")
+          }
+          return null
         }
+        // Drop stale refresh if selection moved
+        if (nodeId && id !== nodeId) return bundle.detail
+        commitBundle(bundle)
+        return bundle.detail
       } finally {
         if (!silent) setLoading(false)
       }
     },
-    [collectionId, nodeId]
+    [nodeId, loadNodeBundle, commitBundle]
   )
 
+  // Cold open / node switch — hold previous content until new data is ready,
+  // then sequential out → commit → in (no mid-fade data swap / empty flash).
   useEffect(() => {
-    fetchDetail()
-    setDeleteConfirm(false)
-    setEditingTitle(false)
-    setEditingGroupId(false)
-    setSelectPreviewFile(null)
-  }, [fetchDetail])
+    if (!nodeId) {
+      setDetail(null)
+      setMessages([])
+      setEventTime("")
+      setLoading(false)
+      setBodyPhase("in")
+      return
+    }
 
-  const handleSaveTitle = async () => {
-    if (!detail || !editTitle.trim()) return
-    try {
-      await updateNode(collectionId, detail.node_id, {
-        title: editTitle.trim(),
-        version: detail.version,
+    const gen = ++switchGenRef.current
+    const prevId = detailRef.current?.node_id ?? null
+    const hadShell = detailRef.current != null
+    const switchingNode = hadShell && prevId !== nodeId
+
+    disarmDelete()
+    setEditingTitle(false)
+    setSelectPreviewFile(null)
+    // Soft-close attach/picker (height silk via CSS); keep accordion expansion
+
+    let outTimer: ReturnType<typeof setTimeout> | null = null
+    let inRaf1 = 0
+    let inRaf2 = 0
+
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        outTimer = setTimeout(resolve, ms)
       })
-      setEditingTitle(false)
-      fetchDetail()
+
+    const run = async () => {
+      if (!hadShell) setLoading(true)
+
+      // 1) Load while still showing previous node (stale-while-revalidate)
+      const bundle = await loadNodeBundle(nodeId)
+      if (gen !== switchGenRef.current) return
+
+      if (!bundle) {
+        if (!hadShell) {
+          setDetail(null)
+          setLoading(false)
+        }
+        return
+      }
+
+      if (switchingNode) {
+        // Soft close attach before content fade so height eases first
+        setAttachOpen(false)
+        setSelectTreeOpen(false)
+
+        // 2) Fade out previous content (cards stay mounted)
+        setBodyPhase("out")
+        await sleep(BODY_OUT_MS)
+        if (gen !== switchGenRef.current) return
+
+        // 3) Commit only after fully out — no mid-transition hard swap
+        commitBundle(bundle)
+        setLoading(false)
+
+        // 4) Double rAF so browser paints new content at opacity 0, then fade in
+        inRaf1 = requestAnimationFrame(() => {
+          inRaf2 = requestAnimationFrame(() => {
+            if (gen !== switchGenRef.current) return
+            setBodyPhase("in")
+          })
+        })
+      } else {
+        // Cold open or same-node re-entry
+        commitBundle(bundle)
+        setLoading(false)
+        setBodyPhase("in")
+        setAttachOpen(false)
+        setSelectTreeOpen(false)
+      }
+    }
+
+    void run()
+    return () => {
+      if (outTimer) clearTimeout(outTimer)
+      if (inRaf1) cancelAnimationFrame(inRaf1)
+      if (inRaf2) cancelAnimationFrame(inRaf2)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collectionId, nodeId])
+
+  // File tree / attach open → expand Node card (with height hand-off)
+  useEffect(() => {
+    if (!(attachOpen || selectTreeOpen)) return
+    if (expandedCard === "node") return
+    beginAccordionHandoff("node")
+    setExpandedCard("node")
+  }, [attachOpen, selectTreeOpen, expandedCard, beginAccordionHandoff])
+
+  /** Messages open — pixel height hand-off (works both from Attach close & header). */
+  const expandMessages = useCallback(() => {
+    if (expandedCard === "messages" && !attachOpen) return
+    setSelectTreeOpen(false)
+    setSelectPreviewFile(null)
+    beginAccordionHandoff("messages")
+    setAttachOpen(false)
+    setExpandedCard("messages")
+  }, [expandedCard, attachOpen, beginAccordionHandoff])
+
+  /** Node takes free space (optional attach open). */
+  const expandNodeCard = useCallback(
+    (opts?: { attach?: boolean }) => {
+      if (opts?.attach) setAttachOpen(true)
+      if (expandedCard !== "node") {
+        beginAccordionHandoff("node")
+        setExpandedCard("node")
+      }
+    },
+    [expandedCard, beginAccordionHandoff]
+  )
+
+  /** Fit title field height to content so edit matches multi-line display. */
+  const syncTitleInputHeight = useCallback(() => {
+    const el = titleInputRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!editingTitle) return
+    syncTitleInputHeight()
+    const el = titleInputRef.current
+    if (!el) return
+    el.focus()
+    /* Caret at end — feels like continuing the displayed title, not a form field */
+    const len = el.value.length
+    el.setSelectionRange(len, len)
+  }, [editingTitle, syncTitleInputHeight])
+
+  const cancelTitleEdit = useCallback(() => {
+    skipTitleSaveRef.current = true
+    setEditingTitle(false)
+    setEditTitle(detail?.title ?? "")
+  }, [detail?.title])
+
+  const handleSaveTitle = useCallback(async () => {
+    if (skipTitleSaveRef.current) {
+      skipTitleSaveRef.current = false
+      return
+    }
+    /* pointerdown outside + blur both fire — only the first commits */
+    if (!editingTitleRef.current) return
+    editingTitleRef.current = false
+    setEditingTitle(false)
+
+    const d = detailRef.current
+    if (!d) return
+    const next = editTitleRef.current.trim()
+    const prev = (d.title ?? "").trim()
+    /* Empty or unchanged → already left edit mode */
+    if (!next || next === prev) {
+      setEditTitle(d.title ?? "")
+      return
+    }
+    try {
+      await updateNode(collectionId, d.node_id, {
+        title: next,
+        version: d.version,
+      })
+      void fetchDetail({ silent: true })
       onNodeUpdated()
     } catch (err) {
+      /* Re-open edit so the user can retry */
+      editingTitleRef.current = true
+      setEditingTitle(true)
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     }
-  }
+  }, [collectionId, fetchDetail, onNodeUpdated])
 
-  const handleSaveGroup = async () => {
+  /**
+   * Click anywhere outside the title field → save (blank rail, tags, messages…).
+   * pointerdown capture runs before focus changes / preventDefault blur quirks.
+   */
+  useEffect(() => {
+    if (!editingTitle) return
+    const onPointerDown = (e: PointerEvent) => {
+      const el = titleInputRef.current
+      const t = e.target
+      if (!el || !(t instanceof Node)) return
+      if (el.contains(t)) return
+      void handleSaveTitle()
+    }
+    document.addEventListener("pointerdown", onPointerDown, true)
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDown, true)
+  }, [editingTitle, handleSaveTitle])
+
+  const startTitleEdit = useCallback(() => {
     if (!detail) return
+    setEditTitle(detail.title ?? "")
+    setEditingTitle(true)
+  }, [detail])
+
+  /** Click group option → save immediately (no confirm step). */
+  const handleSelectGroup = async (groupId: string) => {
+    if (!detail) return
+    const next = groupId || null
+    if (next === (detail.group_id ?? null)) return
     try {
       await updateNode(collectionId, detail.node_id, {
-        group_id: newGroupId,
+        group_id: next,
         version: detail.version,
       })
-      setEditingGroupId(false)
-      fetchDetail()
+      void fetchDetail({ silent: true })
       onNodeUpdated()
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -212,7 +635,7 @@ export function NodeDetailSidebar({
         version: detail.version,
       })
       setEventTime(value)
-      fetchDetail()
+      void fetchDetail({ silent: true })
       onNodeUpdated()
       toast.success("Event time updated")
     } catch (err) {
@@ -238,22 +661,28 @@ export function NodeDetailSidebar({
     currentDefinitive: boolean,
     version: number
   ) => {
-    // Same path as folder view: SQLite flag + doc_summary include + debounce consolidate
     await useFileMgmtStore
       .getState()
       .toggleDefinitive(collectionId, fileId, !currentDefinitive, version)
-    fetchDetail()
+    void fetchDetail({ silent: true })
     onNodeUpdated()
   }
 
   const handleDetachFile = async (fileId: string) => {
     if (!detail) return
+    // Optimistic remove so list doesn’t wait for network + no shell flash
+    const prev = detail
+    setDetail({
+      ...detail,
+      attachments: (detail.attachments ?? []).filter((a) => a.file_id !== fileId),
+    })
     try {
       await detachFileFromNode(collectionId, detail.node_id, fileId)
-      fetchDetail()
+      void fetchDetail({ silent: true })
       onNodeUpdated()
       toast.success("File detached")
     } catch (err) {
+      setDetail(prev)
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
@@ -261,12 +690,12 @@ export function NodeDetailSidebar({
   const refreshMessages = useCallback(async () => {
     if (!detail) return
     try {
-      const msgs = await getNodeMessages(collectionId, detail.node_id)
-      setMessages(msgs)
+      // Full re-merge (node + file msgs) so list stays consistent with fetchDetail
+      void fetchDetail({ silent: true })
     } catch {
       /* ignore */
     }
-  }, [collectionId, detail])
+  }, [detail, fetchDetail])
 
   const handleAddMessage = useCallback(
     async (content: string) => {
@@ -305,20 +734,6 @@ export function NodeDetailSidebar({
     [collectionId, editingMsg, refreshMessages]
   )
 
-  const handleDeleteMessage = useCallback(
-    async (messageId: string) => {
-      if (!detail) return
-      try {
-        await deleteMessage(collectionId, messageId)
-        await refreshMessages()
-        toast.success("Message deleted")
-      } catch (err) {
-        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    },
-    [collectionId, detail, refreshMessages]
-  )
-
   const msgDialogCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
@@ -331,7 +746,6 @@ export function NodeDetailSidebar({
     }
     setMsgDialogOpen(next)
     if (!next) {
-      // Keep payload for silk exit (~280ms)
       msgDialogCloseTimerRef.current = setTimeout(() => {
         setEditingMsg(null)
         setMsgDialogReadonly(false)
@@ -340,7 +754,6 @@ export function NodeDetailSidebar({
     }
   }, [])
 
-  /** Open message dialog with silk enter (closed → open next frames) */
   const openMsgDialog = useCallback(
     (opts: { msg?: Message | null; readonly: boolean }) => {
       setEditingMsg(opts.msg ?? null)
@@ -366,18 +779,17 @@ export function NodeDetailSidebar({
     [openMsgDialog]
   )
 
-  const handleStartEdit = useCallback(
-    (msg: Message) => {
-      openMsgDialog({ msg, readonly: false })
-    },
-    [openMsgDialog]
-  )
+  const filteredMessages = useMemo(() => {
+    if (msgTab === "node") {
+      return messages.filter((m) => m.owner_type === "node")
+    }
+    return messages
+  }, [messages, msgTab])
 
   if (!nodeId) return null
 
   return (
     <div className="relative h-full w-full min-h-0">
-      {/* Portaled fixed preview — not clipped by overflow-hidden parents */}
       <FileSelectPreviewFloating
         collectionId={collectionId}
         file={selectPreviewFile}
@@ -385,402 +797,414 @@ export function NodeDetailSidebar({
         anchorRef={sidebarPanelRef}
         onClose={() => setSelectPreviewFile(null)}
       />
-    <div
-      ref={sidebarPanelRef}
-      data-node-detail-sidebar
-      className="h-full w-full min-h-0 border border-border rounded-xl bg-background shadow-lg flex flex-col overflow-hidden"
-    >
-      {/* Header — close via deselect on canvas (no X when hideCloseButton) */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-        <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          Node Detail
-        </h3>
-        {!hideCloseButton && (
-          <button
-            type="button"
-            className="text-muted-foreground hover:text-foreground transition-colors"
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </button>
+
+      {/*
+        Layout (unchanged intent):
+        - Node always shows title / tags / Attachments+date (never header-only)
+        - Attach zone only when attachOpen
+        - Messages list body opens when messages expanded
+        Motion: pure flex-grow hand-off only (no full-card collapse).
+      */}
+      <div
+        ref={sidebarPanelRef}
+        data-node-detail-sidebar
+        className={cn(
+          "pm-timeline-node-rail pm-ws-side pm-node-rail h-full w-full min-h-0",
+          detail && (bodyPhase === "out" ? "is-body-out" : "is-body-in")
+        )}
+      >
+        {loading && !detail ? (
+          <section className="pm-ws-side-card flex-1 flex items-center justify-center gap-2 py-10">
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
+            <span className="pm-meta">Loading…</span>
+          </section>
+        ) : !detail ? (
+          <section className="pm-ws-side-card flex-1 flex items-center justify-center px-5 py-10">
+            <p className="pm-meta">Node not found</p>
+          </section>
+        ) : (
+          <div ref={accStackRef} className="pm-timeline-acc-stack">
+            {/* ── Node card — chrome always visible ── */}
+            <section
+              ref={(el) => {
+                nodeCardRef.current = el
+              }}
+              className={cn(
+                "pm-ws-side-card pm-timeline-node-card",
+                expandedCard === "node" && "is-expanded"
+              )}
+            >
+              {/* Title bar is chrome only — does not expand/collapse the card */}
+              <div className="pm-ws-side-h">
+                <span className="pm-timeline-panel-title">Node</span>
+                <div className="ml-auto flex items-center gap-0.5 shrink-0">
+                  {!hideCloseButton && (
+                    <button
+                      type="button"
+                      className="p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] transition-colors rounded-[var(--pm-r-sm)]"
+                      onClick={onClose}
+                      title="Close"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                  <button
+                    ref={deleteBtnRef}
+                    type="button"
+                    className={cn("pm-msg-delete", deleteArmed && "is-confirm")}
+                    title={
+                      deleteArmed
+                        ? "Click again to delete node"
+                        : "Delete node"
+                    }
+                    aria-label={
+                      deleteArmed ? "Confirm delete node" : "Delete node"
+                    }
+                    aria-expanded={deleteArmed}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      if (!deleteArmed) {
+                        armDelete()
+                        return
+                      }
+                      disarmDelete()
+                      void handleDeleteNode()
+                    }}
+                  >
+                    {!deleteArmed ? (
+                      <Trash2
+                        className="pm-msg-delete-x h-3.5 w-3.5"
+                        strokeWidth={1.75}
+                        aria-hidden
+                      />
+                    ) : (
+                      <span className="pm-msg-delete-label is-solo">DELETE</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Always flex-1 so free height lives in the pad (never hard-cut on expand toggle) */}
+              <div className="pm-ws-side-pad pt-0 pb-3 min-h-0 flex flex-col flex-1">
+                <div className="pm-node-id-row shrink-0">
+                  <div className="pm-node-id-main min-w-0 flex-1 group/title">
+                    <div className="flex items-start gap-1.5 min-w-0">
+                      {editingTitle ? (
+                        <textarea
+                          ref={titleInputRef}
+                          className="pm-node-id-title pm-node-id-title-input flex-1 min-w-0"
+                          value={editTitle}
+                          rows={1}
+                          spellCheck={false}
+                          aria-label="Node title"
+                          onChange={(e) => {
+                            setEditTitle(e.target.value)
+                            /* Resize after React paints next value */
+                            requestAnimationFrame(syncTitleInputHeight)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault()
+                              void handleSaveTitle()
+                            } else if (e.key === "Escape") {
+                              e.preventDefault()
+                              cancelTitleEdit()
+                            }
+                          }}
+                          /* Blur still saves (e.g. Tab); outside click uses pointerdown */
+                          onBlur={() => void handleSaveTitle()}
+                        />
+                      ) : (
+                        <p
+                          className="pm-node-id-title flex-1 min-w-0 cursor-text"
+                          onDoubleClick={startTitleEdit}
+                          title="Double-click to edit"
+                        >
+                          {(detail.title || "").trim() || "Untitled"}
+                        </p>
+                      )}
+                      {!editingTitle && (
+                        <button
+                          type="button"
+                          className="opacity-0 group-hover/title:opacity-100 transition-opacity text-[var(--pm-faint)] hover:text-[var(--pm-ink)] shrink-0 mt-1"
+                          onClick={startTitleEdit}
+                          title="Edit title"
+                        >
+                          <Edit3 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+
+                    {(detail.attachments?.length ?? 0) > 0 && (
+                      <p className="pm-meta mt-1">
+                        {detail.attachments.length} file
+                        {detail.attachments.length === 1 ? "" : "s"}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="pm-node-tag-col shrink-0">
+                    {/* One click opens menu; pick option saves; outside click closes */}
+                    <DropdownSelect
+                      size="tag"
+                      className="w-full min-w-0"
+                      value={detail.group_id ?? ""}
+                      onChange={(v) => void handleSelectGroup(v)}
+                      placeholder="No group"
+                      options={[
+                        { value: "", label: "No Group" },
+                        ...groups.map((g) => ({
+                          value: g.group_id,
+                          label: g.name,
+                        })),
+                      ]}
+                    />
+                    <span
+                      className="pm-node-tag is-branch capitalize"
+                      title={`Type · ${detail.node_type}`}
+                    >
+                      {detail.node_type}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Attach zone — only grows when open; Node chrome stays */}
+                <div
+                  className={cn(
+                    "pm-timeline-attach-expand",
+                    attachOpen && "is-open"
+                  )}
+                >
+                  <div className="pm-timeline-attach-expand-inner">
+                    <div className="pt-2 min-h-0 flex flex-col h-full">
+                      <NodeFileAttach
+                        collectionId={collectionId}
+                        nodeId={detail.node_id}
+                        active={attachOpen}
+                        attachments={detail.attachments ?? []}
+                        onAttached={() => {
+                          void fetchDetail({ silent: true })
+                          onNodeUpdated()
+                        }}
+                        onPreviewFile={setSelectPreviewFile}
+                        onSelectOpenChange={(open) => {
+                          setSelectTreeOpen(open)
+                          if (!open) setSelectPreviewFile(null)
+                          if (open) expandNodeCard({ attach: true })
+                        }}
+                        onOpenFile={setDetailFileId}
+                        onToggleDefinitive={(fileId, cur, ver) => {
+                          void handleToggleDefinitive(fileId, cur, ver)
+                        }}
+                        onDetach={(fileId) => {
+                          void handleDetachFile(fileId)
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  data-node-foot
+                  className="mt-2.5 flex items-center gap-2 min-w-0 shrink-0"
+                >
+                  <button
+                    type="button"
+                    className={cn(
+                      "pm-timeline-attach-btn",
+                      attachOpen && "is-on"
+                    )}
+                    onClick={() => {
+                      if (attachOpen) {
+                        expandMessages()
+                      } else {
+                        expandNodeCard({ attach: true })
+                      }
+                    }}
+                  >
+                    Attachments
+                  </button>
+                  <div className="ml-auto flex items-center gap-1 shrink-0 min-w-0">
+                    <button
+                      type="button"
+                      className="pm-timeline-date-btn"
+                      onClick={openDatePicker}
+                      title="Set event date"
+                    >
+                      <Calendar
+                        className="h-3 w-3 shrink-0"
+                        strokeWidth={1.75}
+                      />
+                      <span className="truncate">
+                        {eventTime || "Set date"}
+                      </span>
+                    </button>
+                    <input
+                      ref={dateInputRef}
+                      type="date"
+                      value={eventTime}
+                      onChange={(e) => {
+                        setEventTime(e.target.value)
+                        void handleSaveEventTime(e.target.value)
+                      }}
+                      className="sr-only"
+                      tabIndex={-1}
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* ── Messages card — header always; list clipped by card height ── */}
+            <section
+              ref={(el) => {
+                msgsCardRef.current = el
+              }}
+              className={cn(
+                "pm-ws-side-card pm-node-msgs-card pm-timeline-msgs-card",
+                expandedCard === "messages" && "is-expanded"
+              )}
+            >
+              <div
+                className="pm-ws-side-h cursor-pointer"
+                onClick={expandMessages}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    expandMessages()
+                  }
+                }}
+              >
+                <span className="pm-timeline-panel-title">Messages</span>
+                <span className="pm-count-pill">{filteredMessages.length}</span>
+                <button
+                  type="button"
+                  className="pm-timeline-scope-add ml-auto"
+                  title="Add node message"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    expandMessages()
+                    handleOpenForAdd()
+                  }}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <div
+                className={cn(
+                  "pm-timeline-msgs-body",
+                  expandedCard === "messages" && "is-open"
+                )}
+              >
+                <div className="pm-timeline-msgs-body-inner">
+                  <div className="pm-timeline-scope-row !px-3.5 !pb-1.5 shrink-0">
+                    {(["all", "node"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        className={cn(
+                          "pm-timeline-scope-btn capitalize",
+                          msgTab === tab && "is-on"
+                        )}
+                        onClick={() => setMsgTab(tab)}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+
+                  {filteredMessages.length === 0 ? (
+                    <div className="pm-ws-side-pad pt-0">
+                      <p className="pm-meta">
+                        No messages yet. Click + to add one.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="pm-node-msg-list flex-1 min-h-0 overflow-y-auto">
+                      {filteredMessages.map((m) => {
+                        const excerpt = messagePlainExcerpt(m.body || "")
+                        const time = formatMsgListTime(m.created_at)
+                        return (
+                          <div
+                            key={m.message_id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleOpenForView(m)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault()
+                                handleOpenForView(m)
+                              }
+                            }}
+                            className="pm-msg-card pm-node-msg-row"
+                          >
+                            <div className="flex items-center gap-1.5 mb-0.5 min-w-0">
+                              <Clock
+                                className="h-3 w-3 shrink-0 text-[var(--pm-faint)]"
+                                strokeWidth={1.75}
+                              />
+                              {time ? (
+                                <span className="pm-meta shrink-0 tabular-nums">
+                                  {time}
+                                </span>
+                              ) : null}
+                              {m.edited_at ? (
+                                <span className="pm-meta italic shrink-0">
+                                  edited
+                                </span>
+                              ) : null}
+                              {m.owner_type && m.owner_type !== "node" ? (
+                                <span className="pm-meta shrink-0 capitalize">
+                                  · {m.owner_type}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="pm-node-msg-excerpt">
+                              {excerpt || "Empty message"}
+                            </p>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
         )}
       </div>
 
-      {loading ? (
-        <div className="flex-1 min-h-0 flex items-center justify-center text-muted-foreground">
-          <p className="text-sm">Loading...</p>
-        </div>
-      ) : !detail ? (
-        <div className="flex-1 min-h-0 flex items-center justify-center text-muted-foreground">
-          <p className="text-sm">Node not found</p>
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0 flex flex-col">
-          {/* Scrollable body */}
-          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-          <div className="p-4 space-y-4">
-            {/* Basic info — Title left; Group + Type on the right */}
-            <div className="space-y-3">
-              <div className="flex items-start gap-3">
-                {/* Title */}
-                <div className="flex-1 min-w-0">
-                  <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                    Title
-                  </label>
-                  {editingTitle ? (
-                    <div className="flex items-center gap-1">
-                      <input
-                        className="flex-1 min-w-0 text-xs border rounded px-2 py-1 bg-background"
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleSaveTitle()}
-                        autoFocus
-                      />
-                      <button onClick={handleSaveTitle}>
-                        <Check className="h-3.5 w-3.5 text-emerald-500" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 group/title min-w-0">
-                      <span className="text-sm font-medium truncate">
-                        {detail.title || "Untitled"}
-                      </span>
-                      <button
-                        className="opacity-0 group-hover/title:opacity-100 transition-opacity text-muted-foreground shrink-0"
-                        onClick={() => {
-                          setEditTitle(detail.title ?? "")
-                          setEditingTitle(true)
-                        }}
-                      >
-                        <Edit3 className="h-3 w-3" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Group */}
-                <div className="shrink-0 max-w-[140px]">
-                  <FieldLabel className="!mb-1">Group</FieldLabel>
-                  {editingGroupId ? (
-                    <div className="flex items-center gap-1">
-                      <DropdownSelect
-                        size="sm"
-                        className="min-w-0 max-w-[110px] flex-1"
-                        value={newGroupId ?? detail.group_id ?? ""}
-                        onChange={(v) => setNewGroupId(v || null)}
-                        options={[
-                          { value: "", label: "No Group" },
-                          ...groups.map((g) => ({
-                            value: g.group_id,
-                            label: g.name,
-                          })),
-                        ]}
-                      />
-                      <button type="button" onClick={handleSaveGroup}>
-                        <Check className="h-3.5 w-3.5 text-[var(--pm-green)]" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1 group/group">
-                      <span className="text-xs text-muted-foreground truncate max-w-[90px]">
-                        {getGroupName(detail.group_id)}
-                      </span>
-                      <button
-                        className="opacity-0 group-hover/group:opacity-100 transition-opacity text-muted-foreground shrink-0"
-                        onClick={() => {
-                          setNewGroupId(detail.group_id)
-                          setEditingGroupId(true)
-                        }}
-                      >
-                        <Edit3 className="h-3 w-3" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Type */}
-                <div className="shrink-0">
-                  <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                    Type
-                  </label>
-                  <span className="text-xs uppercase font-medium text-muted-foreground">
-                    {detail.node_type}
-                  </span>
-                </div>
-              </div>
-
-              {/* Event time — date only; empty when unset */}
-              <div>
-                <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                  Event Time
-                </label>
-                <div className="flex items-center gap-2">
-                  <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
-                  <input
-                    ref={dateInputRef}
-                    type="date"
-                    value={eventTime}
-                    onChange={(e) => {
-                      setEventTime(e.target.value)
-                      void handleSaveEventTime(e.target.value)
-                    }}
-                    onClick={openDatePicker}
-                    className={cn(
-                      "text-xs border rounded px-2 py-1 bg-background flex-1 cursor-pointer",
-                      !eventTime &&
-                        "[&::-webkit-datetime-edit]:text-transparent [&::-webkit-datetime-edit-fields-wrapper]:opacity-0"
-                    )}
-                  />
-                  {eventTime && (
-                    <button
-                      type="button"
-                      className="text-muted-foreground hover:text-foreground shrink-0 p-0.5"
-                      title="Clear date"
-                      onClick={() => {
-                        setEventTime("")
-                        void handleSaveEventTime("")
-                      }}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Attachments — drop/search first; list below */}
-            <div className="space-y-2">
-              {/* Drop / Select zone always above the list so it is never pushed away */}
-              <div className="shrink-0">
-                  <NodeFileAttach
-                    collectionId={collectionId}
-                    nodeId={detail.node_id}
-                    title={`Attachments (${detail.attachments?.length ?? 0})`}
-                    attachedIds={(detail.attachments ?? []).map((a) => a.file_id)}
-                    onAttached={() => {
-                      // Silent: do not unmount the file tree / kill multi-select
-                      void fetchDetail({ silent: true })
-                      onNodeUpdated()
-                    }}
-                    onPreviewFile={setSelectPreviewFile}
-                    onSelectOpenChange={(open) => {
-                      if (!open) setSelectPreviewFile(null)
-                    }}
-                  />
-              </div>
-
-              {detail.attachments && detail.attachments.length > 0 ? (
-                <div className="max-h-[88px] overflow-y-auto space-y-1.5 pr-0.5">
-                  {detail.attachments.map((att) => (
-                    <div
-                      key={att.file_id}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded bg-muted/30 text-xs group/file"
-                    >
-                      <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
-                      <button
-                        type="button"
-                        className="flex-1 min-w-0 text-left truncate hover:text-primary transition-colors"
-                        title="Open file detail"
-                        onClick={() => setDetailFileId(att.file_id)}
-                      >
-                        {att.filename}
-                      </button>
-                      {att.archived && (
-                        <span className="text-[9px] text-amber-500 font-medium">
-                          archived
-                        </span>
-                      )}
-                      <button
-                        className={`opacity-0 group-hover/file:opacity-100 transition-opacity ${
-                          att.is_definitive
-                            ? "text-emerald-500"
-                            : "text-muted-foreground"
-                        }`}
-                        onClick={() =>
-                          handleToggleDefinitive(
-                            att.file_id,
-                            att.is_definitive,
-                            att.version ?? 1
-                          )
-                        }
-                        title={
-                          att.is_definitive
-                            ? "Remove definitive"
-                            : "Mark as definitive"
-                        }
-                      >
-                        <Star
-                          className={`h-3 w-3 ${
-                            att.is_definitive ? "fill-emerald-500" : ""
-                          }`}
-                        />
-                      </button>
-                      <button
-                        className="opacity-0 group-hover/file:opacity-100 transition-opacity text-muted-foreground hover:text-red-500"
-                        onClick={() => handleDetachFile(att.file_id)}
-                        title="Remove attachment"
-                      >
-                        <XCircle className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground/50">No files attached</p>
-              )}
-            </div>
-
-            {/* Messages — All (node + attached files) | Node only */}
-            <div className="rounded-lg border border-border/40 bg-background/50 overflow-hidden">
-              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border/40">
-                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Messages
-                </span>
-                <span className="text-[10px] text-muted-foreground/50">
-                  {
-                    (msgTab === "all"
-                      ? messages
-                      : messages.filter((m) => m.owner_type === "node")
-                    ).length
-                  }
-                </span>
-                <div className="flex gap-0.5 ml-auto">
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={handleOpenForAdd}
-                    title="Add node message"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-              <div className="flex gap-1 px-2 pt-1.5 border-b border-border/30">
-                {(["all", "node"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    className={cn(
-                      "text-[10px] px-2 py-0.5 rounded capitalize",
-                      msgTab === tab
-                        ? "bg-primary/10 text-primary"
-                        : "text-muted-foreground hover:bg-muted/40"
-                    )}
-                    onClick={() => setMsgTab(tab)}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-
-              <div className="max-h-56 overflow-y-auto">
-                {(() => {
-                  const filtered =
-                    msgTab === "all"
-                      ? messages
-                      : messages.filter((m) => m.owner_type === "node")
-                  if (filtered.length === 0) {
-                    return (
-                      <div className="text-center text-xs text-muted-foreground/50 py-8 px-3">
-                        No messages yet. Click + to add a node message.
-                      </div>
-                    )
-                  }
-                  return (
-                    <div className="flex flex-col gap-1 p-2">
-                      {filtered.map((msg) => (
-                        <MessageCard
-                          key={msg.message_id}
-                          msg={msg}
-                          previewSide="left"
-                          onView={handleOpenForView}
-                          onEdit={handleStartEdit}
-                          onDelete={() => handleDeleteMessage(msg.message_id)}
-                          onSourceTagClick={handleOpenForView}
-                        />
-                      ))}
-                    </div>
-                  )
-                })()}
-              </div>
-            </div>
-
-            <MessageEditorDialog
-              key="node-message-editor"
-              open={msgDialogOpen}
-              onOpenChange={handleCloseMsgDialog}
-              title={
-                msgDialogReadonly
-                  ? "Message"
-                  : editingMsg
-                    ? "Edit Message"
-                    : "Add Message"
-              }
-              initialContent={editingMsg?.body || ""}
-              onSave={
-                !editingMsg
-                  ? handleAddMessage
-                  : !msgDialogReadonly
-                    ? handleEditMessage
-                    : () => {}
-              }
-              readonly={msgDialogReadonly}
-            />
-          </div>
-          </div>
-
-          {/* Sticky footer: Delete left · Created right */}
-          <div className="shrink-0 border-t border-border px-4 py-2.5 bg-background">
-            {deleteConfirm ? (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">
-                  Delete this node? Derived file paths will be removed.
-                </p>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-[10px] h-7"
-                      onClick={() => setDeleteConfirm(false)}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="text-[10px] h-7"
-                      onClick={handleDeleteNode}
-                    >
-                      Delete Node
-                    </Button>
-                  </div>
-                  <span className="text-[10px] text-muted-foreground/70 tabular-nums shrink-0">
-                    {formatCreatedAt(detail.created_at)}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  className="text-[10px] font-medium text-red-500/70 hover:text-red-500 flex items-center gap-1 shrink-0"
-                  onClick={() => setDeleteConfirm(true)}
-                >
-                  <Trash2 className="h-3 w-3" />
-                  Delete Node
-                </button>
-                <span
-                  className="text-[10px] text-muted-foreground/70 tabular-nums text-right"
-                  title="Created"
-                >
-                  {formatCreatedAt(detail.created_at)}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <MessageEditorDialog
+        key="node-message-editor"
+        open={msgDialogOpen}
+        onOpenChange={handleCloseMsgDialog}
+        title={
+          msgDialogReadonly
+            ? "Message"
+            : editingMsg
+              ? "Edit Message"
+              : "Add Message"
+        }
+        initialContent={editingMsg?.body || ""}
+        onSave={
+          !editingMsg
+            ? handleAddMessage
+            : !msgDialogReadonly
+              ? handleEditMessage
+              : () => {}
+        }
+        readonly={msgDialogReadonly}
+        message={editingMsg}
+        collectionId={collectionId}
+        onSelectNodeMessage={(msg) => {
+          setEditingMsg(msg)
+          setMsgDialogReadonly(true)
+        }}
+      />
 
       <FileMgmtDetailDialog
         collectionId={collectionId}
@@ -796,7 +1220,6 @@ export function NodeDetailSidebar({
         }}
         contextNodeId={nodeId}
       />
-    </div>
     </div>
   )
 }

@@ -298,6 +298,11 @@
   --pm-t-prose: 300 14.5px/1.75 var(--pm-ff-prose);
   --pm-prose-measure: 58ch;
   --pm-rail-min: 272px;
+  /*
+   * Shared collection right-rail content width (Files Messages · Timeline
+   * Node/Todo/Messages · Quick Chat when docked to that rail).
+   */
+  --pm-collection-rail-w: clamp(272px, 30vw, 360px);
   --pm-card-gap: 10px;
   --pm-stage-pad-x: 28px;
 }
@@ -334,8 +339,8 @@
   color: var(--ze-muted) !important;
 }
 
-/* Textarea focus — green underline, no ring */
-textarea:focus {
+/* Textarea focus — green underline, no ring (skip inline title field) */
+textarea:focus:not(.pm-node-id-title-input) {
   border-color: var(--ze-green) !important;
   box-shadow: none !important;
   outline: none !important;
@@ -1691,6 +1696,121 @@ input[type="checkbox"] {
   font-family: inherit !important;
 }
 
+/* Select-preview soft card: kill residual chrome if library still mounts bars */
+.sinkduce-file-viewer--chrome-off .file-viewer-web-toolbar,
+.sinkduce-file-viewer--chrome-off .pdf-toolbar,
+.sinkduce-file-viewer--chrome-off .sinkduce-pdf-tools-left,
+.sinkduce-file-viewer--chrome-off [data-sinkduce-bar] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+.sinkduce-file-viewer--chrome-off .file-viewer-web-content {
+  padding: 0 !important;
+}
+
+/*
+ * Select-existing floating preview — pure soft card, document only
+ * (no title band / no tool strip). Close is a float pill top-right.
+ */
+/* Float shell — slide in from the rail side (right → rest) */
+.pm-select-preview-float {
+  opacity: 0;
+  transform: translateX(16px);
+  transition:
+    opacity 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-select-preview-float.is-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+/*
+ * Match Timeline right-rail nested surface: float stage cream + soft card.
+ * (Same family as Collections/Stage --pm-float, not pure white stack.)
+ */
+.pm-select-preview {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--pm-r-lg, 20px);
+  background: var(--pm-float, #fdfbf7);
+  border: none;
+  box-shadow: var(--pm-shadow);
+}
+/* Title row — Geist title role, no hard 1px rule */
+.pm-select-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 10px 12px 8px 14px;
+  background: transparent;
+}
+.pm-select-preview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--pm-t-title);
+  font-weight: 400;
+  color: var(--pm-ink);
+  letter-spacing: -0.01em;
+}
+.pm-select-preview-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  color: var(--pm-faint);
+  background: rgba(18, 20, 16, 0.04);
+  cursor: pointer;
+  transition:
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-select-preview-close:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.08);
+}
+.pm-select-preview-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Nested doc surface */
+  margin: 0 8px 8px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  opacity: 1;
+  transition: opacity var(--pm-select-doc-in, 180ms)
+    var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-select-preview-body.is-out {
+  opacity: 0;
+  transition-duration: var(--pm-select-doc-out, 140ms);
+  pointer-events: none;
+}
+.pm-select-preview-body.is-in {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-select-preview-float,
+  .pm-select-preview-body {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+}
+
 /* Host shell: pure white stage — no grey title strip behind tools */
 .sinkduce-file-viewer .file-viewer-web-shell {
   position: relative !important;
@@ -2438,14 +2558,1660 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 /* Dim non-target cards without CSS opacity on the root —
    root opacity makes the fill translucent so connector lines "leak" through. */
 .node-group-dim {
-  background-color: var(--background) !important;
-  border-color: color-mix(in srgb, var(--border) 45%, transparent) !important;
+  background-color: #ffffff !important;
+  border-color: color-mix(in srgb, var(--pm-ink) 6%, transparent) !important;
   box-shadow: none !important;
-  transition: border-color 0.2s ease, color 0.2s ease;
+  transition: border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
 .node-group-dim > * {
   opacity: 0.4;
   transition: opacity 0.2s ease;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Premium · Collection Timeline (shell layer — canvas geometry non-canonical)
+   Soft inspector + chrome; no hard structure lines; type roles only.
+   ═══════════════════════════════════════════════════════════════════ */
+.pm-timeline {
+  --pm-timeline-ease: var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  --pm-timeline-rail-ms: 300ms;
+  /* Match Files Messages + Quick Chat rail content width */
+  --pm-timeline-rail-w: var(--pm-collection-rail-w);
+  /*
+   * Shadow gutter — must clear --pm-shadow (~24–28px soft spread).
+   * Same language as Files rail + QC float (no hard-cut edges).
+   */
+  --pm-timeline-rail-shadow-gutter: 18px;
+  --pm-timeline-rail-gap-left: var(--pm-timeline-rail-shadow-gutter);
+  /*
+   * Right flush to stage edge (like QC / Files Messages). Soft float paints
+   * into stage padding; parent .pm-timeline is overflow:visible for this.
+   */
+  --pm-timeline-rail-inset-right: 0px;
+  --pm-timeline-rail-inset-bottom: var(--pm-timeline-rail-shadow-gutter);
+  --pm-timeline-msg-detail-gap: 12px;
+  /* Shared shell for Todo / Message stream / Node cards */
+  --pm-timeline-card-r: var(--pm-r, 16px);
+  /* Match Quick Chat soft float — not the tighter sm tier */
+  --pm-timeline-card-shadow: var(--pm-shadow);
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  /*
+   * Visible so Todo / Message stream / Node soft shadows are not sliced by
+   * the timeline shell. Canvas still clips pan/zoom content itself.
+   */
+  overflow: visible;
+  background: transparent;
+}
+.pm-timeline-canvas {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  /* Transparent — stage cream shows through; no second “底色” plate */
+  background: transparent;
+}
+.pm-timeline-viewport {
+  /* Edge fades: right slightly wider; left/top/bottom a bit narrower */
+  --pm-timeline-fade-right: 64px;
+  --pm-timeline-fade-left: 56px;
+  --pm-timeline-fade-top: 56px;
+  --pm-timeline-fade-bottom: 56px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  /* Clean stage — no dot matrix */
+  background-image: none;
+  background-color: transparent;
+  /*
+   * Fade graph content on all four edges — mask only (no solid wash).
+   * H + V gradients intersect so corners dissolve cleanly.
+   */
+  -webkit-mask-image:
+    linear-gradient(
+      to right,
+      transparent 0,
+      #000 var(--pm-timeline-fade-left),
+      #000 calc(100% - var(--pm-timeline-fade-right)),
+      transparent 100%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--pm-timeline-fade-top),
+      #000 calc(100% - var(--pm-timeline-fade-bottom)),
+      transparent 100%
+    );
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(
+      to right,
+      transparent 0,
+      #000 var(--pm-timeline-fade-left),
+      #000 calc(100% - var(--pm-timeline-fade-right)),
+      transparent 100%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--pm-timeline-fade-top),
+      #000 calc(100% - var(--pm-timeline-fade-bottom)),
+      transparent 100%
+    );
+  mask-composite: intersect;
+}
+.pm-timeline-viewport:active {
+  cursor: grabbing;
+}
+.pm-timeline-world {
+  transition: opacity 220ms var(--pm-timeline-ease);
+}
+.pm-timeline-world.is-pending {
+  opacity: 0;
+  pointer-events: none;
+}
+.pm-timeline-world.is-ready {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Floating chrome (Messages · Groups) — ghost pills, green when on */
+.pm-timeline-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pm-timeline-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  cursor: pointer;
+  transition:
+    color 160ms var(--pm-timeline-ease),
+    background 160ms var(--pm-timeline-ease),
+    box-shadow 160ms var(--pm-timeline-ease);
+}
+.pm-timeline-tb-btn:hover {
+  color: var(--pm-ink);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow);
+}
+.pm-timeline-tb-btn.is-on {
+  color: var(--pm-green);
+  /* Solid mint (same hue as green-wash) — no alpha, so canvas doesn’t show through */
+  background: color-mix(in srgb, var(--pm-green) 14%, #ffffff);
+  box-shadow: var(--pm-shadow-sm);
+}
+.pm-timeline-tb-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/*
+ * Right dock shell is transparent (stage shows through the left air gap).
+ * Opacity lives only on .pm-timeline-rail-content so card-to-card gaps
+ * don’t reveal nodes, without painting a full-height cream slab.
+ */
+.pm-timeline-rail {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  flex-shrink: 0;
+  overflow: visible;
+  box-sizing: border-box;
+  background: transparent;
+  /* content + left gap + right inset */
+  width: calc(
+    var(--pm-timeline-rail-w) + var(--pm-timeline-rail-gap-left) +
+      var(--pm-timeline-rail-inset-right)
+  );
+  transition: width var(--pm-timeline-rail-ms) cubic-bezier(0.32, 0.72, 0, 1);
+}
+/* Message detail: two equal columns of collection-rail width */
+.pm-timeline-rail[data-msg-cols="2"] {
+  width: calc(
+    var(--pm-timeline-rail-w) * 2 + var(--pm-timeline-msg-detail-gap) +
+      var(--pm-timeline-rail-gap-left) + var(--pm-timeline-rail-inset-right)
+  );
+}
+.pm-timeline-rail-inner {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: flex-end;
+  /*
+   * Shadow gutter: L/T/B air so soft floats aren’t clipped by .pm-timeline
+   * overflow or the rail edge (same idea as --pm-files-rail-shadow-gutter).
+   */
+  padding-top: var(--pm-timeline-rail-shadow-gutter);
+  padding-left: var(--pm-timeline-rail-gap-left);
+  padding-right: var(--pm-timeline-rail-inset-right);
+  padding-bottom: var(--pm-timeline-rail-inset-bottom);
+  overflow: visible;
+}
+/* Shared white soft-float shell (Todo · Message stream · Node detail cards) */
+.pm-timeline-panel,
+.pm-timeline-todo-shell,
+.pm-timeline-acc-stack > .pm-ws-side-card {
+  border-radius: var(--pm-timeline-card-r, var(--pm-r, 16px));
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-timeline-card-shadow, var(--pm-shadow));
+  box-sizing: border-box;
+  /* Shell stays visible so box-shadow isn’t self-clipped; scroll on inners */
+  overflow: visible;
+}
+.pm-timeline-panel {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Enter/exit soft fade with rail width */
+  animation: pm-timeline-panel-in 220ms var(--pm-timeline-ease) both;
+  /*
+   * Clip only the panel’s *content* to radius via an inner host when needed.
+   * Shell itself must stay overflow:visible or the QC-class soft shadow dies.
+   */
+}
+/* Clip only scroll hosts inside the panel — not the shell shadow */
+.pm-timeline-panel > .pm-timeline-panel-body,
+.pm-timeline-panel > .flex-1,
+.pm-timeline-panel .pm-timeline-panel-body {
+  min-height: 0;
+  border-radius: 0 0 var(--pm-timeline-card-r, 16px) var(--pm-timeline-card-r, 16px);
+}
+@keyframes pm-timeline-panel-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.pm-timeline-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 14px 14px 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+/* Shared rail chrome title: Todo · Message stream · Node / Messages cards */
+.pm-timeline-panel-title {
+  margin: 0;
+  font: var(--pm-t-label);
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+}
+.pm-timeline-panel-meta {
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-faint);
+}
+.pm-timeline-panel-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 14px 14px;
+}
+.pm-timeline-panel-foot {
+  flex-shrink: 0;
+  padding: 10px 14px 12px;
+  /* Soft top wash — no hard 1px rule */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--pm-ink) 3.5%, transparent) 0,
+    transparent 1px
+  );
+  background-size: 100% 100%;
+}
+.pm-timeline-todo-shell {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* overflow visible → soft shadow; list scrolls on .todo-card body */
+  overflow: visible;
+  padding: 14px 14px 12px;
+  margin: 0;
+}
+/*
+ * Shell owns radius + white fill. Do NOT give the inner card
+ * border-radius + overflow:hidden — that clips the top-right Add
+ * button’s corner against the inherited 16px radius.
+ */
+.pm-timeline-todo-shell > .todo-card,
+.pm-timeline-todo-shell > .h-full {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  border-radius: 0;
+  /* no second shadow — shell already floats */
+  box-shadow: none;
+  background: transparent;
+}
+/* Scroll only the list region under the title row */
+.pm-timeline-todo-shell > .todo-card > .flex-1,
+.pm-timeline-todo-shell > .todo-card > [class*="overflow"],
+.pm-timeline-todo-shell .todo-card-body {
+  min-height: 0;
+}
+
+/* Node cards — soft float nested white */
+.pm-timeline-node {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 12rem; /* w-48 */
+  flex-shrink: 0;
+  height: 3rem; /* h-12 */
+  padding: 0 12px;
+  border-radius: var(--pm-r-sm, 8px);
+  background: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 5%, transparent);
+  box-shadow: var(--pm-shadow-sm);
+  cursor: pointer;
+  overflow: visible;
+  transition:
+    border-color 160ms var(--pm-timeline-ease),
+    box-shadow 160ms var(--pm-timeline-ease),
+    background 160ms var(--pm-timeline-ease);
+}
+.pm-timeline-node:hover {
+  border-color: color-mix(in srgb, var(--pm-ink) 12%, transparent);
+  box-shadow: var(--pm-shadow);
+}
+.pm-timeline-node.is-selected {
+  border-color: color-mix(in srgb, var(--pm-green) 45%, #ffffff);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 18%, #ffffff),
+    var(--pm-shadow-sm);
+  /* Solid mint — no alpha, so timeline connectors cannot show through */
+  background: color-mix(in srgb, var(--pm-green) 14%, #ffffff);
+}
+.pm-timeline-node.is-completed {
+  background: color-mix(in srgb, var(--pm-canvas) 55%, #ffffff);
+  color: var(--pm-muted);
+  border-color: color-mix(in srgb, var(--pm-ink) 6%, transparent);
+}
+.pm-timeline-node.is-definitive {
+  border-color: color-mix(in srgb, var(--pm-green) 40%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 12%, transparent),
+    0 0 10px color-mix(in srgb, var(--pm-green) 18%, transparent);
+}
+.pm-timeline-node.is-dragging {
+  opacity: 0.65;
+  box-shadow: var(--pm-shadow);
+  z-index: 50;
+}
+.pm-timeline-node-title {
+  font: var(--pm-t-title);
+  font-weight: 400;
+  color: var(--pm-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  display: block;
+}
+.pm-timeline-node.is-completed .pm-timeline-node-title {
+  color: var(--pm-muted);
+}
+.pm-timeline-node-time {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  min-width: 0;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-faint);
+}
+.pm-timeline-node-action {
+  opacity: 0;
+  padding: 4px;
+  border-radius: 6px;
+  color: var(--pm-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    opacity 140ms var(--pm-timeline-ease),
+    color 140ms var(--pm-timeline-ease),
+    background 140ms var(--pm-timeline-ease);
+}
+.pm-timeline-node:hover .pm-timeline-node-action,
+.pm-timeline-node:focus-within .pm-timeline-node-action {
+  opacity: 1;
+}
+.pm-timeline-node-action:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.05);
+}
+.pm-timeline-node-action.is-merge:hover {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+
+/*
+ * Add targets — solid premium chips (never translucent over connectors).
+ * Soft float white + quiet shadow; green accent for Todo.
+ */
+.pm-timeline-add-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: none;
+  background: #ffffff;
+  color: var(--pm-muted);
+  box-shadow: var(--pm-shadow-sm);
+  transition:
+    color 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-add-slot:hover {
+  color: var(--pm-ink);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow);
+}
+.pm-timeline-add-slot:active {
+  transform: scale(0.96);
+}
+.pm-timeline-add-slot.is-danger {
+  color: color-mix(in srgb, var(--pm-danger, #c43c3c) 70%, var(--pm-muted));
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+}
+.pm-timeline-add-slot.is-danger:hover {
+  color: var(--pm-danger, #c43c3c);
+  background: color-mix(in srgb, var(--pm-danger, #c43c3c) 8%, #ffffff);
+  box-shadow: var(--pm-shadow);
+}
+.pm-timeline-add-slot.is-todo {
+  color: var(--pm-green);
+  background: color-mix(in srgb, var(--pm-green) 9%, #ffffff);
+  box-shadow: var(--pm-shadow-sm);
+}
+.pm-timeline-add-slot.is-todo:hover {
+  color: var(--pm-green);
+  background: color-mix(in srgb, var(--pm-green) 14%, #ffffff);
+  box-shadow: var(--pm-shadow);
+}
+
+/*
+ * Hover split: Node + fixed; Todo silk-expands to the right.
+ *
+ * Use explicit width (not grid 0fr→1fr). In a shrink-wrapped flex row,
+ * 1fr has no free space and the open track stays 0 — Todo never appears.
+ *
+ * Shadow: expand box must be larger than the 40px chip when open, or
+ * overflow:hidden (needed for silk width) slices --pm-shadow-sm (§3.6 gutter).
+ */
+.pm-timeline-add-split {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  position: relative;
+  z-index: 30;
+  height: 40px;
+  gap: 0;
+  overflow: visible;
+  flex-shrink: 0;
+  transition: gap 220ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-timeline-add-split.is-open {
+  gap: 6px;
+}
+.pm-timeline-add-todo-expand {
+  --pm-timeline-add-todo-w: 40px; /* match .w-10 Node + */
+  /* Air for soft float (~sm spread); inside overflow:hidden host */
+  --pm-timeline-add-todo-gutter: 12px;
+  box-sizing: content-box;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  height: var(--pm-timeline-add-todo-w);
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  transition:
+    width 240ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    max-width 240ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    padding 240ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    margin 240ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    opacity 200ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-timeline-add-todo-expand.is-open {
+  width: var(--pm-timeline-add-todo-w);
+  max-width: var(--pm-timeline-add-todo-w);
+  /* Gutter inside the clip box so box-shadow isn’t hard-cut */
+  padding: var(--pm-timeline-add-todo-gutter)
+    var(--pm-timeline-add-todo-gutter)
+    var(--pm-timeline-add-todo-gutter)
+    2px;
+  /* Negative margin: padding doesn’t push layout / shift Node + */
+  margin: calc(-1 * var(--pm-timeline-add-todo-gutter))
+    calc(-1 * var(--pm-timeline-add-todo-gutter))
+    calc(-1 * var(--pm-timeline-add-todo-gutter))
+    0;
+  opacity: 1;
+  pointer-events: auto;
+}
+.pm-timeline-add-todo-expand-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--pm-timeline-add-todo-w, 40px);
+  height: var(--pm-timeline-add-todo-w, 40px);
+  flex-shrink: 0;
+}
+/* Chip shadows must paint; keep above connectors while open */
+.pm-timeline-add-split.is-open .pm-timeline-add-slot {
+  position: relative;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-timeline-add-split,
+  .pm-timeline-add-todo-expand,
+  .pm-timeline-add-slot {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scope chips (message stream toggles) — one row with + pinned right */
+.pm-timeline-scope-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px 8px;
+  min-width: 0;
+}
+.pm-timeline-scope-filters {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pm-timeline-scope-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  color: var(--pm-muted);
+  background: rgba(18, 20, 16, 0.04);
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+  transition:
+    color 160ms var(--pm-timeline-ease),
+    background 160ms var(--pm-timeline-ease);
+}
+.pm-timeline-scope-btn:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.07);
+}
+.pm-timeline-scope-btn.is-on {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+/* Action + — icon square, not a filter pill; always same row, flush right */
+.pm-timeline-scope-add {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--pm-r-sm, 8px);
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+  cursor: pointer;
+  flex: 0 0 26px;
+  transition:
+    color 160ms var(--pm-timeline-ease),
+    background 160ms var(--pm-timeline-ease),
+    box-shadow 160ms var(--pm-timeline-ease);
+}
+.pm-timeline-scope-add:hover {
+  color: var(--pm-on, #e8f0eb);
+  background: var(--pm-green);
+  box-shadow: var(--pm-shadow-sm);
+}
+
+/* Groups menu popover */
+.pm-timeline-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  width: 15rem; /* room for icon + truncated name + count trail */
+  padding: 6px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-shadow);
+  animation: pm-timeline-menu-in 180ms var(--pm-timeline-ease) both;
+}
+@keyframes pm-timeline-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.pm-timeline-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(18, 20, 16, 0.12);
+  animation: pm-timeline-scrim-in 180ms var(--pm-timeline-ease) both;
+}
+@keyframes pm-timeline-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* Group row: icon · name (truncate) · fixed trail (count ↔ edit on hover) */
+.pm-timeline-menu-row {
+  position: relative;
+  border-radius: var(--pm-r-sm, 8px);
+}
+.pm-timeline-menu-row.is-active {
+  background: var(--pm-green-wash);
+}
+.pm-timeline-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--pm-r-sm, 8px);
+  background: transparent;
+  font: var(--pm-t-body);
+  font-weight: 300;
+  color: var(--pm-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms var(--pm-timeline-ease);
+}
+.pm-timeline-menu-item:hover {
+  background: rgba(18, 20, 16, 0.04);
+}
+.pm-timeline-menu-row.is-active .pm-timeline-menu-item,
+.pm-timeline-menu-item.is-active {
+  color: var(--pm-green);
+  background: transparent;
+}
+.pm-timeline-menu-row.is-active .pm-timeline-menu-item:hover {
+  background: color-mix(in srgb, var(--pm-green) 8%, transparent);
+}
+/* Name: take free space, ellipsis when long */
+.pm-timeline-menu-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Fixed-width trail so counts align; edit icon sits in the same box */
+.pm-timeline-menu-trail {
+  flex: 0 0 1.75rem;
+  width: 1.75rem;
+  min-width: 1.75rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
+}
+.pm-timeline-menu-count {
+  margin: 0;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-faint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  line-height: 1;
+  transition: opacity 140ms var(--pm-timeline-ease);
+}
+/* Edit: absolute over trail; appears on row hover where the count was */
+.pm-timeline-menu-edit {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pm-faint);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 140ms var(--pm-timeline-ease),
+    color 140ms var(--pm-timeline-ease),
+    background 140ms var(--pm-timeline-ease);
+}
+.pm-timeline-menu-row.is-editable:hover .pm-timeline-menu-count,
+.pm-timeline-menu-row.is-editable:focus-within .pm-timeline-menu-count {
+  opacity: 0;
+}
+.pm-timeline-menu-row.is-editable:hover .pm-timeline-menu-edit,
+.pm-timeline-menu-row.is-editable:focus-within .pm-timeline-menu-edit {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pm-timeline-menu-edit:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.06);
+}
+.pm-timeline-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: color-mix(in srgb, var(--pm-ink) 6%, transparent);
+  border: none;
+}
+
+/* Nested section inside node detail (messages) — soft card, no hard lines */
+.pm-timeline-nested {
+  border-radius: var(--pm-r-sm, 8px);
+  background: color-mix(in srgb, var(--pm-canvas) 55%, #ffffff);
+  overflow: hidden;
+}
+
+/*
+ * Timeline Node Detail accordion — JS pixel-height hand-off
+ * (see beginAccordionHandoff in node-detail-sidebar.tsx).
+ * Settled state uses flex; mid-tween uses inline height on both cards.
+ */
+.pm-timeline-node-rail.pm-ws-side {
+  --pm-timeline-acc: 280ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  /* Same outer height box as Todo / Message stream */
+  height: 100%;
+  min-height: 0;
+  gap: 0;
+  overflow: visible; /* never clip card shadows */
+  padding: 0;
+  margin: 0; /* override .pm-ws-side margin:-3px */
+  box-sizing: border-box;
+  animation: none;
+  display: flex !important;
+  flex-direction: column;
+}
+.pm-timeline-acc-stack {
+  display: flex;
+  flex-direction: column;
+  /* Air between stacked floats so soft shadows don’t mash into a hard seam */
+  gap: 12px;
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow: visible; /* shadows between / around Node · Messages cards */
+}
+.pm-timeline-acc-stack > .pm-timeline-node-card,
+.pm-timeline-acc-stack > .pm-timeline-msgs-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Shell overflow visible for shadow; clip only scrollable bodies */
+  overflow: visible;
+  /* Re-assert soft float (wins over base .pm-ws-side-card sm) */
+  box-shadow: var(--pm-timeline-card-shadow, var(--pm-shadow));
+  /* height/flex transitions driven by JS during hand-off */
+}
+.pm-timeline-acc-stack > .pm-timeline-node-card > .pm-ws-side-pad,
+.pm-timeline-acc-stack > .pm-timeline-msgs-card > .pm-timeline-msgs-body {
+  overflow: hidden;
+  border-radius: 0 0 var(--pm-timeline-card-r, 16px) var(--pm-timeline-card-r, 16px);
+}
+/*
+ * Settled flex after JS clears inline heights:
+ * - Messages open: Node : Messages = 1 : 2  (Node = 1/3 of free space)
+ * - Node open: Node fills; Messages = header only
+ */
+.pm-timeline-acc-stack > .pm-timeline-node-card:not(.is-expanded) {
+  flex: 1 1 0; /* share 1 of 1+2 */
+  min-height: 0;
+}
+.pm-timeline-acc-stack > .pm-timeline-msgs-card.is-expanded {
+  flex: 2 1 0; /* share 2 of 1+2 → 2/3 */
+  min-height: 0;
+}
+.pm-timeline-acc-stack > .pm-timeline-node-card.is-expanded {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.pm-timeline-acc-stack > .pm-timeline-msgs-card:not(.is-expanded) {
+  flex: 0 0 auto; /* header row only */
+}
+/* Messages body fills expanded card; clipped while card height tweens */
+.pm-timeline-msgs-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.pm-timeline-msgs-body.is-open {
+  pointer-events: auto;
+}
+.pm-timeline-msgs-body:not(.is-open) {
+  pointer-events: none;
+}
+.pm-timeline-msgs-body-inner {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.pm-timeline-msgs-body.is-open .pm-node-msg-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pm-timeline-msgs-body:not(.is-open) .pm-node-msg-list {
+  overflow: hidden;
+}
+/* Node-switch content fade only (not accordion) */
+.pm-timeline-node-rail.is-body-out > .pm-timeline-acc-stack,
+.pm-timeline-node-rail.is-body-out > .pm-ws-side-card {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pm-timeline-node-rail.is-body-in > .pm-timeline-acc-stack,
+.pm-timeline-node-rail.is-body-in > .pm-ws-side-card {
+  opacity: 1;
+  transition: opacity 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Todo ↔ Node Detail ↔ Messages content crossfade */
+.pm-timeline-rail-content {
+  position: relative; /* host for portaled Quick Chat */
+  width: var(--pm-timeline-rail-w);
+  min-width: var(--pm-timeline-rail-w);
+  max-width: var(--pm-timeline-rail-w);
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  /* Transparent host — shells paint white; stage shows in card gaps */
+  background: transparent;
+  border-radius: 0;
+  overflow: visible; /* critical: do not clip Todo / panel / node shadows */
+  transition: opacity 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  opacity: 1;
+  isolation: isolate;
+}
+/*
+ * Quick Chat underlay stack — fade/scale like Overview .pm-rail-stack.
+ */
+.pm-timeline-rail-stack {
+  --pm-qc-rail-motion: 300ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Never re-clip Todo / panel / node soft floats */
+  overflow: visible;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: 50% 40%;
+  transition:
+    opacity var(--pm-qc-rail-motion),
+    transform var(--pm-qc-rail-motion);
+}
+.pm-timeline-rail-content.is-qc-covered .pm-timeline-rail-stack,
+.pm-timeline-rail-stack.is-covered {
+  opacity: 0;
+  transform: translateY(6px) scale(0.985);
+  pointer-events: none;
+}
+/*
+ * QC fills the same box as Todo / Message / Node shells (no extra gutter).
+ * Matches card radius + shadow so open size reads as the same surface.
+ */
+.pm-timeline-rail-content > .pm-qc-float--rail {
+  --pm-qc-float-gutter: 0px;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: var(--pm-timeline-card-r, var(--pm-r, 16px));
+  box-shadow: var(--pm-timeline-card-shadow, var(--pm-shadow));
+}
+.pm-timeline-rail[data-msg-cols="2"] .pm-timeline-rail-content {
+  width: calc(
+    var(--pm-timeline-rail-w) * 2 + var(--pm-timeline-msg-detail-gap)
+  );
+  min-width: calc(
+    var(--pm-timeline-rail-w) * 2 + var(--pm-timeline-msg-detail-gap)
+  );
+  max-width: calc(
+    var(--pm-timeline-rail-w) * 2 + var(--pm-timeline-msg-detail-gap)
+  );
+}
+.pm-timeline-rail-content.is-out {
+  opacity: 0;
+  transition-duration: 140ms;
+  pointer-events: none;
+}
+.pm-timeline-rail-content.is-in {
+  opacity: 1;
+  transition-duration: 180ms;
+}
+
+/* Attach files control — reads as a button (pill + hover wash) */
+.pm-timeline-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--pm-muted);
+  background: rgba(18, 20, 16, 0.05);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    color 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-attach-btn:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.09);
+}
+.pm-timeline-attach-btn.is-on {
+  color: var(--pm-green);
+  background: color-mix(in srgb, var(--pm-green) 14%, #ffffff);
+}
+.pm-timeline-date-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 9rem;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-muted);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-date-btn:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.05);
+}
+
+/* Attach zone soft expand — open/close same duration + ease */
+/*
+ * Attach zone inside Node pad.
+ * Only flex-grow (basis 0) — same single-axis motion as the cards.
+ * When handoff to Messages, JS closes attach in the same frame; grow 1→0
+ * runs with Node card grow so space transfers cleanly.
+ */
+.pm-timeline-attach-expand {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 0;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-height: 0;
+  overflow: hidden;
+  transition: flex-grow var(--pm-timeline-acc, 260ms cubic-bezier(0.45, 0.05, 0.55, 0.95));
+}
+.pm-timeline-attach-expand.is-open {
+  flex-grow: 1;
+}
+.pm-timeline-attach-expand:not(.is-open) {
+  pointer-events: none;
+}
+.pm-timeline-attach-expand-inner {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Stack inside expand: drop → action → list/tree */
+.pm-timeline-attach-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 0;
+}
+/* Picker mode: Confirm sits tight above the flat tree */
+.pm-timeline-attach-stack.is-picking {
+  gap: 4px;
+}
+.pm-timeline-attach-stack.is-picking .pm-timeline-attach-action-row {
+  margin-bottom: 0;
+}
+.pm-timeline-attach-stack.is-picking .pm-timeline-attach-body {
+  margin-top: 0;
+  gap: 0;
+}
+.pm-timeline-attach-action-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-height: 32px;
+}
+.pm-timeline-attach-from-collection {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--pm-muted);
+  background: rgba(18, 20, 16, 0.05);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+.pm-timeline-attach-from-collection:hover {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.09);
+}
+.pm-timeline-attach-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 32px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  font: var(--pm-t-label);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--pm-faint);
+  background: rgba(18, 20, 16, 0.06);
+  cursor: not-allowed;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    opacity 160ms ease;
+}
+.pm-timeline-attach-confirm.is-ready {
+  color: #ffffff;
+  background: var(--pm-green);
+  cursor: pointer;
+}
+.pm-timeline-attach-confirm.is-ready:hover {
+  background: color-mix(in srgb, var(--pm-green) 88%, #000000);
+}
+.pm-timeline-attach-confirm:disabled:not(.is-ready) {
+  opacity: 0.7;
+}
+
+/* Body: list folds down; tree grows under Confirm */
+.pm-timeline-attach-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 0;
+}
+.pm-timeline-attach-list-pane {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  flex: 0 0 auto;
+  pointer-events: none;
+  transition:
+    grid-template-rows 280ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    opacity 220ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-timeline-attach-list-pane.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  pointer-events: auto;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.pm-timeline-attach-list-inner {
+  min-height: 0;
+  overflow: auto;
+}
+/* Attachment list — delete: slide left + collapse; peers slide up to fill */
+.pm-timeline-attach-list {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.pm-timeline-attach-item {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    grid-template-rows 280ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    opacity 240ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: grid-template-rows, opacity, transform;
+}
+.pm-timeline-attach-item.is-exit {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateX(-28px);
+  pointer-events: none;
+}
+.pm-timeline-attach-item-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.pm-timeline-attach-item-row {
+  margin: 3px 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-timeline-attach-item {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+}
+.pm-timeline-attach-tree-pane {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  flex: 0 0 auto;
+  pointer-events: none;
+  /* Flat tree — no card chrome; sits flush under Confirm */
+  background: transparent;
+  box-shadow: none;
+  border: none;
+  padding: 0;
+  transition:
+    grid-template-rows 300ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    opacity 240ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-timeline-attach-tree-pane.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  pointer-events: auto;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.pm-timeline-attach-tree-inner {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0 0;
+  background: transparent;
+}
+
+.pm-timeline-attach-zone {
+  border-radius: var(--pm-r-lg, 20px);
+  border: 1px dashed color-mix(in srgb, var(--pm-ink) 10%, #ffffff);
+  background: color-mix(in srgb, var(--pm-canvas) 40%, #ffffff);
+  padding: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition:
+    border-color 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 180ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    min-height 280ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    height 280ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    padding 220ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-timeline-attach-zone.is-drop {
+  min-height: 112px;
+}
+/* Compact one-line upload when From Collection is open */
+.pm-timeline-attach-zone.is-compact {
+  min-height: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--pm-ink) 8%, #ffffff);
+  background: color-mix(in srgb, var(--pm-canvas) 30%, #ffffff);
+}
+.pm-timeline-attach-zone.is-drag {
+  border-color: var(--pm-green);
+  background: color-mix(in srgb, var(--pm-green) 10%, #ffffff);
+}
+/* Tree used to sit in a nested float card — removed; tree is flat under Confirm. */
+
+/*
+ * Premium file tree picker — flat under Confirm (no nested card).
+ * Soft list · silk folder expand · solid green select.
+ */
+.pm-timeline-ftree {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+/* Search — soft field, no drop-shadow (avoids clip) */
+.pm-timeline-ftree-search-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+.pm-timeline-ftree-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--pm-faint);
+  pointer-events: none;
+}
+.pm-timeline-ftree-search {
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 12px 0 32px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 6%, transparent);
+  background: color-mix(in srgb, var(--pm-canvas) 55%, #ffffff);
+  box-shadow: none;
+  font: var(--pm-t-meta);
+  font-size: 12px;
+  font-weight: 300;
+  color: var(--pm-text);
+  outline: none;
+  transition:
+    border-color 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-ftree-search::placeholder {
+  color: var(--pm-faint);
+}
+.pm-timeline-ftree-search:focus {
+  background: #ffffff;
+  border-color: color-mix(in srgb, var(--pm-green) 35%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green) 12%, transparent);
+}
+/* Scroll host — flat, no nested radius/shadow (parent card owns the shell) */
+.pm-timeline-ftree-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 2px 2px 6px;
+  overscroll-behavior: contain;
+}
+/* Shared row shell */
+.pm-timeline-ftree-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 28px;
+  border-radius: 10px;
+}
+.pm-timeline-ftree-chev {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  color: var(--pm-faint);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-ftree-chev.is-open {
+  color: var(--pm-muted);
+}
+.pm-timeline-ftree-chev:hover:not(:disabled) {
+  color: var(--pm-ink);
+  background: rgba(18, 20, 16, 0.05);
+}
+.pm-timeline-ftree-chev:disabled {
+  cursor: default;
+  opacity: 0.28;
+}
+/* Folder row — no open fill (user: 展开时文件夹不要底色) */
+.pm-timeline-ftree-folder {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 8px 4px 4px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-ftree-folder:hover {
+  background: rgba(18, 20, 16, 0.04);
+}
+.pm-timeline-ftree-folder.is-open {
+  background: transparent;
+}
+.pm-timeline-ftree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pm-canvas) 65%, #ffffff);
+}
+.pm-timeline-ftree-icon svg {
+  width: 12px;
+  height: 12px;
+}
+.pm-timeline-ftree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--pm-t-meta);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 400;
+  color: var(--pm-ink);
+}
+.pm-timeline-ftree-file .pm-timeline-ftree-name {
+  font: var(--pm-t-meta);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 300;
+  color: var(--pm-text);
+}
+/* Count pill */
+.pm-timeline-ftree-count {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font: var(--pm-t-meta);
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 300;
+  color: var(--pm-muted);
+  background: rgba(18, 20, 16, 0.05);
+  font-variant-numeric: tabular-nums;
+}
+/* File row — gap between selected washes so chips don’t fuse */
+.pm-timeline-ftree-file {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin: 2px 0;
+  padding: 4px 8px 4px 4px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-ftree-file:hover {
+  background: rgba(18, 20, 16, 0.04);
+}
+.pm-timeline-ftree-file.is-on {
+  background: color-mix(in srgb, var(--pm-green) 14%, #ffffff);
+}
+.pm-timeline-ftree-file.is-on .pm-timeline-ftree-name {
+  color: var(--pm-green);
+  font-weight: 400;
+}
+.pm-timeline-ftree-file.is-on .pm-timeline-ftree-icon {
+  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
+}
+.pm-timeline-ftree-check {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--pm-green);
+  opacity: 0;
+  transition: opacity 160ms var(--pm-timeline-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-timeline-ftree-file.is-on .pm-timeline-ftree-check {
+  opacity: 1;
+}
+/*
+ * Soft child expand under folder — open/close symmetric.
+ * Also fade kids slightly for silk feel.
+ */
+.pm-timeline-ftree-kids {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 260ms cubic-bezier(0.45, 0.05, 0.55, 0.95),
+    opacity 220ms cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+.pm-timeline-ftree-kids.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.pm-timeline-ftree-kids-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.pm-timeline-ftree-empty {
+  margin: 0;
+  padding: 6px 10px 10px;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-timeline-rail-content,
+  .pm-timeline-attach-expand,
+  .pm-timeline-attach-list-pane,
+  .pm-timeline-attach-tree-pane,
+  .pm-timeline-attach-zone,
+  .pm-timeline-ftree-kids,
+  .pm-timeline-node-rail > .pm-timeline-node-card,
+  .pm-timeline-node-rail > .pm-timeline-msgs-card,
+  .pm-timeline-msgs-body {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+.pm-timeline-field-label {
+  display: block;
+  margin-bottom: 4px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+}
+.pm-timeline-field {
+  width: 100%;
+  font: var(--pm-t-body);
+  font-weight: 300;
+  color: var(--pm-text);
+  border-radius: var(--pm-r-sm, 8px);
+  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  background: #ffffff;
+  padding: 6px 10px;
+  outline: none;
+  transition:
+    border-color 160ms var(--pm-timeline-ease),
+    box-shadow 160ms var(--pm-timeline-ease);
+}
+.pm-timeline-field:focus {
+  border-color: color-mix(in srgb, var(--pm-green) 40%, transparent);
+  box-shadow: 0 0 0 3px var(--pm-green-wash);
+}
+.pm-timeline-attach-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--pm-r-sm, 8px);
+  background: rgba(18, 20, 16, 0.03);
+  font: var(--pm-t-body);
+  font-weight: 300;
+}
+.pm-timeline-attach-row:hover {
+  background: rgba(18, 20, 16, 0.05);
+}
+
+/* Connectors / drop hints */
+.pm-timeline-connector {
+  color: color-mix(in srgb, var(--pm-ink) 18%, transparent);
+}
+.pm-timeline-drop-hint.is-over {
+  background: var(--pm-green-wash);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green) 28%, transparent);
+}
+.pm-timeline-drop-bar {
+  width: 2px;
+  height: 2rem;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 140ms var(--pm-timeline-ease);
+}
+.pm-timeline-drop-hint.is-over .pm-timeline-drop-bar {
+  background: color-mix(in srgb, var(--pm-green) 45%, transparent);
+}
+
+/* Message detail column enter */
+.pm-timeline-msg-detail {
+  animation: pm-timeline-panel-in 220ms var(--pm-timeline-ease) both;
+}
+
+/* Tooltip (node card) */
+.pm-timeline-tip {
+  pointer-events: auto;
+  position: fixed;
+  z-index: 99999;
+  max-width: 240px;
+  transform: translateX(-50%);
+  border-radius: var(--pm-r-sm, 8px);
+  background: var(--pm-ink, #121410);
+  color: var(--pm-on, #e8f0eb);
+  padding: 6px 10px;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  box-shadow: var(--pm-shadow);
+  border: none;
+  animation: pm-timeline-menu-in 140ms var(--pm-timeline-ease) both;
+}
+.pm-timeline-tip.is-above {
+  transform: translateX(-50%) translateY(-100%);
+}
+.pm-timeline-tip-title {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  color: #ffffff;
+}
+.pm-timeline-tip-desc {
+  margin-top: 2px;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: color-mix(in srgb, #ffffff 80%, transparent);
+  line-height: 1.35;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-timeline-world,
+  .pm-timeline-rail,
+  .pm-timeline-panel,
+  .pm-timeline-menu,
+  .pm-timeline-menu-scrim,
+  .pm-timeline-msg-detail,
+  .pm-timeline-tip,
+  .pm-timeline-node,
+  .pm-timeline-tb-btn {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -2931,8 +4697,15 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   transform: translateY(6px) scale(0.985);
   pointer-events: none;
 }
+/* Files: same underlay fade when Quick Chat covers the Messages rail */
+.pm-files-right.is-qc-covered > .pm-rail-stack {
+  opacity: 0;
+  transform: translateY(6px) scale(0.985);
+  pointer-events: none;
+}
 @media (prefers-reduced-motion: reduce) {
-  .pm-rail-stack {
+  .pm-rail-stack,
+  .pm-timeline-rail-stack {
     transition: none !important;
   }
 }
@@ -3818,36 +5591,51 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   box-shadow: none !important;
 }
 /*
- * Silk open/close — shared by todo / Note / Message / File detail.
+ * Silk open/close — shared by todo / Note / Message / File detail / Group form.
  * Parent must keep mounted while open→false (Base UI data-ending-style).
  *
- * Smooth exit rules (avoid “控件残留”):
- * 1) Opacity + tiny scale only — NEVER filter:blur on the popup (re-rasterizes
- *    children mid-fade → ghost icons/buttons).
- * 2) isolation:isolate so chrome + nested cards fade as ONE layer.
- * 3) Do NOT animate translate (centering is -translate-x/y on the shell).
- * 4) Overlay fades opacity only; drop backdrop-filter on exit (blur lags opacity).
+ * Smooth enter/exit rules:
+ * 1) Default opacity 0 (NOT 1) — if first paint misses data-starting-style,
+ *    default-1 flashes the shell fully visible for a frame (“闪一下”).
+ * 2) Only fully open ([data-open] without starting/ending) is opacity 1.
+ * 3) Opacity + tiny scale only — NEVER filter:blur on the popup.
+ * 4) isolation:isolate so chrome + nested cards fade as ONE layer.
+ * 5) Do NOT animate translate (centering is -translate-x/y on the shell).
+ * 6) Overlay fades opacity only; no backdrop-filter on exit.
  */
 .pm-dialog.pm-dialog--silk[data-slot="dialog-content"],
 .pm-dialog--silk[data-slot="dialog-content"] {
   --pm-dialog-silk-ms: 280ms;
   --pm-dialog-silk-ease: cubic-bezier(0.22, 1, 0.36, 1);
   transform-origin: center center;
-  opacity: 1;
-  scale: 1;
+  /* Closed / pre-open baseline — prevents open flash */
+  opacity: 0;
+  scale: 0.985;
   filter: none;
   animation: none !important;
+  animation-duration: 0s !important;
   isolation: isolate;
-  /* Flatten children into this opacity group (reduces residual sublayers) */
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
-  /* Kill TW animate-in/out utilities if twMerge left any */
   --tw-enter-opacity: initial;
   --tw-exit-opacity: initial;
+  --tw-enter-scale: initial;
+  --tw-exit-scale: initial;
   transition:
     opacity var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease),
     scale var(--pm-dialog-silk-ms) var(--pm-dialog-silk-ease) !important;
 }
+/* Fully open — only after Base UI drops data-starting-style */
+.pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-open]:not(
+    [data-starting-style]
+  ):not([data-ending-style]),
+.pm-dialog--silk[data-slot="dialog-content"][data-open]:not(
+    [data-starting-style]
+  ):not([data-ending-style]) {
+  opacity: 1;
+  scale: 1;
+}
+/* Explicit enter/exit hooks (same as baseline; keep for clarity + !important) */
 .pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-starting-style],
 .pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-ending-style],
 .pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-closed],
@@ -3857,6 +5645,17 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   opacity: 0 !important;
   scale: 0.985;
   filter: none !important;
+}
+/*
+ * First-paint safety when element appears already [data-open] without a prior
+ * closed frame (some keepMounted / display:none unhide paths).
+ */
+@starting-style {
+  .pm-dialog.pm-dialog--silk[data-slot="dialog-content"][data-open],
+  .pm-dialog--silk[data-slot="dialog-content"][data-open] {
+    opacity: 0;
+    scale: 0.985;
+  }
 }
 /*
  * Silk backdrop — DialogContent overlayClassName="pm-dialog-overlay--silk"
@@ -4411,6 +6210,596 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   background: var(--pm-green-wash);
   border-color: transparent;
 }
+/*
+ * Group form dialog — fixed shell height + §3.7 flex-grow hand-off
+ * (Appearance ↔ Folder tree) so expand/collapse never resizes the dialog.
+ */
+.pm-group-dialog.pm-dialog[data-slot="dialog-content"] {
+  --pm-group-swap-ms: 280ms;
+  --pm-group-swap-ease: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  /*
+   * §3.6 Soft-float gutter ≥ --pm-shadow-sm bottom lobe (~14–16px blur).
+   */
+  --pm-group-shadow-gutter: 16px;
+  display: flex !important;
+  flex-direction: column !important;
+  /*
+   * FIXED shell height during Appearance↔tree hand-off.
+   * Keep shell stable; only inner 0fr→1fr folds animate.
+   */
+  height: min(600px, 90vh) !important;
+  max-height: min(600px, 90vh) !important;
+  padding: 22px 22px 14px !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  /* Open/close motion: inherit shared .pm-dialog--silk (default opacity 0) */
+  animation: none !important;
+  animation-duration: 0s !important;
+}
+.pm-group-dialog-head {
+  flex: 0 0 auto !important;
+  margin-bottom: 2px !important;
+  padding-bottom: 0 !important;
+}
+/*
+ * Title = default soft-dialog chrome (Geist title · uppercase · wide tracking).
+ * Do not override to sentence case / tight tracking — breaks premium type roles.
+ */
+.pm-group-dialog-title {
+  font: var(--pm-t-title) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  color: var(--pm-ink) !important;
+}
+.pm-group-dialog-body {
+  display: flex !important;
+  flex: 1 1 0 !important;
+  flex-direction: column;
+  gap: 10px !important;
+  margin-top: 10px;
+  /*
+   * §3.6 Soft float gutter inside the dialog’s overflow:hidden shell.
+   * Bottom pad clears Folder shadow; sides clear lateral soft float.
+   */
+  padding: 4px var(--pm-group-shadow-gutter) var(--pm-group-shadow-gutter) !important;
+  margin-inline: calc(-1 * var(--pm-group-shadow-gutter)) !important;
+  min-height: 0 !important;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+.pm-group-card--identity {
+  flex: 0 0 auto;
+}
+/*
+ * Mid stack absorbs free height so Appearance can stay content-sized
+ * (no empty white inside the card) while the dialog shell stays fixed.
+ */
+.pm-group-swap-stack {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 0;
+  box-sizing: border-box;
+  overflow: visible;
+  /* leftover space sits under the cards as canvas — not inside Appearance */
+  justify-content: flex-start;
+}
+/* Nested white soft float cards on canvas */
+.pm-group-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-shadow-sm);
+  min-height: 0;
+}
+/*
+ * One Appearance card: head always visible; body silk-folds.
+ * Always content-height (flex-grow: 0) — never stretch to fill the stack,
+ * or the icon picker sits in a tall card with empty white under it.
+ */
+.pm-group-card--appearance {
+  flex: 0 0 auto;
+  gap: 0;
+  padding: 0;
+  overflow: visible; /* soft float must paint in both states */
+}
+.pm-group-card--appearance.is-open,
+.pm-group-card--appearance.is-compact {
+  flex: 0 0 auto;
+}
+.pm-group-appearance-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  flex-shrink: 0;
+  padding: 12px 14px;
+  border: none;
+  border-radius: var(--pm-r, 16px);
+  background: transparent;
+  cursor: default;
+  text-align: left;
+  color: inherit;
+  transition: background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-group-card--appearance.is-compact .pm-group-appearance-head {
+  cursor: pointer;
+}
+.pm-group-card--appearance.is-compact .pm-group-appearance-head:hover {
+  background: color-mix(in srgb, var(--pm-ink) 2.5%, #ffffff);
+}
+.pm-group-appearance-head.is-static {
+  cursor: default;
+}
+.pm-group-card--appearance.is-open .pm-group-appearance-head {
+  border-radius: var(--pm-r, 16px) var(--pm-r, 16px) 0 0;
+  padding-bottom: 10px;
+}
+.pm-group-appearance-row-text {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pm-group-appearance-row-chev {
+  flex-shrink: 0;
+  color: var(--pm-faint);
+  transform: rotate(-90deg);
+  transition: transform 220ms var(--pm-group-swap-ease, cubic-bezier(0.45, 0.05, 0.55, 0.95));
+}
+.pm-group-appearance-row-chev.is-open {
+  transform: rotate(0deg);
+}
+/*
+ * Appearance body — pure grid 0fr→1fr unfold from the head row.
+ * No opacity fade. Padding only on open (instant is fine; height is the motion).
+ */
+.pm-group-appearance-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-height: 0;
+  pointer-events: none;
+  padding: 0 14px;
+  flex: 0 0 auto;
+  transition: grid-template-rows var(--pm-group-swap-ms) var(--pm-group-swap-ease);
+}
+.pm-group-appearance-body.is-open {
+  grid-template-rows: 1fr;
+  pointer-events: auto;
+  padding: 0 14px 12px;
+}
+/* 0fr/1fr clip target */
+.pm-group-appearance-body > .pm-group-card-scroll {
+  min-height: 0;
+  overflow: hidden;
+}
+/*
+ * Folder card: ALWAYS fill remaining stack height so the bottom edge
+ * (soft float) stays pinned — collapsed vs tree-open only changes
+ * interior (tree 0fr→1fr), not the card shell footprint.
+ */
+.pm-group-card--folder {
+  flex: 1 1 0;
+  min-height: 0;
+  gap: 8px;
+  padding: 10px 12px;
+  overflow: hidden; /* tree scrolls inside; body gutter clears soft float */
+  box-shadow: var(--pm-shadow-sm);
+}
+.pm-group-card-scroll {
+  min-height: 0;
+  margin: 0 -2px;
+  padding: 2px 6px 2px;
+}
+/*
+ * Tree slot: closed = 0 height (hint fills the band); open = remaining height.
+ * Folder shell stays flex:1 so bottom edge doesn’t move either way.
+ */
+.pm-group-tree-slot {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-height: 0;
+  pointer-events: none;
+  flex: 0 0 auto;
+  transition: grid-template-rows var(--pm-group-swap-ms) var(--pm-group-swap-ease);
+}
+.pm-group-tree-slot.is-open {
+  grid-template-rows: 1fr;
+  pointer-events: auto;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.pm-group-tree-slot-inner {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/*
+ * New folder / Keep current — single-line note in the fixed empty band
+ * under the segment (Folder shell height is stable either way).
+ */
+.pm-group-folder-hint {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  text-align: center;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  line-height: 1.4;
+  color: var(--pm-faint);
+  /* one line; ellipsis if ultra-narrow */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Search — pinned above the scrolling list (does not scroll away) */
+.pm-group-folder-search {
+  flex-shrink: 0;
+  margin: 0 !important;
+}
+.pm-group-folder-search-input {
+  height: 28px !important;
+}
+/* Only the folder rows scroll; fills slot under search when open */
+.pm-group-tree-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pm-group-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.pm-group-card-kicker {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+}
+/* Identity: preview top aligns with NAME; height = label + field stack */
+.pm-group-identity {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  min-width: 0;
+}
+.pm-group-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  align-self: stretch;
+  /* height from stretch (= NAME + gap + input); width follows square */
+  aspect-ratio: 1;
+  width: auto;
+  height: auto;
+  min-width: 3rem;
+  margin: 0;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--pm-canvas) 40%, #ffffff);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(18, 20, 16, 0.04),
+    0 6px 14px -6px rgba(18, 20, 16, 0.1);
+  border: none;
+}
+.pm-group-identity-fields {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pm-group-identity-fields .pm-field-label {
+  margin-bottom: 7px;
+}
+.pm-group-name-input {
+  height: 2.25rem !important;
+  font: var(--pm-t-body) !important;
+  font-weight: 300 !important;
+  letter-spacing: -0.01em;
+}
+/* Icon picker — compact stack, no spare vertical air */
+.pm-group-icon-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: visible;
+  min-width: 0;
+}
+.pm-group-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 5px;
+  padding: 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pm-canvas) 55%, #ffffff);
+}
+.pm-group-icon-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  min-height: 1.85rem;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-group-icon-cell:hover {
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(18, 20, 16, 0.06);
+}
+.pm-group-icon-cell.is-on {
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--pm-green) 45%, transparent),
+    0 2px 8px -2px color-mix(in srgb, var(--pm-green) 22%, transparent);
+  transform: scale(1.04);
+}
+/*
+ * Color row: [COLOR] + jelly rounded-rects filling remaining width.
+ * Track has padding so selected outer rings aren’t clipped (esp. last cell).
+ */
+/*
+ * Color row: [COLOR] + jelly bars filling remaining width (one line).
+ * Track padding keeps selected outer rings inside the scroll clip box.
+ */
+.pm-group-swatch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+.pm-group-swatch-label {
+  flex: 0 0 auto;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+  line-height: 1;
+}
+.pm-group-swatch-track {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 10px;
+  padding: 6px 4px;
+  box-sizing: border-box;
+  overflow: visible;
+}
+.pm-group-swatch {
+  --pm-swatch: var(--pm-green);
+  flex: 1 1 0;
+  min-width: 0;
+  height: 0.875rem;
+  border: none;
+  padding: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  /* jelly: soft tint halo + glass highlight + soft drop */
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--pm-swatch) 30%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 50%, transparent),
+    inset 0 -0.5px 1px color-mix(in srgb, var(--pm-swatch) 35%, transparent),
+    0 1px 2px color-mix(in srgb, var(--pm-swatch) 24%, transparent);
+  transition:
+    transform 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-group-swatch:hover {
+  transform: translateY(-0.5px) scale(1.03);
+  box-shadow:
+    0 0 0 3.5px color-mix(in srgb, var(--pm-swatch) 36%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 55%, transparent),
+    inset 0 -0.5px 1px color-mix(in srgb, var(--pm-swatch) 40%, transparent),
+    0 2px 5px color-mix(in srgb, var(--pm-swatch) 28%, transparent);
+}
+.pm-group-swatch.is-on {
+  transform: scale(1.04);
+  box-shadow:
+    0 0 0 3.5px color-mix(in srgb, var(--pm-swatch) 44%, transparent),
+    0 0 0 1.5px color-mix(in srgb, #ffffff 75%, var(--pm-swatch)),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 55%, transparent),
+    inset 0 -0.5px 1px color-mix(in srgb, var(--pm-swatch) 40%, transparent),
+    0 2px 6px color-mix(in srgb, var(--pm-swatch) 32%, transparent);
+}
+.pm-group-custom-field .pm-field-label {
+  margin-bottom: 6px;
+}
+/*
+ * Segmented control — compact height (Keep / Rebind).
+ * Track must read on white Folder card.
+ */
+.pm-group-seg {
+  --pm-group-seg-ms: 280ms;
+  --pm-group-seg-ease: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  flex-shrink: 0;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-canvas) 72%, var(--pm-ink) 6%);
+  box-shadow:
+    inset 0 1px 2px rgba(18, 20, 16, 0.07),
+    inset 0 0 0 1px color-mix(in srgb, var(--pm-ink) 6%, transparent);
+}
+.pm-group-seg-pill {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(18, 20, 16, 0.08),
+    0 4px 12px -4px rgba(18, 20, 16, 0.14),
+    0 0 0 1px color-mix(in srgb, var(--pm-ink) 5%, transparent);
+  pointer-events: none;
+  transition: transform var(--pm-group-seg-ms) var(--pm-group-seg-ease);
+  z-index: 0;
+}
+.pm-group-seg[data-on="1"] .pm-group-seg-pill {
+  transform: translateX(100%);
+}
+.pm-group-seg-btn {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  color: var(--pm-faint);
+  cursor: pointer;
+  transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-group-seg-btn:hover:not(.is-on) {
+  color: var(--pm-ink);
+}
+.pm-group-seg-btn.is-on {
+  color: var(--pm-green);
+  font-weight: 400;
+}
+.pm-group-hint {
+  margin: 0;
+  flex-shrink: 0;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  line-height: 1.5;
+  color: var(--pm-faint);
+}
+/* Folder tree rows — natural height; scroll is on .pm-group-tree-list */
+.pm-group-ftree {
+  flex: 0 0 auto !important;
+  min-height: 0;
+  height: auto !important;
+  max-height: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  padding: 0 !important;
+}
+.pm-group-ftree-scroll {
+  flex: 0 0 auto !important;
+  max-height: none !important;
+  min-height: 0;
+  height: auto !important;
+  overflow: visible !important;
+  background: transparent !important;
+  padding: 2px 0 4px !important;
+}
+/* Selected folder = same solid green select as attach file row */
+.pm-timeline-ftree-folder.is-selected {
+  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-green) 28%, transparent);
+}
+.pm-timeline-ftree-folder.is-selected .pm-timeline-ftree-name {
+  color: var(--pm-green);
+  font-weight: 400;
+}
+.pm-timeline-ftree-folder.is-selected .pm-timeline-ftree-check {
+  opacity: 1;
+  color: var(--pm-green);
+}
+.pm-timeline-ftree-folder.is-muted {
+  cursor: default;
+}
+.pm-timeline-ftree-folder.is-muted:hover {
+  background: transparent;
+}
+.pm-timeline-ftree-folder .pm-timeline-ftree-check {
+  margin-left: auto;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0;
+}
+.pm-group-folder-selected {
+  flex-shrink: 0;
+  margin: 6px 8px 2px;
+  padding-top: 8px;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-green);
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--pm-ink) 4%, transparent) 0,
+    transparent 1px
+  );
+}
+.pm-group-dialog-foot {
+  flex: 0 0 auto !important;
+  /* Body already clears Folder soft float; keep footer tight */
+  margin-top: 0 !important;
+  padding-top: 6px !important;
+  align-items: center !important;
+  /* soft separation without a 1px line */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--pm-ink) 4%, transparent) 0,
+    transparent 1px
+  );
+}
+/* Quiet danger text — not a loud ghost chip */
+.pm-group-delete-link {
+  border: none;
+  background: transparent;
+  padding: 6px 2px;
+  margin: 0;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  color: var(--pm-faint);
+  cursor: pointer;
+  transition: color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-group-delete-link:hover:not(:disabled) {
+  color: var(--pm-danger);
+}
+.pm-group-delete-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pm-group-delete-confirm {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pm-danger) 5%, #ffffff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pm-danger) 10%, transparent);
+}
 .pm-dialog .pm-soft-rule {
   border-color: color-mix(in srgb, var(--pm-ink) 8%, transparent);
 }
@@ -4436,51 +6825,89 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   padding-right: 10px;
 }
 
-/* ── Soft select (DropdownSelect) — no native OS blue ── */
+/* ── Soft select (DropdownSelect) — premium chrome, no native OS blue ── */
 .pm-select-trigger {
   box-sizing: border-box;
-  font: var(--pm-t-body);
+  font: var(--pm-t-meta);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 300;
   color: var(--pm-text);
   background: #ffffff;
-  border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
-  border-radius: var(--pm-r-sm);
+  border: none;
+  border-radius: 999px;
   outline: none;
   cursor: pointer;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 7%, transparent);
   transition:
-    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
+.pm-select-trigger-label {
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+.pm-select-trigger-label.is-placeholder {
+  color: var(--pm-faint);
+}
 .pm-select-trigger--md {
-  min-height: 40px;
-  padding: 8px 12px;
+  min-height: 36px;
+  padding: 0 12px 0 14px;
 }
 .pm-select-trigger--sm {
-  min-height: 34px;
-  padding: 6px 10px;
+  min-height: 30px;
+  padding: 0 10px 0 12px;
+  font-size: 11px;
 }
-.pm-select-trigger:hover:not(.is-disabled) {
+/*
+ * Node group tag editor — same box as static .pm-node-tag
+ * (padding 2×8, meta 11px, green wash; no chevron / fixed height).
+ */
+.pm-select-trigger--tag {
+  min-height: 0;
+  height: auto;
+  padding: 2px 8px;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-green, #1a5e3d);
+  background: var(--pm-green-wash, rgba(26, 94, 61, 0.06));
+  box-shadow: none;
+  max-width: 100%;
+}
+.pm-select-trigger:hover:not(.is-disabled):not(.pm-select-trigger--tag) {
   background: color-mix(in srgb, var(--pm-ink) 2%, #ffffff);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 11%, transparent);
+}
+.pm-select-trigger--tag:hover:not(.is-disabled) {
+  background: color-mix(in srgb, var(--pm-green) 11%, #ffffff);
 }
 .pm-select-trigger.is-open,
 .pm-select-trigger:focus-visible {
-  border-color: color-mix(in srgb, var(--pm-green) 42%, transparent);
-  box-shadow: 0 0 0 3px var(--pm-green-wash);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 35%, transparent),
+    0 0 0 3px var(--pm-green-wash);
+}
+.pm-select-trigger--tag.is-open,
+.pm-select-trigger--tag:focus-visible {
+  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
+  /* Keep pill quiet — same language as static tag, soft wash only */
+  box-shadow: none;
 }
 .pm-select-trigger.is-disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 /*
- * Soft select menu motion — open/close symmetric (ENGINEERING §4).
- * Enter/exit: opacity + slight Y + scale; origin top; no hard mount cut.
+ * Soft select menu — larger radius, airy padding, meta type (matches tags).
  */
 .pm-select-menu {
   --pm-select-ms: 180ms;
   --pm-select-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  padding: 4px 0;
+  padding: 6px;
   border: none;
-  border-radius: var(--pm-r-sm);
+  border-radius: var(--pm-r, 16px);
   background: #ffffff;
   color: var(--pm-ink);
   box-shadow: var(--pm-shadow);
@@ -4498,8 +6925,25 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   transform: translateY(0) scale(1);
   pointer-events: auto;
 }
+/* Tag context: menu wider than the narrow tag column */
+.pm-select-menu--tag {
+  width: max(11.5rem, 100%);
+  min-width: 11.5rem;
+  transform-origin: top right;
+}
+/*
+ * Portaled fixed menu — escapes .pm-ws-side-pad overflow:hidden
+ * (collapsed Node card was clipping the group list).
+ */
+.pm-select-menu--fixed {
+  position: fixed;
+  z-index: 80;
+  margin: 0;
+}
 .pm-select-chev {
-  transition: transform var(--pm-select-ms, 180ms) var(--pm-select-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  color: var(--pm-faint);
+  transition: transform var(--pm-select-ms, 180ms)
+    var(--pm-select-ease, cubic-bezier(0.32, 0.72, 0, 1));
   transform-origin: 50% 50%;
 }
 .pm-select-chev.is-open {
@@ -4510,28 +6954,41 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   width: 100%;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
+  padding: 7px 10px;
   text-align: left;
-  font: var(--pm-t-body);
+  font: var(--pm-t-meta);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 300;
   color: var(--pm-text);
   background: transparent;
   border: none;
+  border-radius: 999px;
   cursor: pointer;
   transition:
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
+.pm-select-opt-label {
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
 .pm-select-opt:hover {
   background: var(--pm-green-wash);
+  color: var(--pm-ink);
 }
 .pm-select-opt.is-on {
-  background: var(--pm-green-soft);
+  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
   color: var(--pm-green);
+  font-weight: 400;
 }
 .pm-select-opt.is-empty {
   cursor: default;
   color: var(--pm-faint);
   font: var(--pm-t-meta);
+  font-size: 11px;
+  font-weight: 300;
 }
 .pm-select-opt.is-empty:hover {
   background: transparent;
@@ -4539,17 +6996,48 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-select-dot {
   width: 6px;
   height: 6px;
-  border-radius: 1px;
-  transform: rotate(45deg);
-  border: 1px solid color-mix(in srgb, var(--pm-ink) 18%, transparent);
-  background: transparent;
-  transition:
-    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    border-color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  border-radius: 999px;
+  border: none;
+  background: color-mix(in srgb, var(--pm-ink) 12%, transparent);
+  transform: none;
+  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .pm-select-dot.is-on {
   background: var(--pm-green);
   border-color: var(--pm-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green) 14%, transparent);
+}
+
+/* Node group editor row — pill select + quiet confirm */
+.pm-node-group-edit {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+}
+.pm-node-group-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+.pm-node-group-confirm:hover {
+  background: color-mix(in srgb, var(--pm-green) 16%, #ffffff);
+  box-shadow: 0 0 0 3px var(--pm-green-wash);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7191,8 +9679,8 @@ button.pm-ws-path-row {
  * into a squashed “half card”.
  */
 .pm-files {
-  /* open rail width (panel + track share this) */
-  --pm-files-rail-w: clamp(272px, 30vw, 360px);
+  /* open rail width (panel + track share this) — same as Timeline / QC */
+  --pm-files-rail-w: var(--pm-collection-rail-w);
   --pm-files-rail-ms: 420ms;
   /* smooth decelerate — feels like soft material, not linear squeeze */
   --pm-files-rail-ease: cubic-bezier(0.32, 0.72, 0, 1);
@@ -7200,6 +9688,8 @@ button.pm-ws-path-row {
   display: flex;
   flex-direction: row;
   align-items: stretch;
+  /* Soft rail float paints into the left column air — do not clip here */
+  overflow: visible;
   gap: 18px;
   height: 100%;
   max-height: 100%;
@@ -7229,11 +9719,10 @@ button.pm-ws-path-row {
 .pm-files-right {
   /*
    * Track = panel width + shadow gutter (border-box).
-   * --pm-shadow-sm spreads ~14–16px; gutter must be ≥ that or the curtain’s
-   * overflow:hidden slices the soft float. Right pad stays 0 so the rail’s
-   * right edge still matches Overview (CHECKLIST).
+   * --pm-shadow soft spread ~24–28px; gutter must clear L/T/B or the float
+   * looks hard-cut. Right pad stays 0 (edge-align with Overview/QC).
    */
-  --pm-files-rail-shadow-gutter: 16px;
+  --pm-files-rail-shadow-gutter: 18px;
   flex: 0 0 calc(var(--pm-files-rail-w) + var(--pm-files-rail-shadow-gutter));
   width: calc(var(--pm-files-rail-w) + var(--pm-files-rail-shadow-gutter));
   min-width: calc(var(--pm-files-rail-w) + var(--pm-files-rail-shadow-gutter));
@@ -7241,12 +9730,15 @@ button.pm-ws-path-row {
   min-height: 0;
   height: auto;
   align-self: stretch;
-  /* L/T/B gutter inside clip; R = 0 (edge align) */
+  /* L/T/B gutter; R = 0 (edge align) */
   padding: var(--pm-files-rail-shadow-gutter) 0
     var(--pm-files-rail-shadow-gutter) var(--pm-files-rail-shadow-gutter);
   box-sizing: border-box;
-  /* Curtain aperture — keep hidden so expand/collapse never half-reflows the card */
-  overflow: hidden;
+  /*
+   * Open: visible so soft float isn’t sliced (same as QC on this rail).
+   * Collapsed: hidden curtain for width wipe.
+   */
+  overflow: visible;
   transition:
     flex-basis var(--pm-files-rail-ms) var(--pm-files-rail-ease),
     width var(--pm-files-rail-ms) var(--pm-files-rail-ease),
@@ -7260,6 +9752,7 @@ button.pm-ws-path-row {
   min-width: 0;
   max-width: 0;
   padding: 0;
+  overflow: hidden; /* curtain while closed / closing */
   /* no absolute jump mid-anim — stay in flow, just zero width */
   pointer-events: none;
 }
@@ -7291,12 +9784,15 @@ button.pm-ws-path-row {
   height: 100%;
   min-height: 0;
   margin-left: auto; /* stick to right edge of shrinking track */
-  /* Clip list scroll only; own box-shadow still paints outside this box */
+  /*
+   * Clip list scroll only; own box-shadow paints outside this box.
+   * No hard border — soft float only (same language as Quick Chat).
+   */
   overflow: hidden;
   border-radius: var(--pm-r, 16px);
   background: #ffffff;
-  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 4.5%, transparent);
-  box-shadow: var(--pm-shadow-sm);
+  border: none;
+  box-shadow: var(--pm-shadow);
   opacity: 1;
   transition: opacity calc(var(--pm-files-rail-ms) * 0.45) var(--pm-files-rail-ease);
 }
@@ -7769,9 +10265,9 @@ button.pm-ws-path-row {
   background: color-mix(in srgb, var(--pm-danger, #c43c3c) 8%, transparent);
 }
 .pm-msg-delete.is-confirm {
-  max-width: 5.25rem;
-  gap: 3px;
-  padding: 3px 7px 3px 5px;
+  max-width: 4.5rem;
+  gap: 0;
+  padding: 3px 8px;
   color: #ffffff;
   background: var(--pm-danger, #c43c3c);
   box-shadow: 0 1px 3px color-mix(in srgb, var(--pm-danger, #c43c3c) 35%, transparent);
@@ -7780,8 +10276,9 @@ button.pm-ws-path-row {
   color: #ffffff;
   background: color-mix(in srgb, var(--pm-danger, #c43c3c) 88%, #000);
 }
-.pm-msg-delete.is-confirm .pm-msg-delete-label {
-  max-width: 3.75rem;
+.pm-msg-delete.is-confirm .pm-msg-delete-label,
+.pm-msg-delete-label.is-solo {
+  max-width: 4rem;
   opacity: 1;
 }
 .pm-msg-delete:focus-visible {
@@ -8074,6 +10571,11 @@ button.pm-ws-path-row {
   overflow: visible !important;
   min-height: 0;
 }
+/* Timeline accordion: keep shell shadows; clip only on inner hosts above */
+.pm-timeline-node-rail .pm-timeline-msgs-card.pm-node-msgs-card,
+.pm-timeline-node-rail .pm-timeline-node-card {
+  overflow: visible !important;
+}
 .pm-node-msgs-card > .pm-ws-side-h {
   flex-shrink: 0;
 }
@@ -8096,7 +10598,8 @@ button.pm-ws-path-row {
   min-width: 0;
 }
 .pm-node-id-main {
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: 0; /* title may shrink; tags never steal this track */
 }
 .pm-node-id-title {
   margin: 0;
@@ -8106,21 +10609,84 @@ button.pm-ws-path-row {
   text-transform: none;
   color: var(--pm-ink, #121410);
   word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  /* Max 3 lines — keep Attachments row visible in collapsed 1/3 card */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
 }
-/* Vertical tag stack — group then branch, right-aligned */
+/*
+ * Inline title edit — must re-declare the same serif metrics as .pm-node-id-title.
+ * Do NOT use font:inherit: parent is UI sans, and form controls often ignore
+ * inherited font-family unless set on the control itself.
+ */
+.pm-node-id-title.pm-node-id-title-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+  -webkit-appearance: none;
+  appearance: none;
+  /* Lift the 3-line clamp while editing so full title is reachable */
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  /* Same tokens as display .pm-node-id-title — explicit, not inherit */
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 16px;
+  font-weight: 300;
+  font-style: normal;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  text-transform: none;
+  color: var(--pm-ink, #121410);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  caret-color: var(--pm-green, #3d5c45);
+  /* Soft underline only — keeps the display look, signals focus */
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--pm-green, #3d5c45) 32%, transparent);
+  field-sizing: content;
+}
+.pm-node-id-title.pm-node-id-title-input:focus {
+  outline: none;
+  box-shadow: inset 0 -1.5px 0 color-mix(in srgb, var(--pm-green, #3d5c45) 55%, transparent);
+}
+.pm-node-id-title.pm-node-id-title-input::placeholder {
+  color: var(--pm-faint, #9a9e96);
+  font-family: inherit;
+  font-weight: 300;
+  opacity: 1;
+}
+/* Vertical tag stack — fixed width so long tags don’t crowd the title */
 .pm-node-tag-col {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 5px;
-  max-width: 42%;
+  flex: 0 0 6.75rem;
+  width: 6.75rem;
+  max-width: 6.75rem;
   padding-top: 1px; /* optical align with serif title cap */
 }
 .pm-node-tag {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   max-width: 100%;
+  box-sizing: border-box;
   padding: 2px 8px;
   border-radius: 999px;
   font: var(--pm-t-meta);
@@ -8130,12 +10696,44 @@ button.pm-ws-path-row {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Timeline Node pad: pin Attachments row; title block can yield height */
+/*
+ * Node pad stack:
+ *  title (auto) → attach fill (grow when open) → Attachments/date (pinned foot)
+ * Never let the title row flex-grow — that left a hollow white slab and shoved
+ * the drop zone into the middle of the card.
+ */
+.pm-timeline-node-card .pm-ws-side-pad {
+  min-height: 0;
+}
+.pm-timeline-node-card .pm-node-id-row {
+  flex: 0 0 auto;
+  min-width: 0;
+  /* visible so group dropdown menu isn’t clipped */
+  overflow: visible;
+}
+.pm-timeline-node-card .pm-node-id-main {
+  overflow: hidden; /* title clamp only */
+}
+.pm-timeline-node-card .pm-node-tag-col {
+  overflow: visible;
+  z-index: 5;
+}
+.pm-timeline-node-card [data-node-foot] {
+  flex-shrink: 0;
+  margin-top: auto; /* sit under attach fill / at bottom of collapsed card */
+}
+/* Attach open: free height goes to the drop zone column, not the title block */
+.pm-timeline-node-card .pm-timeline-attach-expand.is-open {
+  flex: 1 1 0;
+  min-height: 0;
+}
 .pm-node-tag.is-branch {
   /* Same language as group; branch gets a glyph, not a second accent color */
   background: rgba(18, 20, 16, 0.05);
   color: var(--pm-muted, #6a706a);
 }
-/* List excerpt under pm-msg-card meta row — body role, 2-line clamp */
+/* List excerpt under pm-msg-card meta row — body role; allow more lines */
 .pm-node-msg-excerpt {
   margin: 0;
   font: var(--pm-t-body);
@@ -8143,10 +10741,11 @@ button.pm-ws-path-row {
   line-height: 1.45;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
   overflow: hidden;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /*

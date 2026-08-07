@@ -1,9 +1,6 @@
 import { useMemo, useState } from "react"
-import { ChevronDown, Pencil, Plus, Trash2 } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { toast } from "sonner"
+import { ChevronDown, Pencil, Plus } from "lucide-react"
 import type { Node, NodeGroup } from "@/types/file-mgmt"
-import { deleteGroup } from "@/api/file-mgmt"
 import { cn } from "@/lib/utils"
 import {
   GroupIconView,
@@ -34,7 +31,6 @@ export function GroupsMenu({
   const [open, setOpen] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<NodeGroup | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<NodeGroup | null>(null)
 
   const uncategorizedCount = useMemo(
     () => allNodes.filter((n) => !n.group_id && n.node_type === "event").length,
@@ -62,38 +58,32 @@ export function GroupsMenu({
     setOpen(false)
   }
 
-  const handleDelete = async () => {
-    if (!confirmDelete) return
-    try {
-      await deleteGroup(collectionId, confirmDelete.group_id)
-      toast.success("Group deleted")
-      if (focusGroupId === confirmDelete.group_id) onFocusGroup(null)
-      setConfirmDelete(null)
-      onGroupsChanged()
-    } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
+  const openEdit = (g: NodeGroup) => {
+    if (isSystemGroup(g)) return
+    setEditing(g)
+    setFormOpen(true)
+    setOpen(false)
   }
 
   return (
     <div className="relative">
-      <Button
-        variant="outline"
-        size="xs"
-        className={cn(
-          "text-[10px] h-7 gap-1",
-          focusGroupId && "border-[var(--ze-green)]/50 text-[var(--ze-green)]"
-        )}
+      <button
+        type="button"
+        className={cn("pm-timeline-tb-btn", focusGroupId && "is-on")}
         onClick={() => setOpen((v) => !v)}
       >
         Groups
         <ChevronDown className="h-3 w-3 opacity-60" />
-      </Button>
+      </button>
 
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-border bg-popover shadow-xl py-1 text-xs">
+          <div
+            className="pm-timeline-menu-scrim"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+          <div className="pm-timeline-menu" role="menu">
             {systemGroups.map((g) => (
               <GroupRow
                 key={g.group_id}
@@ -109,44 +99,39 @@ export function GroupsMenu({
                 group={g}
                 active={focusGroupId === g.group_id}
                 onSelect={() => handleSelect(g.group_id)}
-                onEdit={() => {
-                  if (isSystemGroup(g)) return
-                  setEditing(g)
-                  setFormOpen(true)
-                  setOpen(false)
-                }}
-                onDelete={() => {
-                  if (isSystemGroup(g)) return
-                  setConfirmDelete(g)
-                  setOpen(false)
-                }}
+                onEdit={() => openEdit(g)}
               />
             ))}
+            <div className="pm-timeline-menu-sep" role="separator" />
             <button
               type="button"
               className={cn(
-                "w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/50 border-t border-border/60 mt-0.5",
-                focusGroupId === UNCATEGORIZED_ID && "bg-[var(--ze-green)]/10 text-[var(--ze-green)]"
+                "pm-timeline-menu-item",
+                focusGroupId === UNCATEGORIZED_ID && "is-active"
               )}
               onClick={() => handleSelect(UNCATEGORIZED_ID)}
             >
               <GroupIconView source={{ name: "Uncategorized" }} />
-              <span className="flex-1 truncate">Uncategorized</span>
-              <span className="text-[10px] text-muted-foreground tabular-nums">
-                {uncategorizedCount}
+              <span className="pm-timeline-menu-name" title="Uncategorized">
+                Uncategorized
+              </span>
+              <span className="pm-timeline-menu-trail" aria-hidden>
+                <span className="pm-timeline-menu-count">
+                  {uncategorizedCount}
+                </span>
               </span>
             </button>
             <button
               type="button"
-              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[var(--ze-green)] hover:bg-muted/40 border-t border-border/60 mt-0.5"
+              className="pm-timeline-menu-item text-[var(--pm-green)]"
               onClick={() => {
                 setEditing(null)
                 setFormOpen(true)
                 setOpen(false)
               }}
             >
-              <Plus className="h-3.5 w-3.5" />
-              Create group
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              <span className="pm-timeline-menu-name">Create group</span>
             </button>
           </div>
         </>
@@ -155,93 +140,79 @@ export function GroupsMenu({
       <GroupFormDialog
         collectionId={collectionId}
         open={formOpen}
-        onOpenChange={setFormOpen}
+        onOpenChange={(v) => {
+          setFormOpen(v)
+          if (!v) setEditing(null)
+        }}
         editing={editing}
         boundFolderIds={boundFolderIds}
         onSaved={onGroupsChanged}
+        onDeleted={() => {
+          if (editing && focusGroupId === editing.group_id) {
+            onFocusGroup(null)
+          }
+          onGroupsChanged()
+        }}
       />
-
-      {confirmDelete && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
-          <div className="bg-popover border border-border rounded-xl p-4 w-[300px] shadow-xl space-y-3">
-            <p className="text-sm font-medium">Delete group “{confirmDelete.name}”?</p>
-            <p className="text-[11px] text-muted-foreground">
-              Nodes become uncategorized. The bound folder and files are kept.
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="xs" onClick={() => setConfirmDelete(null)}>
-                Cancel
-              </Button>
-              <Button variant="destructive" size="xs" onClick={handleDelete}>
-                Delete
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
+/**
+ * Row: [icon] [name trunc…] [count]
+ * Hover (user groups): edit icon replaces count in the same trail slot.
+ * Delete lives in Edit Group dialog — not in this menu.
+ */
 function GroupRow({
   group,
   active,
   onSelect,
   onEdit,
-  onDelete,
   readOnly,
 }: {
   group: NodeGroup
   active: boolean
   onSelect: () => void
   onEdit?: () => void
-  onDelete?: () => void
   readOnly?: boolean
 }) {
+  const count = group.node_count ?? 0
+  const editable = !readOnly && !!onEdit
+
   return (
     <div
       className={cn(
-        "group/row flex items-center gap-1 px-1.5 py-0.5",
-        active && "bg-[var(--ze-green)]/10"
+        "pm-timeline-menu-row",
+        active && "is-active",
+        editable && "is-editable"
       )}
     >
       <button
         type="button"
-        className={cn(
-          "flex-1 flex items-center gap-2 px-1.5 py-1 rounded text-left min-w-0",
-          active ? "text-[var(--ze-green)]" : "hover:bg-muted/40"
-        )}
+        role="menuitem"
+        className={cn("pm-timeline-menu-item", active && "is-active")}
         onClick={onSelect}
+        title={group.name}
       >
         <GroupIconView source={group} />
-        <span className="flex-1 truncate">{group.name}</span>
-        <span className="text-[10px] text-muted-foreground tabular-nums">
-          {group.node_count}
+        <span className="pm-timeline-menu-name">{group.name}</span>
+        <span className="pm-timeline-menu-trail">
+          <span className="pm-timeline-menu-count">{count}</span>
         </span>
       </button>
-      {!readOnly && (
-        <div className="flex opacity-0 group-hover/row:opacity-100 transition-opacity shrink-0">
-          <button
-            type="button"
-            className="p-1 text-muted-foreground hover:text-foreground"
-            onClick={(e) => {
-              e.stopPropagation()
-              onEdit?.()
-            }}
-          >
-            <Pencil className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            className="p-1 text-muted-foreground hover:text-red-500"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete?.()
-            }}
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
+      {editable && (
+        <button
+          type="button"
+          className="pm-timeline-menu-edit"
+          title="Edit group"
+          aria-label={`Edit group ${group.name}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            onEdit?.()
+          }}
+        >
+          <Pencil className="h-3 w-3" strokeWidth={1.75} />
+        </button>
       )}
     </div>
   )

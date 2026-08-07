@@ -282,6 +282,11 @@ export interface RawFileViewerProps {
   filename: string
   className?: string
   downloadUrl?: string | null
+  /**
+   * Compact select-preview mode: hide web + PDF toolbars, pure document surface.
+   * Used by floating / side preview cards (Premium soft float).
+   */
+  hideChrome?: boolean
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -329,6 +334,7 @@ export function RawFileViewer({
   filename,
   className,
   downloadUrl,
+  hideChrome = false,
 }: RawFileViewerProps) {
   /** File Viewer routes by File.name / filename — prefer File over bare blob URL. */
   const [viewerFile, setViewerFile] = useState<File | null>(null)
@@ -340,8 +346,9 @@ export function RawFileViewer({
   const safeName = resolveRawFilename(filename)
 
   // PDF chrome layout: top row search+zoom+rotate; sidebar head = toggle + 1/24
+  // Skip when hideChrome — pure document surface for select-preview cards.
   useEffect(() => {
-    if (!viewerFile || !hostRef.current) return
+    if (hideChrome || !viewerFile || !hostRef.current) return
     const root = hostRef.current
     layoutPdfChrome(root)
     const mo = new MutationObserver(() => {
@@ -358,7 +365,7 @@ export function RawFileViewer({
       window.clearTimeout(t2)
       window.clearTimeout(t3)
     }
-  }, [viewerFile])
+  }, [viewerFile, hideChrome])
 
   useEffect(() => {
     if (!url || !supported) {
@@ -464,32 +471,34 @@ export function RawFileViewer({
         /*
          * Web toolbar = Search · Download · Print (clean single pill).
          * Zoom lives on PDF's own chrome for PDFs; Office/text keep web zoom.
-         * Never double zoom + page meter into the search bar (causes 0/0 100% clutter).
+         * hideChrome: pure document for select-preview soft cards.
          */
-        toolbar: {
-          position: "top" as const,
-          exportHtml: false,
-          theme: false,
-          print: true,
-          download: true,
-          zoom: !isPdfFile,
-          search: true,
-          items: {
-            "zoom-reset": false,
-          },
-          permissions: {
-            "zoom-reset": false,
-          },
-        },
+        toolbar: hideChrome
+          ? false
+          : {
+              position: "top" as const,
+              exportHtml: false,
+              theme: false,
+              print: true,
+              download: true,
+              zoom: !isPdfFile,
+              search: true,
+              items: {
+                "zoom-reset": false,
+              },
+              permissions: {
+                "zoom-reset": false,
+              },
+            },
         pdf: {
           // Product: no page/outline sidebar — full-bleed preview only
           navigation: false,
           defaultNavigationVisible: false,
-          toolbar: true,
+          toolbar: !hideChrome,
           thumbnails: false,
         },
       }) as const,
-    [isPdfFile]
+    [isPdfFile, hideChrome]
   )
 
   const downloadName =
@@ -609,6 +618,7 @@ export function RawFileViewer({
       ref={hostRef}
       className={cn(
         "sinkduce-file-viewer h-full min-h-0 w-full overflow-hidden bg-white",
+        hideChrome && "sinkduce-file-viewer--chrome-off",
         className
       )}
     >

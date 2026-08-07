@@ -272,8 +272,9 @@ export function AddNodeDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        overlayClassName="pm-dialog-overlay--silk"
         className={cn(
-          "pm-dialog max-w-[98vw] sm:max-w-[98vw] h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
+          "pm-dialog pm-dialog--silk max-w-[98vw] sm:max-w-[98vw] h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
           // Form body fixed (wider Message); preview is extra width on the left
           showSelectPreview
             ? "w-[min(calc(920px+min(calc(85vh*210/297),42vw)),98vw)]"

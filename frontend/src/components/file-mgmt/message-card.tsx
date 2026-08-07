@@ -313,6 +313,13 @@ export function MessageCard({
   highlightFolderId = null,
   /** Nested off: all folder-level messages in the list belong to current scope. */
   folderMsgsAreCurrentScope = false,
+  /** Extra classes on the card root (e.g. `pm-node-msg-row` for sliding focus lists). */
+  className,
+  /**
+   * Side flyout preview on hover. Disable in rails that open detail on click
+   * (Message stream) — the 320px popover clips/misplaces in a narrow column.
+   */
+  showHoverPreview = true,
 }: {
   msg: Message
   onView: (msg: Message) => void
@@ -325,6 +332,8 @@ export function MessageCard({
   isActive?: boolean
   highlightFolderId?: string | null
   folderMsgsAreCurrentScope?: boolean
+  className?: string
+  showHoverPreview?: boolean
 }) {
   const isSystem = msg.author_type === "system"
   const isVersionUpdate =
@@ -405,11 +414,12 @@ export function MessageCard({
         isVersionUpdate && "is-version",
         isSystem && !isVersionUpdate && "is-system",
         isActive && "is-active",
+        className
       )}
       onClick={() => onView(msg)}
     >
-      {/* Hover preview — hidden while this card is open in the detail panel */}
-      {!isActive && (
+      {/* Hover preview — opt-out in stream rails; hidden while card is active */}
+      {showHoverPreview && !isActive && (
         <div
           className={cn(
             "absolute bottom-0 z-[9999] hidden group-hover:block pointer-events-none",

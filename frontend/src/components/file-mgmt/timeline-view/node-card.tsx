@@ -34,8 +34,6 @@ interface NodeCardProps {
   isDragging?: boolean
 }
 
-const CARD_H = "h-12"
-
 export function NodeCard({
   node,
   groupName = null,
@@ -150,16 +148,11 @@ export function NodeCard({
         data-node-id={node.node_id}
         data-dragging={isDragging ? "true" : "false"}
         className={cn(
-          "relative z-[1] flex items-center gap-2 px-3 rounded-md border cursor-pointer transition-all group/card bg-background w-48 shrink-0 overflow-visible",
-          CARD_H,
-          isSelected && !isGroupFocus
-            ? "border-primary/50 ring-1 ring-primary/20"
-            : "border-border hover:border-muted-foreground/30",
-          isCompleted && "bg-muted text-muted-foreground border-muted-foreground/20",
-          node.has_definitive_file &&
-            !isGroupFocus &&
-            "shadow-[0_0_8px_rgba(34,197,94,0.3)] border-emerald-500/40",
-          isDragging && "opacity-60 shadow-lg z-50",
+          "pm-timeline-node group/card",
+          isSelected && !isGroupFocus && "is-selected",
+          isCompleted && "is-completed",
+          node.has_definitive_file && !isGroupFocus && "is-definitive",
+          isDragging && "is-dragging",
           isGroupFocus && "node-group-focus",
           isGroupDim && "node-group-dim",
           showDragGrip && "cursor-grab active:cursor-grabbing"
@@ -173,38 +166,34 @@ export function NodeCard({
             className="shrink-0 opacity-30 group-hover/card:opacity-100 transition-opacity touch-none cursor-grab"
             aria-hidden
           >
-            <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+            <GripVertical className="h-3.5 w-3.5 text-[var(--pm-faint)]" />
           </div>
         )}
 
         {node.has_definitive_file && (
-          <div className="absolute inset-0 rounded-md pointer-events-none animate-pulse bg-emerald-500/5" />
+          <div
+            className="absolute inset-0 rounded-[var(--pm-r-sm)] pointer-events-none bg-[color-mix(in_srgb,var(--pm-green)_10%,#ffffff)]"
+            aria-hidden
+          />
         )}
 
         {/* Group icon (name lives in debounced card tooltip) */}
         <span
-          className="inline-flex shrink-0 items-center justify-center w-5 h-5"
+          className="relative inline-flex shrink-0 items-center justify-center w-5 h-5"
           aria-hidden
         >
           <GroupIconView source={source} className="h-3.5 w-3.5" />
         </span>
 
-        <div className="flex-1 min-w-0 overflow-hidden">
+        <div className="relative flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span
-              className={cn(
-                "text-xs font-medium truncate block min-w-0",
-                isCompleted ? "text-muted-foreground" : "text-foreground"
-              )}
-            >
-              {nodeTitle}
-            </span>
+            <span className="pm-timeline-node-title">{nodeTitle}</span>
             {node.has_definitive_file && (
-              <Star className="h-3 w-3 shrink-0 text-emerald-500" />
+              <Star className="h-3 w-3 shrink-0 text-[var(--pm-green)] fill-[var(--pm-green)]" />
             )}
           </div>
           {node.event_time && (
-            <div className="flex items-center gap-0.5 mt-0.5 min-w-0 text-[10px] text-muted-foreground/50">
+            <div className="pm-timeline-node-time">
               <Calendar className="h-2.5 w-2.5 shrink-0" />
               <span className="truncate">{node.event_time}</span>
             </div>
@@ -213,7 +202,8 @@ export function NodeCard({
 
         {onCreateChain && (
           <button
-            className="opacity-0 group-hover/card:opacity-100 transition-opacity p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 shrink-0"
+            type="button"
+            className="pm-timeline-node-action relative"
             onClick={(e) => {
               e.stopPropagation()
               onCreateChain()
@@ -226,7 +216,8 @@ export function NodeCard({
 
         {onMergeBranch && (
           <button
-            className="opacity-0 group-hover/card:opacity-100 transition-opacity p-1 rounded text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10 shrink-0"
+            type="button"
+            className="pm-timeline-node-action is-merge relative"
             onClick={(e) => {
               e.stopPropagation()
               onMergeBranch()
@@ -243,11 +234,7 @@ export function NodeCard({
         createPortal(
           <div
             role="tooltip"
-            className={cn(
-              "pointer-events-auto fixed z-[99999] max-w-[240px] -translate-x-1/2 rounded-md border border-border/40",
-              "bg-[#0A120E] text-[#FAFAF7] px-2.5 py-1.5 text-[11px] shadow-xl",
-              tipAbove ? "-translate-y-full" : ""
-            )}
+            className={cn("pm-timeline-tip", tipAbove && "is-above")}
             style={{
               top: tipPos.top,
               left: tipPos.left,
@@ -257,12 +244,10 @@ export function NodeCard({
           >
             <div className="flex items-center gap-1.5 min-w-0">
               <GroupIconView source={source} className="h-3 w-3 shrink-0" />
-              <span className="font-medium truncate">{groupLabel}</span>
+              <span className="pm-timeline-tip-title truncate">{groupLabel}</span>
             </div>
             {groupDescription ? (
-              <div className="mt-0.5 text-[10px] text-[#FAFAF7]/80 leading-snug">
-                {groupDescription}
-              </div>
+              <div className="pm-timeline-tip-desc">{groupDescription}</div>
             ) : null}
           </div>,
           document.body
