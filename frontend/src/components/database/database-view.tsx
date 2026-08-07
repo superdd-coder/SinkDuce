@@ -647,7 +647,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                       )}
                       {tab === "config" && (
                         <ScrollArea className="h-full">
-                          <div className="pr-1 pb-8">
+                          {/* Soft pad so nested card shadows aren’t clipped */}
+                          <div className="px-0.5 pb-6">
                             <CollectionConfig collection={activeCollection} />
                           </div>
                         </ScrollArea>

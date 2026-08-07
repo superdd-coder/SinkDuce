@@ -7027,7 +7027,8 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   cursor: pointer;
   appearance: auto;
 }
-/* Toggle chips (allowed file types, filters) */
+/* Toggle chips (allowed file types, filters) — global; dialog-scoped alias */
+.pm-field-chip,
 .pm-dialog .pm-field-chip {
   display: inline-flex;
   align-items: center;
@@ -7039,20 +7040,251 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   color: var(--pm-muted);
   background: #ffffff;
   border: 1px solid color-mix(in srgb, var(--pm-ink) 8%, transparent);
-  border-radius: var(--pm-r-sm);
+  border-radius: 999px;
   cursor: pointer;
   transition:
     background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+    border-color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
+.pm-field-chip:hover,
 .pm-dialog .pm-field-chip:hover {
   background: color-mix(in srgb, var(--pm-ink) 4%, transparent);
 }
+.pm-field-chip.is-on,
 .pm-dialog .pm-field-chip.is-on {
   color: var(--pm-green);
   background: var(--pm-green-wash);
   border-color: transparent;
+  box-shadow: none;
+}
+/*
+ * Collection Settings (config tab) — nested white cards on float stage.
+ * Same soft language as Group form / Overview cards:
+ * no Separators · FieldLabel · DropdownSelect · soft switch · field chips.
+ * Panel enter/exit still via parent .pm-panel-fade (database-view).
+ */
+.pm-collection-config {
+  --pm-config-gutter: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 4px var(--pm-config-gutter) 28px;
+  box-sizing: border-box;
+  min-height: 100%;
+}
+.pm-config-head {
+  flex: 0 0 auto;
+  margin-bottom: 14px;
+  padding: 2px 2px 0;
+}
+.pm-config-head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+.pm-config-title {
+  margin: 0;
+  font: var(--pm-t-title);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pm-ink);
+}
+.pm-config-save-status {
+  flex: 0 0 auto;
+  color: var(--pm-faint);
+  letter-spacing: 0.02em;
+  transition: color 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-config-save-status.is-busy {
+  color: var(--pm-muted);
+}
+.pm-config-save-status.is-saved {
+  color: var(--pm-green);
+}
+.pm-config-save-status.is-error {
+  color: var(--pm-danger);
+}
+.pm-config-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Air for soft-float card shadows */
+  padding: 2px 2px 4px;
+}
+/* Nested white soft-float cards */
+.pm-config-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-shadow-sm);
+  min-width: 0;
+  box-sizing: border-box;
+}
+.pm-config-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.pm-config-card-kicker {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* Same readable muted as Group card kickers (not faint) */
+  color: var(--pm-muted);
+}
+.pm-config-card-desc {
+  margin: 0;
+  color: var(--pm-muted);
+  line-height: 1.5;
+}
+.pm-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  min-width: 0;
+}
+@media (max-width: 560px) {
+  .pm-config-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.pm-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+.pm-config-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+.pm-config-field-label {
+  margin-bottom: 0 !important;
+}
+.pm-config-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  color: var(--pm-faint);
+  background: transparent;
+  cursor: help;
+  transition: color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-config-info:hover {
+  color: var(--pm-green);
+}
+.pm-config-locked {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.pm-config-locked .pm-config-input,
+.pm-config-locked [data-slot="input"] {
+  padding-right: 2rem;
+}
+.pm-config-lock-icon {
+  position: absolute;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--pm-faint);
+  pointer-events: none;
+}
+.pm-config-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* Soft pill switch — green track when on (surface pattern, not a third button skin) */
+.pm-config-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-ink) 10%, #ffffff);
+  cursor: pointer;
+  transition: background 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-config-switch.is-on {
+  background: var(--pm-green);
+}
+.pm-config-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--pm-ink) 18%, transparent);
+  transition: transform 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-config-switch.is-on .pm-config-switch-thumb {
+  transform: translateX(16px);
+}
+/* Silk fold for optional fields under a switch */
+.pm-config-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  pointer-events: none;
+}
+.pm-config-fold.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  pointer-events: auto;
+}
+.pm-config-fold-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.pm-config-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  min-width: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-config-switch,
+  .pm-config-switch-thumb,
+  .pm-config-fold,
+  .pm-field-chip,
+  .pm-config-save-status {
+    transition-duration: 0.01ms !important;
+  }
 }
 /*
  * Group form dialog — fixed shell height + §3.7 flex-grow hand-off

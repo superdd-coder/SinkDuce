@@ -1,17 +1,92 @@
-import { useState, useEffect } from "react"
+/**
+ * Collection Settings — Premium surface (nested white cards on float stage).
+ * Layout language matches Group form / Overview cards:
+ * soft float · FieldLabel · DropdownSelect · Input · Button · no hard Separators.
+ */
+import { useState, useEffect, useRef, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Separator } from "@/components/ui/separator"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { FieldLabel } from "@/components/ui/field-label"
-import { Lock, RefreshCw } from "lucide-react"
-import { getCollectionConfig, updateCollectionConfig, triggerSparseRecalc, getConfig, getEmbeddingProviders, type EmbeddingProvider } from "@/api/client"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
+import { Info, Lock, RefreshCw } from "lucide-react"
+import {
+  getCollectionConfig,
+  updateCollectionConfig,
+  triggerSparseRecalc,
+  getConfig,
+  getEmbeddingProviders,
+  type EmbeddingProvider,
+} from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
 import { toast } from "sonner"
-import { TooltipLabel } from "@/components/shared/tooltip-label"
 
 interface CollectionConfigProps {
   collection: string
+}
+
+/** Field label + optional info tooltip — type role = label (Geist). */
+function ConfigLabel({
+  children,
+  tooltip,
+  htmlFor,
+}: {
+  children: ReactNode
+  tooltip?: string
+  htmlFor?: string
+}) {
+  return (
+    <div className="pm-config-label-row">
+      <FieldLabel htmlFor={htmlFor} className="pm-config-field-label">
+        {children}
+      </FieldLabel>
+      {tooltip ? (
+        <Tooltip>
+          <TooltipTrigger
+            type="button"
+            className="pm-config-info"
+            aria-label="More info"
+          >
+            <Info className="h-3 w-3" strokeWidth={1.75} />
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            {tooltip}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  )
+}
+
+function ConfigSwitch({
+  checked,
+  onCheckedChange,
+  label,
+  id,
+}: {
+  checked: boolean
+  onCheckedChange: (next: boolean) => void
+  label: string
+  id: string
+}) {
+  return (
+    <button
+      type="button"
+      id={id}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={cn("pm-config-switch", checked && "is-on")}
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <span className="pm-config-switch-thumb" aria-hidden />
+    </button>
+  )
 }
 
 export function CollectionConfig({ collection }: CollectionConfigProps) {
@@ -31,9 +106,19 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
   const [embeddingModel, setEmbeddingModel] = useState("")
   const [globalEmbModel, setGlobalEmbModel] = useState("")
   const [embeddingProviderId, setEmbeddingProviderId] = useState("")
-  const [embeddingProviders, setEmbeddingProviders] = useState<EmbeddingProvider[]>([])
+  const [embeddingProviders, setEmbeddingProviders] = useState<
+    EmbeddingProvider[]
+  >([])
   const [allowedTypes, setAllowedTypes] = useState<string[]>([])
-  const [saving, setSaving] = useState(false)
+  /** Skip autosave until first load for this collection finishes. */
+  const [hydrated, setHydrated] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "pending" | "saving" | "saved" | "error"
+  >("idle")
+  const saveGenRef = useRef(0)
+  const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** After hydrate, first effect pass is load baseline — do not POST. */
+  const skipAutosaveOnceRef = useRef(true)
 
   const FILE_TYPES = [
     { ext: "pdf", label: "PDF" },
@@ -45,48 +130,63 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
     { ext: "csv", label: "CSV" },
   ]
 
-  // Enriching LLM config (stores provider ID)
   const [enrichingLlmProvider, setEnrichingLlmProvider] = useState("")
   const [enrichingLlmModel, setEnrichingLlmModel] = useState("")
 
-  // Cloud parsing (MinerU)
   const [cloudParsing, setCloudParsing] = useState(true)
   const [mineruGloballyEnabled, setMineruGloballyEnabled] = useState(false)
 
-  // Sparse vocabulary
   const [sparseRecalcThreshold, setSparseRecalcThreshold] = useState("5000")
   const [sparseRecalcCounter, setSparseRecalcCounter] = useState(0)
   const [recalcRunning, setRecalcRunning] = useState(false)
 
-  const readyProviders = providers.filter((p) => p.status === "ready" || !p.status)
+  const readyProviders = providers.filter(
+    (p) => p.status === "ready" || !p.status
+  )
   const enrichingProvider = enrichingLlmProvider
     ? readyProviders.find((p) => p.id === enrichingLlmProvider)
     : null
-  const enrichingModels = enrichingProvider?.selected_models && enrichingProvider.selected_models.length > 0
-    ? enrichingProvider.selected_models
-    : enrichingProvider?.model ? [enrichingProvider.model] : []
+  const enrichingModels =
+    enrichingProvider?.selected_models &&
+    enrichingProvider.selected_models.length > 0
+      ? enrichingProvider.selected_models
+      : enrichingProvider?.model
+        ? [enrichingProvider.model]
+        : []
 
   useEffect(() => {
+    let cancelled = false
+    setHydrated(false)
+    setSaveStatus("idle")
+    saveGenRef.current += 1
+    skipAutosaveOnceRef.current = true
+
     const load = async () => {
       try {
-        const cfg = await getCollectionConfig(collection) as Record<string, unknown>
-        if (cfg.error) return
+        const cfg = (await getCollectionConfig(collection)) as Record<
+          string,
+          unknown
+        >
+        if (cancelled || cfg.error) return
 
-        // Fetch global embedding model for dropdown
         try {
           const globalCfg = await getConfig()
           const emb = globalCfg.embedding as Record<string, unknown> | undefined
           if (emb?.model) setGlobalEmbModel(String(emb.model))
-          // Check if MinerU is globally enabled
           const mineru = globalCfg.mineru as Record<string, unknown> | undefined
           setMineruGloballyEnabled(!!mineru?.enabled)
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
 
-        // Fetch embedding providers for selector
         try {
-          const providers = await getEmbeddingProviders()
-          setEmbeddingProviders(providers)
-        } catch { /* ignore */ }
+          const list = await getEmbeddingProviders()
+          if (!cancelled) setEmbeddingProviders(list)
+        } catch {
+          /* ignore */
+        }
+
+        if (cancelled) return
 
         setEmbeddingDimensions(String(cfg.dimensions ?? "1536"))
         setChunkMode(String(cfg.chunk_mode ?? "normal"))
@@ -104,375 +204,594 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         setEmbeddingModel(String(cfg.embedding_model ?? ""))
         setEmbeddingProviderId(String(cfg.embedding_provider_id ?? ""))
 
-        // Allowed file types
         const aft = cfg.allowed_file_types
         setAllowedTypes(Array.isArray(aft) ? aft.map(String) : [])
 
-        // Enriching LLM config
         setEnrichingLlmProvider(String(cfg.enriching_llm_provider ?? ""))
         setEnrichingLlmModel(String(cfg.enriching_llm_model ?? ""))
 
-        // Cloud parsing — default true when key missing (matches backend)
         setCloudParsing(Boolean(cfg.cloud_parsing ?? true))
 
-        // Sparse vocabulary
         setSparseRecalcThreshold(String(cfg.sparse_recalc_threshold ?? "5000"))
         setSparseRecalcCounter(Number(cfg.sparse_recalc_counter ?? 0))
       } catch {
         // ignore
+      } finally {
+        if (!cancelled) {
+          // Next paint: ignore the load-driven state write in autosave deps
+          requestAnimationFrame(() => {
+            if (!cancelled) setHydrated(true)
+          })
+        }
       }
     }
-    load()
+    void load()
+    return () => {
+      cancelled = true
+    }
   }, [collection])
 
-  const handleSave = async () => {
-    setSaving(true)
-    try {
+  /**
+   * Autosave — debounce field edits; no Save button.
+   * Quiet status in header; toast only on failure (avoid spam).
+   */
+  useEffect(() => {
+    if (!hydrated) return
+    if (skipAutosaveOnceRef.current) {
+      skipAutosaveOnceRef.current = false
+      return
+    }
+
+    setSaveStatus("pending")
+    if (savedClearTimerRef.current) {
+      clearTimeout(savedClearTimerRef.current)
+      savedClearTimerRef.current = null
+    }
+
+    const timer = window.setTimeout(() => {
+      const gen = ++saveGenRef.current
+      setSaveStatus("saving")
+
       const config: Record<string, unknown> = {}
       if (bufferRatio) config.buffer_ratio = parseFloat(bufferRatio)
       if (chunkMode === "normal") {
-        if (chunkSize) config.chunk_size = parseInt(chunkSize)
-        if (chunkOverlap) config.chunk_overlap = parseInt(chunkOverlap)
+        if (chunkSize) config.chunk_size = parseInt(chunkSize, 10)
+        if (chunkOverlap) config.chunk_overlap = parseInt(chunkOverlap, 10)
       } else {
         config.parent_strategy = parentStrategy
-        if (parentChunkSize) config.parent_chunk_size = parseInt(parentChunkSize)
-        if (parentChunkOverlap) config.parent_chunk_overlap = parseInt(parentChunkOverlap)
-        if (childChunkSize) config.child_chunk_size = parseInt(childChunkSize)
-        if (childChunkOverlap) config.child_chunk_overlap = parseInt(childChunkOverlap)
+        if (parentChunkSize)
+          config.parent_chunk_size = parseInt(parentChunkSize, 10)
+        if (parentChunkOverlap)
+          config.parent_chunk_overlap = parseInt(parentChunkOverlap, 10)
+        if (childChunkSize)
+          config.child_chunk_size = parseInt(childChunkSize, 10)
+        if (childChunkOverlap)
+          config.child_chunk_overlap = parseInt(childChunkOverlap, 10)
       }
       config.contextual_enabled = contextualEnabled
-      if (contextualWindow) config.contextual_window = parseInt(contextualWindow)
+      if (contextualWindow)
+        config.contextual_window = parseInt(contextualWindow, 10)
       if (embeddingModel) config.embedding_model = embeddingModel
       config.embedding_provider_id = embeddingProviderId || null
-
-      // Allowed file types (empty array = allow all)
       config.allowed_file_types = allowedTypes
-
-      // Enriching LLM config (always send to allow clearing)
       config.enriching_llm_provider = enrichingLlmProvider || null
       config.enriching_llm_model = enrichingLlmModel || null
-
-      // Cloud parsing
       config.cloud_parsing = cloudParsing
+      if (sparseRecalcThreshold)
+        config.sparse_recalc_threshold = parseInt(sparseRecalcThreshold, 10)
 
-      // Sparse vocabulary
-      if (sparseRecalcThreshold) config.sparse_recalc_threshold = parseInt(sparseRecalcThreshold)
+      void updateCollectionConfig(collection, config)
+        .then((res) => {
+          if (gen !== saveGenRef.current) return
+          if (res.error) {
+            setSaveStatus("error")
+            toast.error(res.error)
+            return
+          }
+          setSaveStatus("saved")
+          savedClearTimerRef.current = setTimeout(() => {
+            if (gen === saveGenRef.current) setSaveStatus("idle")
+          }, 1600)
+        })
+        .catch((err) => {
+          if (gen !== saveGenRef.current) return
+          setSaveStatus("error")
+          toast.error(
+            `Failed: ${err instanceof Error ? err.message : String(err)}`
+          )
+        })
+    }, 480)
 
-      const res = await updateCollectionConfig(collection, config)
-      if (res.error) toast.error(res.error)
-      else toast.success(res.message || "Config updated")
+    return () => window.clearTimeout(timer)
+  }, [
+    hydrated,
+    collection,
+    chunkMode,
+    chunkSize,
+    chunkOverlap,
+    bufferRatio,
+    parentStrategy,
+    parentChunkSize,
+    parentChunkOverlap,
+    childChunkSize,
+    childChunkOverlap,
+    contextualEnabled,
+    contextualWindow,
+    embeddingModel,
+    embeddingProviderId,
+    allowedTypes,
+    enrichingLlmProvider,
+    enrichingLlmModel,
+    cloudParsing,
+    sparseRecalcThreshold,
+  ])
+
+  useEffect(() => {
+    return () => {
+      if (savedClearTimerRef.current) clearTimeout(savedClearTimerRef.current)
+    }
+  }, [])
+
+  const handleRecalc = async () => {
+    setRecalcRunning(true)
+    try {
+      const res = await triggerSparseRecalc(collection)
+      if (res.error) {
+        toast.error(res.error)
+      } else {
+        toast.success(res.message || "Sparse recalculation triggered")
+        window.setTimeout(async () => {
+          try {
+            const cfg = (await getCollectionConfig(collection)) as Record<
+              string,
+              unknown
+            >
+            if (!cfg.error)
+              setSparseRecalcCounter(Number(cfg.sparse_recalc_counter ?? 0))
+          } catch {
+            /* ignore */
+          }
+        }, 2000)
+      }
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
-      setSaving(false)
+      setRecalcRunning(false)
     }
   }
 
+  const thresholdN = parseInt(sparseRecalcThreshold || "5000", 10) || 5000
+  const thresholdReached = sparseRecalcCounter >= thresholdN
+
   return (
-    <div className="space-y-6">
-      {/* ── Dimensions & Mode ── */}
-      <div className="space-y-3">
-        <h3 className="pm-title">Dimensions & Mode</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <TooltipLabel label="Dimensions" tooltip="Vector dimensions for embeddings. Locked at creation time." />
-            <div className="flex items-center gap-2">
-              <Input value={embeddingDimensions} disabled className="flex-1" />
-              <Lock className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <TooltipLabel label="Chunk Mode" tooltip="Locked at creation time." />
-            <div className="flex items-center gap-2">
-              <Input value={chunkMode === "parent_child" ? "Parent-Child" : "Normal"} disabled className="flex-1" />
-              <Lock className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </div>
+    <div className="pm-collection-config">
+      <header className="pm-config-head">
+        <div className="pm-config-head-row">
+          <h2 className="pm-config-title">Collection Settings</h2>
+          <span
+            className={cn(
+              "pm-meta pm-config-save-status",
+              saveStatus === "saved" && "is-saved",
+              saveStatus === "error" && "is-error",
+              (saveStatus === "pending" || saveStatus === "saving") &&
+                "is-busy"
+            )}
+            aria-live="polite"
+          >
+            {saveStatus === "pending" || saveStatus === "saving"
+              ? "Saving…"
+              : saveStatus === "saved"
+                ? "Saved"
+                : saveStatus === "error"
+                  ? "Save failed"
+                  : "Autosave on"}
+          </span>
         </div>
-      </div>
-
-      <Separator />
-
-      {/* ── Chunking ── */}
-      <div className="space-y-3">
-        <h3 className="pm-title">Chunking</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <TooltipLabel label="Buffer Ratio" tooltip="Controls how aggressively paragraphs are merged. 0.5 = merge until 50% of max_tokens." />
-            <Input value={bufferRatio} onChange={(e) => setBufferRatio(e.target.value)} placeholder="0.5" />
-          </div>
-          {chunkMode === "parent_child" && (
-            <div className="space-y-1.5">
-              <TooltipLabel label="Parent Strategy" tooltip="How parent chunks are created." />
-              <DropdownSelect
-                size="sm"
-                value={parentStrategy}
-                onChange={setParentStrategy}
-                options={[
-                  { value: "paragraph", label: "Paragraph" },
-                  { value: "fixed_token", label: "Fixed Token" },
-                  { value: "heading", label: "Heading" },
-                ]}
-              />
-            </div>
-          )}
-        </div>
-        {chunkMode === "normal" ? (
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <TooltipLabel label="Chunk Size" tooltip="Tokens per chunk." />
-              <Input value={chunkSize} onChange={(e) => setChunkSize(e.target.value)} placeholder="512" />
-            </div>
-            <div className="space-y-1.5">
-              <TooltipLabel label="Chunk Overlap" tooltip="Overlapping tokens between adjacent chunks." />
-              <Input value={chunkOverlap} onChange={(e) => setChunkOverlap(e.target.value)} placeholder="64" />
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <TooltipLabel label="Parent Chunk Size" tooltip="Size of parent chunks." />
-                <Input value={parentChunkSize} onChange={(e) => setParentChunkSize(e.target.value)} placeholder="1024" />
-              </div>
-              <div className="space-y-1.5">
-                <TooltipLabel label="Parent Chunk Overlap" tooltip="Overlap between parent chunks." />
-                <Input value={parentChunkOverlap} onChange={(e) => setParentChunkOverlap(e.target.value)} placeholder="128" />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <TooltipLabel label="Child Chunk Size" tooltip="Size of child chunks used for matching." />
-                <Input value={childChunkSize} onChange={(e) => setChildChunkSize(e.target.value)} placeholder="128" />
-              </div>
-              <div className="space-y-1.5">
-                <TooltipLabel label="Child Chunk Overlap" tooltip="Overlap between child chunks." />
-                <Input value={childChunkOverlap} onChange={(e) => setChildChunkOverlap(e.target.value)} placeholder="32" />
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <Separator />
-
-      {/* ── Embedding Model ── */}
-      <div className="space-y-3">
-        <h3 className="pm-title">Embedding Model</h3>
-        <div className="space-y-1.5">
-          <TooltipLabel label="Provider" tooltip="Select embedding provider for this collection." />
-          <DropdownSelect
-            size="sm"
-            value={embeddingProviderId}
-            onChange={setEmbeddingProviderId}
-            placeholder={`Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`}
-            options={[
-              {
-                value: "",
-                label: `Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`,
-              },
-              ...embeddingProviders.map((p) => ({
-                value: p.id,
-                label: p.name || p.model || p.id,
-              })),
-            ]}
-          />
-        </div>
-        {embeddingModel && (
-          <div className="space-y-1.5">
-            <TooltipLabel label="Model (legacy)" tooltip="Legacy field." />
-            <Input value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} placeholder="text-embedding-3-small" />
-          </div>
-        )}
-      </div>
-
-      <Separator />
-
-      {/* ── Allowed File Types ── */}
-      <div className="space-y-3">
-        <h3 className="pm-title">Allowed File Types</h3>
-        <p className="pm-meta leading-relaxed">Restrict which file types can be uploaded. Leave empty to allow all.</p>
-        <div className="flex flex-wrap gap-2">
-          {FILE_TYPES.map((ft) => (
-            <label
-              key={ft.ext}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs cursor-pointer transition-colors ${
-                allowedTypes.includes(ft.ext) ? "bg-primary text-primary-foreground border-primary" : "bg-background border-input hover:bg-accent"
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="sr-only"
-                checked={allowedTypes.includes(ft.ext)}
-                onChange={() =>
-                  setAllowedTypes((prev) =>
-                    prev.includes(ft.ext) ? prev.filter((t) => t !== ft.ext) : [...prev, ft.ext]
-                  )
-                }
-              />
-              {ft.label}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <Separator />
-
-      {/* ── Contextual Enrichment ── */}
-      <div className="space-y-3">
-        <h3 className="pm-title">Contextual Enrichment</h3>
-        <label className="flex items-center gap-2 pm-label cursor-pointer">
-          <input type="checkbox" checked={contextualEnabled} onChange={(e) => setContextualEnabled(e.target.checked)} className="rounded" />
-          Enable Contextual Enrichment
-        </label>
-        {contextualEnabled && (
-          <>
-            <div className="space-y-1.5">
-              <TooltipLabel label="Context Window" tooltip="Surrounding chunks on each side used for context." />
-              <Input value={contextualWindow} onChange={(e) => setContextualWindow(e.target.value)} placeholder="1" />
-            </div>
-            <p className="pm-meta leading-relaxed">
-              Contextual enrichment uses an LLM to generate background information for each chunk, improving retrieval quality.
-            </p>
-          </>
-        )}
-      </div>
-
-      <Separator />
-
-      {/* ── Enriching LLM ── */}
-      <div className="space-y-3">
-        <h3 className="pm-title">Enriching LLM</h3>
-        <p className="pm-meta leading-relaxed">
-          LLM used for contextual enrichment during document ingestion. Leave empty to use the global default.
+        <p className="pm-meta text-[var(--pm-faint)]">
+          Collection processing · embedding · enrichment
         </p>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <FieldLabel>Provider</FieldLabel>
+      </header>
+
+      <div className="pm-config-stack">
+        {/* ── Dimensions & Mode ── */}
+        <section className="pm-config-card">
+          <header className="pm-config-card-head">
+            <span className="pm-config-card-kicker">Dimensions & Mode</span>
+            <span className="pm-meta text-[var(--pm-faint)]">Locked at create</span>
+          </header>
+          <div className="pm-config-grid">
+            <div className="pm-config-field">
+              <ConfigLabel tooltip="Vector dimensions for embeddings. Locked at creation time.">
+                Dimensions
+              </ConfigLabel>
+              <div className="pm-config-locked">
+                <Input
+                  value={embeddingDimensions}
+                  disabled
+                  className="pm-config-input"
+                />
+                <Lock
+                  className="pm-config-lock-icon"
+                  strokeWidth={1.75}
+                  aria-hidden
+                />
+              </div>
+            </div>
+            <div className="pm-config-field">
+              <ConfigLabel tooltip="Locked at creation time.">
+                Chunk Mode
+              </ConfigLabel>
+              <div className="pm-config-locked">
+                <Input
+                  value={
+                    chunkMode === "parent_child" ? "Parent-Child" : "Normal"
+                  }
+                  disabled
+                  className="pm-config-input"
+                />
+                <Lock
+                  className="pm-config-lock-icon"
+                  strokeWidth={1.75}
+                  aria-hidden
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Chunking ── */}
+        <section className="pm-config-card">
+          <header className="pm-config-card-head">
+            <span className="pm-config-card-kicker">Chunking</span>
+          </header>
+          <div className="pm-config-grid">
+            <div className="pm-config-field">
+              <ConfigLabel tooltip="Controls how aggressively paragraphs are merged. 0.5 = merge until 50% of max_tokens.">
+                Buffer Ratio
+              </ConfigLabel>
+              <Input
+                value={bufferRatio}
+                onChange={(e) => setBufferRatio(e.target.value)}
+                placeholder="0.5"
+                className="pm-config-input"
+              />
+            </div>
+            {chunkMode === "parent_child" && (
+              <div className="pm-config-field">
+                <ConfigLabel tooltip="How parent chunks are created.">
+                  Parent Strategy
+                </ConfigLabel>
+                <DropdownSelect
+                  size="sm"
+                  value={parentStrategy}
+                  onChange={setParentStrategy}
+                  options={[
+                    { value: "paragraph", label: "Paragraph" },
+                    { value: "fixed_token", label: "Fixed Token" },
+                    { value: "heading", label: "Heading" },
+                  ]}
+                />
+              </div>
+            )}
+          </div>
+          {chunkMode === "normal" ? (
+            <div className="pm-config-grid">
+              <div className="pm-config-field">
+                <ConfigLabel tooltip="Tokens per chunk.">Chunk Size</ConfigLabel>
+                <Input
+                  value={chunkSize}
+                  onChange={(e) => setChunkSize(e.target.value)}
+                  placeholder="512"
+                  className="pm-config-input"
+                />
+              </div>
+              <div className="pm-config-field">
+                <ConfigLabel tooltip="Overlapping tokens between adjacent chunks.">
+                  Chunk Overlap
+                </ConfigLabel>
+                <Input
+                  value={chunkOverlap}
+                  onChange={(e) => setChunkOverlap(e.target.value)}
+                  placeholder="64"
+                  className="pm-config-input"
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="pm-config-grid">
+                <div className="pm-config-field">
+                  <ConfigLabel tooltip="Size of parent chunks.">
+                    Parent Chunk Size
+                  </ConfigLabel>
+                  <Input
+                    value={parentChunkSize}
+                    onChange={(e) => setParentChunkSize(e.target.value)}
+                    placeholder="1024"
+                    className="pm-config-input"
+                  />
+                </div>
+                <div className="pm-config-field">
+                  <ConfigLabel tooltip="Overlap between parent chunks.">
+                    Parent Chunk Overlap
+                  </ConfigLabel>
+                  <Input
+                    value={parentChunkOverlap}
+                    onChange={(e) => setParentChunkOverlap(e.target.value)}
+                    placeholder="128"
+                    className="pm-config-input"
+                  />
+                </div>
+              </div>
+              <div className="pm-config-grid">
+                <div className="pm-config-field">
+                  <ConfigLabel tooltip="Size of child chunks used for matching.">
+                    Child Chunk Size
+                  </ConfigLabel>
+                  <Input
+                    value={childChunkSize}
+                    onChange={(e) => setChildChunkSize(e.target.value)}
+                    placeholder="128"
+                    className="pm-config-input"
+                  />
+                </div>
+                <div className="pm-config-field">
+                  <ConfigLabel tooltip="Overlap between child chunks.">
+                    Child Chunk Overlap
+                  </ConfigLabel>
+                  <Input
+                    value={childChunkOverlap}
+                    onChange={(e) => setChildChunkOverlap(e.target.value)}
+                    placeholder="32"
+                    className="pm-config-input"
+                  />
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* ── Embedding Model ── */}
+        <section className="pm-config-card">
+          <header className="pm-config-card-head">
+            <span className="pm-config-card-kicker">Embedding Model</span>
+          </header>
+          <div className="pm-config-field">
+            <ConfigLabel tooltip="Select embedding provider for this collection.">
+              Provider
+            </ConfigLabel>
             <DropdownSelect
               size="sm"
-              value={enrichingLlmProvider}
-              onChange={(id) => {
-                setEnrichingLlmProvider(id)
-                const prov = readyProviders.find((p) => p.id === id)
-                const defaultM =
-                  prov?.default_model ||
-                  prov?.selected_models?.[0] ||
-                  prov?.model ||
-                  ""
-                setEnrichingLlmModel(defaultM)
-              }}
-              placeholder="Global default"
+              value={embeddingProviderId}
+              onChange={setEmbeddingProviderId}
+              placeholder={`Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`}
               options={[
-                { value: "", label: "Global default" },
-                ...readyProviders.map((p) => ({
+                {
+                  value: "",
+                  label: `Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`,
+                },
+                ...embeddingProviders.map((p) => ({
                   value: p.id,
                   label: p.name || p.model || p.id,
                 })),
               ]}
             />
           </div>
-          <div className="space-y-1.5">
-            <FieldLabel>Model</FieldLabel>
-            <DropdownSelect
-              size="sm"
-              value={enrichingLlmModel}
-              onChange={setEnrichingLlmModel}
-              disabled={!enrichingLlmProvider}
-              placeholder="Select model"
-              options={[
-                { value: "", label: "Select model" },
-                ...enrichingModels.map((m) => ({ value: m, label: m })),
-              ]}
+          {embeddingModel ? (
+            <div className="pm-config-field">
+              <ConfigLabel tooltip="Legacy field.">Model (legacy)</ConfigLabel>
+              <Input
+                value={embeddingModel}
+                onChange={(e) => setEmbeddingModel(e.target.value)}
+                placeholder="text-embedding-3-small"
+                className="pm-config-input"
+              />
+            </div>
+          ) : null}
+        </section>
+
+        {/* ── Allowed File Types ── */}
+        <section className="pm-config-card">
+          <header className="pm-config-card-head">
+            <span className="pm-config-card-kicker">Allowed File Types</span>
+            <span className="pm-meta text-[var(--pm-faint)]">
+              Empty = all allowed
+            </span>
+          </header>
+          <p className="pm-meta pm-config-card-desc">
+            Restrict which file types can be uploaded to this collection.
+          </p>
+          <div className="pm-config-chips" role="group" aria-label="File types">
+            {FILE_TYPES.map((ft) => {
+              const on = allowedTypes.includes(ft.ext)
+              return (
+                <button
+                  key={ft.ext}
+                  type="button"
+                  className={cn("pm-field-chip", on && "is-on")}
+                  aria-pressed={on}
+                  onClick={() =>
+                    setAllowedTypes((prev) =>
+                      prev.includes(ft.ext)
+                        ? prev.filter((t) => t !== ft.ext)
+                        : [...prev, ft.ext]
+                    )
+                  }
+                >
+                  {ft.label}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* ── Contextual Enrichment ── */}
+        <section className="pm-config-card">
+          <header className="pm-config-card-head">
+            <span className="pm-config-card-kicker">Contextual Enrichment</span>
+            <ConfigSwitch
+              id="pm-config-contextual"
+              label="Enable contextual enrichment"
+              checked={contextualEnabled}
+              onCheckedChange={setContextualEnabled}
             />
-          </div>
-        </div>
-      </div>
-
-      <Separator />
-
-      {/* ── Cloud Parsing (MinerU) ── */}
-      {mineruGloballyEnabled && (
-        <>
-          <div className="space-y-3">
-            <h3 className="pm-title">Cloud Parsing (MinerU)</h3>
-            <p className="pm-meta leading-relaxed">
-              Use MinerU cloud API for document parsing. Produces higher quality Markdown output with better table, formula, and layout preservation.
-            </p>
-            <label className="flex items-center gap-2 pm-label cursor-pointer">
-              <input type="checkbox" checked={cloudParsing} onChange={(e) => setCloudParsing(e.target.checked)} className="rounded" />
-              Enable Cloud Parsing for this Collection
-            </label>
-            {cloudParsing && (
-              <p className="pm-meta leading-relaxed">
-                When enabled, uploaded documents will be parsed by MinerU's cloud API and chunked using a Markdown-aware strategy.
-              </p>
+          </header>
+          <p className="pm-meta pm-config-card-desc">
+            Uses an LLM to generate background for each chunk, improving
+            retrieval quality.
+          </p>
+          <div
+            className={cn(
+              "pm-config-fold",
+              contextualEnabled && "is-open"
             )}
-          </div>
-          <Separator />
-        </>
-      )}
-
-      {/* ── Sparse Vocabulary ── */}
-      <div className="space-y-3">
-        <h3 className="pm-title">Sparse Vocabulary (BM25)</h3>
-        <p className="pm-meta leading-relaxed">
-          BM25 statistics drift as documents are added or removed. The vocabulary is rebuilt automatically when changes reach the threshold.
-        </p>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <TooltipLabel label="Recalc Threshold" tooltip="Chunk changes before auto-rebuilding. 5000 ≈ 1000 files." />
-            <Input value={sparseRecalcThreshold} onChange={(e) => setSparseRecalcThreshold(e.target.value)} placeholder="5000" />
-          </div>
-          <div className="space-y-1.5">
-            <TooltipLabel label="Change Counter" tooltip="Chunk changes since last rebuild." />
-            <Input value={String(sparseRecalcCounter)} disabled />
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={recalcRunning}
-            onClick={async () => {
-              setRecalcRunning(true)
-              try {
-                const res = await triggerSparseRecalc(collection)
-                if (res.error) {
-                  toast.error(res.error)
-                } else {
-                  toast.success(res.message || "Sparse recalculation triggered")
-                  setTimeout(async () => {
-                    try {
-                      const cfg = await getCollectionConfig(collection) as Record<string, unknown>
-                      if (!cfg.error) setSparseRecalcCounter(Number(cfg.sparse_recalc_counter ?? 0))
-                    } catch { /* ignore */ }
-                  }, 2000)
-                }
-              } catch (err) {
-                toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
-              } finally {
-                setRecalcRunning(false)
-              }
-            }}
           >
-            <RefreshCw className={`h-4 w-4 mr-1.5 ${recalcRunning ? "animate-spin" : ""}`} />
-            {recalcRunning ? "Running..." : "Recalculate Now"}
-          </Button>
-          <span className="pm-meta">
-            {sparseRecalcCounter >= parseInt(sparseRecalcThreshold || "5000")
-              ? "Threshold reached — auto-rebuild pending."
-              : `${sparseRecalcCounter} / ${sparseRecalcThreshold || "5000"} changes`}
-          </span>
-        </div>
-      </div>
+            <div className="pm-config-fold-inner">
+              <div className="pm-config-field">
+                <ConfigLabel tooltip="Surrounding chunks on each side used for context.">
+                  Context Window
+                </ConfigLabel>
+                <Input
+                  value={contextualWindow}
+                  onChange={(e) => setContextualWindow(e.target.value)}
+                  placeholder="1"
+                  className="pm-config-input"
+                  disabled={!contextualEnabled}
+                />
+              </div>
+            </div>
+          </div>
+        </section>
 
-      <Separator />
+        {/* ── Enriching LLM ── */}
+        <section className="pm-config-card">
+          <header className="pm-config-card-head">
+            <span className="pm-config-card-kicker">Enriching LLM</span>
+          </header>
+          <p className="pm-meta pm-config-card-desc">
+            Used for contextual enrichment during ingestion. Leave empty for
+            the global default.
+          </p>
+          <div className="pm-config-grid">
+            <div className="pm-config-field">
+              <FieldLabel className="pm-config-field-label">Provider</FieldLabel>
+              <DropdownSelect
+                size="sm"
+                value={enrichingLlmProvider}
+                onChange={(id) => {
+                  setEnrichingLlmProvider(id)
+                  const prov = readyProviders.find((p) => p.id === id)
+                  const defaultM =
+                    prov?.default_model ||
+                    prov?.selected_models?.[0] ||
+                    prov?.model ||
+                    ""
+                  setEnrichingLlmModel(defaultM)
+                }}
+                placeholder="Global default"
+                options={[
+                  { value: "", label: "Global default" },
+                  ...readyProviders.map((p) => ({
+                    value: p.id,
+                    label: p.name || p.model || p.id,
+                  })),
+                ]}
+              />
+            </div>
+            <div className="pm-config-field">
+              <FieldLabel className="pm-config-field-label">Model</FieldLabel>
+              <DropdownSelect
+                size="sm"
+                value={enrichingLlmModel}
+                onChange={setEnrichingLlmModel}
+                disabled={!enrichingLlmProvider}
+                placeholder="Select model"
+                options={[
+                  { value: "", label: "Select model" },
+                  ...enrichingModels.map((m) => ({ value: m, label: m })),
+                ]}
+              />
+            </div>
+          </div>
+        </section>
 
-      <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={saving}>
-          {saving ? "Saving..." : "Save Config"}
-        </Button>
+        {/* ── Cloud Parsing ── */}
+        {mineruGloballyEnabled ? (
+          <section className="pm-config-card">
+            <header className="pm-config-card-head">
+              <span className="pm-config-card-kicker">
+                Cloud Parsing · MinerU
+              </span>
+              <ConfigSwitch
+                id="pm-config-cloud-parsing"
+                label="Enable cloud parsing"
+                checked={cloudParsing}
+                onCheckedChange={setCloudParsing}
+              />
+            </header>
+            <p className="pm-meta pm-config-card-desc">
+              Higher-quality Markdown with better tables, formulas, and layout.
+              When on, uploads use MinerU and Markdown-aware chunking.
+            </p>
+          </section>
+        ) : null}
+
+        {/* ── Sparse Vocabulary ── */}
+        <section className="pm-config-card">
+          <header className="pm-config-card-head">
+            <span className="pm-config-card-kicker">Sparse Vocabulary · BM25</span>
+          </header>
+          <p className="pm-meta pm-config-card-desc">
+            BM25 statistics drift as documents change. The vocabulary rebuilds
+            automatically when changes reach the threshold.
+          </p>
+          <div className="pm-config-grid">
+            <div className="pm-config-field">
+              <ConfigLabel tooltip="Chunk changes before auto-rebuilding. 5000 ≈ 1000 files.">
+                Recalc Threshold
+              </ConfigLabel>
+              <Input
+                value={sparseRecalcThreshold}
+                onChange={(e) => setSparseRecalcThreshold(e.target.value)}
+                placeholder="5000"
+                className="pm-config-input"
+              />
+            </div>
+            <div className="pm-config-field">
+              <ConfigLabel tooltip="Chunk changes since last rebuild.">
+                Change Counter
+              </ConfigLabel>
+              <Input value={String(sparseRecalcCounter)} disabled />
+            </div>
+          </div>
+          <div className="pm-config-action-row">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={recalcRunning}
+              onClick={() => void handleRecalc()}
+            >
+              <RefreshCw
+                className={cn("h-3.5 w-3.5", recalcRunning && "animate-spin")}
+                strokeWidth={1.75}
+              />
+              {recalcRunning ? "Running…" : "Recalculate now"}
+            </Button>
+            <span
+              className={cn(
+                "pm-meta",
+                thresholdReached
+                  ? "text-[var(--pm-green)]"
+                  : "text-[var(--pm-faint)]"
+              )}
+            >
+              {thresholdReached
+                ? "Threshold reached — auto-rebuild pending"
+                : `${sparseRecalcCounter} / ${sparseRecalcThreshold || "5000"} changes`}
+            </span>
+          </div>
+        </section>
       </div>
     </div>
   )
