@@ -328,13 +328,13 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
     text = body.get("text") or " ".join(s.text for s in segments)
     result = TranscriptionResult(text=text, segments=segments)
     store.save_transcript(meeting_id, result)
-    store.update_meeting(meeting_id, status=MeetingStatus.completed)
     logger.info(
         "[SAVE-TRANSCRIPT] Saved %d segments (%d chars) for meeting %s",
         len(segments), len(text), meeting_id,
     )
 
-    # Phase 0: clean old pipeline data, normalize sentences and auto-trigger summary
+    # Phase 0: clean old pipeline data + normalize. Speakers gate next (or file-tx);
+    # do not leave stale tabs/blueprint that would auto-unlock Studio.
     try:
         from src.meeting.pipeline import normalize_sentences
 
@@ -347,33 +347,25 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
             "[SAVE-TRANSCRIPT] Normalized %d sentences for meeting %s",
             len(sentences), meeting_id,
         )
-
-        # Auto-trigger summary generation — only if there's no file transcription
-        # provider configured. When a file provider exists, the upload-audio →
-        # transcribe → transcribe_handler path will trigger summary #2 with
-        # higher-quality segments (punctuation, diarization), making summary #1
-        # a wasted LLM call.
-        from src.config import get_config
-        cfg = get_config()
-        has_file_provider = (
-            cfg.transcription.active_file_provider is not None
-            or cfg.transcription.get_local_file_provider() is not None
-        )
-        if not has_file_provider:
-            task_manager.create_task(
-                filename=f"meeting_summary:{meeting_id}",
-                task_type="meeting_summary",
-                meeting_id=meeting_id,
-            )
-            logger.info("[SAVE-TRANSCRIPT] Auto-triggered meeting_summary for %s (no file provider)", meeting_id)
-        else:
-            logger.info(
-                "[SAVE-TRANSCRIPT] Skipping summary #1 for %s — file provider configured, "
-                "summary #2 will run after file transcription",
-                meeting_id,
-            )
     except Exception as e:
-        logger.warning("[SAVE-TRANSCRIPT] Failed to auto-trigger summary (non-fatal): %s", e)
+        logger.warning("[SAVE-TRANSCRIPT] Post-save hook failed (non-fatal): %s", e)
+
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.completed,
+        processing_state=ProcessingState.idle.value,
+        summary_gen_state=GenerationState.idle.value,
+        blueprint_gen_state=GenerationState.idle.value,
+        summary=None,
+        detail=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        tabs=None,
+    )
+    logger.info(
+        "[SAVE-TRANSCRIPT] Transcript saved for %s — Speakers gate (or file-tx), then Summary",
+        meeting_id,
+    )
 
     return {"message": "Transcript saved", "segments": len(segments)}
 
@@ -431,7 +423,26 @@ async def start_transcription(meeting_id: str, body: dict | None = Body(None)):
         return {"error": "No active file transcription provider configured"}
 
     logger.info("[TRANSCRIBE] Provider found: %s, updating status to transcribing", type(provider).__name__)
-    store.update_meeting(meeting_id, status=MeetingStatus.transcribing)
+    # Drop previous Studio/summary work so the client always re-enters the
+    # speaker gate after file transcription (re-tx must not skip Speakers).
+    try:
+        store.delete_pipeline_data(meeting_id)
+    except Exception as exc:
+        logger.warning("[TRANSCRIBE] delete_pipeline_data failed (non-fatal): %s", exc)
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.transcribing,
+        transcription_error=None,
+        processing_state=ProcessingState.idle.value,
+        summary_gen_state=GenerationState.idle.value,
+        blueprint_gen_state=GenerationState.idle.value,
+        summary=None,
+        detail=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        tabs=None,
+        speaker_names=None,
+    )
 
     language_hints = body.get("language_hints") if isinstance(body, dict) else None
 

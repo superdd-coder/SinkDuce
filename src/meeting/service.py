@@ -12,7 +12,13 @@ from pathlib import Path
 
 from src.config import get_config
 from src.meeting import store
-from src.meeting.models import Meeting, MeetingStatus, TranscriptionResult
+from src.meeting.models import (
+    GenerationState,
+    Meeting,
+    MeetingStatus,
+    ProcessingState,
+    TranscriptionResult,
+)
 from src.meeting.transcription.base import (
     FileTranscriptionProvider,
     RealtimeTranscriptionProvider,
@@ -145,7 +151,25 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
         raise ValueError(f"Meeting {meeting_id} has no audio file")
 
     logger.info("[TRANSCRIBE-HANDLER] Meeting %s audio_path=%s", meeting_id, meeting.audio_path)
-    store.update_meeting(meeting_id, status=MeetingStatus.transcribing, transcription_error=None)
+    # Ensure re-tx never leaves stale tabs/blueprint that would skip Speakers UI.
+    try:
+        store.delete_pipeline_data(meeting_id)
+    except Exception as exc:
+        logger.warning("[TRANSCRIBE-HANDLER] delete_pipeline_data failed (non-fatal): %s", exc)
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.transcribing,
+        transcription_error=None,
+        processing_state=ProcessingState.idle.value,
+        summary_gen_state=GenerationState.idle.value,
+        blueprint_gen_state=GenerationState.idle.value,
+        summary=None,
+        detail=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        tabs=None,
+        speaker_names=None,
+    )
     update(5, "Loading transcription provider...")
 
     # 2. Get the active file transcription provider
@@ -246,23 +270,23 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
     )
     update(95, "Updating meeting status...")
 
-    # 5. Mark meeting as completed
-    store.update_meeting(meeting_id, status=MeetingStatus.completed)
-    update(95, "Starting summary generation...")
-
-    # 6. Auto-trigger summary generation (same path as the Summarize button)
-    try:
-        task_manager.create_task(
-            filename=f"meeting_summary:{meeting_id}",
-            task_type="meeting_summary",
-            meeting_id=meeting_id,
-        )
-        logger.info("[TRANSCRIBE-HANDLER] Auto-triggered meeting_summary for %s", meeting_id)
-    except Exception as e:
-        logger.warning("[TRANSCRIBE-HANDLER] Failed to auto-trigger summary (non-fatal): %s", e)
-
+    # 5. Mark meeting as completed — Speakers gate first; user starts Summary.
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.completed,
+        # Keep Studio fields empty until user passes Speakers → Summarize
+        tabs=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        summary=None,
+        detail=None,
+    )
     update(100, "Transcription complete")
 
+    logger.info(
+        "[TRANSCRIBE-HANDLER] Transcript ready for %s — Speakers gate, then Summary from client",
+        meeting_id,
+    )
     logger.info("[TRANSCRIBE-HANDLER] DONE for meeting %s", meeting_id)
     return {
         "message": "Transcription complete",

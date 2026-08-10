@@ -80,19 +80,19 @@ export function FolderView({
     <div
       className={cn("pm-files", msgCollapsed && "is-msg-collapsed")}
     >
-      {/* LEFT — flex-grows as right track shrinks */}
+      {/* LEFT — one paper card: toolbar + icon field + breadcrumb */}
       <div className="pm-files-left">
-        <div className="relative z-20 shrink-0">
-          <Toolbar collectionId={collectionId} />
-        </div>
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="pm-files-browser">
+          <div className="pm-files-browser-toolbar relative z-20 shrink-0">
+            <Toolbar collectionId={collectionId} />
+          </div>
+          <div className="pm-files-browser-body flex-1 min-h-0 overflow-hidden">
             <IconGrid
               collectionId={collectionId}
               onOpenFile={(fileId) => setDetailFileId(fileId)}
             />
           </div>
-          <div className="shrink-0">
+          <div className="pm-files-browser-foot shrink-0">
             <Breadcrumb collectionId={collectionId} />
           </div>
         </div>

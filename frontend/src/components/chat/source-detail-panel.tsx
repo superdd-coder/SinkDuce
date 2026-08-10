@@ -26,6 +26,38 @@ function _getHighlightOffset(source: Source): number | undefined {
   return typeof v === "number" ? v : undefined
 }
 
+/** Canonical Qdrant source key from retrieval metadata (accept file: / file_id). */
+function resolveSourceKey(meta: Record<string, unknown> | undefined): string {
+  if (!meta) return ""
+  const raw = String(meta.source ?? "").trim()
+  const fileId = String(meta.file_id ?? "").trim()
+  if (
+    raw.startsWith("__file__:") ||
+    raw.startsWith("__note__:") ||
+    raw.startsWith("__meeting__:")
+  ) {
+    return raw
+  }
+  // MCP / alias form
+  if (raw.startsWith("file:") && !raw.startsWith("file://")) {
+    return `__file__:${raw.slice("file:".length).trim()}`
+  }
+  if (fileId) return `__file__:${fileId}`
+  return raw
+}
+
+/** Prefer collection id; fall back to name→id lookup from store. */
+function resolveCollectionId(
+  meta: Record<string, unknown> | undefined,
+  cols: { id: string; name: string }[]
+): string {
+  const raw = String(meta?.collection ?? "").trim()
+  if (!raw) return ""
+  if (cols.some((c) => c.id === raw)) return raw
+  const byName = cols.find((c) => c.name === raw)
+  return byName?.id || raw
+}
+
 export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -34,7 +66,8 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
   const [docSummary, setDocSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState("preview")
+  /** parsed = extracted text · preview = original file (was "raw") */
+  const [activeTab, setActiveTab] = useState("parsed")
   const [highlightOffset, setHighlightOffset] = useState<number | undefined>(undefined)
   // Force scroll effect to re-run on every locate click
   const [locateTick, setLocateTick] = useState(0)
@@ -43,14 +76,16 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   // Store latest previewContent in ref so handleLocate can access it without stale closure
   const previewContentRef = useRef<string | null>(null)
 
-  // sourceKey = internal file path for API calls
-  const sourceKey = source?.metadata?.source as string || ""
-  // displayName = human-readable filename for UI
-  const displayName = (source?.metadata?.source_label as string) || sourceKey
-  const collectionId = source?.metadata?.collection as string || ""
-  const chunkId = source?.metadata?.id as string | undefined
   const { collections } = useAppStore()
-  const collectionDisplay = collections.find(c => c.id === collectionId)?.name || collectionId
+  // sourceKey = canonical Qdrant source for API calls
+  const sourceKey = resolveSourceKey(source?.metadata)
+  // displayName = human-readable filename for UI
+  const displayName =
+    (source?.metadata?.source_label as string) || sourceKey
+  const collectionId = resolveCollectionId(source?.metadata, collections)
+  const chunkId = source?.metadata?.id as string | undefined
+  const collectionDisplay =
+    collections.find((c) => c.id === collectionId)?.name || collectionId
   const metaExt =
     (source?.metadata?.original_ext as string | undefined) ||
     (source?.metadata?.file_type as string | undefined)
@@ -73,7 +108,7 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     setChunks([])
     setDocSummary(null)
     setExpandedParents(new Set())
-    setActiveTab("preview")
+    setActiveTab("parsed")
   }, [collectionId, sourceKey])
 
   // Update highlight when selected source chunk changes
@@ -84,22 +119,50 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     setLocateTick(t => t + 1)
   }, [source?.metadata?.id])
 
-  // Load chunks
+  // Load chunks for this document (full file, not only the hit)
   useEffect(() => {
-    if (!collectionId || !sourceKey) return
+    if (!collectionId || !sourceKey) {
+      setChunks([])
+      setChunksLoading(false)
+      return
+    }
     let cancelled = false
     setChunksLoading(true)
     getFileChunks(collectionId, sourceKey, 10000)
-      .then((res) => { if (!cancelled) setChunks(res.chunks) })
+      .then((res) => {
+        if (cancelled) return
+        const list = Array.isArray(res.chunks) ? res.chunks : []
+        setChunks(list)
+        // If still empty, try file: alias once (older payloads)
+        if (list.length === 0 && sourceKey.startsWith("__file__:")) {
+          const alias = `file:${sourceKey.slice("__file__:".length)}`
+          return getFileChunks(collectionId, alias, 10000)
+            .then((res2) => {
+              if (!cancelled) setChunks(Array.isArray(res2.chunks) ? res2.chunks : [])
+            })
+            .catch(() => {
+              /* keep empty */
+            })
+        }
+      })
       .catch((err) => {
         if (!cancelled) {
-          console.warn("[SourceDetailPanel] Failed to load chunks:", collectionId, sourceKey, err)
+          console.warn(
+            "[SourceDetailPanel] Failed to load chunks:",
+            collectionId,
+            sourceKey,
+            err,
+          )
           setChunks([])
         }
       })
-      .finally(() => { if (!cancelled) setChunksLoading(false) })
-    return () => { cancelled = true }
-  }, [collectionId, sourceKey, chunkId])
+      .finally(() => {
+        if (!cancelled) setChunksLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [collectionId, sourceKey])
 
   // Load source content: parsed/extracted text (works for PDF too via parsed.txt)
   useEffect(() => {
@@ -187,72 +250,89 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
 
   const handleLocate = useCallback((offset?: number, _pageNumber?: number, _length?: number) => {
     setHighlightOffset(offset)
-    setActiveTab("preview")
+    setActiveTab("parsed")
     setLocateTick(t => t + 1)
   }, [])
 
   if (!source || !sourceKey) return null
 
   return (
-    <div className="h-full flex flex-col border-l border-border bg-background">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+    <div className="pm-chat-source-panel">
+      {/* Header — no hard divider */}
+      <div className="pm-chat-source-panel-head">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <span className="text-sm font-medium truncate" title={displayName}>{displayName}</span>
-          <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
+          <h2 className="pm-chat-source-panel-title" title={displayName}>
+            {displayName}
+          </h2>
+          <Badge variant="outline" className="shrink-0">
             {(source.score * 100).toFixed(0)}%
           </Badge>
           {collectionDisplay && (
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">{collectionDisplay}</Badge>
+            <Badge variant="secondary" className="shrink-0">
+              {collectionDisplay}
+            </Badge>
           )}
         </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 ml-2" onClick={onClose}>
-          <X className="h-4 w-4" />
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0"
+          onClick={onClose}
+          aria-label="Close source panel"
+        >
+          <X className="size-4" />
         </Button>
       </div>
 
-      {/* Current chunk preview bar */}
-      <div className="px-4 py-2 border-b border-border/50 shrink-0 bg-muted/20 max-h-32 overflow-y-auto">
+      {/* Current chunk excerpt */}
+      <div className="pm-chat-source-panel-excerpt">
         <div className="flex items-start gap-2">
-          <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap flex-1 min-w-0">
+          <p className="flex-1 min-w-0 whitespace-pre-wrap m-0">
             {source.text}
           </p>
-          <button
-            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors shrink-0 mt-0.5"
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="shrink-0 mt-0.5"
             title="Locate in preview"
-            onClick={() => handleLocate(
-              _getHighlightOffset(source),
-              source.metadata?.page_number as number | undefined,
-              source.text?.length
-            )}
+            onClick={() =>
+              handleLocate(
+                _getHighlightOffset(source),
+                source.metadata?.page_number as number | undefined,
+                source.text?.length,
+              )
+            }
           >
-            <Locate className="h-3 w-3" />
-          </button>
+            <Locate className="size-3" />
+          </Button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex-1 flex flex-col min-h-0 px-2">
+      {/* Tabs — pill default (PRIMITIVES) */}
+      <div className="pm-chat-source-panel-body">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full min-h-0">
-          <TabsList variant="line" className="mb-1 shrink-0 relative">
-            <TabsIndicator renderBeforeHydration />
-            <TabsTrigger value="preview" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SOURCE</TabsTrigger>
-            {showRawTab && (
-              <TabsTrigger value="raw" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">
-                RAW
-              </TabsTrigger>
-            )}
-            <TabsTrigger value="chunks" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">CHUNKS{chunks.length > 0 ? ` (${chunks.length})` : ""}</TabsTrigger>
-            <TabsTrigger value="summary" className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary">SUMMARY</TabsTrigger>
+          <TabsList className="mb-2 shrink-0 w-fit">
+            <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
+            <TabsTrigger value="parsed">Parsed</TabsTrigger>
+            {showRawTab && <TabsTrigger value="preview">Preview</TabsTrigger>}
+            <TabsTrigger value="chunks">
+              Chunks{chunks.length > 0 ? ` · ${chunks.length}` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="summary">Summary</TabsTrigger>
           </TabsList>
 
-          {/* Source Tab — parsed/extracted text (unchanged) */}
-          <TabsContent key={`preview-${activeTab}`} value="preview" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
-            <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
+          {/* Parsed — extracted text (locate-in-doc targets this) */}
+          <TabsContent
+            key={`parsed-${activeTab}`}
+            value="parsed"
+            className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+          >
+            <div className="pm-chat-source-nested h-full">
               {previewLoading || chunksLoading ? (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                  Loading...
+                <div className="flex items-center justify-center h-full gap-2">
+                  <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
+                  <span className="pm-meta">Loading…</span>
                 </div>
               ) : previewContent !== null ? (
                 <ScrollArea className="h-full">
@@ -263,16 +343,17 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                           ? transformImageBlocks(
                               previewContent,
                               collectionId,
-                              // Empty file_id: in :::image blocks → managed id from source
                               sourceKey.startsWith("__file__:")
                                 ? sourceKey.slice("__file__:".length)
-                                : undefined
+                                : undefined,
                             )
                           : ""
                       }
                       readonly
                       showToolbar={false}
-                      onEditorReady={(e) => { sourceEditorRef.current = e }}
+                      onEditorReady={(e) => {
+                        sourceEditorRef.current = e
+                      }}
                     />
                   </div>
                 </ScrollArea>
@@ -280,7 +361,9 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                 <ScrollArea className="h-full">
                   <CardContent className="p-4 space-y-2">
                     {chunks.map((chunk, i) => (
-                      <p key={i} className="text-sm leading-relaxed whitespace-pre-wrap">{chunk.text}</p>
+                      <p key={i} className="pm-meta whitespace-pre-wrap leading-relaxed m-0">
+                        {chunk.text}
+                      </p>
                     ))}
                   </CardContent>
                 </ScrollArea>
@@ -288,92 +371,141 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
             </div>
           </TabsContent>
 
-          {/* Raw — original file via File Viewer (PDF / Office / md / txt / csv…) */}
+          {/* Preview — original file; tools = Search + Download only; no frame border */}
           {showRawTab && (
-            <TabsContent key={`raw-${activeTab}`} value="raw" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
-              <RawFileViewer
-                url={rawPreviewUrl}
-                filename={rawFilename}
-                downloadUrl={rawPreviewUrl}
-                className="h-full"
-              />
+            <TabsContent
+              key={`preview-${activeTab}`}
+              value="preview"
+              className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+            >
+              <div className="pm-chat-source-nested pm-chat-source-nested--flush h-full">
+                <RawFileViewer
+                  url={rawPreviewUrl}
+                  filename={rawFilename}
+                  downloadUrl={rawPreviewUrl}
+                  tools="download-search"
+                  className="h-full"
+                />
+              </div>
             </TabsContent>
           )}
 
-          {/* Chunks Tab */}
-          <TabsContent key={`chunks-${activeTab}`} value="chunks" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
-            <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
+          <TabsContent
+            key={`chunks-${activeTab}`}
+            value="chunks"
+            className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+          >
+            <div className="pm-chat-source-nested h-full">
               <ScrollArea className="h-full">
                 <CardContent className="p-3 space-y-2">
                   {chunksLoading ? (
-                    <div className="flex items-center justify-center py-8 text-muted-foreground">
-                      <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                      Loading chunks...
+                    <div className="flex items-center justify-center py-8 gap-2">
+                      <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
+                      <span className="pm-meta">Loading chunks…</span>
                     </div>
                   ) : chunks.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-4 text-center">No chunks</p>
+                    <p className="pm-meta py-4 text-center">No chunks</p>
                   ) : groupedChunks ? (
-                    groupedChunks.map(group => {
+                    groupedChunks.map((group) => {
                       const isExpanded = expandedParents.has(group.parent.id)
                       const isTargetParent = group.parent.id === chunkId
                       return (
-                        <div key={group.parent.id} className={`border rounded-lg overflow-hidden ${isTargetParent ? "border-primary ring-1 ring-primary/30" : "border-border"}`}>
+                        <div
+                          key={group.parent.id}
+                          className={`pm-chat-chunk-card overflow-hidden ${isTargetParent ? "is-target" : ""}`}
+                        >
                           <div
-                            className="w-full text-left p-2.5 hover:bg-accent/50 transition-colors flex items-start gap-2 cursor-pointer"
+                            className="w-full text-left flex items-start gap-2 cursor-pointer"
                             onClick={() => toggleParent(group.parent.id)}
-                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleParent(group.parent.id) }}
-                            role="button" tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") toggleParent(group.parent.id)
+                            }}
+                            role="button"
+                            tabIndex={0}
                           >
-                            {isExpanded ? <ChevronDown className="h-3.5 w-3.5 mt-0.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 mt-0.5 shrink-0" />}
+                            {isExpanded ? (
+                              <ChevronDown className="size-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
+                            ) : (
+                              <ChevronRight className="size-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
+                            )}
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5 mb-1">
-                                <Badge variant={isTargetParent ? "default" : "outline"} className="text-[10px]">Parent #{group.parent.chunk_index}</Badge>
-                                <Badge variant="outline" className="text-[10px]">{group.children.length} children</Badge>
+                              <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                                <Badge variant={isTargetParent ? "default" : "outline"}>
+                                  Parent #{group.parent.chunk_index}
+                                </Badge>
+                                <Badge variant="outline">{group.children.length} children</Badge>
                                 {group.parent.section_label && (
-                                  <Badge variant="secondary" className="text-[10px]">{group.parent.section_label}</Badge>
+                                  <Badge variant="secondary">{group.parent.section_label}</Badge>
                                 )}
-                                <button
-                                  className="ml-auto p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  className="ml-auto"
                                   title="Locate in preview"
-                                  onClick={(e) => { e.stopPropagation(); handleLocate(group.parent.char_offset, group.parent.page_number, group.parent.text?.length) }}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleLocate(
+                                      group.parent.char_offset,
+                                      group.parent.page_number,
+                                      group.parent.text?.length,
+                                    )
+                                  }}
                                 >
-                                  <Locate className="h-3 w-3" />
-                                </button>
+                                  <Locate className="size-3" />
+                                </Button>
                               </div>
-                              <p className="text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground line-clamp-2">{group.parent.text}</p>
+                              <p className="pm-meta whitespace-pre-wrap line-clamp-2 m-0">
+                                {group.parent.text}
+                              </p>
                             </div>
                           </div>
                           {isExpanded && (
-                            <div className="border-t border-border bg-muted/30 p-2.5 space-y-2 pl-7">
+                            <div className="mt-2 pt-2 space-y-2 pl-6 border-t border-[color-mix(in_srgb,var(--pm-ink)_6%,transparent)]">
                               <div>
-                                <p className="text-xs text-muted-foreground font-medium mb-1">Full text:</p>
-                                <p className="text-xs leading-relaxed whitespace-pre-wrap">{group.parent.text}</p>
+                                <p className="pm-label mb-1">Full text</p>
+                                <p className="pm-meta whitespace-pre-wrap m-0 leading-relaxed">
+                                  {group.parent.text}
+                                </p>
                               </div>
                               {group.parent.context && (
-                                <div className="pl-2.5 border-l-2 border-primary/30">
-                                  <p className="text-[11px] text-muted-foreground italic">{group.parent.context}</p>
+                                <div className="pl-2.5 border-l-2 border-[color-mix(in_srgb,var(--pm-green)_30%,transparent)]">
+                                  <p className="pm-meta italic m-0">{group.parent.context}</p>
                                 </div>
                               )}
-                              {group.children.map(child => {
+                              {group.children.map((child) => {
                                 const isTargetChild = child.id === chunkId
                                 return (
                                   <div
                                     key={child.id}
-                                    className={`border rounded-lg p-2.5 bg-background cursor-pointer hover:bg-accent/50 transition-colors ${isTargetChild ? "border-primary ring-1 ring-primary/30" : "border-border"}`}
-                                    onClick={(e) => { e.stopPropagation(); handleLocate(child.char_offset, child.page_number, child.text?.length) }}
-                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); handleLocate(child.char_offset, child.page_number, child.text?.length) } }}
-                                    role="button" tabIndex={0}
+                                    className={`pm-chat-chunk-card ${isTargetChild ? "is-target" : ""}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleLocate(child.char_offset, child.page_number, child.text?.length)
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.stopPropagation()
+                                        handleLocate(child.char_offset, child.page_number, child.text?.length)
+                                      }
+                                    }}
+                                    role="button"
+                                    tabIndex={0}
                                   >
                                     <div className="flex items-center gap-1.5 mb-1.5">
-                                      <Badge variant={isTargetChild ? "default" : "secondary"} className="text-[10px]">Child #{child.chunk_index}</Badge>
-                                      <Locate className="ml-auto h-3 w-3 text-muted-foreground shrink-0" />
+                                      <Badge variant={isTargetChild ? "default" : "secondary"}>
+                                        Child #{child.chunk_index}
+                                      </Badge>
+                                      <Locate className="ml-auto size-3 text-[var(--pm-faint)] shrink-0" />
                                     </div>
                                     {child.context && (
-                                      <div className="mb-1.5 pl-2.5 border-l-2 border-primary/30">
-                                        <p className="text-[11px] text-muted-foreground italic">{child.context}</p>
+                                      <div className="mb-1.5 pl-2.5 border-l-2 border-[color-mix(in_srgb,var(--pm-green)_30%,transparent)]">
+                                        <p className="pm-meta italic m-0">{child.context}</p>
                                       </div>
                                     )}
-                                    <p className="text-xs leading-relaxed whitespace-pre-wrap">{child.text}</p>
+                                    <p className="pm-meta whitespace-pre-wrap m-0 leading-relaxed">
+                                      {child.text}
+                                    </p>
                                   </div>
                                 )
                               })}
@@ -383,31 +515,46 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                       )
                     })
                   ) : (
-                    chunks.map(chunk => {
+                    chunks.map((chunk) => {
                       const isTarget = chunk.id === chunkId
                       return (
                         <div
                           key={chunk.id}
-                          className={`border rounded-lg p-2.5 cursor-pointer hover:bg-accent/50 transition-colors ${isTarget ? "border-primary ring-1 ring-primary/30 bg-primary/5" : "border-border"}`}
-                          onClick={() => handleLocate(chunk.char_offset, chunk.page_number, chunk.text?.length)}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleLocate(chunk.char_offset, chunk.page_number, chunk.text?.length) }}
-                          role="button" tabIndex={0}
+                          className={`pm-chat-chunk-card ${isTarget ? "is-target" : ""}`}
+                          onClick={() =>
+                            handleLocate(chunk.char_offset, chunk.page_number, chunk.text?.length)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              handleLocate(chunk.char_offset, chunk.page_number, chunk.text?.length)
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
                         >
-                          <div className="flex items-center gap-1.5 mb-1.5">
-                            <Badge variant={isTarget ? "default" : "outline"} className="text-[10px]">Chunk #{chunk.chunk_index}</Badge>
+                          <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                            <Badge variant={isTarget ? "default" : "outline"}>
+                              Chunk #{chunk.chunk_index}
+                            </Badge>
                             {chunk.section_label && (
-                              <Badge variant="secondary" className="text-[10px]">{chunk.section_label}</Badge>
+                              <Badge variant="secondary">{chunk.section_label}</Badge>
                             )}
-                            {chunk.context && <span className="text-[10px] text-muted-foreground italic">with context</span>}
-                            {isTarget && <span className="text-[10px] text-primary font-medium">← retrieved</span>}
-                            <Locate className="ml-auto h-3 w-3 text-muted-foreground shrink-0" />
+                            {chunk.context && (
+                              <span className="pm-meta italic">with context</span>
+                            )}
+                            {isTarget && (
+                              <span className="pm-meta text-[var(--pm-green)]">← retrieved</span>
+                            )}
+                            <Locate className="ml-auto size-3 text-[var(--pm-faint)] shrink-0" />
                           </div>
                           {chunk.context && (
-                            <div className="mb-1.5 pl-2.5 border-l-2 border-primary/30">
-                              <p className="text-[11px] text-muted-foreground italic">{chunk.context}</p>
+                            <div className="mb-1.5 pl-2.5 border-l-2 border-[color-mix(in_srgb,var(--pm-green)_30%,transparent)]">
+                              <p className="pm-meta italic m-0">{chunk.context}</p>
                             </div>
                           )}
-                          <p className="text-xs leading-relaxed whitespace-pre-wrap">{chunk.text}</p>
+                          <p className="pm-meta whitespace-pre-wrap m-0 leading-relaxed">
+                            {chunk.text}
+                          </p>
                         </div>
                       )
                     })
@@ -417,42 +564,65 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
             </div>
           </TabsContent>
 
-          {/* Summary Tab */}
-          <TabsContent key={`summary-${activeTab}`} value="summary" className="flex-1 overflow-hidden min-h-0 animate-tab-in">
-            <div className="flex-1 overflow-hidden rounded-lg border border-border h-full">
+          <TabsContent
+            key={`summary-${activeTab}`}
+            value="summary"
+            className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+          >
+            <div className="pm-chat-source-nested h-full">
               <ScrollArea className="h-full">
                 <CardContent className="p-4">
                   {summaryLoading ? (
-                    <div className="flex items-center justify-center py-8 text-muted-foreground">
-                      <Loader2 className="h-5 w-5 animate-spin mr-2" />
-                      Loading summary...
+                    <div className="flex items-center justify-center py-8 gap-2">
+                      <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
+                      <span className="pm-meta">Loading summary…</span>
                     </div>
                   ) : docSummary ? (
                     <div className="space-y-4">
                       {docSummary.data.length > 0 && (
                         <div>
-                          <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Data Points</h5>
-                          <ul className="space-y-1">{docSummary.data.map((item, i) => <li key={i} className="text-sm">{item}</li>)}</ul>
+                          <h5 className="pm-label mb-2">Data Points</h5>
+                          <ul className="space-y-1">
+                            {docSummary.data.map((item, i) => (
+                              <li key={i} className="pm-prose max-w-none">
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
                       {docSummary.facts.length > 0 && (
                         <div>
-                          <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Facts</h5>
-                          <ul className="space-y-1">{docSummary.facts.map((item, i) => <li key={i} className="text-sm">{item}</li>)}</ul>
+                          <h5 className="pm-label mb-2">Facts</h5>
+                          <ul className="space-y-1">
+                            {docSummary.facts.map((item, i) => (
+                              <li key={i} className="pm-prose max-w-none">
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
                       {docSummary.insights.length > 0 && (
                         <div>
-                          <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Insights</h5>
-                          <ul className="space-y-1">{docSummary.insights.map((item, i) => <li key={i} className="text-sm">{item}</li>)}</ul>
+                          <h5 className="pm-label mb-2">Insights</h5>
+                          <ul className="space-y-1">
+                            {docSummary.insights.map((item, i) => (
+                              <li key={i} className="pm-prose max-w-none">
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
-                      {docSummary.data.length === 0 && docSummary.facts.length === 0 && docSummary.insights.length === 0 && (
-                        <p className="text-sm text-muted-foreground text-center py-4">No summary data available.</p>
-                      )}
+                      {docSummary.data.length === 0 &&
+                        docSummary.facts.length === 0 &&
+                        docSummary.insights.length === 0 && (
+                          <p className="pm-meta text-center py-4">No summary data available.</p>
+                        )}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground text-center py-8">No summary available.</p>
+                    <p className="pm-meta text-center py-8">No summary available.</p>
                   )}
                 </CardContent>
               </ScrollArea>

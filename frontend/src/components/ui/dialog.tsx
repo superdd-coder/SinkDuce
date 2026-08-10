@@ -33,13 +33,11 @@ function DialogOverlay({
       className={cn(
         "fixed inset-0 z-50",
         /*
-         * Dim via CSS class (pm-dialog-overlay--silk) or default bg.
-         * Fade ONLY via opacity + Base UI data-open / data-starting-style /
-         * data-ending-style — never animate-in/out keyframes (hard-cut).
+         * System dialog mask — same clock as popup (280ms silk).
+         * Opacity only; solid dim via .pm-dialog-overlay--silk CSS.
+         * Never TW animate-in/out keyframes (hard cut / residual blur).
          */
-        "bg-black/15 supports-backdrop-filter:backdrop-blur-[2px]",
-        "transition-opacity duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
-        "data-starting-style:opacity-0 data-ending-style:opacity-0 data-closed:opacity-0",
+        "pm-dialog-overlay--silk",
         className
       )}
       {...props}
@@ -55,38 +53,27 @@ function DialogContent({
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
-  /** Optional backdrop classes (e.g. match silk dialog duration). */
+  /** Extra backdrop classes (silk mask is always on by default). */
   overlayClassName?: string
 }) {
-  /* Silk dialogs use CSS opacity/scale — never TW animate-in/out (hard flash). */
-  const isSilk =
-    typeof className === "string"
-      ? className.includes("pm-dialog--silk")
-      : false
-
   return (
     <DialogPortal>
       <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "pm-dialog fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)]",
+          "pm-dialog pm-dialog--silk fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)]",
           "-translate-x-1/2 -translate-y-1/2 gap-4 outline-none sm:max-w-sm",
           /* Shell = canvas (unified with workspace / All Files); nested cards stay white */
           "rounded-[var(--pm-r-lg)] bg-[var(--pm-canvas,#f6f5f1)] p-5",
           "text-[var(--pm-text)] font-[family-name:var(--pm-ff)] text-[13px] font-normal leading-normal",
           "border-0 shadow-[var(--pm-shadow)]",
           /*
-           * Default compact dialogs: keyframe enter/exit.
-           * Silk: skip keyframes entirely (opacity/scale via .pm-dialog--silk).
+           * System open/close for ALL dialogs (see index.css silk block):
+           * opacity + tiny scale, 280ms, same ease both ways.
+           * Kill TW keyframe enter/exit so nothing fights CSS transitions.
            */
-          isSilk
-            ? "animate-none duration-0 data-open:animate-none data-closed:animate-none"
-            : [
-                "duration-300",
-                "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
-                "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-              ],
+          "animate-none duration-0 data-open:animate-none data-closed:animate-none",
           className
         )}
         {...props}
@@ -117,10 +104,24 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-header"
       className={cn(
-        /* No title band / hairline — shell canvas shows through */
-        "flex flex-col gap-1.5 bg-transparent border-0 shadow-none",
+        /* kicker (optional) → large serif title → description (optional) */
+        "pm-dialog-header flex flex-col bg-transparent border-0 shadow-none",
         className
       )}
+      {...props}
+    />
+  )
+}
+
+/**
+ * Green uppercase domain label above DialogTitle (e.g. “Section”, “Meeting”).
+ * Optional — title is large serif either way; kicker only adds the green line.
+ */
+function DialogKicker({ className, ...props }: React.ComponentProps<"p">) {
+  return (
+    <p
+      data-slot="dialog-kicker"
+      className={cn("pm-dialog-kicker", className)}
       {...props}
     />
   )
@@ -159,9 +160,8 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
     <DialogPrimitive.Title
       data-slot="dialog-title"
       className={cn(
-        /* Premium dialog chrome title — Geist 13 / ink / always uppercase */
-        "font-[family-name:var(--pm-ff)] text-[13px] font-normal leading-none",
-        "tracking-[0.04em] uppercase text-[var(--pm-ink)]",
+        /* Large light serif display (system soft-dialog chrome). */
+        "pm-dialog-title",
         className
       )}
       {...props}
@@ -169,6 +169,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   )
 }
 
+/** Optional guidance under the title — omit when the dialog needs no copy. */
 function DialogDescription({
   className,
   ...props
@@ -177,7 +178,7 @@ function DialogDescription({
     <DialogPrimitive.Description
       data-slot="dialog-description"
       className={cn(
-        "text-[13px] font-normal leading-normal text-[var(--pm-muted)]",
+        "pm-dialog-desc",
         "*:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-[var(--pm-green)]",
         className
       )}
@@ -193,6 +194,7 @@ export {
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogKicker,
   DialogOverlay,
   DialogPortal,
   DialogTitle,

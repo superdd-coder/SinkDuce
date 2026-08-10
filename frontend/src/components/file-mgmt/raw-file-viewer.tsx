@@ -20,6 +20,24 @@ import officePreset from "@file-viewer/preset-office"
 import textRenderer from "@file-viewer/renderer-text"
 import { cn } from "@/lib/utils"
 
+/** Inline SVG for scrubbed toolbar — magnifying glass / download icon only. */
+const ICON_SEARCH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`
+const ICON_DOWNLOAD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>`
+
+function setButtonIconOnly(btn: HTMLElement, kind: "search" | "download") {
+  if (btn.dataset.sinkduceIcon === kind && btn.querySelector("svg")) {
+    // Already iconified — only strip any leftover text
+    btn.childNodes.forEach((n) => {
+      if (n.nodeType === Node.TEXT_NODE) n.textContent = ""
+    })
+    return
+  }
+  btn.dataset.sinkduceIcon = kind
+  btn.innerHTML = kind === "search" ? ICON_SEARCH_SVG : ICON_DOWNLOAD_SVG
+  btn.setAttribute("aria-label", kind === "search" ? "Search" : "Download")
+  btn.setAttribute("title", kind === "search" ? "Search" : "Download")
+}
+
 /**
  * Re-home PDF chrome (sidebar/nav removed product-side):
  * - Zoom + rotate stay in `.pdf-toolbar` as left float pill
@@ -287,6 +305,12 @@ export interface RawFileViewerProps {
    * Used by floating / side preview cards (Premium soft float).
    */
   hideChrome?: boolean
+  /**
+   * Toolbar preset when chrome is shown.
+   * - full: search · download · print (+ zoom for non-PDF; PDF has own zoom/rotate)
+   * - download-search: only Search + Download (Chat source Preview tab)
+   */
+  tools?: "full" | "download-search"
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -335,7 +359,9 @@ export function RawFileViewer({
   className,
   downloadUrl,
   hideChrome = false,
+  tools = "full",
 }: RawFileViewerProps) {
+  const downloadSearchOnly = tools === "download-search"
   /** File Viewer routes by File.name / filename — prefer File over bare blob URL. */
   const [viewerFile, setViewerFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
@@ -345,17 +371,127 @@ export function RawFileViewer({
   const supported = isRawViewerSupported(filename)
   const safeName = resolveRawFilename(filename)
 
-  // PDF chrome layout: top row search+zoom+rotate; sidebar head = toggle + 1/24
-  // Skip when hideChrome — pure document surface for select-preview cards.
+  // PDF chrome layout: top row search+zoom+rotate (full tools only).
+  // download-search: strip residual print/zoom nodes the library may still mount.
   useEffect(() => {
     if (hideChrome || !viewerFile || !hostRef.current) return
     const root = hostRef.current
+
+    const scrubDownloadSearchChrome = () => {
+      // Hide PDF float zoom/rotate entirely
+      root.querySelectorAll(
+        ".pdf-toolbar, .sinkduce-pdf-tools-left, [data-sinkduce-bar]"
+      ).forEach((el) => {
+        ;(el as HTMLElement).style.display = "none"
+      })
+
+      const searchInput = root.querySelector<HTMLInputElement>(
+        ".file-viewer-web-search input"
+      )
+      if (searchInput) {
+        // Short placeholder for narrow rail
+        if (searchInput.placeholder.length > 8) {
+          searchInput.placeholder = "Search"
+        }
+      }
+      const hasQuery = !!(searchInput?.value || "").trim()
+
+      // Web bar: only Search + Download; iconify labels; hide idle nav when empty
+      root
+        .querySelectorAll<HTMLElement>(
+          ".file-viewer-web-toolbar button, .file-viewer-web-toolbar [role='button']"
+        )
+        .forEach((el) => {
+          const label = (
+            el.getAttribute("aria-label") ||
+            el.getAttribute("title") ||
+            el.textContent ||
+            ""
+          ).toLowerCase()
+          const isSearchAction =
+            label.includes("search") ||
+            label.includes("find") ||
+            label.includes("查找") ||
+            label.includes("搜索")
+          const isNav =
+            label.includes("next") ||
+            label.includes("prev") ||
+            label.includes("previous") ||
+            label.includes("clear") ||
+            label.includes("下一个") ||
+            label.includes("上一个") ||
+            label.includes("清除")
+          const isDownload =
+            label.includes("download") || label.includes("下载")
+          if (!isSearchAction && !isNav && !isDownload) {
+            el.style.display = "none"
+            return
+          }
+          // Hide prev/next/clear until user has typed a query — saves rail width
+          if (isNav && !hasQuery) {
+            el.style.display = "none"
+            return
+          }
+          el.style.display = ""
+          // Primary actions: force magnifying-glass / download icons (no text)
+          if (isDownload) {
+            setButtonIconOnly(el, "download")
+            return
+          }
+          if (isSearchAction && !isNav) {
+            setButtonIconOnly(el, "search")
+            return
+          }
+          // Nav (prev/next/clear): keep library SVG, strip text labels
+          el.childNodes.forEach((n) => {
+            if (n.nodeType === Node.TEXT_NODE) {
+              n.textContent = ""
+            } else if (n.nodeType === Node.ELEMENT_NODE) {
+              const child = n as HTMLElement
+              if (
+                child.tagName !== "SVG" &&
+                !child.querySelector("svg") &&
+                child.children.length === 0
+              ) {
+                child.style.display = "none"
+              }
+            }
+          })
+        })
+      root
+        .querySelectorAll(
+          ".file-viewer-web-zoom-meter, .file-viewer-web-toolbar [class*='zoom']"
+        )
+        .forEach((el) => {
+          ;(el as HTMLElement).style.display = "none"
+        })
+    }
+
+    if (downloadSearchOnly) {
+      scrubDownloadSearchChrome()
+      const mo = new MutationObserver(() => scrubDownloadSearchChrome())
+      mo.observe(root, { childList: true, subtree: true })
+      const onInput = () => scrubDownloadSearchChrome()
+      root.addEventListener("input", onInput, true)
+      root.addEventListener("change", onInput, true)
+      const t1 = window.setTimeout(scrubDownloadSearchChrome, 50)
+      const t2 = window.setTimeout(scrubDownloadSearchChrome, 300)
+      const t3 = window.setTimeout(scrubDownloadSearchChrome, 1000)
+      return () => {
+        mo.disconnect()
+        root.removeEventListener("input", onInput, true)
+        root.removeEventListener("change", onInput, true)
+        window.clearTimeout(t1)
+        window.clearTimeout(t2)
+        window.clearTimeout(t3)
+      }
+    }
+
     layoutPdfChrome(root)
     const mo = new MutationObserver(() => {
       layoutPdfChrome(root)
     })
     mo.observe(root, { childList: true, subtree: true })
-    // Re-run after library finishes async PDF mount
     const t1 = window.setTimeout(() => layoutPdfChrome(root), 50)
     const t2 = window.setTimeout(() => layoutPdfChrome(root), 300)
     const t3 = window.setTimeout(() => layoutPdfChrome(root), 1000)
@@ -365,7 +501,7 @@ export function RawFileViewer({
       window.clearTimeout(t2)
       window.clearTimeout(t3)
     }
-  }, [viewerFile, hideChrome])
+  }, [viewerFile, hideChrome, downloadSearchOnly])
 
   useEffect(() => {
     if (!url || !supported) {
@@ -469,36 +605,64 @@ export function RawFileViewer({
           surfaceBackground: "transparent",
         },
         /*
-         * Web toolbar = Search · Download · Print (clean single pill).
-         * Zoom lives on PDF's own chrome for PDFs; Office/text keep web zoom.
+         * Web toolbar:
+         * - full: Search · Download · Print (+ zoom for non-PDF)
+         * - download-search: ONLY Search + Download (Chat Preview / former Raw tab)
          * hideChrome: pure document for select-preview soft cards.
          */
         toolbar: hideChrome
           ? false
-          : {
-              position: "top" as const,
-              exportHtml: false,
-              theme: false,
-              print: true,
-              download: true,
-              zoom: !isPdfFile,
-              search: true,
-              items: {
-                "zoom-reset": false,
+          : downloadSearchOnly
+            ? {
+                position: "top" as const,
+                search: true,
+                download: true,
+                print: false,
+                zoom: false,
+                exportHtml: false,
+                theme: false,
+                // Typed mutable array (FileViewerToolbarItem[]); plain string[] fails tsc
+                order: ["search" as const, "download" as const],
+                items: {
+                  print: false,
+                  "export-html": false,
+                  "zoom-in": false,
+                  "zoom-out": false,
+                  "zoom-reset": false,
+                },
+                permissions: {
+                  print: false,
+                  "export-html": false,
+                  "zoom-in": false,
+                  "zoom-out": false,
+                  "zoom-reset": false,
+                },
+              }
+            : {
+                position: "top" as const,
+                exportHtml: false,
+                theme: false,
+                print: true,
+                download: true,
+                zoom: !isPdfFile,
+                search: true,
+                items: {
+                  "zoom-reset": false,
+                },
+                permissions: {
+                  "zoom-reset": false,
+                },
               },
-              permissions: {
-                "zoom-reset": false,
-              },
-            },
         pdf: {
           // Product: no page/outline sidebar — full-bleed preview only
           navigation: false,
           defaultNavigationVisible: false,
-          toolbar: !hideChrome,
+          // PDF zoom/rotate float only in full mode
+          toolbar: !hideChrome && !downloadSearchOnly,
           thumbnails: false,
         },
-      }) as const,
-    [isPdfFile, hideChrome]
+      }),
+    [isPdfFile, hideChrome, downloadSearchOnly]
   )
 
   const downloadName =
@@ -619,6 +783,7 @@ export function RawFileViewer({
       className={cn(
         "sinkduce-file-viewer h-full min-h-0 w-full overflow-hidden bg-white",
         hideChrome && "sinkduce-file-viewer--chrome-off",
+        downloadSearchOnly && "sinkduce-file-viewer--tools-ds",
         className
       )}
     >

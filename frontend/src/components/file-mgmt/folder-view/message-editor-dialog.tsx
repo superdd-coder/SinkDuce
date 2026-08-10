@@ -9,7 +9,9 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
+  DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
@@ -58,6 +60,13 @@ interface MessageEditorDialogProps {
   /** Active folder scope — folder msgs with this owner show "Current folder" */
   highlightFolderId?: string | null
   folderMsgsAreCurrentScope?: boolean
+  /**
+   * Green domain kicker (File / Folder / Node / Branch / Root).
+   * Prefer explicit pass from parent when adding; viewing can derive from message.
+   */
+  kicker?: string | null
+  /** Optional guidance under the title (premium dialog stack). */
+  description?: string | null
   /** In-app navigation to timeline (must not open a new window) */
   onNavigateToNode?: (nodeId: string, chainId: string) => void
   /**
@@ -65,6 +74,17 @@ interface MessageEditorDialogProps {
    * Prefer this so save still targets the correct message_id.
    */
   onSelectNodeMessage?: (msg: Message) => void
+}
+
+/** Map owner_type → short green kicker label */
+function kickerFromOwnerType(ownerType: string | undefined | null): string | null {
+  const ot = (ownerType || "").toLowerCase()
+  if (ot === "file") return "File"
+  if (ot === "folder") return "Folder"
+  if (ot === "node") return "Node"
+  if (ot === "collection") return "Root"
+  if (ot === "system_version") return "Version"
+  return null
 }
 
 export function MessageEditorDialog({
@@ -78,6 +98,8 @@ export function MessageEditorDialog({
   collectionId,
   highlightFolderId = null,
   folderMsgsAreCurrentScope = false,
+  kicker = null,
+  description = null,
   onNavigateToNode,
   onSelectNodeMessage,
 }: MessageEditorDialogProps) {
@@ -460,23 +482,38 @@ export function MessageEditorDialog({
     </div>
   ) : null
 
+  const resolvedKicker =
+    (kicker && kicker.trim()) ||
+    kickerFromOwnerType(activeMsg?.owner_type) ||
+    null
+
   const titleRow = (
-    <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
-      <span className="shrink-0">{title}</span>
-      {sourceTag && (
-        <span
-          className={cn(
-            "pm-meta normal-case tracking-normal px-1.5 py-0.5 rounded truncate max-w-[12rem]",
-            sourceTag.isCurrentFolder
-              ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
-              : "text-[var(--pm-muted)] bg-[rgba(18,20,16,0.05)]"
-          )}
-          title={sourceTag.full}
-        >
-          {sourceTag.label}
-        </span>
-      )}
-    </DialogTitle>
+    <>
+      {resolvedKicker ? (
+        <DialogKicker>{resolvedKicker}</DialogKicker>
+      ) : null}
+      <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
+        <span className="shrink-0">{title}</span>
+        {sourceTag && (
+          <span
+            className={cn(
+              "pm-meta normal-case tracking-normal px-1.5 py-0.5 rounded truncate max-w-[12rem]",
+              sourceTag.isCurrentFolder
+                ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+                : "text-[var(--pm-muted)] bg-[rgba(18,20,16,0.05)]"
+            )}
+            title={sourceTag.full}
+          >
+            {sourceTag.label}
+          </span>
+        )}
+      </DialogTitle>
+      {description?.trim() ? (
+        <DialogDescription className="pm-msg-dialog-desc">
+          {description.trim()}
+        </DialogDescription>
+      ) : null}
+    </>
   )
 
   /**

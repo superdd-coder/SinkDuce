@@ -652,6 +652,18 @@ export function MessageStreamSidebar({
       : focus.kind === "chain"
         ? "Add branch folder message"
         : "Add node message"
+  const addKicker =
+    focus.kind === "main"
+      ? "Main chain"
+      : focus.kind === "chain"
+        ? "Branch"
+        : "Node"
+  const addDescription =
+    focus.kind === "main"
+      ? "New message on the main chain (collection scope)."
+      : focus.kind === "chain"
+        ? "New message on this branch (folder scope)."
+        : "New message on this timeline node."
 
   const detailOpen = !!detailMsg
 
@@ -955,7 +967,9 @@ export function MessageStreamSidebar({
         onOpenChange={(next) => {
           setAddDialogOpen(next)
         }}
-        title={addHint}
+        title="Add message"
+        kicker={addKicker}
+        description={addDescription}
         initialContent=""
         onSave={handleAdd}
         readonly={false}

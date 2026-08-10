@@ -3,8 +3,8 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { BookOpen, AlertTriangle } from "lucide-react"
+import { BookOpen, AlertTriangle, Ban } from "lucide-react"
+import { cn } from "@/lib/utils"
 import {
   getHotWordsLibraries,
   type HotWordsLibrarySummary,
@@ -44,7 +44,6 @@ export function HotWordsSelector({
     if (open) fetchLibraries()
   }, [open, fetchLibraries])
 
-  // Reset pending state when meeting changes
   useEffect(() => {
     setPendingLibraryId(null)
   }, [meetingId])
@@ -52,24 +51,26 @@ export function HotWordsSelector({
   const currentLib = libraries.find((l) => l.id === currentLibraryId)
   const pendingLib = libraries.find((l) => l.id === pendingLibraryId)
   const displayLib = pendingLib || currentLib
-  const isPending = pendingLibraryId !== null && pendingLibraryId !== currentLibraryId
+  const isPending =
+    pendingLibraryId !== null && pendingLibraryId !== currentLibraryId
+  const activeId =
+    pendingLibraryId !== null ? pendingLibraryId : (currentLibraryId ?? null)
+  const noneSelected = activeId == null || activeId === ""
 
   const handleSelect = (libraryId: string | null) => {
     if (!providerSupportsHotWords && libraryId !== null) {
       toast.warning(
         "Current transcription model does not support hot words. Hot words will NOT be applied. Consider switching to None or changing the transcription model.",
-        { duration: 6000 }
+        { duration: 6000 },
       )
     }
 
     if (hasTranscript && libraryId !== currentLibraryId) {
-      // Need re-transcription
       setPendingChangeId(libraryId)
       setRetranscribeConfirmOpen(true)
       return
     }
 
-    // No transcript yet, just select
     setPendingLibraryId(libraryId)
     onSelectLibrary(libraryId)
     setOpen(false)
@@ -96,9 +97,14 @@ export function HotWordsSelector({
   return (
     <>
       <Button
+        type="button"
         variant="outline"
         size="sm"
-        className="flex items-center gap-1.5"
+        className={cn(
+          "flex items-center gap-1.5",
+          displayLib &&
+            "border-[color-mix(in_srgb,var(--pm-green)_28%,transparent)] text-[var(--pm-green)]",
+        )}
         onClick={() => setOpen(true)}
       >
         <BookOpen className="h-3.5 w-3.5" />
@@ -109,82 +115,98 @@ export function HotWordsSelector({
           <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
         )}
         {isPending && (
-          <span className="text-[10px] text-amber-700 dark:text-amber-300 px-1 rounded">
+          <span className="text-[10px] text-amber-700 px-1.5 py-0.5 rounded-full bg-amber-50">
             pending
           </span>
         )}
       </Button>
 
-      {/* Library selector dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="pm-dialog sm:max-w-[360px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <BookOpen className="h-4 w-4" />
-              Select Hot Words Library
+              <BookOpen className="h-4 w-4 text-[var(--pm-green)]" />
+              Hot Words Library
             </DialogTitle>
           </DialogHeader>
+          <p className="pm-meta -mt-1">
+            Boost domain terms during transcription. Pick one library or None.
+          </p>
 
           {!providerSupportsHotWords && (
-            <div className="flex items-start gap-2 px-3 py-2 text-sm border border-amber-200 dark:border-amber-800 rounded-lg text-amber-700 dark:text-amber-300">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>Current transcription model does not support hot words. Hot words will NOT be applied.</span>
+            <div className="pm-hw-warn" role="status">
+              <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+              <span>
+                Active model does not support hot words — selection will not be applied.
+              </span>
             </div>
           )}
 
-          <ScrollArea className="max-h-64">
-            <div className="space-y-1">
-              <div
-                className={`flex items-center gap-2 px-3 py-2 rounded cursor-pointer text-sm ${
-                  !currentLibraryId && !pendingLibraryId
-                    ? "text-primary font-light"
-                    : "hover:bg-muted"
-                }`}
-                onClick={() => handleSelect(null)}
-              >
-                <span>None</span>
-              </div>
-              {libraries.map((lib) => {
-                const isSelected = lib.id === currentLibraryId || lib.id === pendingLibraryId
-                return (
-                  <div
-                    key={lib.id}
-                    className={`flex items-center justify-between px-3 py-2 rounded cursor-pointer text-sm ${
-                      isSelected
-                        ? "text-primary font-light"
-                        : "hover:bg-muted"
-                    }`}
-                    onClick={() => handleSelect(lib.id)}
-                  >
-                    <span className="truncate">{lib.name}</span>
-                    <span className="text-xs text-muted-foreground shrink-0 ml-2">
-                      {lib.word_count} words
+          <div className="pm-hw-list" role="listbox" aria-label="Hot word libraries">
+            <button
+              type="button"
+              role="option"
+              aria-selected={noneSelected}
+              className={cn("pm-hw-option", noneSelected ? "is-on" : "is-off")}
+              onClick={() => handleSelect(null)}
+            >
+              <span className="pm-hw-option-icon" aria-hidden>
+                <Ban className="size-3.5" />
+              </span>
+              <span className="pm-hw-option-body">
+                <span className="pm-hw-option-name">None</span>
+                <span className="pm-hw-option-meta">No vocabulary boost</span>
+              </span>
+            </button>
+
+            {libraries.map((lib) => {
+              const isSelected = lib.id === activeId
+              return (
+                <button
+                  key={lib.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className={cn("pm-hw-option", isSelected ? "is-on" : "is-off")}
+                  onClick={() => handleSelect(lib.id)}
+                >
+                  <span className="pm-hw-option-icon" aria-hidden>
+                    <BookOpen className="size-3.5" />
+                  </span>
+                  <span className="pm-hw-option-body">
+                    <span className="pm-hw-option-name">{lib.name}</span>
+                    <span className="pm-hw-option-meta">
+                      {lib.word_count} word{lib.word_count === 1 ? "" : "s"}
                     </span>
-                  </div>
-                )
-              })}
-              {libraries.length === 0 && (
-                <p className="text-xs text-muted-foreground p-3 text-center">
-                  No hot word libraries. Create one in Settings → Hot Words.
-                </p>
-              )}
-            </div>
-          </ScrollArea>
+                  </span>
+                </button>
+              )
+            })}
+
+            {libraries.length === 0 && (
+              <p className="pm-hw-empty">
+                No libraries yet. Create one in Settings → Hot Words.
+              </p>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 
-      {/* Retranscribe confirmation */}
       <Dialog open={retranscribeConfirmOpen} onOpenChange={setRetranscribeConfirmOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="pm-dialog sm:max-w-[320px]">
           <DialogHeader>
-            <DialogTitle>Re-transcribe Required</DialogTitle>
+            <DialogTitle>Re-transcribe required</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This meeting has already been transcribed. Changing hot words requires re-transcription. Re-transcribe now?
+          <p className="pm-meta">
+            This meeting already has a transcript. Changing hot words needs a re-transcription.
           </p>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={handleCancelRetranscribe}>Cancel</Button>
-            <Button onClick={handleConfirmRetranscribe}>Re-transcribe</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={handleCancelRetranscribe}>
+              Cancel
+            </Button>
+            <Button type="button" variant="default" size="sm" onClick={handleConfirmRetranscribe}>
+              Re-transcribe
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

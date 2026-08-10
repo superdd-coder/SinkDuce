@@ -9,6 +9,32 @@ import type { LanguageHintOption } from "@/api/client"
 
 export const DEFAULT_LANGUAGE_HINTS = ["auto"]
 
+/**
+ * Toggle language hint selection with auto exclusivity:
+ * - pick "auto" → only ["auto"]
+ * - pick any language → drop "auto", multi-select languages
+ * - deselect last language → fall back to ["auto"]
+ */
+export function toggleLanguageHint(selected: string[], code: string): string[] {
+  const isAuto = code === "auto"
+  const isOn = selected.includes(code)
+
+  if (isAuto) {
+    // Selecting auto clears others; deselecting auto with nothing else → stay auto
+    return isOn ? ["auto"] : ["auto"]
+  }
+
+  if (isOn) {
+    const next = selected.filter((c) => c !== code && c !== "auto")
+    return next.length === 0 ? ["auto"] : next
+  }
+
+  // Add language, strip auto
+  const withoutAuto = selected.filter((c) => c !== "auto")
+  if (withoutAuto.includes(code)) return withoutAuto
+  return [...withoutAuto, code]
+}
+
 interface Props {
   selected: string[]
   onChange: (hints: string[]) => void
@@ -19,71 +45,77 @@ export function LanguageHintsSelector({ selected, onChange, options }: Props) {
   const [open, setOpen] = useState(false)
 
   const toggle = (code: string) => {
-    if (selected.includes(code)) {
-      onChange(selected.filter((c) => c !== code))
-    } else {
-      onChange([...selected, code])
-    }
+    onChange(toggleLanguageHint(selected, code))
   }
 
-  const display = selected.length === 0
-    ? "Languages"
+  const isAutoOnly =
+    selected.length === 0 ||
+    (selected.length === 1 && selected[0] === "auto")
+
+  const display = isAutoOnly
+    ? "Auto"
     : selected.length <= 2
       ? selected.map((c) => options.find((o) => o.code === c)?.label ?? c).join(", ")
       : `${selected.length} languages`
 
+  // Ensure auto appears in the list even if options omit it
+  const pills: LanguageHintOption[] = (() => {
+    const hasAuto = options.some((o) => o.code === "auto")
+    return hasAuto
+      ? options
+      : [{ code: "auto", label: "Auto" }, ...options]
+  })()
+
   return (
     <>
       <Button
+        type="button"
         variant="outline"
         size="sm"
-        className="flex items-center gap-1.5"
+        className={cn(
+          "flex items-center gap-1.5",
+          !isAutoOnly && "border-[color-mix(in_srgb,var(--pm-green)_28%,transparent)] text-[var(--pm-green)]",
+        )}
         onClick={() => setOpen(true)}
       >
         <Languages className="h-3.5 w-3.5" />
-        <span className="max-w-[120px] truncate">{display}</span>
+        <span className="max-w-[140px] truncate">{display}</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-xs">
+        <DialogContent className="pm-dialog sm:max-w-[340px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Languages className="h-4 w-4" />
+              <Languages className="h-4 w-4 text-[var(--pm-green)]" />
               Language Hints
             </DialogTitle>
           </DialogHeader>
-          <p className="text-xs text-muted-foreground -mt-1">
-            Help the ASR model recognize mixed-language audio. Select the languages that may appear in the recording.
+          <p className="pm-meta -mt-1">
+            Languages that may appear in the audio. Choosing a language clears Auto;
+            Auto clears every language.
           </p>
-          <div className="space-y-0.5">
-            {options.map(({ code, label }) => {
-              const isSelected = selected.includes(code)
+          <div className="pm-lang-pills" role="group" aria-label="Language hints">
+            {pills.map(({ code, label }) => {
+              const isSelected =
+                code === "auto"
+                  ? isAutoOnly
+                  : selected.includes(code)
               return (
-                <div
+                <button
                   key={code}
+                  type="button"
                   className={cn(
-                    "flex items-center gap-2 px-3 py-2 rounded cursor-pointer text-sm select-none",
-                    isSelected ? "text-primary font-light" : "hover:bg-muted"
+                    "pm-lang-pill",
+                    isSelected ? "is-on" : "is-off",
                   )}
+                  aria-pressed={isSelected}
                   onClick={() => toggle(code)}
                 >
-                  <div
-                    className={cn(
-                      "h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors",
-                      isSelected
-                        ? "bg-primary border-primary"
-                        : "border-muted-foreground/40"
-                    )}
-                  >
-                    {isSelected && (
-                      <svg className="h-3 w-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                  </div>
-                  <span className="flex-1">{label}</span>
-                  <span className="text-xs text-muted-foreground t-mono-family">{code}</span>
-                </div>
+                  <span className="pm-lang-pill-label">{label}</span>
+                  {code !== "auto" && (
+                    <span className="pm-lang-pill-code t-mono-family">{code}</span>
+                  )}
+                </button>
               )
             })}
           </div>

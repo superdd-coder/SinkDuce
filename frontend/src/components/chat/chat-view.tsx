@@ -9,6 +9,7 @@ import { PanelRightClose, ArrowDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { getLLMProviders } from "@/api/client"
 import type { Source } from "@/stores/app-store"
+import { cn } from "@/lib/utils"
 
 export function ChatView() {
   const {
@@ -47,7 +48,20 @@ export function ChatView() {
   /** Ignore scroll events caused by our own programmatic scroll. */
   const ignoreScrollEvent = useRef(false)
   const [selectedSource, setSelectedSource] = useState<Source | null>(null)
+  /** Keep last source mounted during rail close so width/opacity exit can play. */
+  const [panelSource, setPanelSource] = useState<Source | null>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  /** Edge fades when content scrolls out under title / stage bottom. */
+  const [edgeFade, setEdgeFade] = useState({ top: false, bottom: false })
+
+  useEffect(() => {
+    if (selectedSource) {
+      setPanelSource(selectedSource)
+      return
+    }
+    const t = window.setTimeout(() => setPanelSource(null), 420)
+    return () => clearTimeout(t)
+  }, [selectedSource])
 
   useEffect(() => {
     const loadProviders = async () => {
@@ -71,7 +85,6 @@ export function ChatView() {
   }, [])
 
   // Restore history whenever the active session is not yet hydrated
-  // (sessionId is persisted; messages are not — blank UI used to reuse an old session).
   useEffect(() => {
     if (!sessionId) return
     if (sessionHydratedId === sessionId) return
@@ -84,7 +97,6 @@ export function ChatView() {
     if (!sessionId || sessionHydratedId !== sessionId || sessionLoading) return
     stickToBottom.current = true
     setShowScrollBtn(false)
-    // Wait for message DOM after hydrate
     const t = window.setTimeout(() => {
       const el = scrollRef.current
       if (!el) return
@@ -101,7 +113,6 @@ export function ChatView() {
   const pinToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = scrollRef.current
     if (!el) return
-    // Coalesce rapid stream updates into one scroll per frame (prevents main-thread freeze)
     if (behavior !== "smooth") {
       if (pinRaf.current) return
       pinRaf.current = requestAnimationFrame(() => {
@@ -132,7 +143,6 @@ export function ChatView() {
     setShowScrollBtn(true)
   }, [])
 
-  // User wheel / touch → stop auto-follow for this stream
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -146,12 +156,28 @@ export function ChatView() {
     }
   }, [unlockStick])
 
+  const updateEdgeFade = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) {
+      setEdgeFade({ top: false, bottom: false })
+      return
+    }
+    const threshold = 6
+    const top = el.scrollTop > threshold
+    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight > threshold
+    setEdgeFade((prev) =>
+      prev.top === top && prev.bottom === bottom ? prev : { top, bottom }
+    )
+  }, [])
+
   const onScroll = useCallback(() => {
-    if (ignoreScrollEvent.current) return
+    if (ignoreScrollEvent.current) {
+      updateEdgeFade()
+      return
+    }
     const el = scrollRef.current
     if (!el) return
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    // Away from bottom → unlock; back at bottom → re-stick (user intent)
     if (dist > 80) {
       stickToBottom.current = false
       setShowScrollBtn(true)
@@ -159,9 +185,9 @@ export function ChatView() {
       stickToBottom.current = true
       setShowScrollBtn(false)
     }
-  }, [])
+    updateEdgeFade()
+  }, [updateEdgeFade])
 
-  /** Re-enable stick (jump-to-bottom button or new user message). */
   const scrollToBottom = useCallback(() => {
     stickToBottom.current = true
     setShowScrollBtn(false)
@@ -172,7 +198,6 @@ export function ChatView() {
     pinToBottom("smooth")
   }, [pinToBottom])
 
-  // New send / stream starts → re-stick and pin bottom
   const wasStreaming = useRef(false)
   useEffect(() => {
     if (isStreaming && !wasStreaming.current) {
@@ -183,8 +208,6 @@ export function ChatView() {
     wasStreaming.current = isStreaming
   }, [isStreaming, pinToBottom])
 
-  // While stuck, follow content growth — throttle during stream so layout
-  // thrash does not make the rest of the app feel unclickable.
   const lastPinAt = useRef(0)
   useEffect(() => {
     if (!stickToBottom.current) return
@@ -196,6 +219,17 @@ export function ChatView() {
     pinToBottom("auto")
   }, [messages, pinToBottom, isStreaming])
 
+  // Keep edge fades in sync when content height changes (not only on user scroll)
+  useEffect(() => {
+    updateEdgeFade()
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const ro = new ResizeObserver(() => updateEdgeFade())
+    ro.observe(el)
+    if (el.firstElementChild) ro.observe(el.firstElementChild)
+    return () => ro.disconnect()
+  }, [messages, sessionId, sessionLoading, sessionHydratedId, updateEdgeFade])
+
   const handleSelectSource = (source: Source) => {
     setSelectedSource(source)
   }
@@ -205,104 +239,119 @@ export function ChatView() {
   }
 
   const selectedSourceId = (selectedSource?.metadata?.id as string) || null
-
   const currentSession = sessions.find(s => s.id === sessionId)
   const sessionTitle = currentSession?.title || "New Chat"
+  const sourceOpen = !!selectedSource
 
   return (
-    <div className={`flex flex-col h-full overflow-hidden relative ${isStreaming ? "sk-reasoning-flow" : ""}`}>
-      <div className="flex-1 flex min-h-0">
-        {/* Session sidebar — left */}
+    <div className="pm-chat">
+      <div className="pm-chat-body">
         <SessionSidebar />
 
-        {/* Main chat area */}
-        <div className={`flex flex-col flex-1 min-w-0 relative ${selectedSource ? "hidden sm:flex" : ""}`}>
-          {/* Session title header — h-12 (48px) matches Collections/Sessions headers */}
-          <div className="shrink-0 px-12 h-12 flex items-center border-b border-border/30">
-            <h1
-              className="truncate t-body-family"
-              style={{
-                fontSize: "clamp(20px, 2vw, 24px)",
-                fontWeight: 300,
-                letterSpacing: "-0.01em",
-                lineHeight: 1.2,
-                color: "var(--ze-ink)",
-              }}
-            >
-              {sessionTitle}
-            </h1>
-          </div>
+        {/* Main stage — soft float card with clipped rounded surface */}
+        <div
+          className={cn(
+            "pm-chat-stage",
+            sourceOpen && "hidden sm:flex",
+          )}
+        >
+          <div className="pm-chat-stage-surface">
+            <div className="pm-chat-stage-head">
+              <h1 className="pm-chat-stage-title" title={sessionTitle}>
+                {sessionTitle}
+              </h1>
+            </div>
 
-          <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto pb-44 relative">
-            {sessionLoading || (sessionId && sessionHydratedId !== sessionId) ? (
+            <div className="pm-chat-thread-shell">
               <div
-                className="flex flex-col items-center justify-center h-full gap-2 py-20"
-                style={{ color: "var(--ze-muted)" }}
+                ref={scrollRef}
+                onScroll={onScroll}
+                className="pm-chat-thread"
               >
-                <p className="text-sm t-body-family" style={{ color: "var(--ze-ink)" }}>
-                  Loading conversation…
-                </p>
-                <p className="text-xs">Restoring messages for the selected session</p>
+                {sessionLoading || (sessionId && sessionHydratedId !== sessionId) ? (
+                  <div className="pm-chat-empty">
+                    <p className="pm-chat-empty-title">Loading conversation…</p>
+                    <p className="pm-chat-empty-sub">
+                      Restoring messages for the selected session
+                    </p>
+                  </div>
+                ) : messages.length === 0 ? (
+                  <div className="pm-chat-empty">
+                    <p className="pm-chat-empty-title">
+                      Ask a question about your documents
+                    </p>
+                    <p className="pm-chat-empty-sub">
+                      Upload documents first, then start chatting
+                    </p>
+                  </div>
+                ) : (
+                  <div className="pm-chat-thread-inner">
+                    {messages.map((msg) => (
+                      <MessageBubble
+                        key={msg.id}
+                        message={msg}
+                        onSelectSource={handleSelectSource}
+                        selectedSourceId={selectedSourceId}
+                      />
+                    ))}
+                    <div ref={bottomRef} />
+                  </div>
+                )}
               </div>
-            ) : messages.length === 0 ? (
-              <div
-                className="flex flex-col items-center justify-center h-full gap-2 py-20"
-                style={{ color: "var(--ze-muted)" }}
-              >
-                <p
-                  className="text-sm font-medium t-body-family"
-                  style={{ color: "var(--ze-ink)" }}
-                >
-                  Ask a question about your documents
-                </p>
-                <p className="text-xs">Upload documents first, then start chatting</p>
-              </div>
-            ) : (
-              <div className="max-w-4xl mx-auto py-4 px-12">
-                {messages.map((msg) => (
-                  <MessageBubble
-                    key={msg.id}
-                    message={msg}
-                    onSelectSource={handleSelectSource}
-                    selectedSourceId={selectedSourceId}
-                  />
-                ))}
-                <div ref={bottomRef} />
-              </div>
-            )}
-          </div>
 
-          {/* Jump-to-bottom button */}
-          {showScrollBtn && (
-            <div className="absolute bottom-36 left-1/2 -translate-x-1/2 z-10">
+              {/* Top fade sits under session title when content scrolls up and out */}
+              <div
+                aria-hidden
+                className={cn(
+                  "pm-chat-edge-fade pm-chat-edge-fade--top",
+                  edgeFade.top && "is-visible",
+                )}
+              />
+            </div>
+
+            {/* Bottom fade at stage bottom edge when content continues below */}
+            <div
+              aria-hidden
+              className={cn(
+                "pm-chat-edge-fade pm-chat-edge-fade--bottom",
+                edgeFade.bottom && "is-visible",
+              )}
+            />
+
+            {showScrollBtn && (
               <button
                 type="button"
                 onClick={scrollToBottom}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background/80 backdrop-blur border border-border shadow-sm text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                className="pm-chat-scroll-btn"
               >
-                <ArrowDown className="h-3 w-3" />
+                <ArrowDown className="size-3" />
                 Scroll to bottom
               </button>
-            </div>
-          )}
+            )}
 
-          {/* Floating chat input */}
-          <div className={`absolute bottom-4 left-0 right-0 z-10 pointer-events-none transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]`}>
-            <div className="pointer-events-auto">
+            <div className="pm-chat-composer-dock">
               <ChatInput />
             </div>
           </div>
         </div>
 
-        {/* Right-side source detail panel */}
-        <div className={`shrink-0 overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${selectedSource ? "w-full sm:w-[42vw]" : "w-0"}`}>
-          <div className={`w-full sm:w-[42vw] h-full transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${selectedSource ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0"}`}>
-            <div className="sm:hidden absolute top-0 right-0 z-10 p-2">
-              <Button variant="ghost" size="sm" onClick={handleClosePanel}>
-                <PanelRightClose className="h-4 w-4 mr-1" /> Back to chat
-              </Button>
-            </div>
-            <SourceDetailPanel source={selectedSource} onClose={handleClosePanel} />
+        {/* Source detail — soft float rail (host open: overflow visible + gutter) */}
+        <div
+          className={cn(
+            "pm-chat-source-panel-host",
+            sourceOpen && "is-open",
+          )}
+        >
+          <div className="relative h-full min-h-0 overflow-visible">
+            {sourceOpen && (
+              <div className="sm:hidden absolute top-2 right-2 z-20">
+                <Button variant="ghost" size="sm" onClick={handleClosePanel}>
+                  <PanelRightClose className="size-4" />
+                  Back
+                </Button>
+              </div>
+            )}
+            <SourceDetailPanel source={panelSource} onClose={handleClosePanel} />
           </div>
         </div>
       </div>

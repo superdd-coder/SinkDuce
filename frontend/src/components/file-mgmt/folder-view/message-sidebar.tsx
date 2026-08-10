@@ -459,7 +459,33 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
         key="folder-message-editor"
         open={dialogOpen}
         onOpenChange={handleCloseDialog}
-        title={editingMsg ? "Message" : "Add Message"}
+        title={editingMsg ? "Message" : "Add message"}
+        kicker={
+          editingMsg
+            ? undefined
+            : focusFileId
+              ? "File"
+              : focusFolderId
+                ? "Folder"
+                : folderScopeIsRoot
+                  ? "Root"
+                  : "Folder"
+        }
+        description={
+          editingMsg
+            ? undefined
+            : focusFileId
+              ? focusFile?.filename
+                ? `New message on file “${focusFile.filename}”.`
+                : "New message on the selected file."
+              : focusFolderId
+                ? focusFolder?.name
+                  ? `New message on folder “${focusFolder.name}”.`
+                  : "New message on the selected folder."
+                : folderScopeIsRoot
+                  ? "New message at collection root."
+                  : "New message on this folder."
+        }
         initialContent={editingMsg?.body || ""}
         onSave={!editingMsg ? handleAdd : handleEdit}
         readonly={dialogReadonly || !!editingMsg}

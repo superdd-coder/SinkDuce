@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogKicker, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
@@ -74,7 +74,11 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
-          <DialogTitle>Create Collection</DialogTitle>
+          <DialogKicker>Library</DialogKicker>
+          <DialogTitle>Create collection</DialogTitle>
+          <DialogDescription>
+            Name a collection and optionally tune embedding and chunk settings.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">

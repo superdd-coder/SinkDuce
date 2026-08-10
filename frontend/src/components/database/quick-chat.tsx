@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react"
 import { createPortal } from "react-dom"
-import { Send, Loader2, AlertTriangle, Globe, MessageCircle } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Send, Loader2, AlertTriangle, Globe, MessageCircle, BrushCleaning } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { createSession, getSession, deleteSession } from "@/api/client"
@@ -741,15 +740,15 @@ export function QuickChat({
               {msgCount}/{MAX_MESSAGES}
             </span>
           )}
-          <Button
+          <button
             type="button"
-            variant="ghost"
-            size="xs"
+            className="pm-qc-clear-btn"
             onClick={clearContext}
             title="Clear conversation"
+            aria-label="Clear conversation"
           >
-            Clear
-          </Button>
+            <BrushCleaning className="size-3.5" strokeWidth={1.75} />
+          </button>
         </div>
       </header>
 

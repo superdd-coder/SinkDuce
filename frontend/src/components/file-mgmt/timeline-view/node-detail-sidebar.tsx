@@ -1160,8 +1160,18 @@ export function NodeDetailSidebar({
           msgDialogReadonly
             ? "Message"
             : editingMsg
-              ? "Edit Message"
-              : "Add Message"
+              ? "Edit message"
+              : "Add message"
+        }
+        kicker={
+          msgDialogReadonly || editingMsg
+            ? undefined
+            : "Node"
+        }
+        description={
+          msgDialogReadonly || editingMsg
+            ? undefined
+            : "New message on this timeline node."
         }
         initialContent={editingMsg?.body || ""}
         onSave={

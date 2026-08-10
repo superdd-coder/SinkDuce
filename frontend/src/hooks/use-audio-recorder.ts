@@ -1,4 +1,7 @@
-import { useRef, useState, useCallback } from "react"
+import { useRef, useState, useCallback, useEffect } from "react"
+
+/** Number of bars exposed for the live capture waveform UI. */
+export const AUDIO_LEVEL_BAR_COUNT = 24
 
 export interface AudioRecorderState {
   isRecording: boolean
@@ -7,6 +10,36 @@ export interface AudioRecorderState {
   audioBlob: Blob | null
   audioUrl: string | null
   error: string | null
+  /** 0–1 amplitudes for live waveform (real AnalyserNode data). */
+  levels: number[]
+}
+
+function emptyLevels(): number[] {
+  return Array.from({ length: AUDIO_LEVEL_BAR_COUNT }, () => 0)
+}
+
+/**
+ * Map AnalyserNode frequency bins → bar heights 0–1.
+ * Pure helper so tests can lock the scaling without Web Audio.
+ */
+export function binsToLevels(
+  bins: ArrayLike<number>,
+  barCount: number = AUDIO_LEVEL_BAR_COUNT,
+): number[] {
+  const n = bins.length
+  if (n === 0 || barCount <= 0) return Array.from({ length: barCount }, () => 0)
+  const out: number[] = []
+  for (let i = 0; i < barCount; i++) {
+    const start = Math.floor((i * n) / barCount)
+    const end = Math.max(start + 1, Math.floor(((i + 1) * n) / barCount))
+    let sum = 0
+    for (let j = start; j < end; j++) sum += bins[j] ?? 0
+    const avg = sum / (end - start)
+    // 0–255 → 0–1 with soft floor so silence stays flat
+    const v = Math.max(0, (avg - 8) / 180)
+    out.push(Math.min(1, v))
+  }
+  return out
 }
 
 const WORKLET_CODE = `
@@ -48,6 +81,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
     audioBlob: null,
     audioUrl: null,
     error: null,
+    levels: emptyLevels(),
   })
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -55,11 +89,59 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const levelRafRef = useRef<number | null>(null)
+  /** True while MediaRecorder is paused — freezes levels AND stops PCM → live captions. */
+  const capturePausedRef = useRef(false)
   const durationRef = useRef(0)
   const onAudioChunkRef = useRef(onAudioChunk)
   onAudioChunkRef.current = onAudioChunk
 
-  const startRecording = useCallback(async () => {
+  const stopLevelLoop = useCallback(() => {
+    if (levelRafRef.current != null) {
+      cancelAnimationFrame(levelRafRef.current)
+      levelRafRef.current = null
+    }
+    analyserRef.current = null
+    setState((prev) => {
+      const cur = prev.levels ?? emptyLevels()
+      return cur.every((v) => v === 0) ? { ...prev, levels: cur } : { ...prev, levels: emptyLevels() }
+    })
+  }, [])
+
+  const startLevelLoop = useCallback((analyser: AnalyserNode) => {
+    analyserRef.current = analyser
+    capturePausedRef.current = false
+    const data = new Uint8Array(analyser.frequencyBinCount)
+    let lastPublish = 0
+    // ~12 fps — enough for waveform UI without re-rendering MeetingView every frame
+    const MIN_MS = 80
+
+    const tick = (now: number) => {
+      if (!analyserRef.current) return
+      if (now - lastPublish >= MIN_MS) {
+        lastPublish = now
+        if (capturePausedRef.current) {
+          setState((prev) => {
+            const cur = prev.levels ?? emptyLevels()
+            return cur.every((v) => v === 0)
+              ? { ...prev, levels: cur }
+              : { ...prev, levels: emptyLevels() }
+          })
+        } else {
+          analyserRef.current.getByteFrequencyData(data)
+          const next = binsToLevels(data, AUDIO_LEVEL_BAR_COUNT)
+          setState((prev) => ({ ...prev, levels: next }))
+        }
+      }
+      levelRafRef.current = requestAnimationFrame(tick)
+    }
+    if (levelRafRef.current != null) cancelAnimationFrame(levelRafRef.current)
+    levelRafRef.current = requestAnimationFrame(tick)
+  }, [])
+
+  /** @returns true if recording started; false if permission denied / cancelled */
+  const startRecording = useCallback(async (): Promise<boolean> => {
     try {
       // Step 1: mic — silent if already permitted, one-time prompt otherwise.
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -118,6 +200,8 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
 
           const node = new AudioWorkletNode(workletCtx, "pcm-capture")
           node.port.onmessage = (e) => {
+            // Pause freezes MediaRecorder only — also gate live-caption PCM
+            if (capturePausedRef.current) return
             if (onAudioChunkRef.current && e.data instanceof ArrayBuffer) {
               console.log("[AudioRecorder] Sending PCM chunk:", e.data.byteLength, "bytes")
               onAudioChunkRef.current(e.data)
@@ -125,6 +209,14 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
           }
           source.connect(node)
           node.connect(workletCtx.destination)
+
+          // Real waveform: AnalyserNode on the same mixed stream
+          const levelSource = workletCtx.createMediaStreamSource(finalStream)
+          const analyser = workletCtx.createAnalyser()
+          analyser.fftSize = 128
+          analyser.smoothingTimeConstant = 0.72
+          levelSource.connect(analyser)
+          startLevelLoop(analyser)
         } catch {
           // AudioWorklet not supported — fall back to ScriptProcessorNode
           try {
@@ -136,6 +228,10 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
             const chunkSamples = 8000 // 500ms at 16kHz
 
             processor.onaudioprocess = (e) => {
+              if (capturePausedRef.current) {
+                buffer = []
+                return
+              }
               const input = e.inputBuffer.getChannelData(0)
               for (let i = 0; i < input.length; i++) {
                 buffer.push(input[i])
@@ -154,8 +250,15 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
             }
             source.connect(processor)
             processor.connect(scriptCtx.destination)
+
+            const levelSource = scriptCtx.createMediaStreamSource(finalStream)
+            const analyser = scriptCtx.createAnalyser()
+            analyser.fftSize = 128
+            analyser.smoothingTimeConstant = 0.72
+            levelSource.connect(analyser)
+            startLevelLoop(analyser)
           } catch {
-            // Neither supported — no real-time transcription
+            // Neither supported — no real-time transcription / levels
           }
         }
       }
@@ -190,6 +293,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
         setState((prev) => ({ ...prev, duration: durationRef.current }))
       }, 1000)
 
+      capturePausedRef.current = false
       setState((prev) => ({
         ...prev,
         isRecording: true,
@@ -198,33 +302,42 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
         audioBlob: null,
         audioUrl: null,
         error: null,
+        levels: emptyLevels(),
       }))
+      return true
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      setState((prev) => ({ ...prev, error: msg }))
+      stopLevelLoop()
+      setState((prev) => ({ ...prev, error: msg, levels: emptyLevels() }))
+      return false
     }
-  }, [])
+  }, [startLevelLoop, stopLevelLoop])
 
   const stopRecording = useCallback(() => {
+    capturePausedRef.current = false
+    stopLevelLoop()
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop()
     }
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     if (audioCtxRef.current) { audioCtxRef.current.close(); audioCtxRef.current = null }
-  }, [])
+  }, [stopLevelLoop])
 
   const pauseRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.pause()
       if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-      setState((prev) => ({ ...prev, isPaused: true }))
+      // Stop PCM → realtime WS so captions freeze; keep WS open for resume
+      capturePausedRef.current = true
+      setState((prev) => ({ ...prev, isPaused: true, levels: emptyLevels() }))
     }
   }, [])
 
   const resumeRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === "paused") {
       mediaRecorderRef.current.resume()
+      capturePausedRef.current = false
       timerRef.current = setInterval(() => {
         durationRef.current += 1
         setState((prev) => ({ ...prev, duration: durationRef.current }))
@@ -234,6 +347,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
   }, [])
 
   const reset = useCallback(() => {
+    stopLevelLoop()
     if (state.audioUrl) URL.revokeObjectURL(state.audioUrl)
     setState({
       isRecording: false,
@@ -242,8 +356,14 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
       audioBlob: null,
       audioUrl: null,
       error: null,
+      levels: emptyLevels(),
     })
-  }, [state.audioUrl])
+  }, [state.audioUrl, stopLevelLoop])
+
+  // Cleanup rAF on unmount
+  useEffect(() => () => {
+    if (levelRafRef.current != null) cancelAnimationFrame(levelRafRef.current)
+  }, [])
 
   return {
     ...state,

@@ -1,11 +1,19 @@
-import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from "react"
-import { createPortal } from "react-dom"
+import { useRef, useEffect, useState, forwardRef, useImperativeHandle, type RefObject } from "react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { SoftMenu } from "@/components/ui/menu"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages, Trash2 } from "lucide-react"
+import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages, Trash2, Download, Ban } from "lucide-react"
 import type { MeetingStatus, HotWordsLibrarySummary, LanguageHintOption } from "@/api/client"
+import { toggleLanguageHint } from "./language-hints-selector"
 
 interface MediaBarProps {
   meetingId: string
@@ -17,6 +25,8 @@ interface MediaBarProps {
   duration: number
   isRecording: boolean
   isPaused: boolean
+  /** Real AnalyserNode levels 0–1; never Math.random (re-renders would thrash). */
+  levels?: number[] | null
   transcriptionProgress?: number
   transcriptionError?: string | null
   onUploadAudio: (file: File) => void
@@ -44,7 +54,8 @@ interface MediaBarProps {
 }
 
 export interface MediaBarHandle {
-  seekTo: (time: number) => void
+  /** Jump to start and play; optional end auto-pauses (one sentence). */
+  seekTo: (time: number, end?: number) => void
 }
 
 export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function MediaBar({
@@ -57,6 +68,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   duration,
   isRecording,
   isPaused,
+  levels,
   transcriptionError,
   onUploadAudio,
   onStartRecord,
@@ -83,143 +95,267 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const progressTrackRef = useRef<HTMLDivElement>(null)
+  const segmentEndRef = useRef<number | null>(null)
 
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [audioDuration, setAudioDuration] = useState(0)
+  const [scrubbing, setScrubbing] = useState(false)
+  const [scrubRatio, setScrubRatio] = useState(0)
+  const scrubbingRef = useRef(false)
 
-  // Hot Words dropdown
+  // Hot Words / Language menus (SoftMenu + portal)
   const [hwOpen, setHwOpen] = useState(false)
-  const hwBtnRef = useRef<HTMLButtonElement>(null)
-  const hwDropdownRef = useRef<HTMLDivElement>(null)
-  const hwMenuRef = useRef<HTMLDivElement>(null)
-
-  // Language dropdown
+  const hwBtnRef = useRef<HTMLElement>(null)
   const [langOpen, setLangOpen] = useState(false)
-  const langBtnRef = useRef<HTMLButtonElement>(null)
-  const langDropdownRef = useRef<HTMLDivElement>(null)
-  const langMenuRef = useRef<HTMLDivElement>(null)
+  const langBtnRef = useRef<HTMLElement>(null)
 
-  // Click outside to close dropdowns (portal-aware)
+  // Click outside closes SoftMenu (portal items are still under document)
   useEffect(() => {
     if (!hwOpen && !langOpen) return
     const handler = (e: MouseEvent) => {
+      const t = e.target as Node
       if (hwOpen) {
-        const hitMenu = hwMenuRef.current?.contains(e.target as Node)
-        const hitDropdown = hwDropdownRef.current?.contains(e.target as Node)
-        if (!hitMenu && !hitDropdown) setHwOpen(false)
+        const hitBtn = hwBtnRef.current?.contains(t)
+        const hitMenu = (e.target as Element)?.closest?.("[data-slot='menu']")
+        if (!hitBtn && !hitMenu) setHwOpen(false)
       }
       if (langOpen) {
-        const hitMenu = langMenuRef.current?.contains(e.target as Node)
-        const hitDropdown = langDropdownRef.current?.contains(e.target as Node)
-        if (!hitMenu && !hitDropdown) setLangOpen(false)
+        const hitBtn = langBtnRef.current?.contains(t)
+        const hitMenu = (e.target as Element)?.closest?.("[data-slot='menu']")
+        if (!hitBtn && !hitMenu) setLangOpen(false)
       }
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
   }, [hwOpen, langOpen])
 
-  // Pause audio when meeting changes to prevent crackling
+  // Pause + reset local player chrome when meeting changes (no parent remount)
   useEffect(() => {
+    const el = audioRef.current
+    if (el) {
+      el.pause()
+      try {
+        el.currentTime = 0
+      } catch { /* ignore */ }
+    }
+    setIsPlaying(false)
+    setCurrentTime(0)
+    setAudioDuration(0)
+    setScrubbing(false)
+    setScrubRatio(0)
+    segmentEndRef.current = null
     return () => {
-      const el = audioRef.current
-      if (el) {
-        el.pause()
-      }
+      const a = audioRef.current
+      if (a) a.pause()
     }
   }, [meetingId])
 
-  // Emit timeupdate for transcript auto-scroll
+  // Emit timeupdate for transcript auto-scroll + local progress state
   useEffect(() => {
     const el = audioRef.current
-    if (!el || !onTimeUpdate) return
-    const handler = () => onTimeUpdate(el.currentTime)
-    el.addEventListener("timeupdate", handler)
-    return () => el.removeEventListener("timeupdate", handler)
-  }, [onTimeUpdate, audioUrl])
+    if (!el) return
+    const onTime = () => {
+      const t = el.currentTime
+      if (!scrubbing) setCurrentTime(t)
+      onTimeUpdate?.(t)
+      const stopAt = segmentEndRef.current
+      if (stopAt != null && t >= stopAt - 0.02) {
+        segmentEndRef.current = null
+        el.pause()
+        if (el.currentTime > stopAt) {
+          el.currentTime = stopAt
+          setCurrentTime(stopAt)
+        }
+      }
+    }
+    const onMeta = () => setAudioDuration(el.duration || 0)
+    const onPlay = () => setIsPlaying(true)
+    const onPause = () => setIsPlaying(false)
+    const onEnded = () => {
+      segmentEndRef.current = null
+      setIsPlaying(false)
+    }
+    el.addEventListener("timeupdate", onTime)
+    el.addEventListener("loadedmetadata", onMeta)
+    el.addEventListener("durationchange", onMeta)
+    el.addEventListener("play", onPlay)
+    el.addEventListener("pause", onPause)
+    el.addEventListener("ended", onEnded)
+    return () => {
+      el.removeEventListener("timeupdate", onTime)
+      el.removeEventListener("loadedmetadata", onMeta)
+      el.removeEventListener("durationchange", onMeta)
+      el.removeEventListener("play", onPlay)
+      el.removeEventListener("pause", onPause)
+      el.removeEventListener("ended", onEnded)
+    }
+  }, [onTimeUpdate, audioUrl, scrubbing])
+
+  // Reset transport when audio source changes
+  useEffect(() => {
+    segmentEndRef.current = null
+    setIsPlaying(false)
+    setCurrentTime(0)
+    setAudioDuration(0)
+    setScrubbing(false)
+  }, [audioUrl, audioVersion])
 
   useImperativeHandle(ref, () => ({
-    seekTo(time: number) {
+    seekTo(time: number, end?: number) {
       const el = audioRef.current
-      if (el) {
-        el.currentTime = time
-        el.play().catch(() => {})  // AbortError when interrupted by pause/unmount
-      }
+      if (!el) return
+      const t = Math.max(0, time)
+      segmentEndRef.current =
+        end != null && Number.isFinite(end) && end > t ? end : null
+      el.currentTime = t
+      setCurrentTime(t)
+      el.play().catch(() => {})  // AbortError when interrupted by pause/unmount
     },
   }))
 
-  // --- Dropdown position helpers ---
-  const hwDropdownStyle = hwBtnRef.current
-    ? {
-        top: hwBtnRef.current.getBoundingClientRect().bottom + 4,
-        left: hwBtnRef.current.getBoundingClientRect().right - 180,
-      }
-    : {}
+  const seekFromClientX = (clientX: number) => {
+    const track = progressTrackRef.current
+    const el = audioRef.current
+    if (!track || !el) return
+    segmentEndRef.current = null
+    const rect = track.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(rect.width, 1)))
+    setScrubRatio(ratio)
+    const dur = el.duration || audioDuration || 0
+    if (dur > 0 && Number.isFinite(dur)) {
+      const t = ratio * dur
+      el.currentTime = t
+      setCurrentTime(t)
+      onTimeUpdate?.(t)
+    }
+  }
 
-  const langDropdownStyle = langBtnRef.current
-    ? {
-        top: langBtnRef.current.getBoundingClientRect().bottom + 4,
-        left: langBtnRef.current.getBoundingClientRect().right - 200,
-      }
-    : {}
+  const beginScrub = (clientX: number) => {
+    scrubbingRef.current = true
+    setScrubbing(true)
+    seekFromClientX(clientX)
+  }
+  const moveScrub = (clientX: number) => {
+    if (!scrubbingRef.current) return
+    seekFromClientX(clientX)
+  }
+  const endScrub = (clientX?: number) => {
+    if (clientX != null) seekFromClientX(clientX)
+    scrubbingRef.current = false
+    setScrubbing(false)
+  }
 
-  // Recording state
+  const togglePlay = () => {
+    const el = audioRef.current
+    if (!el) return
+    // Manual play/pause leaves free-play mode
+    segmentEndRef.current = null
+    if (el.paused) el.play().catch(() => {})
+    else el.pause()
+  }
+
+  // Recording state — real levels only (no Math.random: parent re-renders would thrash bars)
   if (isRecording || isPaused) {
+    const barCount = 20
+    const rawLevels = Array.isArray(levels) && levels.length > 0 ? levels : null
+    const waveBars = Array.from({ length: barCount }, (_, i) => {
+      if (isPaused || !rawLevels) return 0.08
+      const src = rawLevels[Math.floor((i * rawLevels.length) / barCount)] ?? 0
+      return Math.min(1, Math.max(0.06, src))
+    })
     return (
-      <div className="flex flex-col gap-2 py-3 px-0">
+      <div className="flex flex-col gap-2 py-1">
         <div className="flex items-center gap-3">
-          <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
-          <span className="t-mono-family text-sm tabular-nums">{formatDuration(duration)}</span>
-          <div className="flex-1 flex items-center gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
+          <div
+            className={cn(
+              "h-2.5 w-2.5 rounded-full shrink-0",
+              isPaused
+                ? "bg-[var(--pm-faint,#969c96)]"
+                : "bg-[var(--pm-danger,#b42318)] animate-pulse",
+            )}
+          />
+          <span className="pm-meta tabular-nums t-mono-family">{formatDuration(duration)}</span>
+          <div
+            className={cn(
+              "flex-1 flex items-end gap-0.5 h-5 min-w-0",
+              isPaused && "opacity-45",
+            )}
+            aria-hidden
+          >
+            {waveBars.map((v, i) => (
               <div
                 key={i}
-                className="w-1 bg-primary/40 rounded-full animate-pulse"
-                style={{ height: `${Math.random() * 16 + 4}px`, animationDelay: `${i * 50}ms` }}
+                className="w-1 min-w-[3px] flex-1 max-w-[5px] rounded-full"
+                style={{
+                  height: `${Math.round(4 + v * 16)}px`,
+                  background:
+                    "color-mix(in srgb, var(--pm-green, #1a5e3d) 55%, transparent)",
+                  transition: "height 80ms linear",
+                }}
               />
             ))}
           </div>
-          <Button variant="outline" size="sm" onClick={isPaused ? onResumeRecord : onPauseRecord}>
-            <Pause className="h-4 w-4 mr-1" />
+          <Button variant="ghost" size="sm" onClick={isPaused ? onResumeRecord : onPauseRecord}>
+            <Pause className="size-3.5 mr-1" />
             {isPaused ? "Resume" : "Pause"}
           </Button>
           <Button variant="default" size="sm" onClick={onStopRecord}>
-            <Square className="h-4 w-4 mr-1" />
+            <Square className="size-3.5 mr-1" />
             Finish
           </Button>
           {onDiscard && (
             <Button variant="destructive" size="sm" onClick={() => setDiscardConfirmOpen(true)}>
-              <Trash2 className="h-4 w-4 mr-1" />
+              <Trash2 className="size-3.5 mr-1" />
               Discard
             </Button>
           )}
         </div>
         {hasRealtimeProvider && onToggleRealtime && (
-          <button
+          <Button
             type="button"
+            variant={realtimeEnabled ? "secondary" : "ghost"}
+            size="sm"
+            className="self-start"
             onClick={onToggleRealtime}
-            className={cn(
-              "flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors self-start",
-              realtimeEnabled
-                ? "border-primary/30 text-primary"
-                : "border-border text-muted-foreground"
-            )}
           >
-            <div className={cn("w-2 h-2 rounded-full", realtimeEnabled ? "bg-green-500" : "bg-muted-foreground/30")} />
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full mr-1.5",
+                realtimeEnabled ? "bg-[var(--pm-green)]" : "bg-[var(--pm-faint)]",
+              )}
+            />
             Live captions
-          </button>
+          </Button>
         )}
         {onDiscard && (
           <Dialog open={discardConfirmOpen} onOpenChange={setDiscardConfirmOpen}>
-            <DialogContent className="max-w-sm">
+            <DialogContent
+              className="pm-dialog pm-dialog--silk sm:max-w-sm"
+              showCloseButton={false}
+              overlayClassName="pm-dialog-overlay--silk"
+            >
               <DialogHeader>
-                <DialogTitle>Discard Recording</DialogTitle>
+                <DialogTitle>Discard recording?</DialogTitle>
+                <DialogDescription>
+                  This will stop the recording and permanently delete all audio, captions, and transcript data.
+                </DialogDescription>
               </DialogHeader>
-              <p className="text-sm text-muted-foreground">
-                This will stop the recording and permanently delete all audio, captions, and transcript data. This action cannot be undone.
-              </p>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setDiscardConfirmOpen(false)}>Cancel</Button>
-                <Button variant="destructive" onClick={() => { setDiscardConfirmOpen(false); onDiscard() }}>Discard</Button>
-              </div>
+              <DialogFooter>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setDiscardConfirmOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive-solid"
+                  size="sm"
+                  onClick={() => { setDiscardConfirmOpen(false); onDiscard() }}
+                >
+                  Discard
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
         )}
@@ -227,309 +363,527 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
     )
   }
 
-  // Transcribing state
+  // Transcribing state — same custom player shell as ready state (no native audio chrome)
   if (status === "transcribing") {
+    const dur = audioDuration > 0 && Number.isFinite(audioDuration) ? audioDuration : 0
+    const ratio = scrubbing
+      ? scrubRatio
+      : dur > 0
+        ? Math.min(1, Math.max(0, currentTime / dur))
+        : 0
+    const displayTime = scrubbing && dur > 0 ? scrubRatio * dur : currentTime
+
     return (
-      <div className="flex flex-col gap-2">
+      <div className="pm-meeting-player">
         {transcriptionError && (
-          <div className="flex items-center gap-2 p-3 border border-destructive/50 rounded-lg bg-destructive/10 text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span className="text-sm flex-1">Transcription failed: {transcriptionError}</span>
+          <div className="pm-meeting-warn">
+            <AlertCircle className="size-3.5 shrink-0" />
+            <span className="flex-1">Transcription failed: {transcriptionError}</span>
           </div>
         )}
-        <div className="flex items-center gap-3 py-3 px-0">
-          {/* Audio player during transcription */}
+
+        {audioUrl ? (
+          <audio
+            key={`transcribing-${meetingId}-${audioVersion}`}
+            ref={audioRef}
+            src={audioUrl}
+            preload="metadata"
+            className="sr-only"
+            aria-hidden
+          >
+            <track kind="captions" />
+          </audio>
+        ) : null}
+
+        {/* Row 1: progress only */}
+        <div className="pm-meeting-player-progress-row">
           {audioUrl ? (
-            <audio key={`transcribing-${audioVersion}`} ref={audioRef} controls src={audioUrl} preload="metadata" className="flex-1 h-7 styled-audio">
-              <track kind="captions" />
-            </audio>
+            <div
+              ref={progressTrackRef}
+              className={cn("pm-meeting-player-progress", scrubbing && "is-scrubbing")}
+              role="slider"
+              tabIndex={0}
+              aria-label="Seek"
+              aria-valuemin={0}
+              aria-valuemax={Math.floor(dur || 0)}
+              aria-valuenow={Math.floor(displayTime || 0)}
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId)
+                beginScrub(e.clientX)
+              }}
+              onPointerMove={(e) => moveScrub(e.clientX)}
+              onPointerUp={(e) => {
+                endScrub(e.clientX)
+                try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* */ }
+              }}
+              onPointerCancel={() => endScrub()}
+              onKeyDown={(e) => {
+                const el = audioRef.current
+                if (!el || !dur) return
+                const step = e.shiftKey ? 10 : 5
+                if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+                  e.preventDefault()
+                  const t = Math.min(dur, (el.currentTime || 0) + step)
+                  el.currentTime = t
+                  setCurrentTime(t)
+                } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+                  e.preventDefault()
+                  const t = Math.max(0, (el.currentTime || 0) - step)
+                  el.currentTime = t
+                  setCurrentTime(t)
+                } else if (e.key === "Home") {
+                  e.preventDefault()
+                  el.currentTime = 0
+                  setCurrentTime(0)
+                } else if (e.key === "End") {
+                  e.preventDefault()
+                  el.currentTime = dur
+                  setCurrentTime(dur)
+                }
+              }}
+            >
+              <div className="pm-meeting-player-progress-fill" style={{ width: `${ratio * 100}%` }} />
+              <div className="pm-meeting-player-progress-thumb" style={{ left: `${ratio * 100}%` }} />
+            </div>
           ) : (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              <span className="text-sm">Transcribing...</span>
-            </>
-          )}
-          <span className="text-sm text-muted-foreground shrink-0">Transcribing...</span>
-          {onCancelTranscribe && (
-            <Button variant="destructive" size="sm" onClick={onCancelTranscribe}>
-              <Square className="h-4 w-4 mr-1" />
-              Stop
-            </Button>
+            <div className="pm-meeting-player-progress pm-meeting-player-progress--busy" aria-hidden>
+              <div className="pm-meeting-player-progress-fill animate-progress" style={{ width: "40%" }} />
+            </div>
           )}
         </div>
-        <ProcessingBar label="Transcribing audio..." />
+
+        {/* Row 2: play + time centered as one group */}
+        <div className="pm-meeting-player-main">
+          <span className="pm-meeting-player-status pm-meta inline-flex items-center gap-1.5 min-w-0 truncate">
+            <Loader2 className="size-3 animate-spin text-[var(--pm-green)] shrink-0" />
+            Transcribing…
+          </span>
+          {audioUrl ? (
+            <button
+              type="button"
+              className="pm-meeting-player-play"
+              onClick={togglePlay}
+              aria-label={isPlaying ? "Pause" : "Play"}
+            >
+              {isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+            </button>
+          ) : (
+            <span className="pm-meeting-player-play-slot">
+              <Loader2 className="size-3.5 animate-spin text-[var(--pm-green)] shrink-0" />
+            </span>
+          )}
+          <span className="pm-meeting-player-time t-mono-family" aria-live="off">
+            {formatDuration(Math.floor(displayTime || 0))}
+            <span className="pm-meeting-player-time-sep">/</span>
+            {formatDuration(Math.floor(dur || 0))}
+          </span>
+        </div>
+
+        {/* Row 3: cancel (centered chip tray) */}
+        {onCancelTranscribe ? (
+          <div className="pm-meeting-player-tools">
+            <Button variant="destructive" size="sm" onClick={onCancelTranscribe}>
+              <Square className="size-3.5 mr-1" />
+              Stop
+            </Button>
+          </div>
+        ) : null}
       </div>
     )
   }
 
-  // Has audio — always show player + action buttons
+  // Has audio — custom player card (tools row + scrubbable progress row)
   if (hasAudio) {
     const hwSelectedLabel = hotWordsLibraries.find((l) => l.id === hotWordsLibraryId)?.name
     const langCount = languageHints.length
     const langCustomized = langCount > 0 && !(langCount === 1 && languageHints[0] === "auto")
+    const dur = audioDuration > 0 && Number.isFinite(audioDuration) ? audioDuration : 0
+    const ratio = scrubbing
+      ? scrubRatio
+      : dur > 0
+        ? Math.min(1, Math.max(0, currentTime / dur))
+        : 0
+    const displayTime = scrubbing && dur > 0 ? scrubRatio * dur : currentTime
 
     return (
-      <div className="flex flex-col gap-2">
+      <div className="pm-meeting-player">
         {transcriptionError && (
-          <div className="flex items-center gap-2 p-3 border border-destructive/50 rounded-lg bg-destructive/10 text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span className="text-sm flex-1">Transcription failed: {transcriptionError}</span>
+          <div className="pm-meeting-warn">
+            <AlertCircle className="size-3.5 shrink-0" />
+            <span className="flex-1">Transcription failed: {transcriptionError}</span>
           </div>
         )}
-        <div className="flex items-center gap-3 py-3 px-0">
+
+        {audioUrl ? (
+          <audio
+            key={`player-${meetingId}-${audioVersion}`}
+            ref={audioRef}
+            src={audioUrl}
+            preload="metadata"
+            className="sr-only"
+            aria-hidden
+          >
+            <track kind="captions" />
+          </audio>
+        ) : null}
+
+        {/* Row 1: progress only (full width) */}
+        <div className="pm-meeting-player-progress-row">
           {audioUrl ? (
-            <audio key={`player-${audioVersion}`} ref={audioRef} controls src={audioUrl} preload="metadata" className="flex-1 h-7 styled-audio">
-              <track kind="captions" />
-            </audio>
-          ) : (
-            <div className="flex items-center gap-2 flex-1 min-w-0">
-              <FileAudio className="h-4 w-4 text-muted-foreground shrink-0" />
-              <span className="text-sm text-muted-foreground truncate" title={audioPath}>
-                {audioPath ? audioPath.split("/").pop() : "Audio uploaded"}
-              </span>
+            <div
+              ref={progressTrackRef}
+              className={cn("pm-meeting-player-progress", scrubbing && "is-scrubbing")}
+              role="slider"
+              tabIndex={0}
+              aria-label="Seek"
+              aria-valuemin={0}
+              aria-valuemax={Math.floor(dur || 0)}
+              aria-valuenow={Math.floor(displayTime || 0)}
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId)
+                beginScrub(e.clientX)
+              }}
+              onPointerMove={(e) => moveScrub(e.clientX)}
+              onPointerUp={(e) => {
+                endScrub(e.clientX)
+                try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* */ }
+              }}
+              onPointerCancel={() => endScrub()}
+              onKeyDown={(e) => {
+                const el = audioRef.current
+                if (!el || !dur) return
+                const step = e.shiftKey ? 10 : 5
+                if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+                  e.preventDefault()
+                  const t = Math.min(dur, (el.currentTime || 0) + step)
+                  el.currentTime = t
+                  setCurrentTime(t)
+                } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+                  e.preventDefault()
+                  const t = Math.max(0, (el.currentTime || 0) - step)
+                  el.currentTime = t
+                  setCurrentTime(t)
+                } else if (e.key === "Home") {
+                  e.preventDefault()
+                  el.currentTime = 0
+                  setCurrentTime(0)
+                } else if (e.key === "End") {
+                  e.preventDefault()
+                  el.currentTime = dur
+                  setCurrentTime(dur)
+                }
+              }}
+            >
+              <div className="pm-meeting-player-progress-fill" style={{ width: `${ratio * 100}%` }} />
+              <div className="pm-meeting-player-progress-thumb" style={{ left: `${ratio * 100}%` }} />
             </div>
+          ) : (
+            <p className="pm-meta truncate w-full min-w-0" title={audioPath}>
+              {audioPath ? audioPath.split("/").pop() : "Audio uploaded"}
+            </p>
           )}
-          <div className="flex items-center gap-2 shrink-0">
-            {!hasTranscript && (
-              <>
-                <input
-                  ref={inputRef}
-                  type="file"
-                  accept="audio/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) onUploadAudio(file)
-                    e.target.value = ""
-                  }}
-                />
-                <Button variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
-                  <RefreshCw className="h-3 w-3 mr-1" />
-                  Replace
-                </Button>
-              </>
-            )}
-            {!hasTranscript && (
-              <Button size="sm" onClick={onTranscribe}>
-                <Play className="h-4 w-4 mr-1" />
-                Transcribe
-              </Button>
-            )}
-            {hasTranscript && onReTranscribe && (
-              <Button variant="outline" size="sm" onClick={onReTranscribe}>
-                Re-transcribe
-              </Button>
-            )}
+        </div>
 
-            {/* Hot Words — dropdown */}
-            {onSelectHotWords && (
-              <div ref={hwMenuRef} className="relative">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        ref={hwBtnRef}
-                        type="button"
-                        onClick={() => { setHwOpen(!hwOpen); setLangOpen(false) }}
-                        className={cn(
-                          "h-7 w-7 flex items-center justify-center rounded-sm transition-colors",
-                          hotWordsLibraryId
-                            ? "text-primary hover:bg-primary/10"
-                            : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                        )}
-                      >
-                        <BookOpen className="h-3.5 w-3.5" />
-                      </button>
-                    }
-                  />
-                  <TooltipContent side="top" className="px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
-                    Hot Words{hotWordsLibraryId ? ` · ${hwSelectedLabel}` : ""}
-                  </TooltipContent>
-                </Tooltip>
+        {/* Row 2: play + time centered as one group */}
+        <div className="pm-meeting-player-main">
+          {audioUrl ? (
+            <button
+              type="button"
+              className="pm-meeting-player-play"
+              onClick={togglePlay}
+              aria-label={isPlaying ? "Pause" : "Play"}
+            >
+              {isPlaying ? (
+                <Pause className="size-3.5" strokeWidth={2.25} />
+              ) : (
+                <Play className="size-3.5 pm-meeting-player-play-icon" strokeWidth={2.25} />
+              )}
+            </button>
+          ) : (
+            <span className="pm-meeting-player-play-slot">
+              <FileAudio className="size-3.5 text-[var(--pm-faint)] shrink-0" />
+            </span>
+          )}
+          <span className="pm-meeting-player-time t-mono-family" aria-live="off">
+            {formatDuration(Math.floor(displayTime || 0))}
+            <span className="pm-meeting-player-time-sep">/</span>
+            {formatDuration(Math.floor(dur || 0))}
+          </span>
+        </div>
 
-                {createPortal(
-                  <div
-                    ref={hwDropdownRef}
-                    className={`fixed z-[100] flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                      hwOpen
-                        ? "opacity-100 visible translate-y-0 pointer-events-auto"
-                        : "opacity-0 invisible translate-y-3 pointer-events-none"
-                    }`}
-                    style={{
-                      width: 180,
-                      top: hwDropdownStyle.top ?? 0,
-                      left: hwDropdownStyle.left ?? 0,
+        {/* Row 3: tool buttons — hug content, centered */}
+        <div className="pm-meeting-player-tools">
+          {audioUrl && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className="pm-meeting-player-chip"
+                    aria-label="Download audio"
+                    onClick={() => {
+                      const a = document.createElement("a")
+                      a.href = audioUrl
+                      a.download = audioPath?.split("/").pop() || `meeting-${meetingId}-audio`
+                      a.rel = "noopener"
+                      document.body.appendChild(a)
+                      a.click()
+                      a.remove()
                     }}
                   >
+                    <Download className="size-3.5" strokeWidth={1.75} />
+                  </button>
+                }
+              />
+              <TooltipContent side="top">Download audio</TooltipContent>
+            </Tooltip>
+          )}
+
+          {onSelectHotWords && (
+            <div className="relative" ref={hwBtnRef as RefObject<HTMLDivElement>}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
                     <button
                       type="button"
-                      onClick={() => { onSelectHotWords(null); setHwOpen(false) }}
-                      className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
+                      className={cn(
+                        "pm-meeting-player-chip",
+                        hotWordsLibraryId && "is-active",
+                      )}
+                      onClick={() => { setHwOpen(!hwOpen); setLangOpen(false) }}
+                      aria-label="Hot words"
                     >
-                      <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                        <span className={`sk-diamond ${!hotWordsLibraryId ? "on" : ""}`} aria-hidden />
-                        <span>None</span>
-                      </span>
-                      <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                      <BookOpen className="size-3.5" strokeWidth={1.75} />
                     </button>
-                    {hotWordsLibraries.map((lib) => (
+                  }
+                />
+                <TooltipContent side="top">
+                  Hot Words{hotWordsLibraryId ? ` · ${hwSelectedLabel}` : ""}
+                </TooltipContent>
+              </Tooltip>
+              <SoftMenu
+                open={hwOpen}
+                portal
+                anchorRef={hwBtnRef}
+                align="end"
+                className="pm-hw-menu min-w-[240px]"
+              >
+                <div className="pm-hw-list pm-hw-list--menu" role="listbox" aria-label="Hot word libraries">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={!hotWordsLibraryId}
+                    className={cn("pm-hw-option", !hotWordsLibraryId ? "is-on" : "is-off")}
+                    onClick={() => { onSelectHotWords(null); setHwOpen(false) }}
+                  >
+                    <span className="pm-hw-option-icon" aria-hidden>
+                      <Ban className="size-3.5" />
+                    </span>
+                    <span className="pm-hw-option-body">
+                      <span className="pm-hw-option-name">None</span>
+                      <span className="pm-hw-option-meta">No vocabulary boost</span>
+                    </span>
+                  </button>
+                  {hotWordsLibraries.map((lib) => {
+                    const isOn = hotWordsLibraryId === lib.id
+                    return (
                       <button
                         key={lib.id}
                         type="button"
+                        role="option"
+                        aria-selected={isOn}
+                        className={cn("pm-hw-option", isOn ? "is-on" : "is-off")}
                         onClick={() => { onSelectHotWords(lib.id); setHwOpen(false) }}
-                        className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
                       >
-                        <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                          <span className={`sk-diamond ${hotWordsLibraryId === lib.id ? "on" : ""}`} aria-hidden />
-                          <span className="flex-1 whitespace-normal break-words min-w-0 leading-snug">{lib.name}</span>
-                          <span className="text-[9px] text-muted-foreground/60 shrink-0 ml-1">{lib.word_count}w</span>
+                        <span className="pm-hw-option-icon" aria-hidden>
+                          <BookOpen className="size-3.5" />
                         </span>
-                        <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                        <span className="pm-hw-option-body">
+                          <span className="pm-hw-option-name">{lib.name}</span>
+                          <span className="pm-hw-option-meta">
+                            {lib.word_count} word{lib.word_count === 1 ? "" : "s"}
+                          </span>
+                        </span>
                       </button>
-                    ))}
-                    {hotWordsLibraries.length === 0 && (
-                      <div className="px-2 py-3 text-[10px] text-muted-foreground text-center">No hot word libraries</div>
-                    )}
-                  </div>,
-                  document.body
-                )}
-              </div>
-            )}
+                    )
+                  })}
+                  {hotWordsLibraries.length === 0 && (
+                    <p className="pm-hw-empty">No hot word libraries</p>
+                  )}
+                </div>
+              </SoftMenu>
+            </div>
+          )}
 
-            {/* Language — multi-select dropdown */}
-            {showLanguageSelector && (
-              <div ref={langMenuRef} className="relative">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        ref={langBtnRef}
-                        type="button"
-                        onClick={() => { setLangOpen(!langOpen); setHwOpen(false) }}
-                        className={cn(
-                          "h-7 w-7 flex items-center justify-center rounded-sm transition-colors",
-                          langCustomized
-                            ? "text-primary hover:bg-primary/10"
-                            : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                        )}
-                      >
-                        <Languages className="h-3.5 w-3.5" />
-                      </button>
-                    }
-                  />
-                  <TooltipContent side="top" className="px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
-                    Language{langCustomized ? ` · ${langCount} selected` : " · auto"}
-                  </TooltipContent>
-                </Tooltip>
-
-                {createPortal(
-                  <div
-                    ref={langDropdownRef}
-                    className={`fixed z-[100] flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                      langOpen
-                        ? "opacity-100 visible translate-y-0 pointer-events-auto"
-                        : "opacity-0 invisible translate-y-3 pointer-events-none"
-                    }`}
-                    style={{
-                      width: 200,
-                      top: langDropdownStyle.top ?? 0,
-                      left: langDropdownStyle.left ?? 0,
-                    }}
-                  >
-                    {languageHintOptions.map(({ code, label }) => {
-                      const isSelected = languageHints.includes(code)
+          {showLanguageSelector && (
+            <div className="relative" ref={langBtnRef as RefObject<HTMLDivElement>}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className={cn(
+                        "pm-meeting-player-chip",
+                        langCustomized && "is-active",
+                      )}
+                      onClick={() => { setLangOpen(!langOpen); setHwOpen(false) }}
+                      aria-label="Language"
+                    >
+                      <Languages className="size-3.5" strokeWidth={1.75} />
+                    </button>
+                  }
+                />
+                <TooltipContent side="top">
+                  Language{langCustomized ? ` · ${langCount} selected` : " · auto"}
+                </TooltipContent>
+              </Tooltip>
+              <SoftMenu
+                open={langOpen}
+                portal
+                anchorRef={langBtnRef}
+                align="end"
+                className="pm-lang-menu min-w-[220px]"
+              >
+                <div className="pm-lang-pills pm-lang-pills--menu" role="group" aria-label="Language hints">
+                  {(() => {
+                    const opts = languageHintOptions.some((o) => o.code === "auto")
+                      ? languageHintOptions
+                      : [{ code: "auto", label: "Auto" }, ...languageHintOptions]
+                    const isAutoOnly =
+                      languageHints.length === 0 ||
+                      (languageHints.length === 1 && languageHints[0] === "auto")
+                    return opts.map(({ code, label }) => {
+                      const isSelected =
+                        code === "auto" ? isAutoOnly : languageHints.includes(code)
                       return (
                         <button
                           key={code}
                           type="button"
+                          className={cn("pm-lang-pill", isSelected ? "is-on" : "is-off")}
+                          aria-pressed={isSelected}
                           onClick={() => {
-                            // Single-select: emit [code] when picking, [] when unselecting the current one
-                            onChangeLanguageHints?.(isSelected ? [] : [code])
-                            setLangOpen(false)
+                            onChangeLanguageHints?.(toggleLanguageHint(languageHints, code))
                           }}
-                          className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
                         >
-                          <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                            <span className={`sk-diamond ${isSelected ? "on" : ""}`} aria-hidden />
-                            <span className="flex-1 whitespace-normal break-words min-w-0 leading-snug">{label}</span>
-                            <span className="text-[9px] text-muted-foreground/60 shrink-0 ml-1 t-mono-family">{code}</span>
-                          </span>
-                          <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                          <span className="pm-lang-pill-label">{label}</span>
+                          {code !== "auto" && (
+                            <span className="pm-lang-pill-code t-mono-family">{code}</span>
+                          )}
                         </button>
                       )
-                    })}
-                  </div>,
-                  document.body
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+                    })
+                  })()}
+                </div>
+              </SoftMenu>
+            </div>
+          )}
+
+          {/* Rightmost: Replace / Transcribe (pre-tx) or Re-transcribe (post-tx) */}
+          {!hasTranscript && (
+            <>
+              <input
+                ref={inputRef}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) onUploadAudio(file)
+                  e.target.value = ""
+                }}
+              />
+              <button
+                type="button"
+                className="pm-meeting-player-chip pm-meeting-player-chip--label"
+                onClick={() => inputRef.current?.click()}
+              >
+                <RefreshCw className="size-3" strokeWidth={1.75} />
+                <span>Replace</span>
+              </button>
+              <button
+                type="button"
+                className="pm-meeting-player-chip pm-meeting-player-chip--primary-label"
+                onClick={onTranscribe}
+              >
+                <Play className="size-3 pm-meeting-player-play-icon" strokeWidth={2} />
+                <span>Transcribe</span>
+              </button>
+            </>
+          )}
+          {hasTranscript && onReTranscribe && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className="pm-meeting-player-chip pm-meeting-player-chip--label"
+                    onClick={onReTranscribe}
+                    aria-label="Re-transcribe"
+                  >
+                    <RefreshCw className="size-3" strokeWidth={1.75} />
+                    <span>Re-transcribe</span>
+                  </button>
+                }
+              />
+              <TooltipContent side="top">Re-transcribe</TooltipContent>
+            </Tooltip>
+          )}
+        </div>{/* /.pm-meeting-player-tools */}
       </div>
     )
   }
 
   // No audio — upload / record
   return (
-    <div className="flex flex-col gap-2 py-3 px-0">
+    <div className="flex flex-col gap-2 py-1">
       {recorderError && (
-        <div className="flex items-center gap-2 p-3 border border-destructive/50 rounded-lg bg-destructive/10 text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span className="text-sm flex-1">{recorderError}</span>
+        <div className="pm-meeting-warn">
+          <AlertCircle className="size-3.5 shrink-0" />
+          <span className="flex-1">{recorderError}</span>
         </div>
       )}
       <div className="flex items-center gap-2">
-      <input
-        ref={inputRef}
-        type="file"
-        accept="audio/*"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file) onUploadAudio(file)
-          e.target.value = ""
-        }}
-      />
-      <Button variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
-        <Upload className="h-4 w-4 mr-1" />
-        Audio
-      </Button>
-      <Button variant="outline" size="sm" onClick={onStartRecord}>
-        <Mic className="h-4 w-4 mr-1" />
-        Record
-      </Button>
-      {hasRealtimeProvider && onToggleRealtime && (
-        <button
-          type="button"
-          onClick={onToggleRealtime}
-          className={cn(
-            "flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors ml-auto",
-            realtimeEnabled
-              ? "border-primary/30 text-primary"
-              : "border-border text-muted-foreground"
-          )}
-          title={realtimeEnabled ? "Live captions ON" : "Live captions OFF"}
-        >
-          <div className={cn("w-2 h-2 rounded-full", realtimeEnabled ? "bg-green-500" : "bg-muted-foreground/30")} />
-          Live captions
-        </button>
-      )}
+        <input
+          ref={inputRef}
+          type="file"
+          accept="audio/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file) onUploadAudio(file)
+            e.target.value = ""
+          }}
+        />
+        <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()}>
+          <Upload className="size-3.5 mr-1" />
+          Audio
+        </Button>
+        <Button variant="default" size="sm" onClick={onStartRecord}>
+          <Mic className="size-3.5 mr-1" />
+          Record
+        </Button>
+        {hasRealtimeProvider && onToggleRealtime && (
+          <Button
+            type="button"
+            variant={realtimeEnabled ? "secondary" : "ghost"}
+            size="sm"
+            className="ml-auto"
+            onClick={onToggleRealtime}
+            title={realtimeEnabled ? "Live captions ON" : "Live captions OFF"}
+          >
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full mr-1.5",
+                realtimeEnabled ? "bg-[var(--pm-green)]" : "bg-[var(--pm-faint)]",
+              )}
+            />
+            Live captions
+          </Button>
+        )}
       </div>
     </div>
   )
 })
-
-function ProcessingBar({ label }: { label?: string }) {
-  return (
-    <div className="flex items-center gap-2 px-1">
-      <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
-      {label && <span className="text-xs text-muted-foreground">{label}</span>}
-      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-        <div className="h-full bg-primary/70 rounded-full animate-progress" style={{ width: "40%" }} />
-      </div>
-    </div>
-  )
-}
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60)

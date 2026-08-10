@@ -287,8 +287,15 @@ export const useAppStore = create<AppState>((set) => ({
   fetchCollections: async () => {
     try {
       const items = await getCollections()
+      // Library list: alphabetical by name (API sorts; keep client stable)
+      const sorted = [...items].sort((a: any, b: any) =>
+        String(a.name || "").localeCompare(String(b.name || ""), undefined, {
+          sensitivity: "base",
+          numeric: true,
+        }),
+      )
       // Clean up stale selectedCollections (e.g. deleted collections)
-      const validIds = new Set(items.map((c: any) => c.id))
+      const validIds = new Set(sorted.map((c: any) => c.id))
       const current = loadPersisted<string[]>("selectedCollections", [])
       const cleaned = current.filter((id) => validIds.has(id))
       if (cleaned.length !== current.length) {
@@ -300,10 +307,10 @@ export const useAppStore = create<AppState>((set) => ({
         try {
           localStorage.setItem("rag_activeCollection", JSON.stringify(""))
         } catch { /* ignore */ }
-        set({ collections: items, selectedCollections: cleaned, activeCollection: "" })
+        set({ collections: sorted, selectedCollections: cleaned, activeCollection: "" })
         return
       }
-      set({ collections: items, selectedCollections: cleaned })
+      set({ collections: sorted, selectedCollections: cleaned })
     } catch {
       // ignore
     }

@@ -51,7 +51,10 @@ export function useTranscription(meetingId: string | null) {
   // can update it (e.g. from useAudioRecorder.duration).
   const durationRef = useRef<number>(0)
 
-  // Reset segments when meeting changes
+  // Reset only when the transcription *session* meeting id changes.
+  // MeetingView passes `recordingMeetingId ?? activeMeeting` so while a
+  // capture is live, switching the sidebar selection does not change this
+  // prop — live captions and the WebSocket stay intact.
   const prevMeetingIdRef = useRef(meetingId)
   if (prevMeetingIdRef.current !== meetingId) {
     prevMeetingIdRef.current = meetingId

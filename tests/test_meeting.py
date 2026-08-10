@@ -248,13 +248,14 @@ class TestMeetingStore:
 
         assert list_meetings() == []
 
-    def test_list_meetings_sorted_by_updated_at(self):
-        """list_meetings returns meetings sorted by updated_at descending."""
-        from src.meeting.store import create_meeting, list_meetings
+    def test_list_meetings_sorted_by_created_at(self):
+        """list_meetings returns meetings sorted by created_at descending (newest first)."""
+        from src.meeting.store import create_meeting, list_meetings, update_meeting
 
         m1 = create_meeting("First")
         m2 = create_meeting("Second")
-        # m2 was created after m1 so it should appear first
+        # Touch older meeting — must stay below newer by creation time
+        update_meeting(m1.id, title="First (edited)")
         meetings = list_meetings()
         assert len(meetings) == 2
         assert meetings[0].id == m2.id

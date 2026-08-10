@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from "react"
-import { Brain, ChevronDown, ChevronRight, Wrench } from "lucide-react"
+import { ChevronRight, Globe, Wrench } from "lucide-react"
 import { SourcesCard } from "./sources-card"
 import { ThinkingSteps } from "./thinking-steps"
 import { StreamingAnswerBody } from "./streaming-answer-body"
@@ -11,24 +11,27 @@ function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boo
   useEffect(() => { if (!isStreaming) setExpanded(false) }, [isStreaming])
   if (!text) return null
   return (
-    <div className="mt-4 mb-3">
+    <div className="pm-chat-trail">
       <button
         type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 uppercase tracking-[0.1em] cursor-pointer hover:text-muted-foreground/70 transition-colors"
+        onClick={() => setExpanded((v) => !v)}
+        className="pm-chat-trail-toggle"
+        aria-expanded={expanded}
       >
-        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <Brain className="h-3 w-3 text-[var(--ze-green)]" />
-        Reasoning{isStreaming ? "…" : ""}
-      </button>
-      {expanded && (
-        <div
-          className="mt-1.5 pl-5 text-[11px] leading-relaxed border-l border-[var(--ze-green)]/20 t-body-italic-family"
-          style={{ color: "oklch(0.38 0.07 160 / 0.65)" }}
+        <span
+          className={cn("pm-chat-trail-chev", expanded && "is-open")}
+          aria-hidden
         >
-          {text}
+          <ChevronRight className="size-3 opacity-40" />
+        </span>
+        <span className={cn("sk-diamond", isStreaming ? "breathing" : "on sk-diamond-static")} aria-hidden />
+        Thinking{isStreaming ? "…" : ""}
+      </button>
+      <div className={cn("pm-chat-trail-body", expanded && "is-open")}>
+        <div>
+          <p className="pm-chat-reasoning-text">{text}</p>
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -50,10 +53,6 @@ function ToolCallBlock({
   const hasResult = result.length > 0
   const [open, setOpen] = useState(false)
 
-  // Hard rules for diamond state (ignore message-level streaming):
-  // 1) has result text → done (solid, no animation)
-  // 2) explicit error/declined → empty diamond
-  // 3) only pure running / awaiting_confirm without result → breathing
   const statusRaw = block.toolStatus
   const isError = statusRaw === "error"
   const isDeclined = statusRaw === "declined"
@@ -67,62 +66,74 @@ function ToolCallBlock({
   const name = block.tool || "tool"
 
   return (
-    <div className="mt-3 pt-2.5 border-t border-dashed border-border">
+    <div className="pm-chat-tool-row">
       <button
         type="button"
-        onClick={() => hasResult && setOpen(!open)}
-        className={`flex items-center gap-1.5 w-full text-left min-w-0 ${hasResult ? "cursor-pointer" : "cursor-default"}`}
+        onClick={() => hasResult && setOpen((v) => !v)}
+        className={cn(
+          "pm-chat-trail-toggle w-full text-left min-w-0 normal-case tracking-normal",
+          hasResult ? "cursor-pointer" : "cursor-default",
+        )}
+        aria-expanded={hasResult ? open : undefined}
       >
         {hasResult ? (
-          open ? (
-            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-          )
+          <span
+            className={cn("pm-chat-trail-chev shrink-0", open && "is-open")}
+            aria-hidden
+          >
+            <ChevronRight className="size-3 opacity-40" />
+          </span>
         ) : (
           <span className="w-3 shrink-0" />
         )}
-        {/* Tool icon — breathe only while in progress */}
-        <Wrench
+        <span
           className={cn(
-            "h-3 w-3 shrink-0",
-            running
-              ? "text-[var(--ze-green)] sk-tool-icon-breathe"
-              : isError || isDeclined
-                ? "text-muted-foreground/40"
-                : "text-muted-foreground/70",
+            "sk-diamond",
+            running && "breathing",
+            hasResult && !isError && !isDeclined && "on sk-diamond-static",
           )}
           aria-hidden
         />
-        <span className="text-[11px] font-mono text-muted-foreground/80 truncate">{name}</span>
+        <Wrench
+          className={cn(
+            "size-3 shrink-0",
+            running
+              ? "text-[var(--pm-green)] sk-tool-icon-breathe"
+              : isError || isDeclined
+                ? "text-[var(--pm-faint)]"
+                : "text-[var(--pm-muted)]",
+          )}
+          aria-hidden
+        />
+        <span className="pm-meta font-mono truncate normal-case tracking-normal">{name}</span>
         {running && (
-          <span className="text-[10px] text-muted-foreground/50 italic shrink-0">
+          <span className="pm-meta italic shrink-0 normal-case tracking-normal">
             {statusRaw === "awaiting_confirm" ? "waiting…" : "running…"}
           </span>
         )}
         {isDeclined && (
-          <span className="text-[10px] text-muted-foreground/50 italic shrink-0">declined</span>
+          <span className="pm-meta italic shrink-0 normal-case tracking-normal">declined</span>
         )}
         {isError && (
-          <span className="text-[10px] text-muted-foreground/50 italic shrink-0">error</span>
+          <span className="pm-meta italic shrink-0 normal-case tracking-normal">error</span>
         )}
       </button>
-      {open && hasResult && (
-        <div
-          className="mt-1.5 ml-6 max-h-48 overflow-auto text-[10px] leading-relaxed text-muted-foreground/50 italic whitespace-pre-wrap break-words font-light t-body-italic-family"
-        >
-          {result}
+      <div className={cn("pm-chat-trail-body", open && hasResult && "is-open")}>
+        <div>
+          {hasResult && (
+            <p className="pm-chat-reasoning-text max-h-48 overflow-auto">
+              {result}
+            </p>
+          )}
         </div>
-      )}
+      </div>
     </div>
   )
 }
 
 function isRetrievalTool(block: TimelineBlock): boolean {
   const name = block.tool || ""
-  // Main agentic search — keep the classic Agentic RAG step tree
   if (name === "search_knowledge_base") return true
-  // Legacy blocks without tool name but with agentic summary
   if (!name && (block.summary?.tasks?.length ?? 0) > 0) return true
   if (!name && block.summary && (block.summary.aq_count ?? 0) > 0) return true
   return false
@@ -146,7 +157,6 @@ function TimelineBlockView({
     )
   }
   if (block.type === "tool") {
-    // Retrieval: original detailed Agentic RAG UI (unchanged)
     if (isRetrievalTool(block)) {
       const running =
         messageStreaming &&
@@ -162,7 +172,6 @@ function TimelineBlockView({
         />
       )
     }
-    // Structure / web / full-text: simple name + collapsible result
     return <ToolCallBlock block={block} />
   }
   return null
@@ -177,7 +186,6 @@ function ProcessTrail({
   children,
 }: {
   isStreaming: boolean
-  /** True once final-answer tokens exist — fold trail so MD can paint. */
   answerStarted: boolean
   toolCount: number
   thinkingCount: number
@@ -185,8 +193,6 @@ function ProcessTrail({
 }) {
   const [open, setOpen] = useState(true)
   useEffect(() => {
-    // Expanded while tools/reasoning run; fold when final answer starts or stream ends
-    // (keeps DOM light during the answer phase — main freeze hotspot).
     if (!isStreaming) {
       setOpen(false)
       return
@@ -198,42 +204,45 @@ function ProcessTrail({
     setOpen(true)
   }, [isStreaming, answerStarted])
 
-  // "reasoning" = LLM Think mode blocks; "tools" = function calls / search tree
   const parts: string[] = []
   if (toolCount > 0) parts.push(`${toolCount} tool${toolCount === 1 ? "" : "s"}`)
   if (thinkingCount > 0) parts.push("reasoning")
   const summary = parts.length > 0 ? parts.join(" · ") : "steps"
 
   return (
-    <div className="mt-3 mb-3">
+    <div className="pm-chat-trail">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-[10px] text-muted-foreground/55 uppercase tracking-[0.1em] cursor-pointer hover:text-muted-foreground/75 transition-colors"
+        className="pm-chat-trail-toggle"
+        aria-expanded={open}
       >
-        {open ? (
-          <ChevronDown className="h-3 w-3 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0" />
-        )}
-        <Wrench className="h-3 w-3 shrink-0 text-[var(--ze-green)]/80" />
+        <span
+          className={cn("pm-chat-trail-chev shrink-0", open && "is-open")}
+          aria-hidden
+        >
+          <ChevronRight className="size-3 opacity-40" />
+        </span>
+        <span
+          className={cn("sk-diamond", isStreaming ? "breathing" : "on sk-diamond-static")}
+          aria-hidden
+        />
         <span>
           {isStreaming ? "Working" : "Steps"}
           {isStreaming ? "…" : ""}
-          <span className="normal-case tracking-normal font-normal text-muted-foreground/45 ml-1.5">
-            · {summary}
-          </span>
+          <span className="pm-chat-trail-sum">· {summary}</span>
         </span>
       </button>
-      {open && <div className="mt-0.5">{children}</div>}
+      <div className={cn("pm-chat-trail-body", open && "is-open")}>
+        <div className="pt-0.5">{children}</div>
+      </div>
     </div>
   )
 }
 
 /**
  * Process trail isolated from answer tokens. appendToLastMessage keeps the same
- * `timeline` array reference, so this memo skips re-render while only content grows
- * — same isolation Meeting gets by only subscribing to streamingMd.
+ * `timeline` array reference, so this memo skips re-render while only content grows.
  */
 const AssistantProcessTrail = memo(function AssistantProcessTrail({
   timeline,
@@ -317,15 +326,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
 
   if (isUser) {
     return (
-      <div className="flex flex-col items-end mb-8">
-        <div
-          className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80 mb-1.5 text-primary"
-        >
-          You
-        </div>
-        <div
-          className="max-w-[60%] text-sm leading-[1.7] pb-3 border-b text-right text-foreground border-border t-body-family"
-        >
+      <div className="pm-chat-msg pm-chat-msg--user">
+        <span className="pm-chat-msg-role">You</span>
+        <div className="pm-chat-msg-user-body">
           <p>{message.content}</p>
         </div>
       </div>
@@ -333,12 +336,13 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
   }
 
   return (
-    <div className="mb-8 pl-5 border-l max-w-[72%] border-border">
-      <div
-        className="text-[11px] font-normal uppercase tracking-[0.12em] mb-2.5 text-muted-foreground/80"
-      >
-        Assistant
-      </div>
+    <div
+      className={cn(
+        "pm-chat-msg pm-chat-msg--assistant",
+        streaming && "is-streaming",
+      )}
+    >
+      <span className="pm-chat-msg-role pm-chat-msg-role--ai">Assistant</span>
 
       <AssistantProcessTrail
         timeline={message.timeline}
@@ -351,29 +355,37 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
         answerStarted={!!(message.content && message.content.length > 0)}
       />
 
-      {/* Live answer: MD prefix (throttled) + plain tail (always current) */}
       {streaming && !message.content ? (
-        <div className="flex items-center gap-2.5 text-xs" style={{ color: "oklch(0.38 0.08 160 / 0.7)" }}>
-          <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="31.4 31.4" className="opacity-25" />
-            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
-          </svg>
-          <span className="font-light uppercase tracking-[0.12em] t-body-italic-family">Educing…</span>
+        <div className="pm-chat-typing">
+          <span className="sk-diamond breathing" aria-hidden />
+          <span>Educing…</span>
         </div>
       ) : message.content ? (
-        <div className="text-sm leading-[1.8] text-foreground t-body-family">
-          <StreamingAnswerBody content={message.content} isStreaming={streaming} />
+        <div className="pm-chat-msg-answer">
+          <StreamingAnswerBody
+            content={message.content}
+            isStreaming={streaming}
+            className="pm-chat-prose"
+          />
         </div>
       ) : null}
 
       {!streaming &&
         Array.isArray(message.sources) &&
-        message.sources.some((s) => s?.metadata?.source_type === "web") && (
-        <div className="mt-4 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
-          <span className="font-bold uppercase tracking-wider">Internet sources used</span>
-          {" — "}
-          Some evidence below is from the public web (Tavily), not your private knowledge base.
-          Treat WEB badges as external data.
+        message.sources.some(
+          (s) =>
+            s?.metadata?.source_type === "web" ||
+            s?.metadata?.provider === "tavily" ||
+            s?.metadata?.provider === "web",
+        ) && (
+        <div className="pm-chat-web-banner" role="note">
+          <Globe className="size-3.5 pm-chat-web-banner-icon" strokeWidth={1.75} aria-hidden />
+          <p className="m-0 min-w-0">
+            <strong>Internet sources used</strong>
+            {" — "}
+            Some evidence below is from the public web, not your private knowledge base.
+            Treat <span className="pm-chat-web-badge inline-flex mx-0.5 align-middle">web</span> badges as external data.
+          </p>
         </div>
       )}
 

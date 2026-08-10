@@ -59,6 +59,8 @@ def list_collections():
                 "points_count": 0,
             })
 
+    # Library list: alphabetical by display name (case-insensitive)
+    result.sort(key=lambda c: (c.get("name") or "").casefold())
     return result
 
 

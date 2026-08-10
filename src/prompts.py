@@ -296,6 +296,8 @@ languages — this is a hard failure.
 ## Summary
 A concise 3-5 sentence overview of the entire meeting.
 Use [spk:ID] and [N] to cite speakers and source sentences.
+Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
+the same person's bare name).
 
 ## Data & Facts
 Key data points, figures, metrics, decisions, deadlines mentioned.
@@ -307,23 +309,72 @@ REF ACCURACY — CRITICAL:
 - If no single sentence directly supports a fact, do NOT add a ref tag.
 - Combine IDs: [67,70] or ranges [67-70].
 
+SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
+and Detail):
+
+The transcript labels speakers only as [spk:ID] (e.g. [spk:0], [spk:1]).
+Display names are applied later by the product UI — you must NOT invent
+or paste display names next to a speaker tag.
+
+Two distinct cases:
+
+1) Meeting speaker / assignee among transcript speakers
+   → Use ONLY [spk:ID]. Never also write that person's name.
+   Prefer ID whenever the person can be tied to a [spk:…] in the
+   transcript (who spoke, who owns a task, who decided).
+
+2) Person mentioned in dialogue who is NOT used as a speaker slot
+   → Write their name as spoken in the transcript (plain text only).
+   Use a bare name ONLY when it is clearly a third party or someone
+   referred to by name and you cannot map them to a [spk:ID].
+   If they can be mapped to a speaker ID, use [spk:ID] instead (prefer ID).
+
+HARD RULES:
+- NEVER combine both forms for the same person in one clause
+  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …").
+- NEVER write a speaker's name in place of [spk:ID] for attribution.
+- Prefer [spk:ID] over a bare name whenever either would work.
+- Bare names are only for people clearly named in dialogue who are
+  not identified as a transcript speaker for that attribution.
+
+GOOD:
+- [spk:0] to prepare the Q3 budget report [priority: high]
+- [spk:1] recommended Option B; the team agreed. [42]
+- External vendor Northline to send revised quotes by Friday [88]
+  (third party named in dialogue, not a [spk:] in this meeting)
+
+BAD (double labeling — forbidden):
+- [spk:0] Alex to prepare the Q3 budget report
+- Alex [spk:0] to prepare the Q3 budget report
+- [spk:1] Jordan recommended Option B
+
+BAD (used bare name when a speaker ID applies):
+- Alex to prepare the Q3 budget report
+  (when Alex is [spk:0] in the transcript)
+
 ## Todo
 Every action item, commitment, or deadline found in the ENTIRE meeting.
 One per bullet.
 
-Format: "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is a meeting speaker:
+  "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is only a named third party (not a [spk:ID]):
+  "- <Name as in transcript> task description [priority: …]"
 
 Attribution rule — CRITICAL:
 Attribute each task to the person expected to DO it, NOT the person
-who merely mentioned it.  Example: if [spk:0] says "Zhang should
-update the dashboard", the task belongs to Zhang, not [spk:0].
+who merely mentioned it.
+Example: if [spk:0] says "Pat should update the dashboard", and Pat
+is not a transcript speaker, the task is Pat's (bare name). If Pat
+is [spk:2], write [spk:2], not "Pat", and never "[spk:2] Pat …".
 
 Priority: append [priority: high], [priority: medium], or
 [priority: low] at the end of each bullet when urgency is indicated.
 
 Examples:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- Finance Director Zhang to update the team dashboard [priority: medium]
+- [spk:1] to circulate the meeting notes [priority: medium]
+- Vendor Northline to send revised quotes by Friday [priority: medium]
 
 ## Detail
 A condensed narrative of the entire meeting, preserving ALL
@@ -629,16 +680,18 @@ _MEETING_V3_SHARED_SYSTEM = (
     "a bare integer sentence number and [spk:ID] is a speaker identifier.  "
     "Cite sentences as [67] (bare integer, no prefix)."
     "\n\n"
-    "SPEAKER REFERENCES:\n"
-    "- For meeting participants (those with [spk:X] in the transcript): "
-    "ALWAYS use [spk:ID].  NEVER use their name — you do not know it.\n"
-    "- For non-participants mentioned in the transcript (e.g. people "
-    "referenced but not present): use their name as mentioned.\n"
-    "- NEVER infer or guess that [spk:X] corresponds to a name mentioned "
-    "elsewhere in the transcript.  Even if a name appears frequently, "
-    "treat [spk:X] and the name as separate identities unless the "
-    "transcript text explicitly states the mapping (e.g. \"[spk:2] "
-    "introduced herself as Anjali\").  When in doubt, use [spk:ID].\n"
+    "SPEAKER IDENTITY:\n"
+    "- Transcript speakers are labeled only as [spk:ID] (e.g. [spk:0]). "
+    "Display names are applied later by the UI — never invent or paste "
+    "a display name next to a speaker tag.\n"
+    "- Meeting speaker / assignee among transcript speakers → use ONLY "
+    "[spk:ID]. Prefer ID whenever the person can be tied to a [spk:…] "
+    "(who spoke, who owns a task, who decided).\n"
+    "- Person named in dialogue who is NOT that speaker slot → plain "
+    "name as spoken, only when you cannot map them to a [spk:ID].\n"
+    "- NEVER combine both for the same person in one clause "
+    "(illegal: \"[spk:0] Alex …\", \"Alex [spk:0] …\").\n"
+    "- Prefer [spk:ID] over a bare name whenever either would work.\n"
     "- Use [spk:ID] only when attributing a claim, decision, or action "
     "to a person.  Do NOT prefix every sentence with the speaker tag."
     "\n\n"
@@ -1015,27 +1068,76 @@ A 3-5 paragraph overview covering all distinct discussion threads,
 decisions, and outcomes found in FOCUS sentences.  Be information-
 dense — prefer one well-crafted paragraph over three vague ones.
 Use [spk:ID] and [N] references (copy the number from the header).
-
-Use [spk:ID] for speakers.
+Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
+the same person's bare name).
 
 Use [N] to cite source sentences.
+
+SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
+and Detail):
+
+The transcript labels speakers only as [spk:ID] (e.g. [spk:0], [spk:1]).
+Display names are applied later by the product UI — you must NOT invent
+or paste display names next to a speaker tag.
+
+Two distinct cases:
+
+1) Meeting speaker / assignee among transcript speakers
+   → Use ONLY [spk:ID]. Never also write that person's name.
+   Prefer ID whenever the person can be tied to a [spk:…] in the
+   transcript (who spoke, who owns a task, who decided).
+
+2) Person mentioned in dialogue who is NOT used as a speaker slot
+   → Write their name as spoken in the transcript (plain text only).
+   Use a bare name ONLY when it is clearly a third party or someone
+   referred to by name and you cannot map them to a [spk:ID].
+   If they can be mapped to a speaker ID, use [spk:ID] instead (prefer ID).
+
+HARD RULES:
+- NEVER combine both forms for the same person in one clause
+  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …").
+- NEVER write a speaker's name in place of [spk:ID] for attribution.
+- Prefer [spk:ID] over a bare name whenever either would work.
+- Bare names are only for people clearly named in dialogue who are
+  not identified as a transcript speaker for that attribution.
+
+GOOD:
+- [spk:0] to prepare the Q3 budget report [priority: high]
+- [spk:1] recommended Option B; the team agreed. [42]
+- External vendor Northline to send revised quotes by Friday [88]
+  (third party named in dialogue, not a [spk:] in this meeting)
+
+BAD (double labeling — forbidden):
+- [spk:0] Alex to prepare the Q3 budget report
+- Alex [spk:0] to prepare the Q3 budget report
+- [spk:1] Jordan recommended Option B
+
+BAD (used bare name when a speaker ID applies):
+- Alex to prepare the Q3 budget report
+  (when Alex is [spk:0] in the transcript)
 
 ## Todo
 Every action item, commitment, or deadline found in FOCUS sentences.
 
-Format: "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is a meeting speaker:
+  "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is only a named third party (not a [spk:ID]):
+  "- <Name as in transcript> task description [priority: …]"
 
 Attribution rule — CRITICAL:
 Attribute each task to the person expected to DO it, NOT the person
-who merely mentioned it.  Example: if [spk:0] says "Zhang should
-update the dashboard", the task belongs to Zhang, not [spk:0].
+who merely mentioned it.
+Example: if [spk:0] says "Pat should update the dashboard", and Pat
+is not a transcript speaker, the task is Pat's (bare name). If Pat
+is [spk:2], write [spk:2], not "Pat", and never "[spk:2] Pat …".
 
 Priority: append [priority: high], [priority: medium], or
 [priority: low] at the end of each bullet when urgency is indicated.
 
 Examples:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- Finance Director Zhang to update the team dashboard [priority: medium]
+- [spk:1] to circulate the meeting notes [priority: medium]
+- Vendor Northline to send revised quotes by Friday [priority: medium]
 
 ## Data & Facts
 Every data point, figure, metric, decision, and deadline found in

@@ -1339,6 +1339,14 @@ def _resolve_current_version_id(collection: str, source: str) -> str | None:
         return None
 
 
+def _normalize_chunk_source_key(source: str) -> str:
+    """Canonical Qdrant source key — accept ``file:{id}`` alias as ``__file__:{id}``."""
+    s = (source or "").strip()
+    if s.startswith("file:") and not s.startswith("file://"):
+        return f"__file__:{s[len('file:'):].strip()}"
+    return s
+
+
 @router.get("/documents/{collection}/files/{source:path}/chunks")
 def get_file_chunks(
     collection: str,
@@ -1357,6 +1365,7 @@ def get_file_chunks(
     When *version_id* is set (old version open), return only that version's
     points and include archived ones (history rows are archived after upload).
     """
+    source = _normalize_chunk_source_key(source)
     if not services.db.collection_exists(collection):
         return {"collection": collection, "source": source, "chunks": [], "total": 0}
 
@@ -1393,16 +1402,27 @@ def get_file_chunks(
 
     total = services.db.count_by_filter(collection, filter_cond)
 
-    # Fallback ONLY for legacy docs with no version_id on the file row.
-    # If we pinned to current_version_id and got 0 (e.g. unsupported latest
-    # with no ingest), do NOT fall back to older non-archived leftovers —
-    # that is the "shows wrong version's chunks" bug.
+    # Fallback A: legacy docs with no version_id on the file row (never pinned).
     if (
         total == 0
         and not resolved_version
         and not include_archived
         and not pinned_to_current_version
     ):
+        fallback_must = [
+            FieldCondition(key="source", match=MatchValue(value=source))
+        ]
+        fallback_not = [
+            FieldCondition(key="archived", match=MatchValue(value=True))
+        ]
+        filter_cond = Filter(must=fallback_must, must_not=fallback_not)
+        total = services.db.count_by_filter(collection, filter_cond)
+
+    # Fallback B: pinned to current_version_id but 0 hits — common when points
+    # lack version_id (older ingest) while files.current_version_id is set.
+    # Match non-archived points for this source only (do not include archived
+    # history of other versions).
+    if total == 0 and pinned_to_current_version and not resolved_version:
         fallback_must = [
             FieldCondition(key="source", match=MatchValue(value=source))
         ]

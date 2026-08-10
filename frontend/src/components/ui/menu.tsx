@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils"
 
 /** Open/close duration — keep in sync with CSS `--pm-menu-ms` */
 export const MENU_MS = 180
+/** Silk exit (export menus etc.) — keep in sync with `.pm-meeting-export-menu` */
+export const MENU_SILK_MS = 280
 
 const Menu = React.forwardRef<
   HTMLDivElement,
@@ -23,7 +25,7 @@ const Menu = React.forwardRef<
 
 /**
  * Soft float menu shell — same motion language as DropdownSelect.
- * Mounts closed → rAF open; on close waits MENU_MS then unmounts.
+ * Mounts closed → rAF open; on close waits exitMs then unmounts so CSS can finish.
  *
  * `portal` + `anchorRef`: render fixed to document.body so overflow:hidden
  * ancestors (e.g. .pm-fmt-inner) cannot clip secondary menus.
@@ -35,6 +37,9 @@ function SoftMenu({
   portal = false,
   anchorRef,
   align = "start",
+  /** Unmount delay after close — match CSS transition (default MENU_MS). */
+  exitMs = MENU_MS,
+  style,
   ...props
 }: Omit<React.ComponentProps<"div">, "children"> & {
   open: boolean
@@ -44,6 +49,7 @@ function SoftMenu({
   anchorRef?: React.RefObject<HTMLElement | null>
   /** Horizontal alignment relative to anchor when portaled */
   align?: "start" | "center" | "end"
+  exitMs?: number
 }) {
   const [mounted, setMounted] = useState(false)
   const [shown, setShown] = useState(false)
@@ -68,7 +74,7 @@ function SoftMenu({
       setShown(false)
       exitTimer = setTimeout(() => {
         setMounted(false)
-      }, MENU_MS)
+      }, exitMs)
     }
 
     return () => {
@@ -76,7 +82,7 @@ function SoftMenu({
       if (raf1) cancelAnimationFrame(raf1)
       if (raf2) cancelAnimationFrame(raf2)
     }
-  }, [open])
+  }, [open, exitMs])
 
   useLayoutEffect(() => {
     if (!open || !portal || !anchorRef?.current) {
@@ -127,7 +133,13 @@ function SoftMenu({
         portal && align === "end" && "is-align-end",
         className
       )}
-      style={{ ...portalStyle, ...(props.style as React.CSSProperties) }}
+      style={{
+        ...portalStyle,
+        ...(exitMs !== MENU_MS
+          ? ({ ["--pm-menu-ms" as string]: `${exitMs}ms` } as React.CSSProperties)
+          : null),
+        ...(style as React.CSSProperties | undefined),
+      }}
       {...props}
     >
       {children}

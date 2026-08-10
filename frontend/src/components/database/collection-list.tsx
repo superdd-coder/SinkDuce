@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import { Pencil, Trash2 } from "lucide-react"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import type { CollectionItem } from "@/stores/app-store"
 
 interface CollectionListProps {
@@ -120,18 +120,26 @@ export function CollectionList({
     else rowRefs.current.delete(id)
   }, [])
 
+  const edgeFade = useScrollEdgeFade(listRef, collections.length)
+
   return (
-    <div className="pm-shell-collections">
-      <div className="pm-shell-collections-surface pm-float-surface">
-        <div className="pm-shell-collections-head">
-          <span className="pm-shell-collections-title">Collections</span>
-          <button type="button" onClick={onCreate} className="pm-shell-collections-new">
+    <aside className="pm-shell-collections" aria-label="Collections">
+      <div className="pm-shell-collections-surface">
+        <div className="pm-shell-collections-head pm-rail-head">
+          <h2 className="pm-shell-collections-title pm-rail-title">Collections</h2>
+          <button
+            type="button"
+            onClick={onCreate}
+            className="pm-shell-collections-new pm-rail-new"
+            title="New collection"
+          >
             New
           </button>
         </div>
 
-        <ScrollArea className="flex-1 min-h-0">
-          <div ref={listRef} className="pm-shell-col-list relative pb-3 pt-1">
+        {/* Native scroll + edge fades — same path as Chat Sessions / Meeting */}
+        <div className="pm-rail-list-shell">
+          <div ref={listRef} className="pm-shell-col-list">
             {indicator && (
               <div
                 className={cn(
@@ -186,7 +194,7 @@ export function CollectionList({
                         }}
                         title="Rename"
                       >
-                        <Pencil className="h-3 w-3" />
+                        <Pencil className="size-3" />
                       </button>
                       <button
                         type="button"
@@ -197,7 +205,7 @@ export function CollectionList({
                         }}
                         title="Delete"
                       >
-                        <Trash2 className="h-3 w-3" />
+                        <Trash2 className="size-3" />
                       </button>
                     </div>
                   </div>
@@ -205,8 +213,22 @@ export function CollectionList({
               )
             })}
           </div>
-        </ScrollArea>
+          <div
+            className={cn(
+              "pm-rail-edge-fade pm-rail-edge-fade--top",
+              edgeFade.top && "is-visible",
+            )}
+            aria-hidden
+          />
+          <div
+            className={cn(
+              "pm-rail-edge-fade pm-rail-edge-fade--bottom",
+              edgeFade.bottom && "is-visible",
+            )}
+            aria-hidden
+          />
+        </div>
       </div>
-    </div>
+    </aside>
   )
 }

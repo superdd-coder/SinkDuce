@@ -449,7 +449,7 @@ export function IconGrid({
           </div>
         ) : (
           <TooltipProvider delay={TIP_OPEN_MS} closeDelay={TIP_CLOSE_MS}>
-            <div className="flex flex-wrap gap-1 p-2">
+            <div className="pm-files-grid">
               {sortedItems.map((item) =>
                 item.kind === "folder" ? (
                   <FolderIconItem

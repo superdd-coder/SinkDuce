@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react"
 import {
   ChevronRight,
-  ChevronDown,
-  Check,
   Loader2,
   Sparkles,
   Layers,
 } from "lucide-react"
 import type { ThinkingIteration, ThinkingSummary, TaskSummary, AqSummary, MetaInfo } from "@/stores/app-store"
+import { cn } from "@/lib/utils"
 
 interface ThinkingStepsProps {
   steps: ThinkingIteration[]
@@ -19,19 +18,32 @@ interface ThinkingStepsProps {
 // ── Icons ──
 
 function AqIcon({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
-  // In-progress: still searching and no final chunks yet
   const isSearching =
     isStreaming && (aq.final_chunks ?? 0) === 0 && aq.has_gaps !== false
-  // Complete: retrieval sufficient, no gaps
   if (aq.has_gaps === false) {
-    return <span className="sk-diamond on shrink-0" aria-hidden />
+    return <span className="sk-diamond on sk-diamond-static shrink-0" aria-hidden />
   }
-  // Searching: breathing empty diamond
   if (isSearching) {
     return <span className="sk-diamond breathing shrink-0" aria-hidden />
   }
-  // Gaps remain after retrieval: empty diamond
   return <span className="sk-diamond shrink-0" aria-hidden />
+}
+
+/** Symmetric height fold — always mounted, open via .is-open (ENGINEERING §4). */
+function TrailFold({
+  open,
+  children,
+  className,
+}: {
+  open: boolean
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn("pm-chat-trail-body", open && "is-open", className)}>
+      <div>{children}</div>
+    </div>
+  )
 }
 
 // ── AQ row ──
@@ -40,57 +52,66 @@ function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const variants = aq.variants ?? []
   const totalQueries = 1 + (aq.variant_count ?? 0)
+  const canExpand = variants.length > 0
 
   return (
-    <div className="ml-5 text-[11px] leading-relaxed">
-      <div
-        className="flex items-start gap-1.5 py-0.5 cursor-pointer"
-        onClick={() => variants.length > 0 && setExpanded(!expanded)}
+    <div className="ml-5 pm-meta leading-relaxed">
+      <button
+        type="button"
+        className={cn(
+          "flex items-start gap-1.5 py-0.5 w-full text-left border-none bg-transparent p-0",
+          canExpand ? "cursor-pointer" : "cursor-default",
+        )}
+        onClick={() => canExpand && setExpanded((v) => !v)}
       >
-        {variants.length > 0 ? (
-          expanded ? <ChevronDown className="h-2.5 w-2.5 mt-0.5 shrink-0 text-muted-foreground" /> :
-          <ChevronRight className="h-2.5 w-2.5 mt-0.5 shrink-0 text-muted-foreground" />
+        {canExpand ? (
+          <span
+            className={cn(
+              "pm-chat-trail-chev shrink-0 mt-0.5",
+              expanded && "is-open",
+            )}
+            aria-hidden
+          >
+            <ChevronRight className="size-2.5 text-[var(--pm-faint)]" />
+          </span>
         ) : (
           <span className="w-2.5 shrink-0" />
         )}
         <span className="inline-flex items-center mt-1.5">
           <AqIcon aq={aq} isStreaming={isStreaming} />
         </span>
-        <span className="text-muted-foreground truncate">{aq.query}</span>
-        <span className="text-muted-foreground/50 shrink-0">
+        <span className="text-[var(--pm-muted)] truncate">{aq.query}</span>
+        <span className="text-[var(--pm-faint)] shrink-0">
           {(aq.final_chunks ?? 0) > 0 ? (
             <>→ {aq.final_chunks} chunks</>
           ) : (aq.current_chunks ?? 0) > 0 ? (
-            <span className="text-muted-foreground/40">
-              <Loader2 className="h-2.5 w-2.5 inline animate-spin mr-0.5" />
+            <span>
+              <Loader2 className="size-2.5 inline animate-spin mr-0.5" />
               {aq.current_chunks} chunks so far
             </span>
           ) : (
-            <span className="text-muted-foreground/30 italic">searching…</span>
+            <span className="italic">searching…</span>
           )}
           {totalQueries > 1 && (
-            <span className="text-muted-foreground/40 ml-1">
-              ({totalQueries} queries)
-            </span>
+            <span className="ml-1">({totalQueries} queries)</span>
           )}
         </span>
-      </div>
+      </button>
 
-      {/* Variant details */}
-      {expanded && variants.length > 0 && (
-        <div className="ml-7 mb-1 space-y-0.5">
-          <div className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
-            <Sparkles className="h-2.5 w-2.5 shrink-0" />
+      <TrailFold open={expanded && canExpand}>
+        <div className="ml-7 mb-1 space-y-0.5 pt-0.5">
+          <div className="pm-meta flex items-center gap-1 opacity-80">
+            <Sparkles className="size-2.5 shrink-0" />
             <span>original</span>
           </div>
           {variants.map((v, i) => (
-            <div key={i} className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
-              <Sparkles className="h-2.5 w-2.5 shrink-0 text-muted-foreground/30" />
+            <div key={i} className="pm-meta flex items-center gap-1 opacity-70">
+              <Sparkles className="size-2.5 shrink-0 opacity-50" />
               <span>variant {i + 1}: {v}</span>
             </div>
           ))}
         </div>
-      )}
+      </TrailFold>
     </div>
   )
 }
@@ -98,7 +119,6 @@ function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
 // ── Task group ──
 
 function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: boolean }) {
-  // Expand while live; fold when the parent stream finishes
   const [expanded, setExpanded] = useState(isStreaming)
   useEffect(() => {
     if (!isStreaming) setExpanded(false)
@@ -106,26 +126,28 @@ function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: bool
 
   return (
     <div>
-      <div
-        className="flex items-center gap-1.5 py-1 cursor-pointer text-[12px]"
-        onClick={() => setExpanded(!expanded)}
+      <button
+        type="button"
+        className="flex items-center gap-1.5 py-1 cursor-pointer pm-meta w-full text-left border-none bg-transparent p-0"
+        onClick={() => setExpanded((v) => !v)}
       >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-3 w-3 text-muted-foreground" />
-        )}
-        <Layers className="h-3 w-3 text-muted-foreground/50" />
-        <span className="font-[400]">{task.task || "Task"}</span>
-        <span className="text-muted-foreground/60">
+        <span
+          className={cn("pm-chat-trail-chev shrink-0", expanded && "is-open")}
+          aria-hidden
+        >
+          <ChevronRight className="size-3 text-[var(--pm-faint)]" />
+        </span>
+        <Layers className="size-3 text-[var(--pm-faint)]" />
+        <span className="text-[var(--pm-text)]">{task.task || "Task"}</span>
+        <span className="text-[var(--pm-faint)]">
           — {task.aq_count} AQ{task.aq_count > 1 ? "s" : ""}, {task.useful_chunks} useful chunks
         </span>
-      </div>
+      </button>
 
-      {expanded && (
-        <div>
+      <TrailFold open={expanded}>
+        <div className="pt-0.5">
           {task.task_query && (
-            <div className="ml-7 text-[10px] text-muted-foreground/40 mb-0.5 italic">
+            <div className="ml-7 pm-meta mb-0.5 italic opacity-70">
               {task.task_query}
             </div>
           )}
@@ -133,7 +155,7 @@ function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: bool
             <AqRow key={aq.aq_id} aq={aq} isStreaming={isStreaming} />
           ))}
         </div>
-      )}
+      </TrailFold>
     </div>
   )
 }
@@ -142,16 +164,18 @@ function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: bool
 
 export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: ThinkingStepsProps) {
   const [topExpanded, setTopExpanded] = useState(true)
-  useEffect(() => { if (!isStreaming) setTopExpanded(false) }, [isStreaming])
+  useEffect(() => {
+    if (!isStreaming) setTopExpanded(false)
+  }, [isStreaming])
 
-  // Waiting for first events — show spinner (original Agentic search chrome)
+  // Waiting for first events
   if (isStreaming && (!summary || (summary.tasks?.length ?? 0) === 0)) {
     return (
-      <div className="mt-5 pt-3.5 border-t border-dashed border-border">
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 italic">
-          <Loader2 className="h-3 w-3 animate-spin text-primary" />
-          <Sparkles className="h-3 w-3 text-[var(--ze-green)]" />
-          Agentic RAG — searching…
+      <div className="pm-chat-trail">
+        <div className="pm-chat-trail-toggle" style={{ cursor: "default" }}>
+          <span className="sk-diamond breathing" aria-hidden />
+          <span>Agentic RAG</span>
+          <span className="pm-chat-trail-sum">· searching…</span>
         </div>
       </div>
     )
@@ -160,72 +184,76 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
   // Prefer clean summary over verbose step tree
   if (summary && (summary.tasks?.length ?? 0) > 0) {
     return (
-      <div className="mt-5 pt-3.5 border-t border-dashed border-border">
-        {/* Meta info */}
+      <div className="pm-chat-trail">
         {metaInfo && (metaInfo.provider || metaInfo.model) && (
-          <div className="flex items-center gap-2 text-[10px] mb-2 flex-wrap text-muted-foreground">
+          <div className="pm-meta mb-1.5">
             {metaInfo.provider && metaInfo.model && (
               <span>{metaInfo.provider} / {metaInfo.model}</span>
             )}
           </div>
         )}
 
-        {/* Toggle */}
         <button
           type="button"
-          onClick={() => setTopExpanded(!topExpanded)}
-          className="flex items-center gap-1.5 mb-2 cursor-pointer"
+          onClick={() => setTopExpanded((v) => !v)}
+          className="pm-chat-trail-toggle"
+          aria-expanded={topExpanded}
         >
-          {isStreaming ? (
-            <span className="text-[10px] font-normal text-muted-foreground/50 w-3 text-center">
-              {topExpanded ? "▼" : "▶"}
+          <span
+            className={cn("pm-chat-trail-chev", topExpanded && "is-open")}
+            aria-hidden
+          >
+            <ChevronRight className="size-3 opacity-40" />
+          </span>
+          <span
+            className={`sk-diamond ${isStreaming ? "breathing" : "on sk-diamond-static"}`}
+            aria-hidden
+          />
+          <span>
+            Agentic RAG
+            <span className="pm-chat-trail-sum">
+              · {summary.task_count} task{summary.task_count > 1 ? "s" : ""}, {summary.aq_count} AQ
             </span>
-          ) : topExpanded ? (
-            <ChevronDown className="h-3 w-3 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-3 w-3 text-muted-foreground" />
-          )}
-          <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80">
-            <Sparkles className="h-3 w-3 inline mr-1 text-[var(--ze-green)]" />
-            Agentic RAG · {summary.task_count} task{summary.task_count > 1 ? "s" : ""}, {summary.aq_count} AQ{summary.aq_count > 1 ? "s" : ""}
           </span>
         </button>
 
-        {/* Live status */}
         {summary.status && isStreaming && (
-          <div className="ml-1 text-[10px] text-muted-foreground/50 italic mb-1 truncate">
+          <div className="pm-meta italic mt-1 ml-5 truncate">
             {summary.status}
           </div>
         )}
 
-        {/* Tasks */}
-        {topExpanded && (
-          <div className="space-y-1">
+        {/* Always mounted — grid 0fr↔1fr + opacity (symmetric open/close) */}
+        <TrailFold open={topExpanded}>
+          <div className="mt-1.5 space-y-0.5 pl-0.5">
             {(summary.tasks ?? []).map((task, i) => (
               <TaskGroup key={i} task={task} isStreaming={isStreaming} />
             ))}
 
-            {/* Generating indicator */}
             {isStreaming && (
-              <div className="flex items-center gap-2 ml-1 py-1 text-[11px] text-muted-foreground/60 italic">
-                <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              <div className="flex items-center gap-2 py-1 pm-meta italic">
+                <Loader2 className="size-3 animate-spin text-[var(--pm-faint)]" />
                 Generating answer…
               </div>
             )}
           </div>
-        )}
+        </TrailFold>
       </div>
     )
   }
 
-  // Tool was used but no detailed task breakdown — show compact summary
+  // Tool was used but no detailed task breakdown
   if (summary && !isStreaming) {
     return (
-      <div className="mt-5 pt-3.5 border-t border-dashed border-border">
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60">
-          <Check className="h-3 w-3 text-emerald-500" />
-          <Sparkles className="h-3 w-3 text-[var(--ze-green)]" />
-          Agentic RAG — {summary.aq_count > 0 ? `${summary.aq_count} AQ${summary.aq_count > 1 ? "s" : ""} searched` : "search completed"}
+      <div className="pm-chat-trail">
+        <div className="pm-chat-trail-toggle" style={{ cursor: "default" }}>
+          <span className="sk-diamond on sk-diamond-static" aria-hidden />
+          <span>Agentic RAG</span>
+          <span className="pm-chat-trail-sum">
+            · {summary.aq_count > 0
+              ? `${summary.aq_count} AQ searched`
+              : "search completed"}
+          </span>
         </div>
       </div>
     )
@@ -237,19 +265,23 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
   const totalSteps = steps.reduce((acc, g) => acc + g.steps.length, 0)
 
   return (
-    <div className="mt-5 pt-3.5 border-t border-dashed border-border">
+    <div className="pm-chat-trail">
       <button
         type="button"
-        onClick={() => setTopExpanded(!topExpanded)}
-        className="flex items-center gap-1.5 mb-2 cursor-pointer"
+        onClick={() => setTopExpanded((v) => !v)}
+        className="pm-chat-trail-toggle"
+        aria-expanded={topExpanded}
       >
-        {topExpanded ? (
-          <ChevronDown className="h-3 w-3 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-3 w-3 text-muted-foreground" />
-        )}
-        <span className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80">
-          Steps · {totalSteps}
+        <span
+          className={cn("pm-chat-trail-chev", topExpanded && "is-open")}
+          aria-hidden
+        >
+          <ChevronRight className="size-3 opacity-40" />
+        </span>
+        <span className="sk-diamond on sk-diamond-static" aria-hidden />
+        <span>
+          Steps
+          <span className="pm-chat-trail-sum">· {totalSteps}</span>
         </span>
       </button>
     </div>

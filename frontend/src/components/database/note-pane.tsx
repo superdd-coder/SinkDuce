@@ -28,7 +28,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
 } from "@/components/ui/dialog"
 import { SoftMenu, MenuItem } from "@/components/ui/menu"
 import { _triggerFilesRefresh } from "@/components/database/database-view"
@@ -1311,40 +1317,39 @@ export function NotePane({
       )}
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="pm-dialog max-w-sm !gap-3">
-          <DialogHeader className="!gap-1">
+        <DialogContent
+          className="pm-dialog pm-dialog-confirm sm:max-w-[320px]"
+          showCloseButton={false}
+        >
+          <DialogHeader>
+            <DialogKicker>{managedFileId ? "File" : "Note"}</DialogKicker>
             <DialogTitle>
-              {managedFileId ? "Delete File Globally" : "Delete Note"}
+              {managedFileId ? "Delete file globally?" : "Delete note?"}
             </DialogTitle>
+            {note?.title ? (
+              <p className="pm-dialog-confirm-target" title={note.title}>
+                {note.title}
+              </p>
+            ) : null}
+            <DialogDescription>
+              {managedFileId
+                ? "Permanently removes this note and its managed file, including every version. This cannot be undone."
+                : "This note will be permanently removed. This cannot be undone."}
+            </DialogDescription>
           </DialogHeader>
-          <p className="pm-dialog-body">
-            {managedFileId ? (
-              <>
-                Permanently delete{" "}
-                <span className="font-medium text-[var(--pm-ink)]">
-                  &quot;{note?.title}&quot;
-                </span>{" "}
-                and its managed file, including all versions. This cannot be undone.
-              </>
-            ) : (
-              <>
-                Delete{" "}
-                <span className="font-medium text-[var(--pm-ink)]">
-                  &quot;{note?.title}&quot;
-                </span>
-                ? This cannot be undone.
-              </>
-            )}
-          </p>
-          <DialogFooter className="gap-2">
+          <DialogFooter>
             <Button
+              type="button"
               variant="ghost"
+              size="sm"
               onClick={() => setDeleteOpen(false)}
             >
               Cancel
             </Button>
             <Button
+              type="button"
               variant="destructive-solid"
+              size="sm"
               onClick={() => void handleDeleteConfirm()}
             >
               {managedFileId ? "Delete all versions" : "Delete"}

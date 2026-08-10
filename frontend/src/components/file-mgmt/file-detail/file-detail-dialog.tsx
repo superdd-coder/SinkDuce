@@ -2818,7 +2818,9 @@ export function FileMgmtDetailDialog({
         key="file-add-msg"
         open={addMsgDialogOpen}
         onOpenChange={setAddMsgDialogOpen}
-        title="Add Message"
+        title="Add message"
+        kicker="File"
+        description="New message on this file."
         initialContent=""
         onSave={(content) => void handleAddMessage(content)}
         readonly={false}

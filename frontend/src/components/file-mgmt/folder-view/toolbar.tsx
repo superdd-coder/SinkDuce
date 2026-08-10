@@ -566,9 +566,10 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                 <FolderInput />
                 Upload Folder
               </Button>
+              <ToolbarDivider />
             </>
           )}
-          {/* Sort files in current folder */}
+          {/* Sort / Select — secondary cluster */}
           <div className="relative">
             <Button
               variant="ghost"
@@ -1024,20 +1025,24 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
 
   return (
     <div className="pm-files-toolbar">
-      {/* Up one level — icon only (stays put during mode swap) */}
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={handleGoUp}
-        disabled={!canGoUp}
-        title={canGoUp ? "Go up one level" : "Already at root"}
-        className={tbIconBtn}
-      >
-        <ChevronLeft />
-      </Button>
+      {/* Nav well — stays put while tool chrome crossfades */}
+      <div className="pm-files-tb-nav">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleGoUp}
+          disabled={!canGoUp}
+          title={canGoUp ? "Go up one level" : "Already at root"}
+          className={tbIconBtn}
+        >
+          <ChevronLeft />
+        </Button>
+      </div>
 
-      {/* Any toolKey change → dual-layer crossfade (CSS keyframes on mount) */}
-      <div className="relative flex-1 min-w-0 h-6 overflow-visible" ref={menusRef}>
+      <div className="pm-files-tb-sep" aria-hidden />
+
+      {/* Primary tool strip — dual-layer crossfade on mode swap */}
+      <div className="pm-files-toolbar-tools relative flex-1 min-w-0 overflow-visible" ref={menusRef}>
         {leaving && (
           <div
             key={`leave-${leaving.swapId}`}

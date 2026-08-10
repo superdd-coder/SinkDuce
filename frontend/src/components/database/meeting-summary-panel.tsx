@@ -431,34 +431,45 @@ export function MeetingSummaryPanel({
 
       <div
         className={cn(
-          "pm-ws-doc-body relative flex-1 min-h-0 flex flex-col",
+          "pm-ws-doc-body pm-ws-meeting-summary relative flex-1 min-h-0 flex flex-col",
           docSwapPhase === "out" && "is-doc-out",
           docSwapPhase === "in" && "is-doc-in",
           docSwapPhase === "idle" && "is-doc-idle"
         )}
       >
+        {/*
+          Same reading shell as Meeting content card Summary:
+          body-prose pad + body-read + SummaryMarkdownViewer (full card width).
+        */}
         <div
           className={cn(
-            "flex-1 overflow-y-auto min-h-0 px-6 py-4",
+            "flex-1 overflow-y-auto min-h-0",
             swapBusy && "pointer-events-none select-none"
           )}
         >
           {mode === "view" ? (
-            <SummaryMarkdownViewer
-              md={rawContent}
-              speakerNames={speakerNames}
-              onRefClick={() => {
-                /* note context: no transcript seek */
-              }}
-            />
+            <div className="pm-meeting-body-prose pm-ws-meeting-body-prose">
+              <div className="pm-meeting-body-read">
+                <SummaryMarkdownViewer
+                  md={rawContent}
+                  speakerNames={speakerNames}
+                  onRefClick={() => {
+                    /* note context: no transcript seek */
+                  }}
+                />
+              </div>
+            </div>
           ) : (
-            <MarkdownEditor
-              value={editContent}
-              onChange={swapBusy ? () => {} : handleEditChange}
-              showToolbar={false}
-              className="min-h-[200px]"
-              placeholder="Summary is empty..."
-            />
+            <div className="pm-meeting-body-prose pm-ws-meeting-body-prose">
+              <MarkdownEditor
+                value={editContent}
+                onChange={swapBusy ? () => {} : handleEditChange}
+                showToolbar={false}
+                flush
+                className="min-h-[200px] w-full max-w-none"
+                placeholder="Summary is empty..."
+              />
+            </div>
           )}
         </div>
       </div>

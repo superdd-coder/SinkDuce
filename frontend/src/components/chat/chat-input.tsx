@@ -5,7 +5,9 @@ import { Globe, Sparkles } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { useStreamChat } from "@/hooks/use-stream"
 import { uploadFiles } from "@/api/client"
+import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 import {
   loadWebSearchForSession,
   setSessionWebSearch,
@@ -34,7 +36,6 @@ export function ChatInput() {
   const [input, setInput] = useState("")
   const [showCollections, setShowCollections] = useState(false)
   const [thinking, setThinking] = useState(() => persisted("thinking", true))
-  // Web toggle: remembered per session (default OFF)
   const sessionId = useAppStore((s) => s.sessionId)
   const [webSearch, setWebSearch] = useState(() => loadWebSearchForSession(null))
   const {
@@ -73,11 +74,12 @@ export function ChatInput() {
   const providerMenuRef = useRef<HTMLDivElement>(null)
   const providerDropdownRef = useRef<HTMLDivElement>(null)
   const providerButtonRef = useRef<HTMLButtonElement>(null)
+  /** Force re-measure on open (layout can shift). */
+  const [, setMenuTick] = useState(0)
 
   useEffect(() => { fetchCollections() }, [fetchCollections])
   useEffect(() => { localStorage.setItem("chat_thinking", JSON.stringify(thinking)) }, [thinking])
 
-  // Restore Web preference when switching / creating sessions
   useEffect(() => {
     setWebSearch(loadWebSearchForSession(sessionId))
   }, [sessionId])
@@ -86,20 +88,18 @@ export function ChatInput() {
     setWebSearch((prev) => {
       const next = !prev
       const sid = useAppStore.getState().sessionId
-      // Persist under current session, or draft if none yet
       setSessionWebSearch(sid, next)
-      // Turning Web off also clears always-allow for this session
       if (!next) clearWebSearchAlwaysAllow(sid)
       return next
     })
   }
 
-  // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current
     if (el) {
       el.style.height = "auto"
-      el.style.height = Math.min(el.scrollHeight, 160) + "px"
+      /* Cap growth so the floating card stays compact */
+      el.style.height = Math.min(el.scrollHeight, 96) + "px"
     }
   }, [input])
 
@@ -129,11 +129,24 @@ export function ChatInput() {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
+  // Reposition open menus on scroll/resize
+  useEffect(() => {
+    if (!showCollections && !showProviderMenu) return
+    const bump = () => setMenuTick((t) => t + 1)
+    window.addEventListener("resize", bump)
+    window.addEventListener("scroll", bump, true)
+    return () => {
+      window.removeEventListener("resize", bump)
+      window.removeEventListener("scroll", bump, true)
+    }
+  }, [showCollections, showProviderMenu])
+
   const readyProviders = providers.filter((p) => (p.status === "ready" || p.status === "unknown" || !p.status))
   const providerList = readyProviders.length > 0 ? readyProviders : providers
   const currentProvider = activeProvider
     ? providerList.find((p) => p.id === activeProvider) || providers.find((p) => p.id === activeProvider)
     : providerList.find((p) => p.is_default) || providerList[0]
+
   const handleSend = async () => {
     const text = input.trim()
     if (!text || isStreaming) return
@@ -161,11 +174,9 @@ export function ChatInput() {
     ? "All collections"
     : `${selectedCollections.length} collection${selectedCollections.length !== 1 ? "s" : ""}`
 
-  // Anchor web-confirm card to this composer (width + position)
   const composerRef = useRef<HTMLDivElement>(null)
   const sidebarView = useAppStore((s) => s.sidebarView)
   useEffect(() => {
-    // Re-claim anchor whenever Chat is the active view (Quick may have stolen it)
     if (sidebarView !== "chat") return
     const el = composerRef.current
     if (el) setWebSearchConfirmAnchor(el)
@@ -174,289 +185,354 @@ export function ChatInput() {
     }
   }, [sidebarView])
 
+  const modelLabel =
+    activeModel ||
+    currentProvider?.default_model ||
+    currentProvider?.model ||
+    currentProvider?.name ||
+    "Default provider"
+
+  const colBtnRect = buttonRef.current?.getBoundingClientRect()
+  const colHostRect = collectionMenuRef.current?.getBoundingClientRect()
+  const provHostRect = providerMenuRef.current?.getBoundingClientRect()
+
   return (
-    <div className="px-6 sm:px-12 pb-5 pt-1">
-      <div
-        ref={composerRef}
-        className="max-w-3xl mx-auto w-full space-y-2.5 bg-background/70 backdrop-blur-lg border px-5 py-3 sk-input-frame"
-        style={{ borderRadius: "4px" }}
-      >
-        {/* Toolbar — no overflow-hidden: Web toggle must not clip the model menu */}
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[10px] font-medium uppercase tracking-[0.1em]">
-          {/* Collection selector */}
-          <div className="relative shrink-0" ref={collectionMenuRef}>
-            <button
-              type="button"
-              ref={buttonRef}
-              onClick={() => setShowCollections(!showCollections)}
-              className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
-              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "155px", color: showCollections ? "var(--color-primary-foreground)" : selectedCollections.length > 0 ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
-            >
-              <span className="relative z-10 whitespace-nowrap text-center">
-                {collectionLabel}
-              </span>
-              <span
-                className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-                style={{
-                  transform: showCollections ? "scaleX(1)" : "scaleX(0)",
-                  transformOrigin: showCollections ? "right" : "left",
-                }}
-              />
-            </button>
-            {createPortal(
-              <div
-                ref={dropdownRef}
-                className={`fixed z-[100] flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                  showCollections
-                    ? "opacity-100 visible translate-y-0 pointer-events-auto"
-                    : "opacity-0 invisible translate-y-3 pointer-events-none"
-                }`}
-                style={{
-                  width: buttonRef.current ? buttonRef.current.getBoundingClientRect().width : "auto",
-                  bottom: collectionMenuRef.current ? window.innerHeight - collectionMenuRef.current.getBoundingClientRect().top + 4 : 0,
-                  left: collectionMenuRef.current ? collectionMenuRef.current.getBoundingClientRect().left : 0,
-                }}
-              >
-                {collections.map((col) => (
-                  <label
-                    key={col.id}
-                    onClick={() => toggleCollection(col.id)}
-                    className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
-                  >
-                    <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                      <span
-                        className={`sk-diamond ${selectedCollections.includes(col.id) ? "on" : ""}`}
-                        aria-hidden
-                      />
-                      <span className="whitespace-normal break-words min-w-0 leading-snug">{col.name}</span>
-                    </span>
-                    <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                  </label>
-                ))}
-              </div>,
-              document.body
+    <div
+      ref={composerRef}
+      className={cn(
+        "pm-chat-composer sk-input-frame",
+        isStreaming && "is-streaming",
+      )}
+    >
+      {/* Toolbar — collection · Think · Web · model */}
+      <div className="pm-chat-composer-tools">
+        {/* Collection selector — original diamond + green wipe, rounded shell */}
+        <div className="relative shrink-0" ref={collectionMenuRef}>
+          <button
+            type="button"
+            ref={buttonRef}
+            onClick={() => {
+              setShowCollections((v) => !v)
+              setMenuTick((t) => t + 1)
+            }}
+            className={cn(
+              "pm-chat-tool-chip pm-chat-tool-chip--wipe",
+              selectedCollections.length > 0 && "is-on",
+              showCollections && "is-menu-open",
             )}
-          </div>
-
-          <div className="w-px h-3 bg-border" />
-
-          {/* Thinking toggle — AI-COMP-060 full-body green flow when ON */}
-          <button
-            type="button"
-            className={`shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${thinking ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
-            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: thinking ? "2px 7px" : "0", borderRadius: "2px" }}
-            onClick={() => setThinking(!thinking)}
-            title={
-              thinking
-                ? "Model deep reasoning ON (reasoning tokens / <think>). Tool & search steps still show."
-                : "Model deep reasoning OFF. You may still see tool / search steps — those are not Think mode."
-            }
           >
-            <Sparkles className="h-3 w-3" />
-            Think
+            <span className="pm-chat-tool-chip-label whitespace-nowrap text-center">
+              {collectionLabel}
+            </span>
+            <span className="pm-chat-tool-chip-wipe" aria-hidden />
           </button>
-
-          <div className="w-px h-3 bg-border shrink-0" />
-
-          {/* Web search toggle — requires Tavily API key in Settings */}
-          <button
-            type="button"
-            className={`shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${webSearch ? "sk-thinking-flow text-primary" : "border-none bg-transparent text-muted-foreground hover:text-primary"}`}
-            style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", padding: webSearch ? "2px 7px" : "0", borderRadius: "2px" }}
-            onClick={toggleWebSearch}
-            title={
-              webSearch
-                ? "Web search ON for this session — may ask to confirm before searching the internet"
-                : "Web search OFF for this session — knowledge base only (set Tavily API key in Settings)"
-            }
-          >
-            <Globe className="h-3 w-3" />
-            Web
-          </button>
-
-          <div className="w-px h-3 bg-border shrink-0" />
-
-          {/* Provider/Model cascading menu — always visible (not gated solely on ready list) */}
-          <div className="relative shrink-0" ref={providerMenuRef}>
-            <button
-              type="button"
-              ref={providerButtonRef}
-              onClick={() => { setShowProviderMenu(!showProviderMenu); setHoveredProvider(null) }}
-              className="group relative flex items-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]"
-              style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", minWidth: "160px", color: showProviderMenu ? "var(--color-primary-foreground)" : activeProvider ? "var(--color-primary)" : "var(--color-muted-foreground)" }}
+          {createPortal(
+            <div
+              ref={dropdownRef}
+              className={cn(
+                "pm-chat-pop pm-chat-pop--collections",
+                showCollections && "is-open",
+              )}
+              style={{
+                width: colBtnRect ? Math.max(colBtnRect.width, 180) : 180,
+                minWidth: 155,
+                bottom: colHostRect
+                  ? Math.max(8, window.innerHeight - colHostRect.top + 6)
+                  : 0,
+                left: colHostRect ? colHostRect.left : 0,
+              }}
             >
-              <span className="relative z-10 whitespace-nowrap">
-                {activeModel || currentProvider?.default_model || currentProvider?.model || currentProvider?.name || "Default provider"}
-              </span>
-              <span
-                className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-                style={{ transform: showProviderMenu ? "scaleX(1)" : "scaleX(0)", transformOrigin: showProviderMenu ? "right" : "left" }}
-              />
-            </button>
-            {createPortal(
+              {collections.length === 0 ? (
+                <div className="pm-chat-pop-empty">No collections</div>
+              ) : (
+                <div className="pm-chat-pop-scroll">
+                  {collections.map((col) => (
+                    <label
+                      key={col.id}
+                      onClick={() => toggleCollection(col.id)}
+                      className="pm-chat-pop-item group"
+                    >
+                      <span className="pm-chat-pop-item-label is-wrap">
+                        <span
+                          className={cn(
+                            "sk-diamond",
+                            selectedCollections.includes(col.id) && "on",
+                          )}
+                          aria-hidden
+                        />
+                        <span className="pm-chat-pop-item-name">{col.name}</span>
+                      </span>
+                      <span className="pm-chat-pop-item-wipe" aria-hidden />
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>,
+            document.body,
+          )}
+        </div>
+
+        <span className="pm-chat-tool-sep" aria-hidden />
+
+        {/* Think — flow layers always mounted; .is-on fades in (no hard cut) */}
+        <button
+          type="button"
+          className={cn(
+            "pm-chat-tool-chip pm-chat-tool-chip--flow",
+            thinking && "is-on",
+          )}
+          onClick={() => setThinking(!thinking)}
+          title={
+            thinking
+              ? "Model deep reasoning ON (reasoning tokens / <think>). Tool & search steps still show."
+              : "Model deep reasoning OFF. You may still see tool / search steps — those are not Think mode."
+          }
+        >
+          <Sparkles className="size-3" />
+          Think
+        </button>
+
+        <span className="pm-chat-tool-sep" aria-hidden />
+
+        {/* Web — same enter/exit flow fade as Think */}
+        <button
+          type="button"
+          className={cn(
+            "pm-chat-tool-chip pm-chat-tool-chip--flow",
+            webSearch && "is-on",
+          )}
+          onClick={toggleWebSearch}
+          title={
+            webSearch
+              ? "Web search ON for this session — may ask to confirm before searching the internet"
+              : "Web search OFF for this session — knowledge base only (set Tavily API key in Settings)"
+          }
+        >
+          <Globe className="size-3" />
+          Web
+        </button>
+
+        <span className="pm-chat-tool-sep" aria-hidden />
+
+        {/* Provider / model cascade — original wipe + slide-in models, rounded premium */}
+        <div className="relative shrink-0" ref={providerMenuRef}>
+          <button
+            type="button"
+            ref={providerButtonRef}
+            onClick={() => {
+              setShowProviderMenu((v) => !v)
+              setHoveredProvider(null)
+              setMenuTick((t) => t + 1)
+            }}
+            className={cn(
+              "pm-chat-tool-chip pm-chat-tool-chip--wipe",
+              activeProvider && "is-on",
+              showProviderMenu && "is-menu-open",
+            )}
+          >
+            <span className="pm-chat-tool-chip-label truncate max-w-[9rem]">
+              {modelLabel}
+            </span>
+            <span className="pm-chat-tool-chip-wipe" aria-hidden />
+          </button>
+          {createPortal(
+            <div
+              ref={providerDropdownRef}
+              className={cn(
+                "pm-chat-pop pm-chat-pop--cascade",
+                showProviderMenu && "is-open",
+              )}
+              style={{
+                bottom: provHostRect
+                  ? Math.max(8, window.innerHeight - provHostRect.top + 6)
+                  : 0,
+                left: provHostRect ? provHostRect.left : 0,
+              }}
+            >
               <div
-                ref={providerDropdownRef}
-                className={`fixed z-[100] flex overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                  showProviderMenu ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible translate-y-3 pointer-events-none"
-                }`}
-                style={{
-                  bottom: providerMenuRef.current ? window.innerHeight - providerMenuRef.current.getBoundingClientRect().top + 4 : 0,
-                  left: providerMenuRef.current ? providerMenuRef.current.getBoundingClientRect().left : 0,
-                }}
+                className={cn(
+                  "pm-chat-pop-col",
+                  hoveredProvider && "is-split",
+                )}
               >
-                {/* Left: provider list */}
-                <div className={`flex flex-col flex-1 min-w-[160px] ${hoveredProvider ? "border-r border-primary/20" : ""}`}>
-                  <button
-                    type="button"
-                    className="group relative flex items-center overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap w-full"
-                    onMouseEnter={() => setHoveredProvider(null)}
-                    onClick={() => {
-                      useAppStore.getState().setActiveProvider(null)
-                      setActiveModel(null)
-                      setShowProviderMenu(false)
-                    }}
-                  >
-                    <span className="relative z-10 text-muted-foreground group-hover:text-primary-foreground transition-colors duration-500">Default</span>
-                    <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100" />
-                  </button>
-                  {(readyProviders.length > 0 ? readyProviders : providers).map((p) => {
-                    const provModels = p.selected_models && p.selected_models.length > 0
+                <button
+                  type="button"
+                  className={cn(
+                    "pm-chat-pop-item group",
+                    !activeProvider && "is-active",
+                  )}
+                  onMouseEnter={() => setHoveredProvider(null)}
+                  onClick={() => {
+                    useAppStore.getState().setActiveProvider(null)
+                    setActiveModel(null)
+                    setShowProviderMenu(false)
+                  }}
+                >
+                  <span className="pm-chat-pop-item-label">Default</span>
+                  <span className="pm-chat-pop-item-wipe" aria-hidden />
+                </button>
+                {(readyProviders.length > 0 ? readyProviders : providers).map((p) => {
+                  const provModels =
+                    p.selected_models && p.selected_models.length > 0
                       ? p.selected_models
-                      : p.model ? [p.model] : []
-                    const isActive = activeProvider === p.id && !hoveredProvider
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className="group relative flex items-center justify-between overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap w-full"
-                        onMouseEnter={() => setHoveredProvider(p.id)}
-                      >
-                        <span className={`relative z-10 transition-colors duration-500 ${isActive ? "text-primary" : hoveredProvider === p.id ? "text-primary-foreground" : "text-muted-foreground group-hover:text-primary-foreground"}`}>
+                      : p.model
+                        ? [p.model]
+                        : []
+                  const isActive = activeProvider === p.id && !hoveredProvider
+                  const isHover = hoveredProvider === p.id
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={cn(
+                        "pm-chat-pop-item group",
+                        isActive && "is-active",
+                        isHover && "is-hover",
+                      )}
+                      onMouseEnter={() => setHoveredProvider(p.id)}
+                    >
+                      <span className="pm-chat-pop-item-label">
+                        <span className="pm-chat-pop-item-name truncate">
                           {p.name || p.model}
                         </span>
-                        {provModels.length > 0 && <span className={`relative z-10 text-[8px] transition-opacity duration-500 ${hoveredProvider === p.id ? "opacity-60" : "opacity-40 group-hover:opacity-60"}`}>→</span>}
-                        <span className={`absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] origin-left ${hoveredProvider === p.id ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"}`} />
-                      </button>
-                    )
-                  })}
-                  {providers.length === 0 && (
-                    <div className="px-3 py-2 text-[10px] text-muted-foreground/60 italic">
-                      No providers — configure in Settings
-                    </div>
-                  )}
-                </div>
-                {/* Right: model list — slides in on hover */}
-                <div
-                  className={`flex flex-col overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                    hoveredProvider
-                      ? "max-w-[200px] opacity-100"
-                      : "max-w-0 opacity-0"
-                  }`}
-                >
-                  <div className="min-w-[140px]">
-                    {(() => {
-                      const list = readyProviders.length > 0 ? readyProviders : providers
-                      const hp = hoveredProvider ? list.find(p => p.id === hoveredProvider) : null
-                      const allModels = hp
-                        ? (hp.selected_models && hp.selected_models.length > 0 ? hp.selected_models : hp.model ? [hp.model] : [])
-                        : []
-                      // Only show models with function calling support (required for ChatboxAgent)
-                      const fcIds = (hp as any)?.function_call_model_ids ?? []
-                      const models = allModels.filter((m: string) => fcIds.length === 0 || fcIds.includes(m))
-                      if (models.length === 0) return null
-                      return models.map((m) => (
-                        <button
-                          key={m}
-                          type="button"
-                          className="group relative block w-full overflow-hidden px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-left whitespace-nowrap"
-                          onClick={() => {
-                            if (hoveredProvider) {
-                              useAppStore.getState().setActiveProvider(hoveredProvider)
-                              setActiveModel(m)
-                            }
-                            setShowProviderMenu(false)
-                          }}
-                        >
-                          <span className={`relative z-10 transition-colors duration-500 ${activeProvider === hoveredProvider && activeModel === m ? "text-primary group-hover:text-primary-foreground" : "text-muted-foreground group-hover:text-primary-foreground"}`}>
-                            {m}
-                          </span>
-                          <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100" />
-                        </button>
-                      ))
-                    })()}
+                      </span>
+                      {provModels.length > 0 && (
+                        <span className="pm-chat-pop-item-arrow">→</span>
+                      )}
+                      <span className="pm-chat-pop-item-wipe" aria-hidden />
+                    </button>
+                  )
+                })}
+                {providers.length === 0 && (
+                  <div className="pm-chat-pop-empty">
+                    No providers — configure in Settings
                   </div>
+                )}
+              </div>
+
+              <div
+                className={cn(
+                  "pm-chat-pop-models",
+                  hoveredProvider && "is-open",
+                )}
+              >
+                <div className="pm-chat-pop-models-inner">
+                  {(() => {
+                    const list = readyProviders.length > 0 ? readyProviders : providers
+                    const hp = hoveredProvider
+                      ? list.find((p) => p.id === hoveredProvider)
+                      : null
+                    const allModels = hp
+                      ? hp.selected_models && hp.selected_models.length > 0
+                        ? hp.selected_models
+                        : hp.model
+                          ? [hp.model]
+                          : []
+                      : []
+                    const fcIds =
+                      (hp as { function_call_model_ids?: string[] } | null)
+                        ?.function_call_model_ids ?? []
+                    const models = allModels.filter(
+                      (m: string) => fcIds.length === 0 || fcIds.includes(m),
+                    )
+                    if (models.length === 0) return null
+                    return models.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        className={cn(
+                          "pm-chat-pop-item group",
+                          activeProvider === hoveredProvider &&
+                            activeModel === m &&
+                            "is-active",
+                        )}
+                        onClick={() => {
+                          if (hoveredProvider) {
+                            useAppStore.getState().setActiveProvider(hoveredProvider)
+                            setActiveModel(m)
+                          }
+                          setShowProviderMenu(false)
+                        }}
+                      >
+                        <span className="pm-chat-pop-item-label">
+                          <span className="pm-chat-pop-item-name truncate">{m}</span>
+                        </span>
+                        <span className="pm-chat-pop-item-wipe" aria-hidden />
+                      </button>
+                    ))
+                  })()}
                 </div>
-              </div>,
-              document.body
-            )}
-          </div>
-        </div>
-
-        {/* Input area */}
-        <div className="flex items-end gap-3">
-          <input ref={fileRef} type="file" multiple accept=".pdf,.txt,.md,.docx,.xlsx,.pptx" className="hidden" onChange={handleFileAttach} />
-
-          <div className="relative flex-1">
-            <textarea
-              ref={textareaRef}
-              className="w-full resize-none border-0 border-b border-border px-0 py-2.5 text-sm min-h-[40px] max-h-[160px] outline-none bg-transparent leading-[1.7] focus:border-primary t-body-italic-family"
-              style={{ color: "var(--ze-text)", borderRadius: 0 }}
-              placeholder="Ask about your documents…"
-              rows={1}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isStreaming}
-            />
-            {isStreaming && <span className="sk-stream-cursor absolute right-0 bottom-3" aria-hidden />}
-          </div>
-        </div>
-
-        {/* Disclaimer + Send row */}
-        <div className="flex items-center justify-between gap-3 pt-1">
-          <p
-            className="select-none text-left flex-1 min-w-0 t-body-italic-family"
-            style={{
-              fontSize: "10px",
-              fontWeight: 400,
-              color: "oklch(0.38 0.07 160 / 0.85)",
-            }}
-          >
-            AI-generated answers may contain errors. Please verify critical information.
-          </p>
-          {isStreaming ? (
-            <button
-              type="button"
-              className="shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family sk-stop-btn"
-              style={{
-                fontSize: "10px", fontWeight: 600,
-                textTransform: "uppercase", letterSpacing: "0.12em",
-                padding: "5px 14px", borderRadius: "2px",
-              }}
-              onClick={stopGeneration}
-            >
-              Cancel
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="shrink-0 flex items-center gap-1.5 cursor-pointer t-sans-family sk-send-btn"
-              style={{
-                fontSize: "10px", fontWeight: 600,
-                textTransform: "uppercase", letterSpacing: "0.12em",
-                padding: "5px 14px", borderRadius: "2px",
-                opacity: !input.trim() ? 0.32 : 1,
-              }}
-              onClick={handleSend}
-              disabled={!input.trim()}
-            >
-              Send
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
-            </button>
+              </div>
+            </div>,
+            document.body,
           )}
         </div>
       </div>
+
+      {/* Input + send on one row — keeps card short (QC-like density) */}
+      <div className="pm-chat-composer-main">
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept=".pdf,.txt,.md,.docx,.xlsx,.pptx"
+          className="hidden"
+          onChange={handleFileAttach}
+        />
+        <div className="pm-chat-composer-field">
+          <textarea
+            ref={textareaRef}
+            className="pm-chat-composer-textarea"
+            placeholder="Ask about your documents…"
+            rows={1}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isStreaming}
+          />
+          {isStreaming && (
+            <span className="sk-stream-cursor absolute right-1 bottom-2" aria-hidden />
+          )}
+        </div>
+        {isStreaming ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="pm-chat-composer-send shrink-0"
+            onClick={stopGeneration}
+          >
+            Cancel
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="default"
+            size="xs"
+            className="pm-chat-composer-send shrink-0"
+            onClick={handleSend}
+            disabled={!input.trim()}
+          >
+            Send
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden
+            >
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </Button>
+        )}
+      </div>
+
+      <p className="pm-chat-composer-disclaimer">
+        AI-generated answers may contain errors. Please verify critical information.
+      </p>
     </div>
   )
 }

@@ -7,7 +7,15 @@ import {
   useImperativeHandle,
   forwardRef,
 } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import {
@@ -392,26 +400,35 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
         />
 
         <Dialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null) }}>
-          <DialogContent className="pm-dialog max-w-sm !gap-3">
-            <DialogHeader className="!gap-1">
-              <DialogTitle>Delete Note</DialogTitle>
+          <DialogContent
+            className="pm-dialog pm-dialog-confirm sm:max-w-[320px]"
+            showCloseButton={false}
+          >
+            <DialogHeader>
+              <DialogKicker>Note</DialogKicker>
+              <DialogTitle>Delete note?</DialogTitle>
+              {deleteTarget?.title ? (
+                <p className="pm-dialog-confirm-target" title={deleteTarget.title}>
+                  {deleteTarget.title}
+                </p>
+              ) : null}
+              <DialogDescription>
+                This note will be permanently removed. This cannot be undone.
+              </DialogDescription>
             </DialogHeader>
-            <p className="pm-dialog-body">
-              Are you sure you want to delete{" "}
-              <span className="font-medium text-[var(--pm-ink)]">
-                &ldquo;{deleteTarget?.title}&rdquo;
-              </span>
-              ? This cannot be undone.
-            </p>
-            <DialogFooter className="gap-2">
+            <DialogFooter>
               <Button
+                type="button"
                 variant="ghost"
+                size="sm"
                 onClick={() => setDeleteTarget(null)}
               >
                 Cancel
               </Button>
               <Button
+                type="button"
                 variant="destructive-solid"
+                size="sm"
                 onClick={handleDeleteConfirm}
               >
                 Delete

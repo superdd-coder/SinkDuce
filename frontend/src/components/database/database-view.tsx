@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -158,16 +158,44 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
   }, [timelineNavRequest, handleTabChange])
 
   /**
-   * Collection switch: keep stage + tab panels mounted (no opacity-0, no
-   * visitedTabs wipe — that remounted InfoPanel and flashed white).
-   * Children update via collection / collectionId props.
+   * Collection switch: keep stage + tab panels mounted (no visitedTabs wipe —
+   * that remounted InfoPanel and flashed white). Soft-fade title + body so
+   * content doesn't hard-cut; tab bar stays fully opaque.
    */
-  useEffect(() => {
+  const [collectionSoftFaded, setCollectionSoftFaded] = useState(false)
+  const collectionSoftSkipRef = useRef(true)
+  const collectionSoftGenRef = useRef(0)
+
+  useLayoutEffect(() => {
+    // Reset tab stage to current (panels stay mounted; props swap)
     setStageTab(activeTab)
     setStagePhase("shown")
     panelMotionGen.current += 1
+
+    if (collectionSoftSkipRef.current) {
+      collectionSoftSkipRef.current = false
+      return
+    }
+    if (!activeCollection) {
+      setCollectionSoftFaded(false)
+      return
+    }
+    // Paint new collection at opacity 0, then fade in (tab bar not faded)
+    collectionSoftGenRef.current += 1
+    setCollectionSoftFaded(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
   }, [activeCollection])
+
+  useEffect(() => {
+    if (!collectionSoftFaded) return
+    const gen = collectionSoftGenRef.current
+    // Brief hold so browser commits opacity:0 with new data, then fade up
+    const t = window.setTimeout(() => {
+      if (collectionSoftGenRef.current !== gen) return
+      setCollectionSoftFaded(false)
+    }, 40)
+    return () => window.clearTimeout(t)
+  }, [collectionSoftFaded, activeCollection])
 
   // Sequential fade: hide current paint → swap → show next (never two UIs at once).
   useEffect(() => {
@@ -434,23 +462,17 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     collections.find((c) => c.id === activeCollection)?.name || activeCollection || ""
 
   /**
-   * Premium pill tabs — Overview | Files | Timeline only.
-   * Settings is a ⋮ control on the title row (not part of the tab bar).
-   * Always mounted so the sliding pill can animate between views.
+   * Pill tabs — Overview | Files | Timeline (same language as Meeting content tabs).
+   * White soft tray + sliding indicator; Settings stays on the title ⋮.
    */
   const collectionTabs = (
-    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+    <div className="pm-collection-tabs-bar">
       <Tabs
         value={contentTab}
         onValueChange={handleTabChange}
-        className="min-w-0"
+        className="min-w-0 gap-0"
       >
-        <TabsList
-          className={cn(
-            "pm-tabs !h-auto w-fit bg-transparent p-0 gap-1 border-0 rounded-none",
-            "relative shrink-0 items-center isolate"
-          )}
-        >
+        <TabsList className="pm-pill-tabs relative shrink-0 items-center isolate">
           <TabsIndicator
             renderBeforeHydration
             className="pm-tabs-indicator"
@@ -472,41 +494,36 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               }}
               className={cn(
                 "pm-vtab relative z-[1]",
-                "!h-auto min-h-0",
-                // Dim tab pill while Settings is open (not a tab)
                 activeTab === "config" && "opacity-60",
-                "data-[state=active]:shadow-none data-active:bg-transparent",
-                "after:!opacity-0 after:!content-none",
-                "inline-flex items-center justify-center",
-                "transition-colors duration-200 ease-out"
               )}
-              style={{ borderColor: "transparent" }}
             >
               {label}
             </TabsTrigger>
           ))}
         </TabsList>
       </Tabs>
-      {/* Files tab only: All Files flat list */}
+      {/* All Files — sits beside the pill tray (only on Files tab) */}
       {activeTab === "files" && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          onClick={() => setClassicFilesOpen(true)}
-          title="All Files"
-          className="shrink-0 gap-1"
-        >
-          <List className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">All Files</span>
-        </Button>
+        <div className="pm-collection-tabs-actions">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setClassicFilesOpen(true)}
+            title="All Files"
+            className="pm-collection-all-files-btn shrink-0 gap-1.5"
+          >
+            <List className="size-3.5" />
+            <span>All Files</span>
+          </Button>
+        </div>
       )}
     </div>
   )
 
   return (
     /* overflow visible so stage + collections soft shadows are not clipped */
-    <div className="pm-shell-workspace h-full flex gap-3 min-h-0 min-w-0">
+    <div className="pm-shell-workspace h-full flex min-h-0 min-w-0">
       <CollectionList
         collections={collections}
         activeCollection={activeCollection}
@@ -522,7 +539,11 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
           <div className="pm-stage pm-float-surface h-full min-h-0 flex flex-col overflow-hidden">
             {/* Collection header — title left, Settings ⋮ far right (not in tab bar) */}
             <header
-              className="pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3"
+              className={cn(
+                "pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3",
+                "pm-collection-soft-fade",
+                collectionSoftFaded && "is-faded",
+              )}
               style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
             >
               <div className="min-w-0">
@@ -558,9 +579,10 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                 Must NOT move between InfoPanel chrome and this shell — remounting
                 kills TabsIndicator slide (new instance, no left/width tween).
                 value={contentTab} so Config open still keeps last pill for slide-back.
+                Tab bar intentionally NOT soft-faded on collection switch.
               */}
               <div
-                className="pm-tabs-shell is-in shrink-0 min-w-0"
+                className="pm-tabs-shell pm-collection-tabs-shell is-in shrink-0 min-w-0"
                 style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
               >
                 {collectionTabs}
@@ -569,12 +591,19 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               {/*
                 Keep-alive surfaces + sequential fade (out → swap → in).
                 Same motion for Overview / Files / Timeline / Config.
+                Soft-fade on collection switch (title + this body only).
               */}
               {/*
                 overflow-visible so QC diamond park (top: -40px) is not clipped.
                 transparent — never paint canvas gray over .pm-stage cream
               */}
-              <div className="relative flex-1 min-h-0 min-w-0 bg-transparent isolate overflow-visible">
+              <div
+                className={cn(
+                  "relative flex-1 min-h-0 min-w-0 bg-transparent isolate overflow-visible",
+                  "pm-collection-soft-fade",
+                  collectionSoftFaded && "is-faded",
+                )}
+              >
                 {(
                   [
                     ["info", visitedTabs.has("info")] as const,

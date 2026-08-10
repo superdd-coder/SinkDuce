@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, memo } from "react"
+import { useState, useEffect, useCallback, useMemo, memo, useRef } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
 import { Header } from "./header"
@@ -60,6 +60,14 @@ export function AppLayout() {
   const [visitedViews, setVisitedViews] = useState<Set<SidebarView>>(
     () => new Set([sidebarView])
   )
+  /**
+   * Sequential fade between Navigate views (Chat / Database / Meeting / …).
+   * displayView lags sidebarView: fade out → swap → fade in (no hard cut).
+   */
+  const [displayView, setDisplayView] = useState<SidebarView>(sidebarView)
+  const [viewPhase, setViewPhase] = useState<"shown" | "hiding">("shown")
+  const viewMotionGenRef = useRef(0)
+  const VIEW_OUT_MS = 160
 
   useEffect(() => {
     setVisitedViews((prev) => {
@@ -69,6 +77,24 @@ export function AppLayout() {
       return next
     })
   }, [sidebarView])
+
+  useEffect(() => {
+    if (sidebarView === displayView) return
+    const gen = ++viewMotionGenRef.current
+    setViewPhase("hiding")
+    const t = window.setTimeout(() => {
+      if (viewMotionGenRef.current !== gen) return
+      setDisplayView(sidebarView)
+      // Paint next at opacity 0, then fade in
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (viewMotionGenRef.current !== gen) return
+          setViewPhase("shown")
+        })
+      })
+    }, VIEW_OUT_MS)
+    return () => window.clearTimeout(t)
+  }, [sidebarView, displayView])
 
   // Check on startup
   useEffect(() => {
@@ -162,27 +188,34 @@ export function AppLayout() {
           Sage canvas behind float cards; padding = soft-shadow bleed.
         */}
         <main className="pm-shell-main flex-1 min-w-0 flex flex-col overflow-hidden p-3 pt-1">
-          {viewEntries.map((key) => {
-            const V = views[key]
-            const isActive = key === sidebarView
-            return (
-              <div
-                key={key}
-                className={cn(
-                  "flex-1 min-h-0",
-                  // Database workspace needs visible overflow for card shadows;
-                  // other views clip content as before.
-                  isActive
-                    ? key === "database"
-                      ? "flex flex-col overflow-visible"
-                      : "flex flex-col overflow-hidden"
-                    : "hidden",
-                )}
-              >
-                <V active={isActive} />
-              </div>
-            )
-          })}
+          {/* Stacked keep-alive views + sequential fade on Navigate switch */}
+          <div className="pm-shell-view-host">
+            {viewEntries.map((key) => {
+              const V = views[key]
+              const isDisplay = key === displayView
+              const isNavActive = key === sidebarView
+              const phaseClass = isDisplay
+                ? viewPhase === "hiding"
+                  ? "is-exiting"
+                  : "is-active"
+                : "is-idle"
+              const floatChrome =
+                key === "database" || key === "chat" || key === "meeting"
+              return (
+                <div
+                  key={key}
+                  className={cn(
+                    "pm-shell-view-layer",
+                    phaseClass,
+                    floatChrome && "pm-shell-view-layer--float",
+                  )}
+                  aria-hidden={!isDisplay || viewPhase === "hiding"}
+                >
+                  <V active={isNavActive} />
+                </div>
+              )
+            })}
+          </div>
           <div
             className="relative z-40 overflow-hidden rounded-[var(--pm-r-lg,20px)] bg-[var(--pm-surface,#fefcf8)]"
             style={{

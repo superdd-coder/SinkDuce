@@ -101,7 +101,16 @@ export function startStream(meetingId: string) {
     onToken: (text) => {
       const e = streams.get(meetingId)
       if (!e) return
-      e.state = { ...e.state, streamingMd: e.state.streamingMd + text, thinkingText: "" }
+      // Tokens imply content stream — don't wait for a late "state" event or
+      // the UI stays on prefilling skeleton forever (streamingMd invisible).
+      e.state = {
+        ...e.state,
+        streamingMd: e.state.streamingMd + text,
+        thinkingText: "",
+        summaryGenState:
+          e.state.summaryGenState === "idle" ? "streaming" : "streaming",
+        isStreaming: true,
+      }
       notify()
     },
     onSummaryDone: () => {
