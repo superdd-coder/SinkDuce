@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -8,6 +8,22 @@ import { cn } from "@/lib/utils"
 import type { LanguageHintOption } from "@/api/client"
 
 export const DEFAULT_LANGUAGE_HINTS = ["auto"]
+
+/** Short rotating tips — explicit language improves ASR accuracy */
+const LANG_HINT_MESSAGES = [
+  "Pick a language for accuracy",
+  "Language hint → cleaner text",
+  "Specify language for better ASR",
+  "A set language is more precise",
+  "Hint the language for best results",
+  "Known language, sharper captions",
+]
+
+const HINT_SHOW_DURATION = 3200
+const HINT_INITIAL_DELAY = 600
+const HINT_MIN_INTERVAL = 2200
+const HINT_MAX_INTERVAL = 4800
+const HINT_EXIT_MS = 320
 
 /**
  * Toggle language hint selection with auto exclusivity:
@@ -39,10 +55,74 @@ interface Props {
   selected: string[]
   onChange: (hints: string[]) => void
   options: LanguageHintOption[]
+  /** Hide floating tip bubble (e.g. during file transcribe busy) */
+  showTipBubble?: boolean
+  /** e.g. file transcription in progress */
+  disabled?: boolean
+  /** Compact control (review footer) — no full-width stretch */
+  compact?: boolean
 }
 
-export function LanguageHintsSelector({ selected, onChange, options }: Props) {
+export function LanguageHintsSelector({
+  selected,
+  onChange,
+  options,
+  showTipBubble = true,
+  disabled = false,
+  compact = false,
+}: Props) {
   const [open, setOpen] = useState(false)
+  const [hintVisible, setHintVisible] = useState(false)
+  const [hintExiting, setHintExiting] = useState(false)
+  const [hintMessage, setHintMessage] = useState(LANG_HINT_MESSAGES[0])
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastHintIdxRef = useRef(0)
+
+  const pickMessage = () => {
+    if (LANG_HINT_MESSAGES.length <= 1) return LANG_HINT_MESSAGES[0]
+    let idx = Math.floor(Math.random() * LANG_HINT_MESSAGES.length)
+    if (idx === lastHintIdxRef.current) {
+      idx = (idx + 1) % LANG_HINT_MESSAGES.length
+    }
+    lastHintIdxRef.current = idx
+    return LANG_HINT_MESSAGES[idx]
+  }
+
+  useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
+
+  // Same show/hide cadence as Meeting Quick Chat FAB tip
+  useEffect(() => {
+    if (!showTipBubble || open || disabled) {
+      setHintVisible(false)
+      setHintExiting(false)
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+      return
+    }
+
+    const scheduleHint = () => {
+      setHintMessage(pickMessage())
+      setHintVisible(true)
+      setHintExiting(false)
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+      hintTimerRef.current = setTimeout(() => {
+        setHintExiting(true)
+        hintTimerRef.current = setTimeout(() => {
+          setHintVisible(false)
+          setHintExiting(false)
+          const delay =
+            HINT_MIN_INTERVAL + Math.random() * (HINT_MAX_INTERVAL - HINT_MIN_INTERVAL)
+          hintTimerRef.current = setTimeout(scheduleHint, delay)
+        }, HINT_EXIT_MS)
+      }, HINT_SHOW_DURATION)
+    }
+
+    hintTimerRef.current = setTimeout(scheduleHint, HINT_INITIAL_DELAY)
+    return () => {
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+    }
+  }, [showTipBubble, open, disabled])
 
   const toggle = (code: string) => {
     onChange(toggleLanguageHint(selected, code))
@@ -52,11 +132,14 @@ export function LanguageHintsSelector({ selected, onChange, options }: Props) {
     selected.length === 0 ||
     (selected.length === 1 && selected[0] === "auto")
 
+  // When disabled (e.g. re-transcribing), show short codes: zh / en / zh,en
   const display = isAutoOnly
     ? "Auto"
-    : selected.length <= 2
-      ? selected.map((c) => options.find((o) => o.code === c)?.label ?? c).join(", ")
-      : `${selected.length} languages`
+    : disabled
+      ? selected.filter((c) => c !== "auto").join(", ") || "Auto"
+      : selected.length <= 2
+        ? selected.map((c) => options.find((o) => o.code === c)?.label ?? c).join(", ")
+        : `${selected.length} languages`
 
   // Ensure auto appears in the list even if options omit it
   const pills: LanguageHintOption[] = (() => {
@@ -68,19 +151,51 @@ export function LanguageHintsSelector({ selected, onChange, options }: Props) {
 
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className={cn(
-          "flex items-center gap-1.5",
-          !isAutoOnly && "border-[color-mix(in_srgb,var(--pm-green)_28%,transparent)] text-[var(--pm-green)]",
+      {/* Language button fixed; bubble sits top-right and bobs on its own */}
+      <div className={cn("pm-lang-hint-anchor", compact ? "w-auto" : "w-full")}>
+        {(hintVisible || hintExiting) && showTipBubble && !open && !disabled && (
+          <div className="pm-lang-hint-bubble-slot" aria-hidden>
+            {/* Bob on outer wrap; scale emerge on inner — no transform fight */}
+            <div className="pm-lang-hint-bob">
+              <div
+                className={cn(
+                  "pm-lang-hint-bubble",
+                  hintExiting ? "is-retracting" : "is-emerging",
+                )}
+              >
+                <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">
+                  {hintMessage}
+                </span>
+              </div>
+            </div>
+          </div>
         )}
-        onClick={() => setOpen(true)}
-      >
-        <Languages className="h-3.5 w-3.5" />
-        <span className="max-w-[140px] truncate">{display}</span>
-      </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          className={cn(
+            "pm-meeting-pill",
+            compact && "is-compact",
+            !isAutoOnly && "is-active",
+          )}
+          onClick={() => {
+            if (disabled) return
+            setOpen(true)
+          }}
+        >
+          <Languages className="size-3.5 shrink-0 opacity-80" />
+          <span
+            className={cn(
+              "pm-meeting-pill-label",
+              disabled && "t-mono-family uppercase tracking-wide",
+            )}
+          >
+            {display}
+          </span>
+        </Button>
+      </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="pm-dialog sm:max-w-[340px]">

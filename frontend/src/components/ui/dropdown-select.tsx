@@ -4,6 +4,7 @@ import {
   useEffect,
   useLayoutEffect,
   useCallback,
+  useMemo,
 } from "react"
 import { createPortal } from "react-dom"
 import { ChevronDown } from "lucide-react"
@@ -39,10 +40,22 @@ const SELECT_MS = 180
 
 type MenuPos = { top: number; left: number; width: number; maxHeight: number }
 
+function optionMatches(opt: DropdownSelectOption, query: string): boolean {
+  if (!query) return true
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  /* Prefix match — type "zh" → zh, not anything containing zh mid-string */
+  return (
+    opt.label.toLowerCase().startsWith(q) ||
+    opt.value.toLowerCase().startsWith(q)
+  )
+}
+
 /**
  * Soft float select — Premium green-wash selection (no native OS blue).
  * Menu always portals to document.body (fixed) so dialog/card overflow
  * cannot clip it (todo Chain, node forms, rails, etc.).
+ * While open: type to filter options; ↑↓ navigate; Enter select; Esc clear/close.
  */
 export function DropdownSelect({
   value,
@@ -58,11 +71,19 @@ export function DropdownSelect({
   const [mounted, setMounted] = useState(false)
   const [shown, setShown] = useState(false)
   const [menuPos, setMenuPos] = useState<MenuPos | null>(null)
+  /** Keyboard type-to-filter while menu is open */
+  const [filterQuery, setFilterQuery] = useState("")
+  const [highlightIndex, setHighlightIndex] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const isTag = size === "tag"
+
+  const filteredOptions = useMemo(
+    () => options.filter((o) => optionMatches(o, filterQuery)),
+    [options, filterQuery]
+  )
 
   const close = useCallback(() => {
     setOpen(false)
@@ -113,6 +134,8 @@ export function DropdownSelect({
       })
     } else {
       setShown(false)
+      setFilterQuery("")
+      setHighlightIndex(-1)
       exitTimer = setTimeout(() => {
         setMounted(false)
         setMenuPos(null)
@@ -126,6 +149,17 @@ export function DropdownSelect({
     }
   }, [open])
 
+  /* When open / filter changes, pin highlight to selected match or first row */
+  useEffect(() => {
+    if (!open) return
+    if (filteredOptions.length === 0) {
+      setHighlightIndex(-1)
+      return
+    }
+    const selectedIdx = filteredOptions.findIndex((o) => o.value === value)
+    setHighlightIndex(selectedIdx >= 0 ? selectedIdx : 0)
+  }, [filterQuery, open, value, filteredOptions.length])
+
   /* Fixed coords for all sizes — escapes overflow:hidden dialogs / cards */
   useLayoutEffect(() => {
     if (!open && !mounted) return
@@ -138,7 +172,7 @@ export function DropdownSelect({
       window.removeEventListener("resize", onReposition)
       window.removeEventListener("scroll", onReposition, true)
     }
-  }, [open, mounted, updateMenuPos, options.length])
+  }, [open, mounted, updateMenuPos, options.length, filterQuery])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -151,24 +185,124 @@ export function DropdownSelect({
     return () => document.removeEventListener("mousedown", handler)
   }, [close])
 
+  /* Keyboard: Esc / type-to-filter / arrows / Enter while open */
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close()
+      /* Ignore when user is typing in a real input (shouldn't steal focus) */
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        /* Still allow Escape to close the select */
+        if (e.key === "Escape") {
+          e.preventDefault()
+          close()
+        }
+        return
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault()
+        if (filterQuery) {
+          setFilterQuery("")
+          return
+        }
+        close()
+        return
+      }
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault()
+        if (filteredOptions.length === 0) return
+        setHighlightIndex((i) =>
+          i < 0 ? 0 : Math.min(filteredOptions.length - 1, i + 1)
+        )
+        return
+      }
+
+      if (e.key === "ArrowUp") {
+        e.preventDefault()
+        if (filteredOptions.length === 0) return
+        setHighlightIndex((i) =>
+          i < 0 ? filteredOptions.length - 1 : Math.max(0, i - 1)
+        )
+        return
+      }
+
+      if (e.key === "Enter" || e.key === " ") {
+        if (e.key === " " && filterQuery) {
+          /* Space while filtering becomes part of the query */
+          e.preventDefault()
+          setFilterQuery((q) => q + " ")
+          return
+        }
+        if (highlightIndex >= 0 && highlightIndex < filteredOptions.length) {
+          e.preventDefault()
+          onChange(filteredOptions[highlightIndex].value)
+          close()
+        }
+        return
+      }
+
+      if (e.key === "Backspace") {
+        if (!filterQuery) return
+        e.preventDefault()
+        setFilterQuery((q) => q.slice(0, -1))
+        return
+      }
+
+      /* Printable character → append to filter (ignore modifiers) */
+      if (
+        e.key.length === 1 &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        e.preventDefault()
+        setFilterQuery((q) => q + e.key)
+      }
     }
     document.addEventListener("keydown", onKey)
     return () => document.removeEventListener("keydown", onKey)
-  }, [open, close])
+  }, [
+    open,
+    close,
+    filterQuery,
+    filteredOptions,
+    highlightIndex,
+    onChange,
+  ])
+
+  /* Scroll highlighted option into view */
+  useEffect(() => {
+    if (!open || highlightIndex < 0) return
+    const menu = menuRef.current
+    if (!menu) return
+    const el = menu.querySelector<HTMLElement>(
+      `[data-opt-index="${highlightIndex}"]`
+    )
+    el?.scrollIntoView({ block: "nearest" })
+  }, [highlightIndex, open, filteredOptions])
 
   const selected = options.find((o) => o.value === value)
   const selectedLabel = selected?.label || placeholder || "Select..."
   const selectedHasMark = !!selected?.indicator
+  const hasFilter = filterQuery.trim().length > 0
 
   const menu =
     mounted && menuPos ? (
       <div
         ref={menuRef}
         role="listbox"
+        aria-activedescendant={
+          highlightIndex >= 0
+            ? `pm-select-opt-${highlightIndex}`
+            : undefined
+        }
         className={cn(
           "pm-select-menu pm-select-menu--fixed max-h-60 overflow-y-auto",
           isTag && "pm-select-menu--tag",
@@ -181,22 +315,43 @@ export function DropdownSelect({
           maxHeight: menuPos.maxHeight,
         }}
       >
+        {hasFilter ? (
+          <div
+            className="pm-select-filter sticky top-0 z-[1] px-2.5 py-1.5 text-[11px] text-muted-foreground border-b border-border/40 bg-popover/95 backdrop-blur-sm truncate"
+            aria-live="polite"
+          >
+            <span className="opacity-60">Filter · </span>
+            <span className="font-medium text-foreground/80">
+              {filterQuery}
+            </span>
+          </div>
+        ) : null}
         {options.length === 0 ? (
           <div className="pm-select-opt is-empty">No options</div>
+        ) : filteredOptions.length === 0 ? (
+          <div className="pm-select-opt is-empty">No matches</div>
         ) : (
-          options.map((opt) => {
+          filteredOptions.map((opt, idx) => {
             const on = opt.value === value
+            const hi = idx === highlightIndex
             return (
               <button
                 key={opt.value}
+                id={`pm-select-opt-${idx}`}
+                data-opt-index={idx}
                 type="button"
                 role="option"
                 aria-selected={on}
+                onMouseEnter={() => setHighlightIndex(idx)}
                 onClick={() => {
                   onChange(opt.value)
                   close()
                 }}
-                className={cn("pm-select-opt", on && "is-on")}
+                className={cn(
+                  "pm-select-opt",
+                  on && "is-on",
+                  hi && "is-highlight"
+                )}
               >
                 <span
                   className={cn("pm-select-dot shrink-0", on && "is-on")}

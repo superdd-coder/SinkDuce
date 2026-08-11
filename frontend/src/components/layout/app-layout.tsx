@@ -187,7 +187,12 @@ export function AppLayout() {
         {/*
           Sage canvas behind float cards; padding = soft-shadow bleed.
         */}
-        <main className="pm-shell-main flex-1 min-w-0 flex flex-col overflow-hidden p-3 pt-1">
+        <main
+          className={cn(
+            "pm-shell-main flex-1 min-w-0 flex flex-col overflow-hidden p-3 pt-1",
+            logPanelOpen && "has-backend-logs"
+          )}
+        >
           {/* Stacked keep-alive views + sequential fade on Navigate switch */}
           <div className="pm-shell-view-host">
             {viewEntries.map((key) => {
@@ -216,19 +221,20 @@ export function AppLayout() {
               )
             })}
           </div>
+          {/*
+            Height + shadow gutter live in CSS (.pm-backend-logs-slot[data-open]).
+            Negative margin into main p-3 keeps card L/R flush with Chat stage
+            while soft-float shadow is not clipped by overflow:hidden.
+          */}
           <div
-            className="relative z-40 overflow-hidden rounded-[var(--pm-r-lg,20px)] bg-[var(--pm-surface,#fefcf8)]"
-            style={{
-              height: logPanelOpen ? 280 : 0,
-              transition: "height 350ms cubic-bezier(0.4,0,0.2,1)",
-            }}
+            className="pm-backend-logs-slot"
+            data-open={logPanelOpen ? "true" : "false"}
           >
             <div
+              className="pm-backend-logs-slot-pad"
               style={{
-                height: 280,
-                transform: `translateY(${logPanelOpen ? 0 : 10}px)`,
+                transform: `translateY(${logPanelOpen ? 0 : 12}px)`,
                 opacity: logPanelOpen ? 1 : 0,
-                transition: "transform 350ms cubic-bezier(0.4,0,0.2,1), opacity 300ms ease-out",
               }}
             >
               <LogViewer open={logPanelOpen} onClose={toggleLogPanel} />

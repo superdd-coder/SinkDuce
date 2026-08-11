@@ -25,14 +25,14 @@ interface BundleDef {
 const BUNDLES: BundleDef[] = [
   {
     id: "file",
-    label: "File Transcription",
-    description: "SenseVoiceSmall + FSMN-VAD + CAM++ Speaker + CT-Punc",
+    label: "File Transcription (ONNX)",
+    description: "SenseVoice int8 ONNX + FSMN-VAD + CT-Punc + CAM++ (export quant on first load)",
     modelIds: ["transcription", "vad", "speaker", "punc"],
   },
   {
     id: "realtime",
-    label: "Real-time Transcription",
-    description: "Paraformer Streaming",
+    label: "Real-time Transcription (ONNX)",
+    description: "Paraformer Streaming — exported to ONNX on first load",
     modelIds: ["realtime"],
   },
 ]

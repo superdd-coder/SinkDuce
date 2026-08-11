@@ -180,7 +180,9 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
 
     # Auto-load the provider if its model is downloaded but not yet loaded.
     # If the model is NOT downloaded, raise a clear error — do NOT auto-download.
-    if provider_cfg and provider_cfg.adapter.startswith("funasr_local"):
+    from src.meeting.transcription import is_local_file_adapter
+
+    if provider_cfg and is_local_file_adapter(provider_cfg.adapter):
         from src.services import _is_builtin_model_downloaded, reload_provider
         from src.providers.load_state import get_state
         model_id = provider_cfg.id
@@ -440,7 +442,7 @@ class MeetingService:
         ad = (adapter or "").lower()
         if "dashscope" in ad:
             return "dashscope" in name
-        if "funasr_local" in ad or ad.startswith("funasr"):
+        if "funasr" in ad:
             return "funasr" in name and "dashscope" not in name
         if "openrouter" in ad:
             return "openrouter" in name or "openai" in name
@@ -462,7 +464,7 @@ class MeetingService:
         provider_cfg = config.transcription.active_file_provider
         if provider_cfg is None:
             provider_cfg = config.transcription.get_local_file_provider()
-        # Builtin id must always resolve to FunASR local factory config
+        # Builtin id must always resolve to FunASR ONNX factory config
         if provider_cfg.id == "builtin-local-file":
             provider_cfg = config.transcription.get_local_file_provider()
             provider_cfg = provider_cfg.model_copy(update={"is_active": True})

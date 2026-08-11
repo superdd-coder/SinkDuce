@@ -24,6 +24,8 @@ class OpenRouterFileTranscription(FileTranscriptionProvider):
     Sends audio as base64 in JSON body (OpenRouter rejects multipart/form-data).
     """
 
+    # Soft boost via prompt text (same pattern as openai_compatible).
+    supports_hot_words = True
     SUPPORTED_LANGUAGE_HINTS = [
         {"code": "auto", "label": "Auto"},
         {"code": "zh", "label": "Chinese"},

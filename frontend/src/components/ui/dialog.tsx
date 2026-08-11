@@ -72,8 +72,9 @@ function DialogContent({
            * System open/close for ALL dialogs (see index.css silk block):
            * opacity + tiny scale, 280ms, same ease both ways.
            * Kill TW keyframe enter/exit so nothing fights CSS transitions.
+           * Do NOT set duration-0 — that zeros transition-duration and kills silk fade-out.
            */
-          "animate-none duration-0 data-open:animate-none data-closed:animate-none",
+          "animate-none data-open:animate-none data-closed:animate-none",
           className
         )}
         {...props}

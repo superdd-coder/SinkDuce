@@ -170,8 +170,8 @@ export function useTranscription(meetingId: string | null) {
           )
           if (!engineToastedRef.current) {
             engineToastedRef.current = true
-            const label = adapter.startsWith("funasr_local")
-              ? `Local FunASR${model ? ` (${model})` : ""}`
+            const label = adapter.startsWith("funasr_onnx")
+              ? `Local FunASR ONNX${model ? ` (${model})` : ""}`
               : adapter.includes("dashscope")
                 ? `DashScope cloud${model ? ` (${model})` : ""}`
                 : `${data.name || adapter}${model ? ` · ${model}` : ""}`

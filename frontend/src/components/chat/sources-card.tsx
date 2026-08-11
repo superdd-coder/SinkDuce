@@ -33,7 +33,26 @@ export function SourcesCard({ sources, onSelectSource, selectedSourceId }: Sourc
     return col?.name || id
   }
 
-  const list = Array.isArray(sources) ? sources : []
+  /**
+   * Dedupe by chunk id / url (agentic RAG can return the same point twice).
+   * Keep highest score so React list keys stay unique.
+   */
+  const raw = Array.isArray(sources) ? sources : []
+  const byKey = new Map<string, Source>()
+  raw.forEach((s, idx) => {
+    const meta =
+      s?.metadata && typeof s.metadata === "object" ? s.metadata : {}
+    const chunkId = String((meta as { id?: string }).id || "")
+    const url = String((meta as { url?: string }).url || "")
+    const k = chunkId || url || `__i${idx}`
+    const prev = byKey.get(k)
+    if (!prev || (Number(s?.score) || 0) >= (Number(prev?.score) || 0)) {
+      byKey.set(k, s)
+    }
+  })
+  const list = [...byKey.values()].sort(
+    (a, b) => (Number(b?.score) || 0) - (Number(a?.score) || 0),
+  )
   const webCount = list.filter(isWebSource).length
   const kbCount = list.length - webCount
 
@@ -74,12 +93,7 @@ export function SourcesCard({ sources, onSelectSource, selectedSourceId }: Sourc
         {...(!expanded ? { inert: true } : {})}
       >
         <div>
-          {[...list]
-            .sort((a, b) => {
-              // Web after KB within same score band is fine; keep score primary
-              return (Number(b?.score) || 0) - (Number(a?.score) || 0)
-            })
-            .map((s, i) => {
+          {list.map((s, i) => {
               const meta = (s?.metadata && typeof s.metadata === "object") ? s.metadata : {}
               const sourceName = (meta.source_label as string) || (meta.source as string) || ""
               const collection = (meta.collection as string) || ""
@@ -90,7 +104,7 @@ export function SourcesCard({ sources, onSelectSource, selectedSourceId }: Sourc
 
               return (
                 <button
-                  key={chunkId || url || i}
+                  key={chunkId || url ? `${chunkId || url}` : `src-${i}`}
                   type="button"
                   onClick={() => {
                     if (isWeb && url) {

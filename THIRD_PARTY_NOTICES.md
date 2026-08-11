@@ -73,7 +73,7 @@ No proprietary / closed-source **library** is declared as a direct dependency of
 | regex | Apache-2.0 AND CNRI-Python | https://github.com/mrabarnett/mrab-regex |
 | dashscope | Apache-2.0 | https://github.com/aliyun/alibabacloud-dashscope-sdk / Aliyun DashScope |
 
-### Optional: `diarization` extra
+### Optional: `asr-export` / `diarization` extra (host export only; not Docker runtime)
 
 | Package | License (as published) | Project |
 |---------|------------------------|---------|

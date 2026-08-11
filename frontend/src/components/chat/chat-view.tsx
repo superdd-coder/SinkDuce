@@ -11,6 +11,8 @@ import { getLLMProviders } from "@/api/client"
 import type { Source } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
 
+const THREAD_FADE_MS = 240
+
 export function ChatView() {
   const {
     messages,
@@ -54,13 +56,24 @@ export function ChatView() {
   /** Edge fades when content scrolls out under title / stage bottom. */
   const [edgeFade, setEdgeFade] = useState({ top: false, bottom: false })
 
+  /**
+   * Frozen display while switching sessions — avoids collapsing the thread
+   * (layout jitter) when store messages clear mid-load. Fade opacity only.
+   */
+  const [threadVisible, setThreadVisible] = useState(true)
+  const [displayMessages, setDisplayMessages] = useState(messages)
+  const [displayEmpty, setDisplayEmpty] = useState(messages.length === 0)
+  /** Session whose content is currently painted (undefined = never committed). */
+  const paintedSessionRef = useRef<string | null | undefined>(undefined)
+  const fadeTimerRef = useRef(0)
+
   useEffect(() => {
     if (selectedSource) {
       setPanelSource(selectedSource)
       return
     }
     const t = window.setTimeout(() => setPanelSource(null), 420)
-    return () => clearTimeout(t)
+    return () => window.clearTimeout(t)
   }, [selectedSource])
 
   useEffect(() => {
@@ -73,7 +86,12 @@ export function ChatView() {
           if (defaultP) {
             setActiveProvider(defaultP.id)
             if (!activeModel) {
-              setActiveModel(defaultP.default_model || defaultP.selected_models?.[0] || defaultP.model || null)
+              setActiveModel(
+                defaultP.default_model ||
+                  defaultP.selected_models?.[0] ||
+                  defaultP.model ||
+                  null
+              )
             }
           }
         }
@@ -91,23 +109,6 @@ export function ChatView() {
     if (sessionLoading) return
     void loadSessionMessages(sessionId)
   }, [sessionId, sessionHydratedId, sessionLoading, loadSessionMessages])
-
-  // Open / switch session → jump to bottom once history is hydrated
-  useEffect(() => {
-    if (!sessionId || sessionHydratedId !== sessionId || sessionLoading) return
-    stickToBottom.current = true
-    setShowScrollBtn(false)
-    const t = window.setTimeout(() => {
-      const el = scrollRef.current
-      if (!el) return
-      ignoreScrollEvent.current = true
-      el.scrollTop = el.scrollHeight
-      requestAnimationFrame(() => {
-        ignoreScrollEvent.current = false
-      })
-    }, 50)
-    return () => clearTimeout(t)
-  }, [sessionId, sessionHydratedId, sessionLoading])
 
   const pinRaf = useRef(0)
   const pinToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
@@ -211,15 +212,84 @@ export function ChatView() {
   const lastPinAt = useRef(0)
   useEffect(() => {
     if (!stickToBottom.current) return
+    // Only pin live stream / same-session updates when thread is visible
+    if (!threadVisible) return
+    if (paintedSessionMismatch()) return
     if (isStreaming) {
       const now = Date.now()
       if (now - lastPinAt.current < 120) return
       lastPinAt.current = now
     }
     pinToBottom("auto")
-  }, [messages, pinToBottom, isStreaming])
+  }, [messages, pinToBottom, isStreaming, threadVisible])
 
-  // Keep edge fades in sync when content height changes (not only on user scroll)
+  function paintedSessionMismatch() {
+    return paintedSessionRef.current !== sessionId
+  }
+
+  // Session id changed → fade out (keep frozen paint to avoid height collapse)
+  useEffect(() => {
+    if (paintedSessionRef.current === undefined) return
+    if (sessionId === paintedSessionRef.current) return
+    setThreadVisible(false)
+  }, [sessionId])
+
+  // Ready session → commit display while hidden, pin bottom, fade in
+  useEffect(() => {
+    const ready =
+      !sessionId ||
+      (sessionHydratedId === sessionId && !sessionLoading)
+    if (!ready) return
+    if (paintedSessionRef.current === sessionId) return
+
+    const commit = () => {
+      paintedSessionRef.current = sessionId
+      const msgs = useAppStore.getState().messages
+      setDisplayMessages(msgs)
+      setDisplayEmpty(msgs.length === 0)
+      stickToBottom.current = true
+      setShowScrollBtn(false)
+      requestAnimationFrame(() => {
+        const el = scrollRef.current
+        if (el) {
+          ignoreScrollEvent.current = true
+          el.scrollTop = el.scrollHeight
+          requestAnimationFrame(() => {
+            ignoreScrollEvent.current = false
+            setThreadVisible(true)
+            updateEdgeFade()
+          })
+        } else {
+          setThreadVisible(true)
+        }
+      })
+    }
+
+    // First paint: no out-fade delay
+    if (paintedSessionRef.current === undefined) {
+      commit()
+      return
+    }
+
+    setThreadVisible(false)
+    if (fadeTimerRef.current) window.clearTimeout(fadeTimerRef.current)
+    fadeTimerRef.current = window.setTimeout(commit, THREAD_FADE_MS)
+
+    return () => {
+      if (fadeTimerRef.current) window.clearTimeout(fadeTimerRef.current)
+    }
+  }, [sessionId, sessionHydratedId, sessionLoading, updateEdgeFade])
+
+  // Live streaming / append while this session is painted
+  useEffect(() => {
+    if (paintedSessionRef.current !== sessionId) return
+    if (sessionLoading) return
+    if (sessionId && sessionHydratedId !== sessionId) return
+    setDisplayMessages(messages)
+    setDisplayEmpty(messages.length === 0)
+  }, [messages, sessionId, sessionLoading, sessionHydratedId])
+
+  // Keep edge fades in sync when content height changes
   useEffect(() => {
     updateEdgeFade()
     const el = scrollRef.current
@@ -228,7 +298,7 @@ export function ChatView() {
     ro.observe(el)
     if (el.firstElementChild) ro.observe(el.firstElementChild)
     return () => ro.disconnect()
-  }, [messages, sessionId, sessionLoading, sessionHydratedId, updateEdgeFade])
+  }, [displayMessages, sessionId, updateEdgeFade])
 
   const handleSelectSource = (source: Source) => {
     setSelectedSource(source)
@@ -239,7 +309,7 @@ export function ChatView() {
   }
 
   const selectedSourceId = (selectedSource?.metadata?.id as string) || null
-  const currentSession = sessions.find(s => s.id === sessionId)
+  const currentSession = sessions.find((s) => s.id === sessionId)
   const sessionTitle = currentSession?.title || "New Chat"
   const sourceOpen = !!selectedSource
 
@@ -248,12 +318,8 @@ export function ChatView() {
       <div className="pm-chat-body">
         <SessionSidebar />
 
-        {/* Main stage — soft float card with clipped rounded surface */}
         <div
-          className={cn(
-            "pm-chat-stage",
-            sourceOpen && "hidden sm:flex",
-          )}
+          className={cn("pm-chat-stage", sourceOpen && "hidden sm:flex")}
         >
           <div className="pm-chat-stage-surface">
             <div className="pm-chat-stage-head">
@@ -268,53 +334,51 @@ export function ChatView() {
                 onScroll={onScroll}
                 className="pm-chat-thread"
               >
-                {sessionLoading || (sessionId && sessionHydratedId !== sessionId) ? (
-                  <div className="pm-chat-empty">
-                    <p className="pm-chat-empty-title">Loading conversation…</p>
-                    <p className="pm-chat-empty-sub">
-                      Restoring messages for the selected session
-                    </p>
-                  </div>
-                ) : messages.length === 0 ? (
-                  <div className="pm-chat-empty">
-                    <p className="pm-chat-empty-title">
-                      Ask a question about your documents
-                    </p>
-                    <p className="pm-chat-empty-sub">
-                      Upload documents first, then start chatting
-                    </p>
-                  </div>
-                ) : (
-                  <div className="pm-chat-thread-inner">
-                    {messages.map((msg) => (
-                      <MessageBubble
-                        key={msg.id}
-                        message={msg}
-                        onSelectSource={handleSelectSource}
-                        selectedSourceId={selectedSourceId}
-                      />
-                    ))}
-                    <div ref={bottomRef} />
-                  </div>
-                )}
+                <div
+                  className={cn(
+                    "pm-chat-thread-fade",
+                    threadVisible ? "is-in" : "is-out"
+                  )}
+                >
+                  {displayEmpty ? (
+                    <div className="pm-chat-empty">
+                      <p className="pm-chat-empty-title">
+                        Ask a question about your documents
+                      </p>
+                      <p className="pm-chat-empty-sub">
+                        Upload documents first, then start chatting
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="pm-chat-thread-inner">
+                      {displayMessages.map((msg) => (
+                        <MessageBubble
+                          key={msg.id}
+                          message={msg}
+                          onSelectSource={handleSelectSource}
+                          selectedSourceId={selectedSourceId}
+                        />
+                      ))}
+                      <div ref={bottomRef} />
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Top fade sits under session title when content scrolls up and out */}
               <div
                 aria-hidden
                 className={cn(
                   "pm-chat-edge-fade pm-chat-edge-fade--top",
-                  edgeFade.top && "is-visible",
+                  edgeFade.top && "is-visible"
                 )}
               />
             </div>
 
-            {/* Bottom fade at stage bottom edge when content continues below */}
             <div
               aria-hidden
               className={cn(
                 "pm-chat-edge-fade pm-chat-edge-fade--bottom",
-                edgeFade.bottom && "is-visible",
+                edgeFade.bottom && "is-visible"
               )}
             />
 
@@ -335,11 +399,10 @@ export function ChatView() {
           </div>
         </div>
 
-        {/* Source detail — soft float rail (host open: overflow visible + gutter) */}
         <div
           className={cn(
             "pm-chat-source-panel-host",
-            sourceOpen && "is-open",
+            sourceOpen && "is-open"
           )}
         >
           <div className="relative h-full min-h-0 overflow-visible">
@@ -351,7 +414,10 @@ export function ChatView() {
                 </Button>
               </div>
             )}
-            <SourceDetailPanel source={panelSource} onClose={handleClosePanel} />
+            <SourceDetailPanel
+              source={panelSource}
+              onClose={handleClosePanel}
+            />
           </div>
         </div>
       </div>

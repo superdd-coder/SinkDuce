@@ -67,9 +67,11 @@ const CaptureMiniPlayer = forwardRef<
     onTimeUpdate?: (time: number) => void
     /** review only: right-side action (e.g. Summarize) on same row as play */
     footerSlot?: ReactNode
+    /** review only: left tools (hot words / language / re-transcribe) */
+    footerLeftSlot?: ReactNode
   }
 >(function CaptureMiniPlayer(
-  { audioUrl, audioVersion, variant = "compact", onTimeUpdate, footerSlot },
+  { audioUrl, audioVersion, variant = "compact", onTimeUpdate, footerSlot, footerLeftSlot },
   ref,
 ) {
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -215,6 +217,11 @@ const CaptureMiniPlayer = forwardRef<
           </span>
         </div>
         <div className="pm-meeting-f-controls pm-meeting-speaker-gate-actions pm-meeting-review-actions">
+          {footerLeftSlot ? (
+            <div className="pm-meeting-review-tools">{footerLeftSlot}</div>
+          ) : (
+            <div className="pm-meeting-review-tools" aria-hidden />
+          )}
           <button
             type="button"
             className="pm-meeting-review-play"
@@ -223,7 +230,7 @@ const CaptureMiniPlayer = forwardRef<
           >
             {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
           </button>
-          {footerSlot}
+          <div className="pm-meeting-review-footer-right">{footerSlot}</div>
         </div>
       </div>
     )
@@ -302,9 +309,14 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const captureOwnerRef = useRef<string | null>(null)
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
+  /** Active adapter hot-words capability (from registry class flag) */
+  const [fileSupportsHotWords, setFileSupportsHotWords] = useState(false)
+  const [rtSupportsHotWords, setRtSupportsHotWords] = useState(false)
   const [hotWordsLibraries, setHotWordsLibraries] = useState<HotWordsLibrarySummary[]>([])
-  // Per-meeting language hints: keyed by meeting ID, persists across meeting switches during the session
+  // Per-meeting + path language hints (`${meetingId}:rt` | `${meetingId}:file`)
   const perMeetingLanguageHints = useRef<Map<string, string[]>>(new Map())
+  /** Which model path the language selector is bound to right now */
+  const languagePathRef = useRef<"rt" | "file">("rt")
   const [languageHints, setLanguageHints] = useState<string[]>([...DEFAULT_LANGUAGE_HINTS])
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState("")
@@ -643,9 +655,61 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const updateLanguageHints = (hints: string[]) => {
     setLanguageHints(hints)
     if (activeMeeting) {
-      perMeetingLanguageHints.current.set(activeMeeting, hints)
+      perMeetingLanguageHints.current.set(
+        `${activeMeeting}:${languagePathRef.current}`,
+        hints,
+      )
     }
   }
+
+  /**
+   * Language options follow the path-appropriate default model:
+   * - Setup / live capture → active **realtime** model
+   * - Audio ready / file re-tx → active **file** model
+   * Hot words stay shared (meeting-level library).
+   */
+  const refreshLanguageHintsFromActiveProvider = useCallback(
+    async (opts?: { preferRealtime?: boolean; meetingId?: string | null }) => {
+      try {
+        const info = await getActiveProviderInfo()
+        const preferRt = !!opts?.preferRealtime
+        const fileHints = info.file?.supported_language_hints ?? []
+        const rtHints = info.realtime?.supported_language_hints ?? []
+        const useRt = preferRt && rtHints.length > 0
+        const hints = (useRt ? rtHints : fileHints).length
+          ? (useRt ? rtHints : fileHints)
+          : fileHints.length
+            ? fileHints
+            : rtHints
+
+        setSupportedLanguageHints(hints)
+        languagePathRef.current = useRt ? "rt" : "file"
+        setFileSupportsHotWords(!!info.file?.supports_hot_words)
+        setRtSupportsHotWords(!!info.realtime?.supports_hot_words)
+
+        const supportedCodes = new Set(hints.map((h) => h.code))
+        const mid = opts?.meetingId ?? activeMeeting
+        const storeKey = mid
+          ? `${mid}:${useRt ? "rt" : "file"}`
+          : useRt
+            ? "rt"
+            : "file"
+        const stored = perMeetingLanguageHints.current.get(storeKey)
+        const pick = (codes: string[]) => {
+          const filtered = codes.filter((c) => supportedCodes.has(c))
+          if (filtered.length > 0) return filtered
+          if (supportedCodes.has("auto")) return ["auto"]
+          return hints[0]?.code ? [hints[0].code] : [...DEFAULT_LANGUAGE_HINTS]
+        }
+        const next = pick(stored ?? languageHintsRef.current)
+        setLanguageHints(next)
+        perMeetingLanguageHints.current.set(storeKey, next)
+      } catch {
+        /* keep previous options */
+      }
+    },
+    [activeMeeting],
+  )
 
   // Start/stop realtime transcription when recording starts/stops,
   // and when realtimeEnabled is toggled during recording.
@@ -664,8 +728,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     const shouldTranscribe = recorder.isRecording && realtimeEnabled
 
     if (shouldTranscribe && !isTranscribingRef.current) {
-      // Prefer explicit language for local Chinese streaming; "auto" is stripped server-side
-      startTranscriptionRef.current(["zh"])
+      startTranscriptionRef.current(languageHintsRef.current)
     } else if (!shouldTranscribe && isTranscribingRef.current) {
       stopTranscriptionRef.current()
     }
@@ -742,21 +805,6 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   // Load meeting detail when active changes — keep previous paint (no blank flash)
   useEffect(() => {
     if (activeMeeting) {
-      // Refresh provider info in case active model was changed in Settings
-      getActiveProviderInfo()
-        .then((info) => {
-          const hints = info.file.supported_language_hints
-          setSupportedLanguageHints(hints)
-          // Restore per-meeting language hints, or default filtered by supported codes
-          const stored = perMeetingLanguageHints.current.get(activeMeeting)
-          if (stored) {
-            setLanguageHints(stored)
-          } else {
-            const supportedCodes = new Set(hints.map((h) => h.code))
-            setLanguageHints(DEFAULT_LANGUAGE_HINTS.filter((c) => supportedCodes.has(c)))
-          }
-        })
-        .catch(() => {})
       // Do NOT setMeeting(null) / setTranscript([]) — that blanked the stage and
       // thrashed player grid before the next payload arrived.
       fetchMeeting(activeMeeting)
@@ -1130,6 +1178,13 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     hasFileProvider,
   ])
 
+  /** Uncommitted hot-words pick when a transcript already exists (cleared on leave / refresh). */
+  const hotWordsDraftRef = useRef<string | null | undefined>(undefined)
+
+  const handleHotWordsDraftChange = useCallback((draft: string | null | undefined) => {
+    hotWordsDraftRef.current = draft
+  }, [])
+
   const handleTranscribe = async () => {
     if (!activeMeeting) return
     if (!hasFileProvider) {
@@ -1137,6 +1192,20 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         action: { label: "Settings", onClick: () => setSidebarView("llm_provider") },
       })
       return
+    }
+    // Commit hot-words draft (if any) before starting file transcription
+    const draft = hotWordsDraftRef.current
+    if (draft !== undefined) {
+      try {
+        const m = await updateMeeting(activeMeeting, { hot_words_library_id: draft })
+        setMeeting(m)
+        hotWordsDraftRef.current = undefined
+      } catch (err) {
+        toast.error(
+          `Failed to update hot words: ${err instanceof Error ? err.message : String(err)}`,
+        )
+        return
+      }
     }
     // Clear realtime segments so new file transcript shows after completion
     transcription.setSegments([])
@@ -1381,21 +1450,31 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   )
 
   /**
-   * Stage mode for capture ↔ speakers ↔ studio (and live / audio-ready).
+   * Stage mode for capture ↔ speakers ↔ studio (and live / audio-ready / transcribing).
    * Paint lags target via sequential fade so layout doesn't hard-cut.
+   * audio vs transcribing are separate so Transcribe click fades out → in.
    */
-  type StageMode = "setup" | "audio" | "speakers" | "live" | "studio" | "empty"
+  type StageMode =
+    | "setup"
+    | "audio"
+    | "transcribing"
+    | "speakers"
+    | "live"
+    | "studio"
+    | "empty"
   const targetStageMode: StageMode = !meeting
     ? "empty"
     : isCaptureSetup
       ? "setup"
-      : isCaptureAudioReady || isFileTranscribing
-        ? "audio"
-        : isCaptureSpeakers
-          ? "speakers"
-          : isLiveStage
-            ? "live"
-            : "studio"
+      : isFileTranscribing
+        ? "transcribing"
+        : isCaptureAudioReady
+          ? "audio"
+          : isCaptureSpeakers
+            ? "speakers"
+            : isLiveStage
+              ? "live"
+              : "studio"
   const [displayStageMode, setDisplayStageMode] = useState<StageMode>(targetStageMode)
   const [stageModePhase, setStageModePhase] = useState<"shown" | "hiding">("shown")
   const stageModeGenRef = useRef(0)
@@ -1427,6 +1506,36 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }, STAGE_MODE_OUT_MS)
     return () => window.clearTimeout(t)
   }, [targetStageMode, displayStageMode, meetingSoftFaded, stageModePhase])
+
+  // Language options: setup/live → realtime model; audio-ready (after upload) → file model
+  useEffect(() => {
+    if (!active) return
+    const preferRealtime =
+      displayStageMode === "setup" ||
+      displayStageMode === "live" ||
+      displayStageMode === "empty"
+    void refreshLanguageHintsFromActiveProvider({
+      preferRealtime,
+      meetingId: activeMeeting,
+    })
+  }, [
+    active,
+    activeMeeting,
+    displayStageMode,
+    refreshLanguageHintsFromActiveProvider,
+  ])
+
+  /**
+   * Hot words enablement from adapter class flags (supports_hot_words).
+   * Setup: either path may use the library → enable if file OR realtime supports.
+   * Live: realtime only. File / re-tx / speakers: file model only.
+   */
+  const activeHotWordsSupported =
+    displayStageMode === "setup" || displayStageMode === "empty"
+      ? fileSupportsHotWords || rtSupportsHotWords
+      : displayStageMode === "live"
+        ? rtSupportsHotWords
+        : fileSupportsHotWords
 
   const captureAudioUrl =
     meeting?.audio_path
@@ -1553,22 +1662,30 @@ export function MeetingView({ active = true }: { active?: boolean }) {
               sideRailMotion && "is-side-motion",
               /* Grid shell follows painted mode (not target) so layout eases with fade */
               !sideRailOpen && displayStageMode === "studio" && "is-side-collapsed",
-              (displayStageMode === "setup" || displayStageMode === "audio") && "is-mode-empty",
+              (displayStageMode === "setup" ||
+                displayStageMode === "audio" ||
+                displayStageMode === "transcribing") && "is-mode-empty",
               (displayStageMode === "speakers" || displayStageMode === "live") && "is-mode-live",
               (displayStageMode === "setup" ||
                 displayStageMode === "audio" ||
+                displayStageMode === "transcribing" ||
                 displayStageMode === "speakers" ||
                 displayStageMode === "live") && "is-mode-capture",
             )}
           >
             {meeting && displayStageMode === "setup" ? (
-              /* ═══ Capture · Setup — config before record/upload ═══ */
+              /* ═══ Capture · Setup
+               * 1) Hot words (shared) + language (realtime model)
+               * 2) Start recording
+               * 3) or
+               * 4) Upload audio → leaves setup; language becomes file model
+               */
               <div className="pm-meeting-mode-empty" data-meeting-mode="empty">
                 <div className="pm-meeting-e-stage">
                   <p className="pm-meeting-e-kicker">New meeting</p>
                   <h3 className="pm-meeting-e-title">Capture the conversation</h3>
                   <p className="pm-meeting-e-sub">
-                    Choose hot words and language, then record live or upload audio.
+                    Pick a hot-words library to reduce ambiguity. Select language for live caption.
                   </p>
 
                   <div className="pm-meeting-e-config" aria-label="Transcription settings">
@@ -1576,9 +1693,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                       meetingId={meeting.id}
                       currentLibraryId={meeting.hot_words_library_id}
                       hasTranscript={false}
-                      providerSupportsHotWords
+                      providerSupportsHotWords={activeHotWordsSupported}
                       onSelectLibrary={handleSelectHotWordsLibrary}
-                      onRetranscribe={() => {}}
                     />
                     {supportedLanguageHints.length > 0 && (
                       <LanguageHintsSelector
@@ -1589,7 +1705,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                     )}
                   </div>
 
-                  <div className="pm-meeting-e-actions">
+                  <div className="pm-meeting-e-actions pm-meeting-e-actions--stack">
                     <input
                       ref={emptyUploadRef}
                       type="file"
@@ -1654,6 +1770,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                         </button>
                       )}
                     </div>
+
+                    <p className="pm-meeting-e-or" aria-hidden>
+                      or
+                    </p>
+
                     <button
                       type="button"
                       className="pm-meeting-e-cta is-secondary"
@@ -1669,19 +1790,13 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 </div>
               </div>
             ) : meeting && displayStageMode === "audio" ? (
-              /* ═══ Capture · Audio ready / Transcribing (same shell for upload + post-live file tx) ═══ */
-              <div className="pm-meeting-mode-empty" data-meeting-mode={isFileTranscribing ? "transcribing" : "audio-ready"}>
+              /* ═══ Capture · Audio ready (upload / post-live before file-tx) ═══ */
+              <div className="pm-meeting-mode-empty" data-meeting-mode="audio-ready">
                 <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
-                  <p className="pm-meeting-e-kicker">
-                    {isFileTranscribing ? "Transcribing" : "Audio ready"}
-                  </p>
-                  <h3 className="pm-meeting-e-title">
-                    {isFileTranscribing ? "File transcription in progress" : "Review audio"}
-                  </h3>
+                  <p className="pm-meeting-e-kicker">Audio ready</p>
+                  <h3 className="pm-meeting-e-title">Review audio</h3>
                   <p className="pm-meeting-e-sub">
-                    {isFileTranscribing
-                      ? "Stay on this page — next you can name speakers and start Summary."
-                      : "Play back the recording, then start transcription when ready."}
+                    Pick a hot-words library to reduce ambiguity. Select language for file transcription.
                   </p>
 
                   <div className="pm-meeting-e-config" aria-label="Transcription settings">
@@ -1689,15 +1804,15 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                       meetingId={meeting.id}
                       currentLibraryId={meeting.hot_words_library_id}
                       hasTranscript={false}
-                      providerSupportsHotWords
+                      providerSupportsHotWords={activeHotWordsSupported}
                       onSelectLibrary={handleSelectHotWordsLibrary}
-                      onRetranscribe={() => {}}
                     />
                     {supportedLanguageHints.length > 0 && (
                       <LanguageHintsSelector
                         selected={languageHints}
                         onChange={updateLanguageHints}
                         options={supportedLanguageHints}
+                        showTipBubble
                       />
                     )}
                   </div>
@@ -1710,63 +1825,97 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                   )}
 
                   <div className="pm-meeting-e-actions">
-                    {isFileTranscribing ? (
-                      <>
-                        <button
-                          type="button"
-                          className="pm-meeting-e-cta is-primary"
-                          disabled
-                        >
-                          <Loader2 className="size-3.5 animate-spin" />
-                          Transcribing…
-                        </button>
-                        <button
-                          type="button"
-                          className="pm-meeting-e-cta is-secondary"
-                          onClick={() => void handleCancelTranscribe()}
-                        >
-                          <Square className="size-3.5" />
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="pm-meeting-e-cta is-primary"
-                          onClick={() => void handleTranscribe()}
-                          disabled={!hasFileProvider}
-                        >
-                          <Play className="size-3.5" />
-                          Transcribe
-                        </button>
-                        <button
-                          type="button"
-                          className="pm-meeting-e-cta is-secondary"
-                          onClick={() => emptyUploadRef.current?.click()}
-                        >
-                          <Upload className="size-3.5" />
-                          Replace audio
-                        </button>
-                        <input
-                          ref={emptyUploadRef}
-                          type="file"
-                          accept="audio/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0]
-                            if (file) void handleUploadAudio(file)
-                            e.target.value = ""
-                          }}
-                        />
-                      </>
-                    )}
+                    <button
+                      type="button"
+                      className="pm-meeting-e-cta is-primary"
+                      onClick={() => void handleTranscribe()}
+                      disabled={!hasFileProvider}
+                    >
+                      <Play className="size-3.5" />
+                      Transcribe
+                    </button>
+                    <button
+                      type="button"
+                      className="pm-meeting-e-cta is-secondary"
+                      onClick={() => emptyUploadRef.current?.click()}
+                    >
+                      <Upload className="size-3.5" />
+                      Replace audio
+                    </button>
+                    <input
+                      ref={emptyUploadRef}
+                      type="file"
+                      accept="audio/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) void handleUploadAudio(file)
+                        e.target.value = ""
+                      }}
+                    />
                   </div>
-                  {!hasFileProvider && !isFileTranscribing && (
+                  {!hasFileProvider && (
                     <p className="pm-meeting-e-error">
                       No file transcription provider configured. Go to Settings → Transcription.
                     </p>
                   )}
+                </div>
+              </div>
+            ) : meeting && displayStageMode === "transcribing" ? (
+              /* ═══ Capture · File transcription in progress ═══ */
+              <div className="pm-meeting-mode-empty" data-meeting-mode="transcribing">
+                <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
+                  <p className="pm-meeting-e-kicker">Transcribing</p>
+                  <h3 className="pm-meeting-e-title">File transcription in progress</h3>
+                  <p className="pm-meeting-e-sub">
+                    Stay on this page — next you can name speakers and start Summary.
+                  </p>
+
+                  <div className="pm-meeting-e-config" aria-label="Transcription settings">
+                    <HotWordsSelector
+                      meetingId={meeting.id}
+                      currentLibraryId={meeting.hot_words_library_id}
+                      hasTranscript={false}
+                      providerSupportsHotWords={activeHotWordsSupported}
+                      onSelectLibrary={handleSelectHotWordsLibrary}
+                      disabled
+                    />
+                    {supportedLanguageHints.length > 0 && (
+                      <LanguageHintsSelector
+                        selected={languageHints}
+                        onChange={updateLanguageHints}
+                        options={supportedLanguageHints}
+                        disabled
+                        showTipBubble={false}
+                      />
+                    )}
+                  </div>
+
+                  {captureAudioUrl && (
+                    <CaptureMiniPlayer
+                      audioUrl={captureAudioUrl}
+                      audioVersion={audioVersion}
+                    />
+                  )}
+
+                  <div className="pm-meeting-e-actions">
+                    <button
+                      type="button"
+                      className="pm-meeting-e-cta is-primary"
+                      disabled
+                    >
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Transcribing…
+                    </button>
+                    <button
+                      type="button"
+                      className="pm-meeting-e-cta is-secondary"
+                      onClick={() => void handleCancelTranscribe()}
+                    >
+                      <Square className="size-3.5" />
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : meeting && displayStageMode === "speakers" ? (
@@ -1841,6 +1990,38 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                     audioUrl={captureAudioUrl}
                     audioVersion={audioVersion}
                     onTimeUpdate={setPlaybackTime}
+                    footerLeftSlot={
+                      <>
+                        <HotWordsSelector
+                          meetingId={meeting.id}
+                          currentLibraryId={meeting.hot_words_library_id}
+                          hasTranscript={displaySegments.length > 0}
+                          providerSupportsHotWords={activeHotWordsSupported}
+                          onSelectLibrary={handleSelectHotWordsLibrary}
+                          onDraftChange={handleHotWordsDraftChange}
+                          compact
+                        />
+                        {supportedLanguageHints.length > 0 && (
+                          <LanguageHintsSelector
+                            selected={languageHints}
+                            onChange={updateLanguageHints}
+                            options={supportedLanguageHints}
+                            compact
+                            showTipBubble={false}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          className="pm-meeting-pill is-compact pm-meeting-review-retx"
+                          onClick={() => void handleTranscribe()}
+                          disabled={!hasFileProvider}
+                          title="Re-run file transcription with current hot words and language"
+                        >
+                          <Play className="size-3.5 opacity-80" />
+                          Re-transcribe
+                        </button>
+                      </>
+                    }
                     footerSlot={
                       <button
                         type="button"
@@ -1853,7 +2034,36 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                     }
                   />
                 ) : (
-                  <div className="pm-meeting-f-controls pm-meeting-speaker-gate-actions">
+                  <div className="pm-meeting-f-controls pm-meeting-speaker-gate-actions pm-meeting-review-actions">
+                    <div className="pm-meeting-review-tools">
+                      <HotWordsSelector
+                        meetingId={meeting.id}
+                        currentLibraryId={meeting.hot_words_library_id}
+                        hasTranscript={displaySegments.length > 0}
+                        providerSupportsHotWords={activeHotWordsSupported}
+                        onSelectLibrary={handleSelectHotWordsLibrary}
+                        onDraftChange={handleHotWordsDraftChange}
+                        compact
+                      />
+                      {supportedLanguageHints.length > 0 && (
+                        <LanguageHintsSelector
+                          selected={languageHints}
+                          onChange={updateLanguageHints}
+                          options={supportedLanguageHints}
+                          compact
+                          showTipBubble={false}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        className="pm-meeting-pill is-compact pm-meeting-review-retx"
+                        onClick={() => void handleTranscribe()}
+                        disabled={!hasFileProvider}
+                      >
+                        <Play className="size-3.5 opacity-80" />
+                        Re-transcribe
+                      </button>
+                    </div>
                     <button
                       type="button"
                       className="pm-meeting-e-cta is-primary"

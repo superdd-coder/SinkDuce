@@ -27,12 +27,19 @@ class ModelInfo:
 
 
 LOCAL_MODELS: list[ModelInfo] = [
-    ModelInfo("transcription","SenseVoiceSmall",              "hf", "FunAudioLLM/SenseVoiceSmall",                    "transcription", 900),
-    ModelInfo("vad",          "FSMN-VAD",                    "hf", "funasr/fsmn-vad",                                 "transcription", 10),
-    ModelInfo("speaker",      "CAM++ Speaker ID",            "hf", "funasr/campplus",                                 "transcription", 30),
-    ModelInfo("punc",         "CT-Transformer Punctuation",   "hf", "funasr/ct-punc",                                  "transcription", 30),
-    ModelInfo("realtime",     "Paraformer Streaming",         "hf", "funasr/paraformer-zh-streaming",                   "transcription", 220),
+    # size_mb ≈ ONNX int8 pack size (not original .pt)
+    ModelInfo("transcription", "SenseVoiceSmall (ONNX int8)", "hf", "FunAudioLLM/SenseVoiceSmall", "transcription", 240),
+    ModelInfo("vad", "FSMN-VAD (ONNX int8)", "hf", "funasr/fsmn-vad", "transcription", 1),
+    ModelInfo("speaker", "CAM++ Speaker (ONNX)", "hf", "funasr/campplus", "transcription", 30),
+    ModelInfo("punc", "CT-Punc (ONNX int8)", "hf", "funasr/ct-punc", "transcription", 280),
+    ModelInfo("realtime", "Paraformer Streaming (ONNX int8)", "hf", "funasr/paraformer-zh-streaming", "transcription", 230),
 ]
+
+# Transcription models are considered ready when the ONNX pack exists under
+# ``HF_HOME/onnx/<repo--name>/`` (preferred). Legacy HF hub .pt is optional.
+_TRANSCRIPTION_ONNX_IDS = frozenset(
+    {"transcription", "vad", "speaker", "punc", "realtime"}
+)
 
 # ---------------------------------------------------------------------------
 # State tracking
@@ -42,60 +49,122 @@ _download_lock = threading.Lock()
 _download_progress: dict[str, dict[str, Any]] = {}  # model_id -> {status, progress, message}
 
 
+def _hf_home() -> Path:
+    return Path(os.environ.get("HF_HOME", "data/models"))
+
+
 def _get_model_dir(model: ModelInfo) -> Path:
-    """Return the expected directory for a downloaded model."""
-    hf_home = Path(os.environ.get("HF_HOME", "data/models"))
+    """Return the expected HF hub directory for a downloaded model (legacy .pt)."""
     safe_name = model.repo_id.replace("/", "--")
-    return hf_home / "hub" / f"models--{safe_name}"
+    return _hf_home() / "hub" / f"models--{safe_name}"
+
+
+def _get_onnx_dir(model: ModelInfo) -> Path:
+    """ONNX pack directory used by funasr_onnx adapters."""
+    safe_name = model.repo_id.replace("/", "--")
+    return _hf_home() / "onnx" / safe_name
 
 
 def _has_config(d: Path) -> bool:
     """Check if a directory has a model config file (any of the common formats)."""
-    for name in ("config.json", "config.yaml", "configuration.json", "model_config.json"):
+    for name in ("config.json", "config.yaml", "configuration.json", "model_config.json", "vad.yaml"):
         if (d / name).exists():
             return True
     return False
 
 
-def _is_downloaded(model: ModelInfo) -> bool:
-    """Check if a model is fully downloaded with valid weight files."""
+def _is_onnx_ready(model: ModelInfo) -> bool:
+    """True if ``data/models/onnx/<repo>/`` has the artifacts we need to load."""
+    d = _get_onnx_dir(model)
+    if not d.is_dir():
+        return False
+
+    mid = model.id
+    if mid == "realtime":
+        # Streaming Paraformer: encoder + decoder (prefer int8)
+        has_enc = (d / "model_quant.onnx").is_file() or (d / "model.onnx").is_file()
+        has_dec = (d / "decoder_quant.onnx").is_file() or (d / "decoder.onnx").is_file()
+        return has_enc and has_dec
+
+    if mid == "speaker":
+        # Any reasonably large embedding onnx
+        for f in d.glob("*.onnx"):
+            try:
+                if f.is_file() and f.stat().st_size > 1_000_000:
+                    return True
+            except OSError:
+                continue
+        return False
+
+    if mid == "vad":
+        # VAD int8 can be < 1MB; allow smaller threshold
+        return (d / "model_quant.onnx").is_file() or (d / "model.onnx").is_file()
+
+    # SenseVoice / punc: prefer int8 quant graph
+    if (d / "model_quant.onnx").is_file():
+        try:
+            return d.joinpath("model_quant.onnx").stat().st_size > 100_000
+        except OSError:
+            return False
+    if (d / "model.onnx").is_file():
+        try:
+            return d.joinpath("model.onnx").stat().st_size > 100_000
+        except OSError:
+            return False
+    return False
+
+
+def _is_hub_ready(model: ModelInfo) -> bool:
+    """Legacy: HuggingFace hub snapshot with .pt / .bin weights."""
     d = _get_model_dir(model)
     if not d.exists():
         return False
 
-    # Determine minimum file size threshold based on model size
-    min_file_size = max(500_000, (model.size_mb * 1_000_000) // 10)  # At least 500KB, max ~10% of model size
-    # Standard HF cache: snapshots/<hash>/ must have config + weight files
+    min_file_size = max(100_000, min(500_000, (model.size_mb * 1_000_000) // 20))
     snaps = d / "snapshots"
     if snaps.exists():
         for s in snaps.iterdir():
-            if s.is_dir() and _has_config(s):
-                # Check for any weight files above minimum size
-                weight_files = [
-                    f for f in s.iterdir()
-                    if f.is_file() and f.suffix in (".safetensors", ".bin", ".pt", ".onnx")
-                    and f.stat().st_size > min_file_size
-                ]
-                if weight_files:
-                    for wf in weight_files:
-                        if wf.suffix == ".safetensors" and _is_valid_safetensors(wf):
-                            return True
-                        elif wf.suffix in (".bin", ".pt", ".onnx"):
-                            return True  # .bin/.pt/.onnx files are valid if they exist above threshold
-    # Fallback: model downloaded with local_dir
-    for f in d.glob("*.safetensors"):
-        if f.is_file() and f.stat().st_size > min_file_size and _is_valid_safetensors(f):
-            return True
-    for f in d.glob("*.bin"):
-        if f.is_file() and f.stat().st_size > min_file_size:
-            return True
-    # Also check for models that have config at the root (local_dir layout)
+            if not s.is_dir():
+                continue
+            if not _has_config(s) and not any(s.glob("*.pt")) and not any(s.glob("*.bin")):
+                continue
+            for f in s.iterdir():
+                if not f.is_file():
+                    continue
+                try:
+                    sz = f.stat().st_size
+                except OSError:
+                    continue
+                if sz < min_file_size:
+                    continue
+                if f.suffix == ".safetensors" and _is_valid_safetensors(f):
+                    return True
+                if f.suffix in (".bin", ".pt", ".onnx"):
+                    return True
     if _has_config(d):
         for ext in ("*.safetensors", "*.bin", "*.pt", "*.onnx"):
             for f in d.glob(ext):
-                if f.is_file() and f.stat().st_size > min_file_size:
-                    return True
+                try:
+                    if f.is_file() and f.stat().st_size > min_file_size:
+                        return True
+                except OSError:
+                    continue
     return False
+
+
+def _is_downloaded(model: ModelInfo) -> bool:
+    """Check if a model is ready on disk.
+
+    Transcription packs: prefer ONNX under ``HF_HOME/onnx/``.
+    Other categories: HF hub cache as before.
+    """
+    if model.id in _TRANSCRIPTION_ONNX_IDS or model.category == "transcription":
+        if _is_onnx_ready(model):
+            return True
+        # Fall back to hub only for non-default workflows (legacy pytorch adapters)
+        return _is_hub_ready(model)
+
+    return _is_hub_ready(model)
 
 
 def _is_valid_safetensors(path: Path) -> bool:
@@ -206,37 +275,46 @@ def start_download_all(hf_token: str | None = None) -> None:
     t.start()
 
 
-def delete_model(model_id: str) -> dict[str, Any]:
-    """Delete downloaded model files from the HuggingFace hub cache.
+def _dir_size_mb(path: Path) -> float:
+    total = 0
+    if not path.exists():
+        return 0.0
+    try:
+        for root, _dirs, files in os.walk(path):
+            for name in files:
+                try:
+                    total += (Path(root) / name).stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        return 0.0
+    return round(total / 1_000_000, 1)
 
-    Removes ``HF_HOME/hub/models--{repo}`` for the registered model id.
-    Safe if the directory is already missing.
+
+def delete_model(model_id: str) -> dict[str, Any]:
+    """Delete local model packs (ONNX first, then legacy HF hub).
+
+    Removes ``HF_HOME/onnx/<repo>`` and ``HF_HOME/hub/models--{repo}``.
     """
     model = next((m for m in LOCAL_MODELS if m.id == model_id), None)
     if not model:
         return {"success": False, "error": f"Unknown model: {model_id}"}
 
-    model_dir = _get_model_dir(model)
+    paths = [_get_onnx_dir(model), _get_model_dir(model)]
     removed = False
     freed_mb = 0.0
-    if model_dir.exists():
-        # Approximate size before delete
-        try:
-            total = 0
-            for root, _dirs, files in os.walk(model_dir):
-                for name in files:
-                    try:
-                        total += (Path(root) / name).stat().st_size
-                    except OSError:
-                        pass
-            freed_mb = round(total / 1_000_000, 1)
-        except OSError:
-            freed_mb = 0.0
+    last_path = paths[0]
+    for model_dir in paths:
+        last_path = model_dir
+        if not model_dir.exists():
+            continue
+        freed_mb += _dir_size_mb(model_dir)
         shutil.rmtree(model_dir, ignore_errors=False)
         removed = True
         logger.info("Deleted local model files: %s (%s)", model.display_name, model_dir)
-    else:
-        logger.info("Model dir already absent: %s", model_dir)
+
+    if not removed:
+        logger.info("Model dirs already absent for %s", model.display_name)
 
     with _download_lock:
         _download_progress.pop(model_id, None)
@@ -246,8 +324,8 @@ def delete_model(model_id: str) -> dict[str, Any]:
         "model_id": model_id,
         "display_name": model.display_name,
         "removed": removed,
-        "path": str(model_dir),
-        "freed_mb": freed_mb,
+        "path": str(last_path),
+        "freed_mb": round(freed_mb, 1),
         "downloaded": _is_downloaded(model),
     }
 

@@ -62,9 +62,11 @@ def list_provider_types():
         llm_registry,
     )
     from src.meeting.transcription.registry import (
+        entry_public_dict,
         file_transcription_registry,
         realtime_transcription_registry,
     )
+
     def _entries(registry):
         return [
             {"name": e.name, "display_name": e.display_name}
@@ -75,8 +77,13 @@ def list_provider_types():
         "embedding": _entries(embedding_registry),
         "reranker": _entries(reranker_registry),
         "llm": _entries(llm_registry),
-        "file_transcription": _entries(file_transcription_registry),
-        "realtime_transcription": _entries(realtime_transcription_registry),
+        # Transcription adapters also expose supports_hot_words for UI enable/disable
+        "file_transcription": [
+            entry_public_dict(e) for e in file_transcription_registry.list_primary()
+        ],
+        "realtime_transcription": [
+            entry_public_dict(e) for e in realtime_transcription_registry.list_primary()
+        ],
     }
 
 
@@ -422,13 +429,23 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
     return {"error": f"Provider '{provider_id}' not found"}
 
 
+def _provider_display_name(provider, fallback_id: str = "") -> str:
+    """Human-readable label for toasts (prefer name over uuid)."""
+    name = (getattr(provider, "name", None) or "").strip()
+    if name:
+        return name
+    pid = (getattr(provider, "id", None) or fallback_id or "").strip()
+    return pid or "Provider"
+
+
 @router.delete("/llm/providers/{provider_id}")
 async def delete_llm_provider(provider_id: str):
     config = get_config()
-    original_len = len(config.llm.providers)
-    config.llm.providers = [p for p in config.llm.providers if p.id != provider_id]
-    if len(config.llm.providers) == original_len:
+    target = next((p for p in config.llm.providers if p.id == provider_id), None)
+    if not target:
         return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
+    config.llm.providers = [p for p in config.llm.providers if p.id != provider_id]
     # Clean up stale visual_model_id / default_chat_model
     all_visual = {m for prov in config.llm.providers for m in (prov.visual_model_ids or [])}
     if config.visual_model_id and config.visual_model_id not in all_visual:
@@ -438,7 +455,7 @@ async def delete_llm_provider(provider_id: str):
         config.default_chat_model = None
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/llm/providers/{provider_id}/test")
@@ -558,13 +575,14 @@ async def delete_embedding_provider(provider_id: str):
     target = next((p for p in config.embedding.providers if p.id == provider_id), None)
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     config.embedding.providers = [p for p in config.embedding.providers if p.id != provider_id]
     # If we deleted the default, auto-promote the first remaining
     if target.is_default and config.embedding.providers:
         config.embedding.providers[0].is_default = True
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/embedding/providers/{provider_id}/test")
@@ -681,13 +699,14 @@ async def delete_rerank_provider(provider_id: str):
     target = next((p for p in config.rerank.providers if p.id == provider_id), None)
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     config.rerank.providers = [p for p in config.rerank.providers if p.id != provider_id]
     # If we deleted the default, auto-promote the first remaining
     if target.is_default and config.rerank.providers:
         config.rerank.providers[0].is_default = True
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/rerank/providers/{provider_id}/test")
@@ -746,12 +765,20 @@ async def set_default_rerank_provider(provider_id: str):
 
 
 def _check_models_downloaded(adapter: str, model: str | None) -> bool:
-    """Check if the model files for a local adapter exist on disk."""
-    from src.models.download import LOCAL_MODELS, _is_downloaded
+    """Check if the model files for a local ONNX adapter exist on disk.
 
-    if adapter == "funasr_local":
+    Readiness is determined by ``_is_downloaded`` (prefers ONNX packs under
+    ``data/models/onnx/``).
+    """
+    from src.models.download import LOCAL_MODELS, _is_downloaded
+    from src.meeting.transcription import (
+        is_local_file_adapter,
+        is_local_realtime_adapter,
+    )
+
+    if is_local_file_adapter(adapter):
         required_ids = ["transcription", "vad", "speaker", "punc"]
-    elif adapter == "funasr_local_realtime":
+    elif is_local_realtime_adapter(adapter):
         required_ids = ["realtime"]
     else:
         return False
@@ -786,7 +813,9 @@ def list_file_transcription_providers():
         if p.id.startswith("builtin-"):
             continue
         d = p.model_dump()
-        if p.adapter.startswith("funasr_local"):
+        from src.meeting.transcription import is_local_file_adapter
+
+        if is_local_file_adapter(p.adapter):
             d["models_downloaded"] = _check_models_downloaded(p.adapter, p.model)
             d["is_loaded"] = get_state(p.id) == "loaded"
             d["load_state"] = get_state(p.id)
@@ -842,16 +871,19 @@ async def update_file_transcription_provider(provider_id: str, update: dict = Bo
 @router.delete("/transcription/file-providers/{provider_id}")
 async def delete_file_transcription_provider(provider_id: str):
     config = get_config()
+    target = next(
+        (p for p in config.transcription.file_providers if p.id == provider_id), None
+    )
+    if not target:
+        return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     invalidate_provider(f"file_trans:{provider_id}")
-    original_len = len(config.transcription.file_providers)
     config.transcription.file_providers = [
         p for p in config.transcription.file_providers if p.id != provider_id
     ]
-    if len(config.transcription.file_providers) == original_len:
-        return {"error": f"Provider '{provider_id}' not found"}
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/transcription/file-providers/{provider_id}/test")
@@ -874,10 +906,12 @@ async def test_file_transcription_provider(provider_id: str):
         from src.providers.cache import peek
         from src.providers.load_state import get_state
 
-        cache_key = f"file_trans:{provider_id}"
-        is_local = provider.adapter.startswith("funasr_local")
+        from src.meeting.transcription import is_local_file_adapter
 
-        # Local FunASR: never re-load on Test — require Load first (instant feedback).
+        cache_key = f"file_trans:{provider_id}"
+        is_local = is_local_file_adapter(provider.adapter)
+
+        # Local ONNX FunASR: never re-load on Test — require Load first (instant feedback).
         if is_local:
             cached = peek(cache_key)
             state = get_state(provider_id)
@@ -963,8 +997,10 @@ def _invalidate_transcription_caches(*, kind: str) -> None:
 
 
 def _maybe_autoload_local(provider_id: str, adapter: str) -> None:
-    """If activating a local FunASR provider, kick off memory load when files exist."""
-    if not adapter.startswith("funasr_local"):
+    """If activating a local ONNX FunASR provider, kick off memory load when files exist."""
+    from src.meeting.transcription import is_local_asr_adapter
+
+    if not is_local_asr_adapter(adapter):
         return
     if provider_id not in ("builtin-local-file", "builtin-local-rt"):
         return
@@ -1050,7 +1086,9 @@ def list_realtime_transcription_providers():
         if p.id.startswith("builtin-"):
             continue
         d = p.model_dump()
-        if p.adapter.startswith("funasr_local"):
+        from src.meeting.transcription import is_local_realtime_adapter
+
+        if is_local_realtime_adapter(p.adapter):
             d["models_downloaded"] = _check_models_downloaded(p.adapter, p.model)
             d["is_loaded"] = get_state(p.id) == "loaded"
             d["load_state"] = get_state(p.id)
@@ -1106,16 +1144,20 @@ async def update_realtime_transcription_provider(provider_id: str, update: dict 
 @router.delete("/transcription/realtime-providers/{provider_id}")
 async def delete_realtime_transcription_provider(provider_id: str):
     config = get_config()
+    target = next(
+        (p for p in config.transcription.realtime_providers if p.id == provider_id),
+        None,
+    )
+    if not target:
+        return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     invalidate_provider(f"rt_trans:{provider_id}")
-    original_len = len(config.transcription.realtime_providers)
     config.transcription.realtime_providers = [
         p for p in config.transcription.realtime_providers if p.id != provider_id
     ]
-    if len(config.transcription.realtime_providers) == original_len:
-        return {"error": f"Provider '{provider_id}' not found"}
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/transcription/realtime-providers/{provider_id}/test")
@@ -1138,11 +1180,13 @@ async def test_realtime_transcription_provider(provider_id: str):
         from src.providers.cache import peek
         from src.providers.load_state import get_state
 
+        from src.meeting.transcription import is_local_realtime_adapter
+
         cache_key = f"rt_trans:{provider_id}"
-        is_local = provider.adapter.startswith("funasr_local")
+        is_local = is_local_realtime_adapter(provider.adapter)
 
         if is_local:
-            # CRITICAL: do not create a second AutoModel on Test — that was multi-10s lag.
+            # CRITICAL: do not create a second model instance on Test — that was multi-10s lag.
             cached = peek(cache_key)
             state = get_state(provider_id)
             if cached is None and state != "loaded":

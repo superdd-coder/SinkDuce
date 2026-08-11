@@ -36,12 +36,69 @@ _AUDIO_MIME_TYPES = {
 # ── Meeting CRUD ─────────────────────────────────────────────
 
 
+def _active_transcription_supports_hot_words() -> bool:
+    """True if file or realtime active adapter declares supports_hot_words."""
+    try:
+        from src.config import get_config
+        from src.meeting.transcription import resolve_file_adapter, resolve_realtime_adapter
+        from src.meeting.transcription.registry import (
+            cls_supports_hot_words,
+            file_transcription_registry,
+            realtime_transcription_registry,
+        )
+
+        config = get_config()
+        file_cfg = config.transcription.active_file_provider
+        if file_cfg is None:
+            file_cfg = config.transcription.get_local_file_provider()
+        rt_cfg = config.transcription.active_realtime_provider
+        if rt_cfg is None:
+            rt_cfg = config.transcription.get_local_realtime_provider()
+
+        def _supports(provider_cfg, registry, resolve_adapter) -> bool:
+            if not provider_cfg:
+                return False
+            adapter_name = resolve_adapter(provider_cfg.adapter or "")
+            entry = registry.get(adapter_name)
+            if not entry:
+                return False
+            return cls_supports_hot_words(entry.cls)
+
+        return _supports(
+            file_cfg, file_transcription_registry, resolve_file_adapter
+        ) or _supports(
+            rt_cfg, realtime_transcription_registry, resolve_realtime_adapter
+        )
+    except Exception as exc:
+        logger.debug("Hot-words support probe failed: %s", exc)
+        return False
+
+
 @router.post("/meetings")
 async def create_meeting(body: dict = Body()):
     title = body.get("title") or datetime.now().strftime("%Y-%m-%d %H:%M")
     mode = body.get("mode")  # "upload" or "record"
     meeting_mode = MeetingMode(mode) if mode else None
     meeting = store.create_meeting(title=title, mode=meeting_mode)
+
+    # Auto-select default hot-words library when active ASR supports hot words
+    try:
+        if _active_transcription_supports_hot_words():
+            from src.hot_words import store as hw_store
+
+            default_hw = hw_store.get_default_library_id()
+            if default_hw:
+                meeting = store.update_meeting(
+                    meeting.id, hot_words_library_id=default_hw
+                )
+                logger.info(
+                    "[CREATE] Applied default hot-words library id=%s to meeting %s",
+                    default_hw,
+                    meeting.id,
+                )
+    except Exception as exc:
+        logger.warning("[CREATE] Failed to apply default hot-words: %s", exc)
+
     logger.info("[CREATE] Meeting '%s' id=%s mode=%s", title, meeting.id, meeting_mode)
     return meeting.model_dump()
 
@@ -260,20 +317,40 @@ async def get_active_provider_info():
     which would trigger ML model downloads for local providers.
     """
     from src.config import get_config
-    from src.meeting.transcription.registry import file_transcription_registry, realtime_transcription_registry
+    from src.meeting.transcription import resolve_file_adapter, resolve_realtime_adapter
+    from src.meeting.transcription.registry import (
+        cls_supports_hot_words,
+        file_transcription_registry,
+        realtime_transcription_registry,
+    )
 
     config = get_config()
 
-    def _info(provider_cfg, registry):
+    def _info(provider_cfg, registry, *, resolve_adapter):
+        empty = {
+            "supports_hot_words": False,
+            "supported_language_hints": [],
+            "adapter": None,
+            "id": None,
+            "name": None,
+            "display_name": None,
+        }
         if not provider_cfg:
-            return {"supports_hot_words": False, "supported_language_hints": []}
+            return empty
+        adapter_name = resolve_adapter(provider_cfg.adapter or "")
+        meta = {
+            "adapter": adapter_name or provider_cfg.adapter or None,
+            "id": provider_cfg.id or None,
+            "name": provider_cfg.name or None,
+            "display_name": None,
+        }
         # If provider has custom language_hints_config, use it (openai_compatible etc.)
         custom = getattr(provider_cfg, "language_hints_config", None)
         if custom:
-            entry = registry.get(provider_cfg.adapter)
+            entry = registry.get(adapter_name)
             if entry:
-                raw = getattr(entry.cls, "supports_hot_words", False)
-                supports = raw if not isinstance(raw, property) else False
+                supports = cls_supports_hot_words(entry.cls)
+                meta["display_name"] = entry.display_name or entry.name
             else:
                 supports = False
             # Build hint list from custom config, ensuring "auto" is always first
@@ -283,21 +360,42 @@ async def get_active_provider_info():
             return {
                 "supports_hot_words": supports,
                 "supported_language_hints": hints,
+                **meta,
             }
-        entry = registry.get(provider_cfg.adapter)
+        entry = registry.get(adapter_name)
         if not entry:
-            return {"supports_hot_words": False, "supported_language_hints": []}
+            return {**empty, **meta}
         adapter_cls = entry.cls
-        raw = getattr(adapter_cls, "supports_hot_words", False)
-        supports = raw if not isinstance(raw, property) else False
+        supports = cls_supports_hot_words(adapter_cls)
+        meta["display_name"] = entry.display_name or entry.name
         return {
             "supports_hot_words": supports,
-            "supported_language_hints": list(getattr(adapter_cls, "SUPPORTED_LANGUAGE_HINTS", [])),
+            "supported_language_hints": list(
+                getattr(adapter_cls, "SUPPORTED_LANGUAGE_HINTS", [])
+            ),
+            **meta,
         }
 
+    # Prefer configured active providers; fall back to built-in local ONNX factories
+    # so the Meeting language UI still has options before user sets Default.
+    file_cfg = config.transcription.active_file_provider
+    if file_cfg is None:
+        file_cfg = config.transcription.get_local_file_provider()
+    rt_cfg = config.transcription.active_realtime_provider
+    if rt_cfg is None:
+        rt_cfg = config.transcription.get_local_realtime_provider()
+
     return {
-        "file": _info(config.transcription.active_file_provider, file_transcription_registry),
-        "realtime": _info(config.transcription.active_realtime_provider, realtime_transcription_registry),
+        "file": _info(
+            file_cfg,
+            file_transcription_registry,
+            resolve_adapter=resolve_file_adapter,
+        ),
+        "realtime": _info(
+            rt_cfg,
+            realtime_transcription_registry,
+            resolve_adapter=resolve_realtime_adapter,
+        ),
     }
 
 

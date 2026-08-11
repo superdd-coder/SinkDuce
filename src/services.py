@@ -35,9 +35,11 @@ def _preload_transcription_providers(config):
     from src.providers.cache import invalidate as cache_invalidate
     from src.providers.load_state import get_state
 
+    from src.meeting.transcription import is_local_asr_adapter
+
     def _trigger_load(cfg, providers, label):
         """Fire-and-forget load for one transcription provider."""
-        if not cfg or not cfg.adapter.startswith("funasr_local"):
+        if not cfg or not is_local_asr_adapter(cfg.adapter):
             return
         if not _is_builtin_model_downloaded(cfg.id):
             logger.info("Built-in %s transcription model not downloaded, deactivating", label)
@@ -61,7 +63,7 @@ def _preload_transcription_providers(config):
     for key in list(_provider_cache_snapshot()):
         if key.startswith("file_trans:"):
             file_cfg = config.transcription.active_file_provider
-            if not file_cfg or not file_cfg.adapter.startswith("funasr_local"):
+            if not file_cfg or not is_local_asr_adapter(file_cfg.adapter):
                 cache_invalidate(key)
                 logger.info("Unloaded inactive local file transcription provider: %s", key)
 
@@ -77,7 +79,7 @@ def _preload_transcription_providers(config):
     for key in list(_provider_cache_snapshot()):
         if key.startswith("rt_trans:"):
             rt_cfg = config.transcription.active_realtime_provider
-            if not rt_cfg or not rt_cfg.adapter.startswith("funasr_local"):
+            if not rt_cfg or not is_local_asr_adapter(rt_cfg.adapter):
                 cache_invalidate(key)
                 logger.info("Unloaded inactive local realtime transcription provider: %s", key)
 
@@ -136,7 +138,7 @@ def _reload_transcription_provider(model_id: str, loading: bool):
 
     if model_id == "builtin-local-file":
         cache_key = f"file_trans:{model_id}"
-        # Always FunASR local factory config — never the active cloud provider.
+        # Always FunASR ONNX factory config — never the active cloud provider.
         # (Previous bug: used active_file_provider → DashScope cached under builtin id.)
         provider_cfg = config.transcription.get_local_file_provider()
         # Prefer device from persisted builtin row if present
@@ -148,7 +150,7 @@ def _reload_transcription_provider(model_id: str, loading: bool):
             "src.meeting.transcription",
             fromlist=["create_file_transcription_provider"],
         ).create_file_transcription_provider
-        human = "file transcription (SenseVoice pack)"
+        human = "file transcription (SenseVoice ONNX pack)"
     elif model_id == "builtin-local-rt":
         cache_key = f"rt_trans:{model_id}"
         provider_cfg = config.transcription.get_local_realtime_provider()
@@ -160,7 +162,7 @@ def _reload_transcription_provider(model_id: str, loading: bool):
             "src.meeting.transcription",
             fromlist=["create_realtime_transcription_provider"],
         ).create_realtime_transcription_provider
-        human = "realtime transcription (Paraformer streaming)"
+        human = "realtime transcription (Paraformer ONNX streaming)"
     else:
         return
 
@@ -170,11 +172,11 @@ def _reload_transcription_provider(model_id: str, loading: bool):
         from src.providers.cache import peek as cache_peek
         cached = cache_peek(cache_key)
         if cached is not None and get_state(model_id) == "loaded":
-            # Verify it is the expected FunASR class family
+            # Verify it is the expected FunASR ONNX class family
             cls_name = type(cached).__name__
             if "DashScope" in cls_name or "OpenAI" in cls_name or "OpenRouter" in cls_name:
                 logger.warning(
-                    "Cache mismatch for %s: found %s, forcing reload as FunASR",
+                    "Cache mismatch for %s: found %s, forcing reload as FunASR ONNX",
                     model_id,
                     cls_name,
                 )

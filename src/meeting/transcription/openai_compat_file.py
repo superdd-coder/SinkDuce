@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 class OpenAICompatFileTranscription(FileTranscriptionProvider):
     """File transcription via OpenAI Whisper API using the OpenAI SDK."""
 
+    # Whisper prompt injection for domain terms (soft boost, not true lexicon).
+    supports_hot_words = True
     SUPPORTED_LANGUAGE_HINTS = [
         {"code": "auto", "label": "Auto"},
         {"code": "zh", "label": "Chinese"},

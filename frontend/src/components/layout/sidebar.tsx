@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { cn } from "@/lib/utils"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
@@ -27,6 +27,9 @@ type PlateState = {
   ready: boolean
 }
 
+/** Float update card fade duration — keep in sync with --pm-update-card-ms in CSS */
+const UPDATE_CARD_MS = 280
+
 export function Sidebar() {
   const { sidebarView, setSidebarView } = useAppStore(
     useShallow((s) => ({
@@ -36,7 +39,13 @@ export function Sidebar() {
   )
   const { update, ignored, ignoreVersion, currentVersion } = useUpdateCheck()
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [leaving, setLeaving] = useState(false)
+  /** After Ignore or closing Details — hide float card; version becomes update pill */
+  const [cardDismissed, setCardDismissed] = useState(false)
+  /** Soft enter/leave for float card (keep mounted while fading out) */
+  const [cardMounted, setCardMounted] = useState(false)
+  const [cardIn, setCardIn] = useState(false)
+  /** Soft enter for the flowing-green version pill (avoid hard cut) */
+  const [pillIn, setPillIn] = useState(false)
 
   const listRef = useRef<HTMLElement>(null)
   const itemRefs = useRef<Map<SidebarView, HTMLButtonElement>>(new Map())
@@ -91,14 +100,68 @@ export function Sidebar() {
     else itemRefs.current.delete(view)
   }, [])
 
-  const showCard = update && !ignored && !leaving
+  /** Logical visibility — fade keep-alive is cardMounted / cardIn */
+  const shouldShowCard = !!update && !ignored && !cardDismissed
+  /**
+   * Keep the version as the green pill whenever an update exists (even while
+   * the float card is open). That way card `left: 0` and the pill share one
+   * left edge in the same stack — no shift when the card is dismissed.
+   */
+  const showUpdatePill = !!update
+
+  /* Float card: mount → double-rAF is-in; hide → is-in off then unmount after UPDATE_CARD_MS */
+  useEffect(() => {
+    if (shouldShowCard) {
+      setCardMounted(true)
+      setCardIn(false)
+      let raf2 = 0
+      const raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => setCardIn(true))
+      })
+      return () => {
+        cancelAnimationFrame(raf1)
+        if (raf2) cancelAnimationFrame(raf2)
+      }
+    }
+    setCardIn(false)
+    const t = window.setTimeout(() => setCardMounted(false), UPDATE_CARD_MS)
+    return () => window.clearTimeout(t)
+  }, [shouldShowCard])
+
+  /* Mount pill closed → next frames is-in for soft scale/fade (not a hard cut) */
+  useEffect(() => {
+    if (!showUpdatePill) {
+      setPillIn(false)
+      return
+    }
+    setPillIn(false)
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPillIn(true))
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      if (raf2) cancelAnimationFrame(raf2)
+    }
+  }, [showUpdatePill])
 
   const handleIgnore = () => {
-    setLeaving(true)
-    setTimeout(() => {
-      ignoreVersion()
-      setLeaving(false)
-    }, 250)
+    /* Flag dismiss first so leave animation runs; ignore persists after */
+    setCardDismissed(true)
+    ignoreVersion()
+  }
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open)
+    if (!open && update) {
+      /* Close Details → fade float card into version pill */
+      setCardDismissed(true)
+    }
+  }
+
+  const openUpdateDetails = () => {
+    if (!update) return
+    setDialogOpen(true)
   }
 
   return (
@@ -137,47 +200,82 @@ export function Sidebar() {
         </nav>
 
         <div className="pm-shell-nav-bottom">
-          {showCard && update && (
-            <div
-              className={cn(
-                "pm-shell-update-card mb-3 transition-all duration-300",
-                leaving && "opacity-0 -translate-x-2"
-              )}
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="pm-shell-update-label">Update</span>
-                <button
-                  type="button"
-                  onClick={handleIgnore}
-                  className="text-[var(--pm-faint)] hover:text-[var(--pm-muted)]"
-                  title="Ignore this version"
-                >
-                  <X className="h-3 w-3" />
-                </button>
+          {/* Shared stack so float card + version pill share the same left edge */}
+          <div className="pm-shell-update-stack">
+            {cardMounted && update && (
+              <div
+                className={cn(
+                  "pm-shell-update-card",
+                  cardIn && "is-in",
+                )}
+                role="status"
+              >
+                <div className="pm-shell-update-card-head">
+                  <span className="pm-shell-update-label">Update</span>
+                  <button
+                    type="button"
+                    onClick={handleIgnore}
+                    className="pm-shell-update-dismiss"
+                    title="Ignore this version"
+                    aria-label="Ignore this version"
+                  >
+                    <X className="h-3 w-3" strokeWidth={2} />
+                  </button>
+                </div>
+                <p className="pm-shell-update-ver">
+                  {update.latestVersion.startsWith("v")
+                    ? update.latestVersion
+                    : `v${update.latestVersion}`}
+                </p>
+                <p className="pm-shell-update-from">
+                  from v{update.currentVersion.replace(/^v/, "")}
+                </p>
+                <div className="pm-shell-update-actions">
+                  <button
+                    type="button"
+                    onClick={openUpdateDetails}
+                    className="pm-shell-update-link"
+                  >
+                    Details
+                    <ArrowUpRight className="h-3 w-3" strokeWidth={2} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleIgnore}
+                    className="pm-shell-update-ghost"
+                  >
+                    Ignore
+                  </button>
+                </div>
               </div>
-              <p className="pm-shell-update-ver mb-2">{update.latestVersion}</p>
-              <div className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => setDialogOpen(true)}
-                  className="pm-shell-update-link"
-                >
-                  Details <ArrowUpRight className="h-2.5 w-2.5" />
-                </button>
-                <button type="button" onClick={handleIgnore} className="pm-shell-update-ghost">
-                  Ignore
-                </button>
-              </div>
-            </div>
-          )}
-          <span className="pm-shell-version">v{currentVersion}</span>
+            )}
+            {showUpdatePill ? (
+              <button
+                type="button"
+                className={cn(
+                  "pm-shell-version-pill is-update",
+                  pillIn && "is-in",
+                )}
+                onClick={openUpdateDetails}
+                title="Update available — view details"
+                aria-label={`Update available, current version v${currentVersion}. Open details.`}
+              >
+                <span className="pm-shell-version-pill-ring" aria-hidden />
+                <span className="pm-shell-version-pill-label">
+                  v{currentVersion}
+                </span>
+              </button>
+            ) : (
+              <span className="pm-shell-version">v{currentVersion}</span>
+            )}
+          </div>
         </div>
       </aside>
 
       {update && (
         <UpdateDialog
           open={dialogOpen}
-          onOpenChange={setDialogOpen}
+          onOpenChange={handleDialogOpenChange}
           update={update}
         />
       )}

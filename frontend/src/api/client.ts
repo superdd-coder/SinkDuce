@@ -398,6 +398,8 @@ export const getAvailableModels = (section: string, data?: Record<string, unknow
 export interface ProviderTypeInfo {
   name: string
   display_name: string
+  /** Present on file/realtime transcription adapters */
+  supports_hot_words?: boolean
 }
 
 export interface ProviderTypesResponse {
@@ -1562,6 +1564,7 @@ export interface HotWordsLibrary {
   name: string
   description: string
   words: HotWordItem[]
+  is_default?: boolean
   created_at: string
   updated_at: string
 }
@@ -1571,6 +1574,7 @@ export interface HotWordsLibrarySummary {
   name: string
   description: string
   word_count: number
+  is_default?: boolean
   created_at: string
   updated_at: string
 }
@@ -1598,14 +1602,79 @@ export const deleteHotWordsLibrary = (id: string) =>
     method: "DELETE",
   })
 
+/** Set or clear the default hot-words library (auto-selected on new meetings). */
+export const setDefaultHotWordsLibrary = (libraryId: string | null) =>
+  request<{ default_library_id: string | null; error?: string }>("/hot-words/default", {
+    method: "PUT",
+    body: JSON.stringify({ library_id: libraryId }),
+  })
+
+/** Download CSV / Excel hot-words import template (attachment). */
+export function downloadHotWordsTemplate(format: "csv" | "xlsx" = "csv") {
+  const a = document.createElement("a")
+  a.href = `${BASE}/hot-words/template.${format}`
+  a.download = `hot-words-template.${format}`
+  a.rel = "noopener"
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+/** Export a library as Excel (.xlsx). */
+export function exportHotWordsLibrary(id: string, nameHint?: string) {
+  const a = document.createElement("a")
+  a.href = `${BASE}/hot-words/${encodeURIComponent(id)}/export.xlsx`
+  a.download = `${(nameHint || "hot-words").replace(/[^\w\-]+/g, "_").slice(0, 60)}.xlsx`
+  a.rel = "noopener"
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+/** Import a CSV or Excel file as a new hot-words library. */
+export async function importHotWordsLibrary(
+  file: File,
+  opts?: { name?: string; description?: string },
+): Promise<HotWordsLibrary> {
+  const fd = new FormData()
+  fd.append("file", file)
+  if (opts?.name?.trim()) fd.append("name", opts.name.trim())
+  if (opts?.description?.trim()) fd.append("description", opts.description.trim())
+  const res = await fetch(`${BASE}/hot-words/import`, {
+    method: "POST",
+    body: fd,
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(
+      typeof body?.error === "string"
+        ? body.error
+        : `API ${res.status}: import failed`,
+    )
+  }
+  if (body?.error) throw new Error(String(body.error))
+  return body as HotWordsLibrary
+}
+
 export interface LanguageHintOption {
   code: string
   label: string
 }
 
+export interface ActiveProviderSideInfo {
+  supports_hot_words: boolean
+  supported_language_hints: LanguageHintOption[]
+  /** Resolved adapter name, e.g. funasr_onnx / dashscope_funasr */
+  adapter?: string | null
+  id?: string | null
+  name?: string | null
+  /** Registry display name for UI captions */
+  display_name?: string | null
+}
+
 export interface ActiveProviderInfo {
-  file: { supports_hot_words: boolean; supported_language_hints: LanguageHintOption[] }
-  realtime: { supports_hot_words: boolean; supported_language_hints: LanguageHintOption[] }
+  file: ActiveProviderSideInfo
+  realtime: ActiveProviderSideInfo
 }
 
 export const getActiveProviderInfo = () =>

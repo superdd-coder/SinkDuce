@@ -49,11 +49,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+# Local ASR: ONNX runtime only (funasr-onnx + onnxruntime). No torch/funasr.
+# Place pre-exported models under data/models/onnx/ (export once on a host with
+# `pip install -e ".[asr-export]"` if you need to re-export).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
     --index-strategy unsafe-best-match \
-    --extra-index-url https://download.pytorch.org/whl/cpu \
-    .[diarization]
+    ".[asr-onnx]"
 
 COPY . .
 COPY --from=frontend /app/frontend/dist /app/frontend/dist

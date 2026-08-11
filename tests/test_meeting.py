@@ -466,7 +466,10 @@ class TestTranscribeHandler:
 
         with patch("src.meeting.service.store") as mock_store, \
              patch("src.meeting.service.get_config", return_value=config), \
-             patch("src.meeting.service.create_file_transcription_provider", return_value=provider):
+             patch("src.meeting.service.create_file_transcription_provider", return_value=provider), \
+             patch("src.meeting.service.cached_provider", side_effect=lambda key, factory: factory()), \
+             patch("src.services._is_builtin_model_downloaded", return_value=True), \
+             patch("src.providers.load_state.get_state", return_value="loaded"):
             mock_store.get_meeting.return_value = meeting
             mock_store.update_meeting.return_value = meeting
             mock_store.save_transcript.return_value = "/tmp/transcript.json"
@@ -512,11 +515,15 @@ class TestMeetingService:
         from src.meeting.service import MeetingService
 
         config = AppConfig()
-        with patch("src.meeting.service.get_config", return_value=config):
+        with patch("src.meeting.service.get_config", return_value=config), \
+             patch("src.meeting.service.create_file_transcription_provider") as mock_create, \
+             patch("src.meeting.service.cached_provider", side_effect=lambda key, factory: factory()):
+            mock_create.return_value = MagicMock()
             svc = MeetingService()
-            # System always falls back to built-in local FunASR provider
+            # System always falls back to built-in local FunASR (ONNX) provider
             provider = svc.get_active_file_provider()
             assert provider is not None
+            assert mock_create.call_args[0][0].adapter == "funasr_onnx"
 
     def test_get_active_realtime_provider(self):
         """Returns provider when active realtime provider is configured."""
@@ -540,11 +547,15 @@ class TestMeetingService:
         from src.meeting.service import MeetingService
 
         config = AppConfig()
-        with patch("src.meeting.service.get_config", return_value=config):
+        with patch("src.meeting.service.get_config", return_value=config), \
+             patch("src.meeting.service.create_realtime_transcription_provider") as mock_create, \
+             patch("src.meeting.service.cached_provider", side_effect=lambda key, factory: factory()):
+            mock_create.return_value = MagicMock()
             svc = MeetingService()
-            # System always falls back to built-in local realtime provider
+            # System always falls back to built-in local ONNX realtime provider
             provider = svc.get_active_realtime_provider()
             assert provider is not None
+            assert mock_create.call_args[0][0].adapter == "funasr_onnx_realtime"
 
     @pytest.mark.skip(reason="v3: generate_summary replaced by _do_blueprint_summary (async task-based)")
     def test_generate_summary(self):

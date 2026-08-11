@@ -159,8 +159,8 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
 
   /**
    * Collection switch: keep stage + tab panels mounted (no visitedTabs wipe —
-   * that remounted InfoPanel and flashed white). Soft-fade title + body so
-   * content doesn't hard-cut; tab bar stays fully opaque.
+   * that remounted InfoPanel and flashed white). Soft-fade title, tab bar, and
+   * body together so nothing hard-cuts alone.
    */
   const [collectionSoftFaded, setCollectionSoftFaded] = useState(false)
   const collectionSoftSkipRef = useRef(true)
@@ -180,7 +180,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       setCollectionSoftFaded(false)
       return
     }
-    // Paint new collection at opacity 0, then fade in (tab bar not faded)
+    // Paint new collection at opacity 0, then fade in (title + tab bar + body)
     collectionSoftGenRef.current += 1
     setCollectionSoftFaded(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
@@ -523,7 +523,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
 
   return (
     /* overflow visible so stage + collections soft shadows are not clipped */
-    <div className="pm-shell-workspace h-full flex min-h-0 min-w-0">
+    <div className="pm-shell-workspace h-full min-h-0 min-w-0">
       <CollectionList
         collections={collections}
         activeCollection={activeCollection}
@@ -579,10 +579,18 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                 Must NOT move between InfoPanel chrome and this shell — remounting
                 kills TabsIndicator slide (new instance, no left/width tween).
                 value={contentTab} so Config open still keeps last pill for slide-back.
-                Tab bar intentionally NOT soft-faded on collection switch.
+                Soft-fades with title/body on collection switch (same opacity).
+              */}
+              {/*
+                Do NOT add .is-in here — it forces opacity:1 and overrides
+                .pm-collection-soft-fade.is-faded (same specificity, later in CSS).
               */}
               <div
-                className="pm-tabs-shell pm-collection-tabs-shell is-in shrink-0 min-w-0"
+                className={cn(
+                  "pm-tabs-shell pm-collection-tabs-shell shrink-0 min-w-0",
+                  "pm-collection-soft-fade",
+                  collectionSoftFaded && "is-faded",
+                )}
                 style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
               >
                 {collectionTabs}
@@ -591,7 +599,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               {/*
                 Keep-alive surfaces + sequential fade (out → swap → in).
                 Same motion for Overview / Files / Timeline / Config.
-                Soft-fade on collection switch (title + this body only).
+                Soft-fade on collection switch (title + tab bar + body).
               */}
               {/*
                 overflow-visible so QC diamond park (top: -40px) is not clipped.

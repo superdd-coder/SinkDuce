@@ -99,7 +99,12 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
     try {
       const res = await onDelete(provider.id)
       if (res.error) toast.error(res.error)
-      else { toast.success(res.message || "Deleted"); onRefresh() }
+      else {
+        toast.success(
+          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+        )
+        onRefresh()
+      }
     } catch { toast.error("Delete failed") }
   }
 
@@ -479,7 +484,12 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
     try {
       const res = await onDelete(provider.id)
       if (res.error) toast.error(res.error)
-      else { toast.success(res.message || "Deleted"); onRefresh() }
+      else {
+        toast.success(
+          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+        )
+        onRefresh()
+      }
     } catch { toast.error("Delete failed") }
   }
 
@@ -884,17 +894,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
   const getFileTransFields = (form: Record<string, string>): FieldDef[] => {
     const adapter = form.adapter || ""
-    if (adapter.startsWith("funasr_local")) {
-      return [
-        ...fileTransFields,
-        { key: "device", label: "Device", options: [
-          { value: "auto", label: "Auto (recommended)" },
-          { value: "mps", label: "Apple Silicon (MPS)" },
-          { value: "cuda", label: "CUDA (NVIDIA)" },
-          { value: "cpu", label: "CPU" },
-        ]},
-      ]
-    }
+    // Local FunASR is ONNX-only (CPU via onnxruntime); no torch device picker.
     if (adapter === "openai_compatible") {
       return [
         ...fileTransFields,
@@ -939,17 +939,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
   const getRtTransFields = (form: Record<string, string>): FieldDef[] => {
     const adapter = form.adapter || ""
-    if (adapter.startsWith("funasr_local")) {
-      return [
-        ...rtTransFields,
-        { key: "device", label: "Device", options: [
-          { value: "auto", label: "Auto (recommended)" },
-          { value: "mps", label: "Apple Silicon (MPS)" },
-          { value: "cuda", label: "CUDA (NVIDIA)" },
-          { value: "cpu", label: "CPU" },
-        ]},
-      ]
-    }
+    // Local FunASR realtime is ONNX-only (CPU); no torch device picker.
     if (adapter === "openai_compatible") {
       return [
         ...rtTransFields,

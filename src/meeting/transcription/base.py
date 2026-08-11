@@ -12,10 +12,8 @@ class FileTranscriptionProvider(ABC):
     # Supported language hints declared per adapter.
     # Each entry: {"code": "zh", "label": "中文"}
     SUPPORTED_LANGUAGE_HINTS: list[dict[str, str]] = []
-
-    @property
-    def supports_hot_words(self) -> bool:
-        return False
+    # Class flag — read by registry / active-provider-info (do not use @property).
+    supports_hot_words: bool = False
 
     @abstractmethod
     async def transcribe(
@@ -43,10 +41,8 @@ class RealtimeTranscriptionProvider(ABC):
     """Real-time streaming transcription via WebSocket."""
 
     SUPPORTED_LANGUAGE_HINTS: list[dict[str, str]] = []
-
-    @property
-    def supports_hot_words(self) -> bool:
-        return False
+    # Class flag — read by registry / active-provider-info (do not use @property).
+    supports_hot_words: bool = False
 
     @abstractmethod
     async def start(

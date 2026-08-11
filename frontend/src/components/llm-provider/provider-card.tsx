@@ -49,7 +49,9 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
       const res = await deleteLLMProvider(provider.id)
       if (res.error) toast.error(res.error)
       else {
-        toast.success(res.message || "Provider deleted")
+        toast.success(
+          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+        )
         onRefresh()
       }
     } catch {
