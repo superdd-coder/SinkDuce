@@ -44,6 +44,11 @@ jobs:
           echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
           echo "TAG_VER=$TAG_VER" >> "$GITHUB_ENV"
 
+      # Multi-arch: amd64 (servers) + arm64 (Apple Silicon). Without this,
+      # Hub only has linux/amd64 and Mac M-series pull fails.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -75,6 +80,7 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.tags.outputs.list }}
           build-args: |
             NODE_IMAGE=${{ env.NODE_IMAGE }}
