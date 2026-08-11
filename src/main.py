@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI):
     await task_manager.stop()
 
 
-app = FastAPI(title="SinkDuce", version="1.0.2", lifespan=lifespan)
+app = FastAPI(title="SinkDuce", version="1.1.0", lifespan=lifespan)
 
 # CORS for development
 app.add_middleware(
