@@ -1,29 +1,37 @@
 /**
- * Log message detail from file detail:
- * - Normal message: single-column view + Edit top-right
- * - Version update: left = Preview/Parse/Summary/Chunks for that version;
- *   right = message body with Edit inside the message panel
- * - Non-current versions: Delete on left tab bar (blob + Qdrant + log link)
+ * Log message detail from file detail / Messages rail:
+ *
+ * - Normal message → same shell as Add Message (`pm-msg-dialog` + silk)
+ * - Version update → same shell as File detail (`pm-workspace` + silk):
+ *     left  = Preview / Parse / Summary / Chunks (pm-ws-main card + tabs)
+ *     right = Message body (pm-ws-side float card)
+ *
+ * Motion: pm-dialog--silk + overlay--silk (open/close + mask fade, symmetric).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
+  DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Tabs,
   TabsContent,
+  TabsIndicator,
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs"
-import { Loader2, Pencil, Trash2 } from "lucide-react"
+import { History, Loader2, Pencil, Trash2 } from "lucide-react"
 import { cn, transformImageBlocks } from "@/lib/utils"
+import { ChunkMd } from "@/components/shared/chunk-md"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
@@ -37,7 +45,13 @@ import {
   type ChunkDetail,
   type DocSummary,
 } from "@/api/client"
-import { deleteFileVersion, updateMessage } from "@/api/file-mgmt"
+import {
+  deleteFileVersion,
+  FileMgmtApiError,
+  getFileDetail,
+  rollbackFileVersion,
+  updateMessage,
+} from "@/api/file-mgmt"
 import {
   RawFileViewer,
   resolveRawFilename,
@@ -62,6 +76,14 @@ function versionUpdateBody(body: string | null | undefined): string {
   return t || "version update"
 }
 
+const silkShell = cn(
+  "pm-dialog pm-dialog--silk",
+  "!animate-none data-open:!animate-none data-closed:!animate-none"
+)
+
+const proseBodyClass =
+  "prose prose-sm max-w-none leading-relaxed break-words [&_p]:my-2 font-[family-name:var(--pm-ff-prose)]"
+
 export interface LogMessageDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -73,9 +95,33 @@ export interface LogMessageDialogProps {
   version?: FileVersion | null
   /** True when version is the file's current version */
   isCurrentVersion?: boolean
-  onSaved?: () => void
+  /** Called with the updated message so parents can refresh lock version. */
+  onSaved?: (msg: Message) => void
   /** After permanently deleting a non-current version */
   onVersionDeleted?: () => void
+  /** After rolling back to this version (later versions hard-deleted) */
+  onVersionRolledBack?: () => void
+}
+
+/**
+ * Re-read optimistic-lock version from file detail (system_version / file msgs).
+ * Returns null when the message cannot be resolved.
+ */
+async function fetchMessageLockVersion(
+  collectionId: string,
+  msg: Message
+): Promise<Message | null> {
+  const ot = (msg.owner_type || "").toLowerCase()
+  if (ot !== "system_version" && ot !== "file") return null
+  if (!msg.owner_id) return null
+  try {
+    const detail = await getFileDetail(collectionId, msg.owner_id)
+    return (
+      detail.messages?.find((m) => m.message_id === msg.message_id) ?? null
+    )
+  } catch {
+    return null
+  }
 }
 
 export function LogMessageDialog({
@@ -88,6 +134,7 @@ export function LogMessageDialog({
   isCurrentVersion = false,
   onSaved,
   onVersionDeleted,
+  onVersionRolledBack,
 }: LogMessageDialogProps) {
   /**
    * Keep last payload while closing so exit animation can finish.
@@ -99,17 +146,30 @@ export function LogMessageDialog({
     isCurrentVersion: boolean
   } | null>(null)
 
+  /**
+   * Working copy while the dialog is open — owns optimistic-lock `version`
+   * after save. Parent props can lag behind (loadDetail does not always
+   * rewrite logMsgOpen), so we must not keep using a stale lock.
+   */
+  const [workingMsg, setWorkingMsg] = useState<Message | null>(null)
+
   useEffect(() => {
-    if (message) {
-      setHeld({
-        message,
-        version: version ?? null,
-        isCurrentVersion,
-      })
-    }
+    if (!message) return
+    setHeld({
+      message,
+      version: version ?? null,
+      isCurrentVersion,
+    })
+    setWorkingMsg((prev) => {
+      // New message id → always take prop
+      if (!prev || prev.message_id !== message.message_id) return message
+      // Prefer the higher lock version (local save may be ahead of parent)
+      if ((prev.version ?? 0) > (message.version ?? 0)) return prev
+      return message
+    })
   }, [message, version, isCurrentVersion])
 
-  const activeMessage = message ?? held?.message ?? null
+  const activeMessage = workingMsg ?? message ?? held?.message ?? null
   const activeVersion = message ? version ?? null : held?.version ?? null
   const activeIsCurrent = message
     ? isCurrentVersion
@@ -124,18 +184,37 @@ export function LogMessageDialog({
   const [content, setContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [rollbackConfirmOpen, setRollbackConfirmOpen] = useState(false)
+  const [rollingBack, setRollingBack] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     if (!open || !activeMessage) return
     setEditing(false)
     setDeleteConfirmOpen(false)
+    setRollbackConfirmOpen(false)
     setContent(
       isVersionUpdate
         ? versionUpdateBody(activeMessage.body)
         : activeMessage.body || ""
     )
-  }, [open, activeMessage?.message_id, activeMessage?.body, isVersionUpdate])
+    // Only reset editor when opening / switching message — not on lock bumps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeMessage?.message_id, isVersionUpdate])
+
+  const applySavedMessage = useCallback((updated: Message) => {
+    setWorkingMsg(updated)
+    setHeld((h) =>
+      h && h.message.message_id === updated.message_id
+        ? { ...h, message: updated }
+        : h
+    )
+    setContent(
+      (updated.owner_type || "").toLowerCase() === "system_version"
+        ? versionUpdateBody(updated.body)
+        : updated.body || ""
+    )
+  }, [])
 
   const handleSave = useCallback(async () => {
     if (!activeMessage) return
@@ -143,23 +222,77 @@ export function LogMessageDialog({
       ? versionUpdateBody(content)
       : content.trim()
     if (!body && !isVersionUpdate) return
+
     setSaving(true)
     try {
-      await updateMessage(collectionId, activeMessage.message_id, {
+      /**
+       * Optimistic lock is messages.version (row concurrency), NOT file
+       * version_no. Parent list / dialog props are often stale after a prior
+       * edit — especially when editing a historical system_version note.
+       * Always resolve the current lock from the server before PATCH.
+       */
+      let lockMsg = activeMessage
+      const fresh = await fetchMessageLockVersion(collectionId, activeMessage)
+      if (fresh && typeof fresh.version === "number") {
+        lockMsg = fresh
+        setWorkingMsg(fresh)
+      } else if (
+        typeof lockMsg.version !== "number" ||
+        Number.isNaN(lockMsg.version)
+      ) {
+        toast.error("Save failed: could not read message version — reopen and try again")
+        return
+      }
+
+      const payload = {
         body: body || "version update",
-        version: activeMessage.version,
-      })
+        version: lockMsg.version,
+      }
+      let updated: Message
+      try {
+        updated = await updateMessage(
+          collectionId,
+          activeMessage.message_id,
+          payload
+        )
+      } catch (err) {
+        // Rare race: someone else saved between our GET and PATCH — retry once
+        if (err instanceof FileMgmtApiError && err.status === 409) {
+          const again = await fetchMessageLockVersion(
+            collectionId,
+            activeMessage
+          )
+          if (!again || typeof again.version !== "number") throw err
+          updated = await updateMessage(
+            collectionId,
+            activeMessage.message_id,
+            { body: payload.body, version: again.version }
+          )
+        } else {
+          throw err
+        }
+      }
+      applySavedMessage(updated)
       toast.success("Message saved")
       setEditing(false)
-      onSaved?.()
+      onSaved?.(updated)
     } catch (err) {
-      toast.error(
-        `Save failed: ${err instanceof Error ? err.message : String(err)}`
-      )
+      const msg =
+        err instanceof FileMgmtApiError && err.status === 409
+          ? "Save failed: message changed while saving — try again"
+          : `Save failed: ${err instanceof Error ? err.message : String(err)}`
+      toast.error(msg)
     } finally {
       setSaving(false)
     }
-  }, [activeMessage, content, isVersionUpdate, collectionId, onSaved])
+  }, [
+    activeMessage,
+    content,
+    isVersionUpdate,
+    collectionId,
+    onSaved,
+    applySavedMessage,
+  ])
 
   const handleDeleteVersion = useCallback(async () => {
     if (!activeVersion || activeIsCurrent) return
@@ -188,52 +321,192 @@ export function LogMessageDialog({
     onVersionDeleted,
   ])
 
-  // Enter/exit: keep mounted (portal keepMounted + held payload on close)
-  const dialogMotion = cn(
-    "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-    "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-3",
-    "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2",
-    "data-closed:duration-280 data-open:duration-320"
-  )
+  const handleRollbackVersion = useCallback(async () => {
+    if (!activeVersion || activeIsCurrent) return
+    const fileId = activeVersion.file_id
+    const versionId = activeVersion.version_id
+    if (!fileId || !versionId) return
+    setRollingBack(true)
+    try {
+      const res = await rollbackFileVersion(collectionId, fileId, versionId)
+      const n = res.deleted_count ?? res.deleted_version_ids?.length ?? 0
+      toast.success(
+        n > 0
+          ? `Rolled back to v${res.version_no} — permanently deleted ${n} later version${n === 1 ? "" : "s"}`
+          : `Rolled back to v${res.version_no}`
+      )
+      setRollbackConfirmOpen(false)
+      onOpenChange(false)
+      onVersionRolledBack?.()
+    } catch (err) {
+      toast.error(
+        err instanceof FileMgmtApiError
+          ? err.message
+          : `Rollback failed: ${err instanceof Error ? err.message : String(err)}`
+      )
+    } finally {
+      setRollingBack(false)
+    }
+  }, [
+    activeVersion,
+    activeIsCurrent,
+    collectionId,
+    onOpenChange,
+    onVersionRolledBack,
+  ])
 
   if (!activeMessage) return null
 
-  // ── Version update: dual pane ──
+  const handleCancelEdit = () => {
+    setEditing(false)
+    setContent(
+      isVersionUpdate
+        ? versionUpdateBody(activeMessage.body)
+        : activeMessage.body || ""
+    )
+  }
+
+  /**
+   * Message card title actions:
+   * Idle → pill Edit; click → Cancel/Save slide out to the left (symmetric close).
+   */
+  const messageCardActions = (
+    <div
+      className={cn("pm-log-msg-card-actions", editing && "is-editing")}
+    >
+      {/* Expand host: width 0 → auto; content slides left into place */}
+      <div className="pm-log-msg-expand" aria-hidden={!editing}>
+        <div className="pm-log-msg-expand-inner">
+          <button
+            type="button"
+            className="pm-btn-ghost pm-btn-xs pm-log-msg-action-btn"
+            disabled={saving}
+            tabIndex={editing ? 0 : -1}
+            onClick={handleCancelEdit}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="pm-btn-pri pm-btn-xs pm-log-msg-action-btn"
+            disabled={saving || !content.trim()}
+            tabIndex={editing ? 0 : -1}
+            onClick={() => void handleSave()}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Saving…
+              </>
+            ) : (
+              "Save"
+            )}
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        className="pm-log-msg-edit"
+        aria-expanded={editing}
+        aria-label="Edit message"
+        tabIndex={editing ? -1 : 0}
+        onClick={() => {
+          if (!editing) setEditing(true)
+        }}
+      >
+        <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
+        Edit
+      </button>
+    </div>
+  )
+
+  /** Preview body — click to enter edit (Version Update notes are always editable). */
+  const messageEditorOrBody = (minHeight: string, allowEdit: boolean) =>
+    editing ? (
+      <div className="flex-1 min-h-0 flex flex-col pm-msg-editor-host">
+        <MarkdownEditor
+          value={content}
+          onChange={setContent}
+          minHeight={minHeight}
+          placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+          showToolbar
+          flush
+          className="flex-1 min-h-0"
+        />
+      </div>
+    ) : (
+      <div
+        className={cn(
+          "p-5 pm-prose max-w-none flex-1 overflow-auto",
+          allowEdit && "cursor-text"
+        )}
+        onClick={() => {
+          if (allowEdit) setEditing(true)
+        }}
+        onKeyDown={(e) => {
+          if (allowEdit && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault()
+            setEditing(true)
+          }
+        }}
+        role={allowEdit ? "button" : undefined}
+        tabIndex={allowEdit ? 0 : undefined}
+        title={allowEdit ? "Click to edit" : undefined}
+      >
+        <MessageBody body={content} className={proseBodyClass} />
+      </div>
+    )
+
+  // ═══════════════════════════════════════════════════════════
+  // Version update — File detail workspace shell + Message chrome actions
+  // ═══════════════════════════════════════════════════════════
   if (isVersionUpdate) {
+    const versionLabel = activeVersion
+      ? `v${activeVersion.version_no}${
+          activeVersion.archived ? " · archived" : ""
+        }${activeIsCurrent ? " · current" : ""}`
+      : null
+
     return (
       <>
         <Dialog open={open} onOpenChange={onOpenChange}>
           <DialogContent
+            showCloseButton
+            overlayClassName="pm-dialog-overlay--silk"
             className={cn(
-              "w-[min(1200px,94vw)] max-w-[94vw] sm:max-w-[94vw]",
-              "h-[min(88vh,820px)] flex flex-col gap-0 p-0 overflow-hidden",
-              dialogMotion
+              silkShell,
+              "pm-workspace pm-ws-dialog",
+              "!max-w-[94vw] !w-[94vw] h-[88vh] flex flex-col p-0 !gap-0 overflow-hidden"
             )}
           >
-            <DialogHeader className="px-4 py-3 border-b border-border shrink-0">
-              <DialogTitle className="text-sm flex items-center gap-2 min-w-0 pr-8">
-                <Badge
-                  variant="secondary"
-                  className="text-[9px] shrink-0 border-transparent bg-[var(--ze-green,#1A5E3D)]/15 text-[var(--ze-green,#1A5E3D)]"
-                >
-                  version update
-                </Badge>
-                {activeVersion && (
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    v{activeVersion.version_no}
-                    {activeVersion.archived ? " · archived" : ""}
-                    {activeIsCurrent ? " · current" : ""}
+            {/* Chrome — File detail title bar (X only; Edit/Save live in Message card) */}
+            <div className="pm-ws-chrome">
+              <DialogHeader className="shrink-0 flex-1 min-w-0 !p-0">
+                <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
+                  <span className="pm-ws-title truncate">Version Update</span>
+                  <span className="pm-meta tabular-nums shrink-0">
+                    {formatTime(activeMessage.created_at)}
                   </span>
-                )}
-                <span className="text-[11px] text-muted-foreground font-normal tabular-nums ml-auto mr-2">
-                  {formatTime(activeMessage.created_at)}
-                </span>
-              </DialogTitle>
-            </DialogHeader>
+                  {/* Version tag (vN · current) — far right of title row */}
+                  {versionLabel && (
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        "pm-ws-badge ml-auto shrink-0",
+                        activeIsCurrent && "is-live"
+                      )}
+                    >
+                      {versionLabel}
+                    </Badge>
+                  )}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="w-8 shrink-0" />
+            </div>
 
-            <div className="flex-1 min-h-0 flex overflow-hidden">
-              {/* Left: version file Preview / Parse / Summary / Chunks */}
-              <div className="flex-[1.35] min-w-0 min-h-0 flex flex-col border-r border-border p-3">
+            <div className="pm-ws-body">
+              {/* Left: Preview / Parse / Summary / Chunks — identical card to File detail */}
+              <div className="pm-ws-main pm-ws-card pm-ws-card--main">
                 <VersionFileTabs
                   collectionId={collectionId}
                   docSource={docSource}
@@ -244,92 +517,59 @@ export function LogMessageDialog({
                       ? () => setDeleteConfirmOpen(true)
                       : undefined
                   }
+                  onRequestRollback={
+                    !activeIsCurrent && activeVersion
+                      ? () => setRollbackConfirmOpen(true)
+                      : undefined
+                  }
                 />
               </div>
 
-              {/* Right: message content + edit inside panel */}
-              <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
-                <div className="shrink-0 px-3 py-2 border-b border-border/60 flex items-center justify-between gap-2">
-                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
-                    Message
-                  </p>
-                  {editing ? (
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        variant="outline"
-                        size="xs"
-                        className="h-7"
-                        disabled={saving}
-                        onClick={() => {
-                          setEditing(false)
-                          setContent(versionUpdateBody(activeMessage.body))
-                        }}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        size="xs"
-                        className="h-7"
-                        disabled={saving}
-                        onClick={() => void handleSave()}
-                      >
-                        {saving ? "Saving…" : "Save"}
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="h-7 gap-1 text-muted-foreground hover:text-foreground"
-                      onClick={() => setEditing(true)}
+              {/* Right: Message float card — Edit/Save in card title bar */}
+              <div className="pm-ws-side">
+                <section
+                  className="pm-ws-side-card min-h-0 !overflow-hidden flex flex-col"
+                  style={{ flex: "1 1 0", minHeight: 0 }}
+                >
+                  <div className="pm-ws-side-h">
+                    <span
+                      className="pm-label"
+                      style={{
+                        textTransform: "none",
+                        letterSpacing: "0.02em",
+                      }}
                     >
-                      <Pencil className="h-3 w-3" />
-                      Edit
-                    </Button>
-                  )}
-                </div>
-                <div className="flex-1 min-h-0 overflow-hidden">
-                  {editing ? (
-                    <div className="h-full min-h-0 overflow-auto p-3">
-                      <MarkdownEditor
-                        value={content}
-                        onChange={setContent}
-                        minHeight="240px"
-                        placeholder={MESSAGE_EDITOR_PLACEHOLDER}
-                        showToolbar={false}
-                      />
-                    </div>
-                  ) : (
-                    <ScrollArea className="h-full">
-                      <div className="p-4">
-                        <MessageBody
-                          body={content}
-                          className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed break-words [&_p]:my-2"
-                        />
-                      </div>
-                    </ScrollArea>
-                  )}
-                </div>
+                      Message
+                    </span>
+                    <div className="ml-auto shrink-0">{messageCardActions}</div>
+                  </div>
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                    {/* Version Update notes are always editable (system_version) */}
+                    {messageEditorOrBody("200px", true)}
+                  </div>
+                </section>
               </div>
             </div>
           </DialogContent>
         </Dialog>
 
-        {/* Secondary confirm: permanently delete this non-current version */}
+        {/* Delete version confirm — compact silk dialog */}
         <Dialog
           open={deleteConfirmOpen}
           onOpenChange={(v) => {
             if (!deleting) setDeleteConfirmOpen(v)
           }}
         >
-          <DialogContent className="max-w-sm">
+          <DialogContent
+            overlayClassName="pm-dialog-overlay--silk"
+            className={cn(silkShell, "pm-dialog max-w-sm gap-4")}
+          >
             <DialogHeader>
               <DialogTitle>Delete this version?</DialogTitle>
             </DialogHeader>
-            <p className="text-sm text-muted-foreground">
+            <p className="pm-dialog-body">
               Permanently remove{" "}
-              <span className="font-medium text-foreground">
+              <span className="text-[var(--pm-ink)]">
                 v{activeVersion?.version_no}
                 {activeVersion?.storage_file_id
                   ? ` (${activeVersion.storage_file_id})`
@@ -338,9 +578,10 @@ export function LogMessageDialog({
               . This deletes the version blob, its vectors in the database, and
               the linked log entry. This cannot be undone.
             </p>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-1">
               <Button
-                variant="outline"
+                variant="ghost"
+                size="sm"
                 disabled={deleting}
                 onClick={() => setDeleteConfirmOpen(false)}
               >
@@ -363,109 +604,146 @@ export function LogMessageDialog({
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Rollback confirm — premium compact danger (pm-dialog-confirm) */}
+        <Dialog
+          open={rollbackConfirmOpen}
+          onOpenChange={(v) => {
+            if (!rollingBack) setRollbackConfirmOpen(v)
+          }}
+        >
+          <DialogContent
+            showCloseButton={false}
+            overlayClassName="pm-dialog-overlay--silk"
+            className="pm-dialog pm-dialog-confirm"
+          >
+            <DialogHeader>
+              <DialogKicker>Version</DialogKicker>
+              <DialogTitle>Roll back to this version?</DialogTitle>
+              {activeVersion ? (
+                <p
+                  className="pm-dialog-confirm-target"
+                  title={
+                    activeVersion.storage_file_id
+                      ? `v${activeVersion.version_no} · ${activeVersion.storage_file_id}`
+                      : `v${activeVersion.version_no}`
+                  }
+                >
+                  <span className="tabular-nums">v{activeVersion.version_no}</span>
+                  {activeVersion.storage_file_id
+                    ? ` · ${activeVersion.storage_file_id}`
+                    : ""}
+                </p>
+              ) : null}
+              <DialogDescription>
+                Make this the live revision. Later revisions are permanently
+                deleted. This cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={rollingBack}
+                onClick={() => setRollbackConfirmOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive-solid"
+                size="sm"
+                disabled={rollingBack}
+                onClick={() => void handleRollbackVersion()}
+              >
+                {rollingBack ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                    Rolling back…
+                  </>
+                ) : (
+                  "Roll back"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </>
     )
   }
 
-  // ── Normal message: single column, Edit top-right ──
-  // author_id "local" is the single-user default — omit it from chrome
+  // ═══════════════════════════════════════════════════════════
+  // Normal message — same shell as Add Message
+  // ═══════════════════════════════════════════════════════════
   const authorLabel =
     activeMessage.author_id &&
     activeMessage.author_id !== "local" &&
     activeMessage.author_id !== "user"
       ? activeMessage.author_id
       : null
+  /**
+   * system_version notes (file Version Update log) are user-editable.
+   * Other system messages stay read-only.
+   */
+  const canEdit =
+    activeMessage.author_type !== "system" ||
+    (activeMessage.owner_type || "").toLowerCase() === "system_version"
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        overlayClassName="pm-dialog-overlay--silk"
         className={cn(
-          "w-[min(900px,92vw)] max-w-[92vw] sm:max-w-[92vw]",
-          "h-[min(80vh,700px)] flex flex-col overflow-hidden",
-          dialogMotion
+          silkShell,
+          "pm-msg-dialog w-[min(900px,92vw)] max-w-[92vw] sm:max-w-[92vw]",
+          "h-[min(80vh,700px)] flex flex-col gap-0 p-0 overflow-hidden"
         )}
       >
-        <DialogHeader className="shrink-0">
-          <DialogTitle className="text-sm flex items-center gap-2 min-w-0 pr-28">
-            <Badge variant="secondary" className="text-[9px] shrink-0">
-              message
-            </Badge>
+        {/* Title only — Edit/Save live on the message card (not dialog chrome) */}
+        <DialogHeader className="pm-msg-dialog-chrome pm-msg-dialog-chrome--title-only shrink-0">
+          <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
+            <span className="shrink-0">Message</span>
             {authorLabel && (
-              <span className="text-[11px] text-muted-foreground font-normal">
+              <span className="pm-meta normal-case tracking-normal">
                 {authorLabel}
               </span>
             )}
             {activeMessage.edited_at && (
-              <Badge variant="outline" className="text-[9px]">
+              <span className="pm-meta normal-case tracking-normal px-1.5 py-0.5 rounded text-[var(--pm-muted)] bg-[rgba(18,20,16,0.05)]">
                 edited
-              </Badge>
+              </span>
             )}
-            <span className="text-[11px] text-muted-foreground font-normal tabular-nums ml-auto">
+            <span className="pm-meta tabular-nums shrink-0">
               {formatTime(activeMessage.created_at)}
             </span>
           </DialogTitle>
-          <div className="absolute top-3.5 right-12 z-10 flex items-center gap-1.5">
-            {editing ? (
-              <>
-                <Button
-                  variant="outline"
-                  size="xs"
-                  disabled={saving}
-                  onClick={() => {
-                    setEditing(false)
-                    setContent(activeMessage.body || "")
+        </DialogHeader>
+        <div className="pm-msg-dialog-stage flex-1 min-h-0 overflow-hidden flex flex-col">
+          <div className="pm-msg-dialog-card flex-1 min-h-0 flex flex-col overflow-hidden">
+            {canEdit && (
+              <div className="pm-msg-dialog-card-h">
+                <span
+                  className="pm-label"
+                  style={{
+                    textTransform: "none",
+                    letterSpacing: "0.02em",
                   }}
                 >
-                  Cancel
-                </Button>
-                <Button
-                  size="xs"
-                  disabled={saving || !content.trim()}
-                  onClick={() => void handleSave()}
-                >
-                  {saving ? "Saving…" : "Save"}
-                </Button>
-              </>
-            ) : (
-              activeMessage.author_type !== "system" && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="gap-1 h-7 px-2 text-muted-foreground hover:text-foreground"
-                  onClick={() => setEditing(true)}
-                >
-                  <Pencil className="h-3 w-3" />
-                  Edit
-                </Button>
-              )
+                  Message
+                </span>
+                <div className="ml-auto shrink-0">{messageCardActions}</div>
+              </div>
             )}
+            {messageEditorOrBody("280px", canEdit)}
           </div>
-        </DialogHeader>
-        <div className="flex-1 min-h-0 overflow-auto flex flex-col">
-          {editing ? (
-            <MarkdownEditor
-              value={content}
-              onChange={setContent}
-              minHeight="280px"
-              placeholder={MESSAGE_EDITOR_PLACEHOLDER}
-              showToolbar={false}
-            />
-          ) : (
-            <div className="p-4 text-sm leading-relaxed flex-1 overflow-auto">
-              <MessageBody
-                body={content}
-                className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed break-words [&_p]:my-2"
-              />
-            </div>
-          )}
         </div>
       </DialogContent>
     </Dialog>
   )
 }
 
-// ── Left pane: Preview / Parse / Summary / Chunks for a version ──
+// ── Left pane: same tab chrome as File detail (Preview / Parse / Summary / Chunks) ──
 
 function VersionFileTabs({
   collectionId,
@@ -473,13 +751,14 @@ function VersionFileTabs({
   version,
   isCurrentVersion,
   onRequestDelete,
+  onRequestRollback,
 }: {
   collectionId: string
   docSource: string | null
   version: FileVersion | null
   isCurrentVersion: boolean
-  /** When set (non-current only), show Delete on the tab bar right */
   onRequestDelete?: () => void
+  onRequestRollback?: () => void
 }) {
   const [tab, setTab] = useState("raw")
   const [previewContent, setPreviewContent] = useState<string | null>(null)
@@ -490,15 +769,11 @@ function VersionFileTabs({
   const [docSummary, setDocSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
 
-  // Always bind preview to *this* version's blob. Never fall back to current
-  // file resolution when version is known — otherwise an unsupported current
-  // version would make every historical Log card look unpreviewable.
   const storageFile = version?.storage_file_id || null
   const ext = (storageFile || "").split(".").pop()?.toLowerCase() || ""
   const isPdf = ext === "pdf"
 
   const previewUrl = useMemo(() => {
-    // Prefer version_id; storage_file alone is ambiguous when versions share a name
     if (!docSource) return null
     if (!storageFile && !version?.version_id) return null
     return getFilePreviewUrl(docSource, {
@@ -508,8 +783,6 @@ function VersionFileTabs({
     })
   }, [docSource, collectionId, storageFile, version?.version_id])
 
-  // Source = parse/extract text for *this* version (parsed.txt / .extracted.txt
-  // cache, or text-like file body). Raw = original file (PDF iframe / download).
   useEffect(() => {
     if (!docSource || !collectionId) {
       setPreviewContent(null)
@@ -541,8 +814,6 @@ function VersionFileTabs({
     }
   }, [docSource, collectionId, storageFile, version?.version_id])
 
-  // Chunks: this version_id when known (works for archived historical versions).
-  // Summary: document-level (one per source), only meaningful for current ingest.
   const versionId = version?.version_id || null
   useEffect(() => {
     if (!docSource || !collectionId) {
@@ -555,11 +826,9 @@ function VersionFileTabs({
     }
     let cancelled = false
 
-    // Chunks for this version
     setChunksLoading(true)
     getFileChunks(collectionId, docSource, 10000, {
       versionId: versionId || undefined,
-      // Without version_id, only current (non-archived) chunks
     })
       .then((res) => {
         if (!cancelled) {
@@ -577,7 +846,6 @@ function VersionFileTabs({
         if (!cancelled) setChunksLoading(false)
       })
 
-    // Summary for this version_id (historical = read-only; no generate here)
     setSummaryLoading(true)
     getDocSummary(collectionId, docSource, {
       versionId: versionId || version?.version_id || undefined,
@@ -597,70 +865,105 @@ function VersionFileTabs({
     }
   }, [docSource, collectionId, isCurrentVersion, versionId, version?.version_id])
 
+  const tabTriggerClass = cn(
+    "pm-vtab relative z-[1]",
+    "!h-auto min-h-0",
+    "data-[state=active]:shadow-none data-active:bg-transparent",
+    "after:!opacity-0 after:!content-none"
+  )
+
   return (
     <Tabs
       value={tab}
       onValueChange={setTab}
-      className="flex flex-col h-full min-h-0 gap-2"
+      className="flex flex-col h-full min-h-0"
     >
-      <div className="shrink-0 flex items-center gap-1 border-b border-border">
-        <TabsList className="h-8 flex-1 min-w-0 justify-start bg-transparent p-0 gap-1 rounded-none border-0">
-          {(
-            [
-              { value: "raw", label: "Preview" },
-              { value: "source", label: "Parse" },
-              { value: "summary", label: "Summary" },
-              { value: "chunks", label: "Chunks" },
-            ] as const
-          ).map(({ value: v, label }) => (
-            <TabsTrigger
-              key={v}
-              value={v}
-              className="font-light uppercase tracking-wider text-[11px] after:!opacity-0 data-[state=active]:text-primary rounded-none px-2.5 h-8"
-            >
-              {v === "chunks" ? (
-                <>
-                  {label}
-                  {chunksTotal > 0 && (
-                    <span className="ml-1 tabular-nums text-[10px] text-muted-foreground">
-                      {chunksTotal}
-                    </span>
-                  )}
-                </>
-              ) : (
-                label
-              )}
-            </TabsTrigger>
-          ))}
+      <div className="pm-ws-main-head flex items-center justify-between gap-2 shrink-0">
+        <TabsList
+          className={cn(
+            "pm-tabs !h-auto w-fit bg-transparent p-0 gap-1 border-0 rounded-none",
+            "relative shrink-0 items-center isolate"
+          )}
+        >
+          <TabsIndicator
+            renderBeforeHydration
+            className="pm-tabs-indicator"
+          />
+          <TabsTrigger value="raw" className={tabTriggerClass}>
+            Preview
+          </TabsTrigger>
+          <TabsTrigger value="source" className={tabTriggerClass}>
+            Parse
+          </TabsTrigger>
+          <TabsTrigger value="summary" className={tabTriggerClass}>
+            Summary
+          </TabsTrigger>
+          <TabsTrigger value="chunks" className={tabTriggerClass}>
+            Chunks
+            {chunksTotal > 0 && (
+              <span className="ml-1.5 tabular-nums pm-meta normal-case tracking-normal">
+                {chunksTotal}
+              </span>
+            )}
+          </TabsTrigger>
         </TabsList>
-        {onRequestDelete && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="h-7 shrink-0 gap-1 mr-0.5 text-destructive/80 hover:text-destructive hover:bg-destructive/10"
-            onClick={onRequestDelete}
-            title="Permanently delete this version"
-          >
-            <Trash2 className="h-3 w-3" />
-            Delete
-          </Button>
+        {(onRequestRollback || onRequestDelete) && (
+          <div className="flex items-center gap-2 shrink-0">
+            {onRequestRollback && (
+              <button
+                type="button"
+                className="pm-ws-link shrink-0 inline-flex items-center gap-1"
+                onClick={onRequestRollback}
+                title="Make this version current and permanently delete newer versions"
+              >
+                <History className="h-3 w-3" strokeWidth={1.75} />
+                Roll back
+              </button>
+            )}
+            {onRequestDelete && (
+              <button
+                type="button"
+                className="pm-ws-link shrink-0 inline-flex items-center gap-1 !text-[var(--pm-danger)]"
+                onClick={onRequestDelete}
+                title="Permanently delete this version"
+              >
+                <Trash2 className="h-3 w-3" strokeWidth={1.75} />
+                Delete
+              </button>
+            )}
+          </div>
         )}
       </div>
 
+      {/* Preview — original file */}
+      <TabsContent
+        value="raw"
+        className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+      >
+        <div className="pm-ws-doc-stage">
+          <RawFileViewer
+            url={previewUrl}
+            filename={resolveRawFilename(storageFile, version?.storage_file_id)}
+            downloadUrl={previewUrl}
+            className="h-full !rounded-none !border-0 !bg-white"
+          />
+        </div>
+      </TabsContent>
+
+      {/* Parse — extracted text */}
       <TabsContent
         value="source"
-        className="flex-1 min-h-0 overflow-hidden data-[state=inactive]:hidden mt-0"
+        className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
       >
-        <div className="h-full rounded-lg border border-border overflow-hidden">
+        <div className="pm-ws-doc-stage">
           {previewLoading ? (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            <div className="pm-ws-loading h-full">
+              <Loader2 className="h-4 w-4 animate-spin" />
               Loading…
             </div>
           ) : previewContent ? (
             <ScrollArea className="h-full">
-              <div className="p-3">
+              <div className="p-4">
                 <TiptapEditor
                   value={transformImageBlocks(
                     previewContent,
@@ -673,17 +976,17 @@ function VersionFileTabs({
               </div>
             </ScrollArea>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-sm text-muted-foreground p-4 text-center gap-2">
+            <div className="pm-ws-empty h-full flex flex-col items-center justify-center gap-2 px-6">
               {!storageFile ? (
-                <p>No version file linked to this message.</p>
+                <p className="pm-meta">No version file linked to this message.</p>
               ) : (
                 <>
-                  <p>No parsed text for this version.</p>
-                  <p className="text-xs max-w-sm">
+                  <p className="pm-meta">No parsed text for this version.</p>
+                  <p className="pm-meta max-w-sm">
                     Parse shows text after parse/ingest. If this version was
                     never ingested (or the parse cache is missing), use{" "}
-                    <span className="font-medium text-foreground">Preview</span>{" "}
-                    for the original file
+                    <span className="text-[var(--pm-green)]">Preview</span> for
+                    the original file
                     {isPdf ? " (PDF preview)" : ""}.
                   </p>
                 </>
@@ -693,33 +996,22 @@ function VersionFileTabs({
         </div>
       </TabsContent>
 
-      <TabsContent
-        value="raw"
-        className="flex-1 min-h-0 overflow-hidden data-[state=inactive]:hidden mt-0"
-      >
-        <RawFileViewer
-          url={previewUrl}
-          filename={resolveRawFilename(storageFile, version?.storage_file_id)}
-          downloadUrl={previewUrl}
-          className="h-full"
-        />
-      </TabsContent>
-
+      {/* Summary */}
       <TabsContent
         value="summary"
-        className="flex-1 min-h-0 overflow-hidden data-[state=inactive]:hidden mt-0"
+        className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
       >
-        <ScrollArea className="h-full rounded-lg border border-border">
-          <div className="p-3">
+        <ScrollArea className="pm-ws-doc-stage">
+          <div className="p-4">
             {summaryLoading ? (
-              <div className="flex items-center justify-center py-8 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              <div className="pm-ws-loading py-8">
+                <Loader2 className="h-4 w-4 animate-spin" />
                 Loading…
               </div>
             ) : docSummary ? (
-              <div className="space-y-3 text-sm">
+              <div className="space-y-4">
                 {!isCurrentVersion && (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="pm-meta px-0.5">
                     Read-only summary for this version. Re-summarize only on the
                     current version.
                   </p>
@@ -733,12 +1025,12 @@ function VersionFileTabs({
                 ).map(([title, items]) =>
                   items?.length ? (
                     <section key={title}>
-                      <h5 className="text-[10px] uppercase text-muted-foreground mb-1">
-                        {title}
-                      </h5>
+                      <h5 className="pm-label mb-1.5">{title}</h5>
                       <ul className="list-disc pl-4 space-y-1">
                         {items.map((t, i) => (
-                          <li key={i}>{t}</li>
+                          <li key={i} className="pm-ws-prose-item">
+                            {t}
+                          </li>
                         ))}
                       </ul>
                     </section>
@@ -747,14 +1039,14 @@ function VersionFileTabs({
                 {!docSummary.data?.length &&
                   !docSummary.facts?.length &&
                   !docSummary.insights?.length && (
-                    <p className="text-muted-foreground">No summary content.</p>
+                    <p className="pm-meta">No summary content.</p>
                   )}
               </div>
             ) : (
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <p>No summary for this version.</p>
+              <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
+                <p className="pm-meta">No summary for this version.</p>
                 {!isCurrentVersion && (
-                  <p className="text-xs">
+                  <p className="pm-meta max-w-sm">
                     Summaries are only generated for the current version.
                   </p>
                 )}
@@ -764,49 +1056,53 @@ function VersionFileTabs({
         </ScrollArea>
       </TabsContent>
 
+      {/* Chunks */}
       <TabsContent
         value="chunks"
-        className="flex-1 min-h-0 overflow-hidden data-[state=inactive]:hidden mt-0"
+        className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
       >
-        <ScrollArea className="h-full rounded-lg border border-border">
-          <div className="p-3 space-y-2">
-            {chunksLoading ? (
-              <div className="flex items-center justify-center py-8 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Loading…
-              </div>
-            ) : chunks.length === 0 ? (
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <p>No chunks for this version.</p>
-                <p className="text-xs">
-                  Chunks appear after this version was ingested into the vector
-                  store. Unsupported uploads and failed ingests leave this empty.
-                </p>
-              </div>
-            ) : (
-              chunks.map((chunk) => (
-                <div
-                  key={chunk.id}
-                  className="rounded-md border border-border/50 p-2 text-xs"
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <Badge variant="outline" className="text-[9px]">
-                      #{chunk.chunk_index}
-                    </Badge>
-                    {chunk.heading_path && (
-                      <span className="text-[10px] text-muted-foreground truncate">
-                        {chunk.heading_path}
-                      </span>
-                    )}
-                  </div>
-                  <p className="leading-relaxed whitespace-pre-wrap">
-                    {chunk.text}
+        <div className="pm-ws-doc-stage flex flex-col">
+          <ScrollArea className="flex-1 min-h-0">
+            <div className="p-3 space-y-2">
+              {chunksLoading ? (
+                <div className="pm-ws-loading py-12">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading…
+                </div>
+              ) : chunks.length === 0 ? (
+                <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
+                  <p className="pm-meta">No chunks for this version.</p>
+                  <p className="pm-meta max-w-sm">
+                    Chunks appear after this version was ingested into the
+                    vector store. Unsupported uploads and failed ingests leave
+                    this empty.
                   </p>
                 </div>
-              ))
-            )}
-          </div>
-        </ScrollArea>
+              ) : (
+                chunks.map((chunk) => (
+                  <div key={chunk.id} className="pm-ws-tile">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="pm-meta tabular-nums text-[var(--pm-green)]">
+                        #{chunk.chunk_index}
+                      </span>
+                      {chunk.heading_path && (
+                        <span className="pm-meta truncate">
+                          {chunk.heading_path}
+                        </span>
+                      )}
+                    </div>
+                    <ChunkMd
+                      text={chunk.text}
+                      collection={collectionId}
+                      fileId={version?.file_id || undefined}
+                      source={docSource || undefined}
+                    />
+                  </div>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+        </div>
       </TabsContent>
     </Tabs>
   )

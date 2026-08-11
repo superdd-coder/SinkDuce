@@ -1,6 +1,6 @@
 [project]
 name = "sinkduce"
-version = "1.0.2"
+version = "1.1.0"
 description = "One-click deployable RAG Agent system"
 license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.11"
@@ -34,12 +34,35 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# One-time host tools to export FunASR → ONNX (NOT used at Docker runtime).
+# Runtime inference is always [asr-onnx]. Install only when re-exporting models:
+#   pip install -e ".[asr-export]"
+asr-export = [
+    "funasr>=1.1.0",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "onnx>=1.14.0",
+    "onnxscript>=0.1.0",
+]
+# Deprecated alias of asr-export (older docs / scripts).
 diarization = [
     "funasr>=1.1.0",
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
     "librosa>=0.10.0",
     "soundfile>=0.12.0",
+    "onnx>=1.14.0",
+    "onnxscript>=0.1.0",
+]
+# Local ASR runtime: funasr-onnx + onnxruntime only (no torch).
+asr-onnx = [
+    "funasr-onnx>=0.4.0",
+    "onnxruntime>=1.16.0",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "numpy>=1.24.0",
 ]
 dev = [
     "pytest>=8.3.0",

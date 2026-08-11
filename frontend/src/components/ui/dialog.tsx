@@ -31,7 +31,13 @@ function DialogOverlay({
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-300 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "fixed inset-0 z-50",
+        /*
+         * System dialog mask — same clock as popup (280ms silk).
+         * Opacity only; solid dim via .pm-dialog-overlay--silk CSS.
+         * Never TW animate-in/out keyframes (hard cut / residual blur).
+         */
+        "pm-dialog-overlay--silk",
         className
       )}
       {...props}
@@ -43,17 +49,32 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  overlayClassName,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  /** Extra backdrop classes (silk mask is always on by default). */
+  overlayClassName?: string
 }) {
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-300 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "pm-dialog pm-dialog--silk fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)]",
+          "-translate-x-1/2 -translate-y-1/2 gap-4 outline-none sm:max-w-sm",
+          /* Shell = canvas (unified with workspace / All Files); nested cards stay white */
+          "rounded-[var(--pm-r-lg)] bg-[var(--pm-canvas,#f6f5f1)] p-5",
+          "text-[var(--pm-text)] font-[family-name:var(--pm-ff)] text-[13px] font-normal leading-normal",
+          "border-0 shadow-[var(--pm-shadow)]",
+          /*
+           * System open/close for ALL dialogs (see index.css silk block):
+           * opacity + tiny scale, 280ms, same ease both ways.
+           * Kill TW keyframe enter/exit so nothing fights CSS transitions.
+           * Do NOT set duration-0 — that zeros transition-duration and kills silk fade-out.
+           */
+          "animate-none data-open:animate-none data-closed:animate-none",
           className
         )}
         {...props}
@@ -65,13 +86,12 @@ function DialogContent({
             render={
               <Button
                 variant="ghost"
-                className="absolute top-2 right-2"
+                className="absolute top-2.5 right-2.5"
                 size="icon-sm"
               />
             }
           >
-            <XIcon
-            />
+            <XIcon />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>
         )}
@@ -84,7 +104,25 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2", className)}
+      className={cn(
+        /* kicker (optional) → large serif title → description (optional) */
+        "pm-dialog-header flex flex-col bg-transparent border-0 shadow-none",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+/**
+ * Green uppercase domain label above DialogTitle (e.g. “Section”, “Meeting”).
+ * Optional — title is large serif either way; kicker only adds the green line.
+ */
+function DialogKicker({ className, ...props }: React.ComponentProps<"p">) {
+  return (
+    <p
+      data-slot="dialog-kicker"
+      className={cn("pm-dialog-kicker", className)}
       {...props}
     />
   )
@@ -102,14 +140,15 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        "border-0 bg-transparent p-0 m-0 rounded-none",
         className
       )}
       {...props}
     >
       {children}
       {showCloseButton && (
-        <DialogPrimitive.Close render={<Button variant="outline" />}>
+        <DialogPrimitive.Close render={<Button variant="ghost" />}>
           Close
         </DialogPrimitive.Close>
       )}
@@ -122,7 +161,8 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
     <DialogPrimitive.Title
       data-slot="dialog-title"
       className={cn(
-        "font-heading text-base leading-none font-medium",
+        /* Large light serif display (system soft-dialog chrome). */
+        "pm-dialog-title",
         className
       )}
       {...props}
@@ -130,6 +170,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   )
 }
 
+/** Optional guidance under the title — omit when the dialog needs no copy. */
 function DialogDescription({
   className,
   ...props
@@ -138,7 +179,8 @@ function DialogDescription({
     <DialogPrimitive.Description
       data-slot="dialog-description"
       className={cn(
-        "text-sm text-muted-foreground *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
+        "pm-dialog-desc",
+        "*:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-[var(--pm-green)]",
         className
       )}
       {...props}
@@ -153,6 +195,7 @@ export {
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogKicker,
   DialogOverlay,
   DialogPortal,
   DialogTitle,

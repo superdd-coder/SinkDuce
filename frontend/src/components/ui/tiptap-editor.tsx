@@ -2,6 +2,11 @@ import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import remarkBreaks from "remark-breaks"
+import { unified } from "unified"
+import remarkParse from "remark-parse"
+import remarkRehype from "remark-rehype"
+import rehypeStringify from "rehype-stringify"
 import { useEditor, EditorContent } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
 import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table"
@@ -14,15 +19,65 @@ import { TextStyle } from "@tiptap/extension-text-style"
 import Color from "@tiptap/extension-color"
 import { Markdown } from "tiptap-markdown"
 import { Node, mergeAttributes, Extension, type Editor } from "@tiptap/core"
-import { Plugin, PluginKey } from "@tiptap/pm/state"
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state"
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model"
+import type { EditorView } from "@tiptap/pm/view"
 import {
-  Bold, Italic, Strikethrough, Highlighter,
-  List, ListOrdered, ListTodo, Heading1, Heading2, Heading3,
-  ChevronDown,
+  Bold, Italic, Strikethrough,
+  List, ListOrdered, ListTodo,
 } from "lucide-react"
+import { SoftMenu, MenuItem } from "@/components/ui/menu"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * Click *below* the last content block (tall min-height ProseMirror pad) →
+ * place caret at end of document (Typora / Notes style).
+ * Left/right of text (same vertical band as a line) must NOT jump to end.
+ * Also: posAtCoords null in empty pad → end (common when min-height expands PM).
+ */
+function placeCaretAtEndIfClickBelowContent(
+  view: EditorView,
+  event: MouseEvent
+): boolean {
+  if (event.button !== 0) return false
+
+  const goEnd = () => {
+    event.preventDefault()
+    const sel = TextSelection.atEnd(view.state.doc)
+    view.dispatch(view.state.tr.setSelection(sel).scrollIntoView())
+    if (!view.hasFocus()) view.focus()
+  }
+
+  const last = view.dom.lastElementChild as HTMLElement | null
+  if (!last) {
+    goEnd()
+    return true
+  }
+
+  // Click clearly below the last block’s ink box
+  const bottom = last.getBoundingClientRect().bottom
+  if (event.clientY > bottom + 2) {
+    goEnd()
+    return true
+  }
+
+  /*
+   * Empty vertical pad: last block’s content box is short but ProseMirror is tall.
+   * posAtCoords may still resolve into the last node — prefer end when the hit
+   * is in the trailing empty fraction of the editor (below content mid-line).
+   */
+  const coords = view.posAtCoords({
+    left: event.clientX,
+    top: event.clientY,
+  })
+  if (!coords) {
+    goEnd()
+    return true
+  }
+
+  return false
+}
 
 // ──────────────────────────────────────────────
 // Markdown Syntax Hover Plugin
@@ -1083,142 +1138,212 @@ function createResizableImageExtension() {
 }  // end createResizableImageExtension
 
 // ──────────────────────────────────────────────
-// Image Floating Menu
+// Premium float bars (image / table) — fixed portal, SoftMenu surface
+// Avoid absolute top:-44px inside overflow:hidden pane cards (clipping).
 // ──────────────────────────────────────────────
 let _isPreviewMode = false
+let _floatBarCleanup: (() => void) | null = null
+let _floatBarAnchor: HTMLElement | null = null
+
+function dismissPremiumFloatBars() {
+  document.getElementById("image-floating-menu")?.remove()
+  document.getElementById("table-floating-menu")?.remove()
+  if (_floatBarCleanup) {
+    _floatBarCleanup()
+    _floatBarCleanup = null
+  }
+  _floatBarAnchor = null
+}
+
+/** Mount a Premium float bar on document.body (fixed) above `anchor`. */
+function mountPremiumFloatBar(
+  menu: HTMLElement,
+  anchor: HTMLElement,
+  opts?: { align?: "center" | "start" },
+) {
+  dismissPremiumFloatBars()
+  _floatBarAnchor = anchor
+  menu.classList.add("pm-float-bar")
+  menu.setAttribute("role", "toolbar")
+  document.body.appendChild(menu)
+
+  const place = () => {
+    if (!menu.isConnected || !anchor.isConnected) return
+    const r = anchor.getBoundingClientRect()
+    const mh = menu.offsetHeight || 36
+    const mw = menu.offsetWidth || 160
+    const gap = 8
+    // Clear sticky format strip + viewport chrome so bar isn't covered/clipped
+    let minTop = 8
+    const fmt = document.querySelector(
+      ".pm-fmt-toolbar.is-editing",
+    ) as HTMLElement | null
+    if (fmt) {
+      const fb = fmt.getBoundingClientRect().bottom
+      if (fb > 0) minTop = Math.max(minTop, fb + 6)
+    }
+    let top = r.top - mh - gap
+    // Flip below when not enough room under sticky format strip / viewport top
+    if (top < minTop) {
+      top = Math.min(r.bottom + gap, window.innerHeight - mh - 8)
+    }
+    let left =
+      opts?.align === "start"
+        ? r.left
+        : r.left + r.width / 2 - mw / 2
+    left = Math.max(8, Math.min(left, window.innerWidth - mw - 8))
+    menu.style.top = `${Math.round(top)}px`
+    menu.style.left = `${Math.round(left)}px`
+  }
+
+  // Enter animation after first layout
+  requestAnimationFrame(() => {
+    place()
+    menu.classList.add("is-open")
+    requestAnimationFrame(place)
+  })
+
+  const onReposition = () => place()
+  window.addEventListener("scroll", onReposition, true)
+  window.addEventListener("resize", onReposition)
+
+  const onOutside = (e: MouseEvent) => {
+    const t = e.target
+    if (
+      t instanceof globalThis.Node &&
+      (menu.contains(t) || anchor.contains(t))
+    ) {
+      return
+    }
+    dismissPremiumFloatBars()
+    document.removeEventListener("mousedown", onOutside, true)
+  }
+  // mousedown so we dismiss before other click handlers re-open
+  setTimeout(() => {
+    document.addEventListener("mousedown", onOutside, true)
+  }, 0)
+
+  _floatBarCleanup = () => {
+    window.removeEventListener("scroll", onReposition, true)
+    window.removeEventListener("resize", onReposition)
+    document.removeEventListener("mousedown", onOutside, true)
+  }
+}
+
+function makeFloatBarBtn(
+  title: string,
+  svg: string,
+  opts?: { active?: boolean; danger?: boolean; className?: string },
+): HTMLButtonElement {
+  const b = document.createElement("button")
+  b.type = "button"
+  b.className = [
+    "pm-float-bar-btn",
+    opts?.active ? "is-on" : "",
+    opts?.danger ? "is-danger" : "",
+    opts?.className || "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+  b.title = title
+  b.setAttribute("aria-label", title)
+  b.innerHTML = svg
+  return b
+}
+
+function makeFloatBarSep(): HTMLDivElement {
+  const d = document.createElement("div")
+  d.className = "pm-float-bar-sep"
+  d.setAttribute("aria-hidden", "true")
+  return d
+}
+
 function showImageFloatingMenu(
   container: HTMLElement,
   attrs: any,
   onUpdate: (attrs: any) => void,
 ) {
-  if (_isPreviewMode) return  // Don't show menus in preview
-  // Remove existing menu
-  const existingMenu = document.getElementById("image-floating-menu")
-  if (existingMenu) existingMenu.remove()
+  if (_isPreviewMode) return
+
+  // Anchor to the image frame (not full-width container) so the bar sits over the photo
+  const anchor =
+    (container.querySelector("img")?.parentElement as HTMLElement | null) ||
+    container
+
+  // Same image already open → keep
+  if (
+    document.getElementById("image-floating-menu") &&
+    _floatBarAnchor === anchor
+  ) {
+    return
+  }
 
   const menu = document.createElement("div")
   menu.id = "image-floating-menu"
-  menu.style.cssText = `
-    position: absolute;
-    top: -44px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #1e1e1e;
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-    padding: 6px;
-    display: flex;
-    gap: 4px;
-    z-index: 100;
-    white-space: nowrap;
-  `
+  menu.setAttribute("aria-label", "Image")
 
-  // Alignment options with SVG icons
+  // Prevent mousedown from stealing editor focus
+  menu.addEventListener("mousedown", (e) => {
+    if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault()
+  })
+  menu.addEventListener("click", (e) => e.stopPropagation())
+
   const alignmentOptions = [
     {
       value: "left",
-      svg: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M2 7h8M2 11h10M2 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+      svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M2 7h8M2 11h10M2 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
       label: "Align left",
     },
     {
       value: "center",
-      svg: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M4 7h8M3 11h10M5 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+      svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M4 7h8M3 11h10M5 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
       label: "Align center",
     },
     {
       value: "right",
-      svg: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M6 7h8M4 11h10M8 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+      svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M6 7h8M4 11h10M8 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
       label: "Align right",
     },
   ]
 
-  alignmentOptions.forEach(opt => {
-    const btn = document.createElement("button")
-    btn.innerHTML = opt.svg
-    btn.title = opt.label
-    btn.style.cssText = `
-      padding: 6px 8px;
-      border: none;
-      background: ${attrs.alignment === opt.value ? "rgba(255,255,255,0.2)" : "transparent"};
-      border-radius: 4px;
-      cursor: pointer;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.15s;
-    `
-    btn.addEventListener("mouseenter", () => { btn.style.background = "rgba(255,255,255,0.15)" })
-    btn.addEventListener("mouseleave", () => {
-      btn.style.background = attrs.alignment === opt.value ? "rgba(255,255,255,0.2)" : "transparent"
+  const currentAlign = attrs.alignment || "center"
+  alignmentOptions.forEach((opt) => {
+    const btn = makeFloatBarBtn(opt.label, opt.svg, {
+      active: currentAlign === opt.value,
+      className: "align-btn",
     })
+    btn.dataset.align = opt.value
     btn.addEventListener("click", (e) => {
       e.stopPropagation()
       attrs.alignment = opt.value
       onUpdate({ alignment: opt.value })
-      // Update visual highlight — re-style all buttons
-      menu.querySelectorAll("button.align-btn").forEach((b, i) => {
-        const el = b as HTMLElement
-        el.style.background = alignmentOptions[i].value === opt.value ? "rgba(255,255,255,0.2)" : "transparent"
+      menu.querySelectorAll("button.align-btn").forEach((b) => {
+        const el = b as HTMLButtonElement
+        el.classList.toggle("is-on", el.dataset.align === opt.value)
       })
-      // Don't remove menu so user can see effect and adjust further
     })
-    btn.className = "align-btn"
     menu.appendChild(btn)
   })
 
-  // Divider
-  const divider = document.createElement("div")
-  divider.style.cssText = `width: 1px; background: rgba(255,255,255,0.2); margin: 4px 2px;`
-  menu.appendChild(divider)
+  menu.appendChild(makeFloatBarSep())
 
-  // Caption button — inline editing instead of system prompt()
-  const captionBtn = document.createElement("button")
-  captionBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`
-  captionBtn.title = "Add caption"
-  captionBtn.style.cssText = `
-    padding: 6px 8px;
-    border: none;
-    background: transparent;
-    border-radius: 4px;
-    cursor: pointer;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s;
-  `
-  captionBtn.addEventListener("mouseenter", () => { captionBtn.style.background = "rgba(255,255,255,0.15)" })
-  captionBtn.addEventListener("mouseleave", () => { captionBtn.style.background = "transparent" })
+  const captionBtn = makeFloatBarBtn(
+    "Add caption",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+  )
   captionBtn.addEventListener("click", (e) => {
     e.stopPropagation()
-    menu.remove() // close floating menu
-
-    // Read current caption from attrs (fresh from doc, not stale closure)
     const currentAlt = attrs.alt || ""
-
-    // Dispatch a custom event to the container so the nodeView can show
-    // its inline editor. This keeps the input completely outside ProseMirror's DOM.
-    const ev = new CustomEvent("caption:edit", { bubbles: false, detail: { alt: currentAlt } })
+    dismissPremiumFloatBars()
+    const ev = new CustomEvent("caption:edit", {
+      bubbles: false,
+      detail: { alt: currentAlt },
+    })
     container.dispatchEvent(ev)
   })
   menu.appendChild(captionBtn)
 
-  // ── Visual Translate removed — image descriptions are now automatic during ingest ──
-
-
-  container.style.position = "relative"
-  container.appendChild(menu)
-
-  // Close menu when clicking outside
-  setTimeout(() => {
-    document.addEventListener("click", function closeMenu(e) {
-      if (!menu.contains(e.target as HTMLElement) && !container.contains(e.target as HTMLElement)) {
-        menu.remove()
-        document.removeEventListener("click", closeMenu)
-      }
-    })
-  }, 10)
+  mountPremiumFloatBar(menu, anchor, { align: "center" })
 }
 
 // ──────────────────────────────────────────────
@@ -1317,8 +1442,9 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
     name: "distillBlock",
     group: "block",
     atom: true,
-    draggable: false,
-    selectable: false,
+    // Must be true so PM enables block drag (grip / card reorder)
+    draggable: true,
+    selectable: true,
     defining: true,
     isolating: true,
 
@@ -1365,112 +1491,378 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 
     addNodeView() {
       return ({ node, getPos, editor }) => {
+        /** Collapsed max height (px) — keep in sync with CSS --distill-collapsed-h */
+        const COLLAPSED_MAX = 200
+
         const dom = document.createElement("div")
         dom.setAttribute("data-type", "distill-block")
         dom.setAttribute("data-block-id", node.attrs.blockId)
         dom.setAttribute("data-loading", node.attrs.loading ? "true" : "false")
         dom.className = "distill-block"
-        dom.style.cssText = `
-          border: 1px solid rgba(26,94,61,0.2); border-left: 4px solid #1A5E3D;
-          border-radius: 4px; margin: 12px 0; background: rgba(26,94,61,0.03);
-          overflow: hidden; position: relative;
-        `
+        if (node.attrs.loading) dom.classList.add("is-loading")
         dom.contentEditable = "false"
-        // Disable drag for loading blocks — ProseMirror sets draggable="true"
-        // on this element via node spec; dom.draggable property overrides it.
+
+        // Node is draggable:true — PM sets dom.draggable. Loading blocks must not move
+        // (result replace looks up by position / temp id).
         if (node.attrs.loading) {
           dom.draggable = false
-          dom.style.cursor = "default"
         }
 
-        // Header
+        // ── Header: grip · source · delete (no ID badge) ──
         const header = document.createElement("div")
-        header.style.cssText = `
-          display: flex; align-items: center; gap: 6px; padding: 6px 10px;
-          background: rgba(26,94,61,0.06); border-bottom: 1px solid rgba(26,94,61,0.12); font-size: 12px;
-        `
+        header.className = "distill-block__header"
 
         const handle = document.createElement("span")
+        handle.className = "distill-block__grip"
         handle.textContent = "⠿"
-        // Disable drag for loading blocks — dragging a loading placeholder
-        // moves it to a new position, so the distill result can't find it.
-        handle.style.cssText = node.attrs.loading
-          ? `cursor: not-allowed; color: #bbb; font-size: 14px; user-select: none;`
-          : `cursor: grab; color: #666; font-size: 14px; user-select: none;`
+        handle.setAttribute("aria-hidden", "true")
+        handle.title = "Drag to reorder"
         if (node.attrs.loading) {
-          handle.addEventListener("dragstart", (e) => { e.preventDefault(); e.stopPropagation() })
+          handle.classList.add("is-disabled")
+          handle.addEventListener("dragstart", (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          })
         }
 
+        // Use <span role="link"> not <button> — buttons suppress HTML5/PM drag from the card
         const link = document.createElement("span")
-        link.textContent = `📎 ${node.attrs.sourceTitle}`
-        link.style.cssText = `color: #1A5E3D; text-decoration: none; flex: 1; font-weight: 500; cursor: pointer;`
-        link.addEventListener("click", (e) => {
+        link.className = "distill-block__source"
+        link.setAttribute("role", "link")
+        link.tabIndex = 0
+        const sourceTitle = (node.attrs.sourceTitle as string) || "source"
+        link.textContent = sourceTitle
+        link.title = sourceTitle
+        const goSource = (e: Event) => {
           e.preventDefault()
           e.stopPropagation()
-          // Call navigation callback directly
-          if (onNavigate) {
-            onNavigate(node.attrs.sourceNoteId)
-          }
-        })
-        link.addEventListener("mouseenter", () => {
-          link.style.textDecoration = "underline"
-        })
-        link.addEventListener("mouseleave", () => {
-          link.style.textDecoration = "none"
+          if (onNavigate) onNavigate(node.attrs.sourceNoteId)
+        }
+        link.addEventListener("click", goSource)
+        link.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") goSource(e)
         })
 
-        const badge = document.createElement("span")
-        badge.textContent = node.attrs.sourceNoteId?.slice(-3) || "?"
-        badge.style.cssText = `
-          background: #1A5E3D; color: white; border-radius: 2px;
-          padding: 1px 5px; font-size: 10px; font-weight: 600;
-        `
-
+        // Two-step delete: × → expand "DELETE" → second click removes (avoids mis-tap)
         const delBtn = document.createElement("button")
-        delBtn.textContent = "✕"
-        delBtn.style.cssText = `
-          background: none; border: none; cursor: pointer; color: #999;
-          font-size: 14px; padding: 0 2px; line-height: 1;
-        `
-        delBtn.addEventListener("click", () => {
-          if (typeof getPos === "function") {
-            const pos = getPos()
-            if (pos !== undefined) {
-              const blockId = node.attrs.blockId
-              const sourceNoteId = node.attrs.sourceNoteId
-              editor.chain().focus().deleteRange({ from: pos, to: pos + node.nodeSize }).run()
-              // Dispatch on editor.view.dom (always in document) — dom is detached
-              // after deleteRange, so events dispatched on it won't bubble.
-              if (blockId || sourceNoteId) {
-                const detail = { blockId, sourceNoteId }
-                const event = new CustomEvent("distill:block-remove", { bubbles: true, detail })
-                editor.view.dom.dispatchEvent(event)
-              }
-            }
+        delBtn.type = "button"
+        delBtn.className = "distill-block__delete"
+        delBtn.innerHTML =
+          '<span class="distill-block__delete-x" aria-hidden="true">×</span><span class="distill-block__delete-label">Delete</span>'
+        delBtn.title = "Remove distill block"
+        delBtn.setAttribute("aria-label", "Remove distill block")
+        delBtn.setAttribute("aria-expanded", "false")
+
+        let deleteArmed = false
+        let deleteArmTimer: number | null = null
+        let deleteOutsideCleanup: (() => void) | null = null
+
+        const disarmDelete = () => {
+          deleteArmed = false
+          delBtn.classList.remove("is-confirm")
+          delBtn.setAttribute("aria-expanded", "false")
+          delBtn.setAttribute("aria-label", "Remove distill block")
+          delBtn.title = "Remove distill block"
+          if (deleteArmTimer != null) {
+            window.clearTimeout(deleteArmTimer)
+            deleteArmTimer = null
           }
+          deleteOutsideCleanup?.()
+          deleteOutsideCleanup = null
+        }
+
+        const armDelete = () => {
+          deleteArmed = true
+          delBtn.classList.add("is-confirm")
+          delBtn.setAttribute("aria-expanded", "true")
+          delBtn.setAttribute("aria-label", "Confirm delete distill block")
+          delBtn.title = "Click again to delete"
+          // Auto-collapse if user abandons
+          if (deleteArmTimer != null) window.clearTimeout(deleteArmTimer)
+          deleteArmTimer = window.setTimeout(() => disarmDelete(), 4000)
+          // Outside click / Escape cancels
+          deleteOutsideCleanup?.()
+          const onPointerDown = (ev: Event) => {
+            const t = ev.target
+            if (t instanceof globalThis.Node && delBtn.contains(t)) return
+            disarmDelete()
+          }
+          const onKey = (ev: KeyboardEvent) => {
+            if (ev.key === "Escape") disarmDelete()
+          }
+          // next tick so this click doesn't immediately disarm
+          window.setTimeout(() => {
+            document.addEventListener("pointerdown", onPointerDown, true)
+            document.addEventListener("keydown", onKey, true)
+          }, 0)
+          deleteOutsideCleanup = () => {
+            document.removeEventListener("pointerdown", onPointerDown, true)
+            document.removeEventListener("keydown", onKey, true)
+          }
+        }
+
+        const performDelete = () => {
+          if (typeof getPos !== "function") return
+          const pos = getPos()
+          if (pos === undefined) return
+          const blockId = node.attrs.blockId
+          const sourceNoteId = node.attrs.sourceNoteId
+          disarmDelete()
+          editor
+            .chain()
+            .focus()
+            .deleteRange({ from: pos, to: pos + node.nodeSize })
+            .run()
+          // Dispatch on editor.view.dom (always in document) — dom is detached
+          // after deleteRange, so events dispatched on it won't bubble.
+          if (blockId || sourceNoteId) {
+            const detail = { blockId, sourceNoteId }
+            const event = new CustomEvent("distill:block-remove", {
+              bubbles: true,
+              detail,
+            })
+            editor.view.dom.dispatchEvent(event)
+          }
+        }
+
+        delBtn.addEventListener("click", (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (!deleteArmed) {
+            armDelete()
+            return
+          }
+          performDelete()
         })
-        delBtn.addEventListener("mouseenter", () => { delBtn.style.color = "#f44336" })
-        delBtn.addEventListener("mouseleave", () => { delBtn.style.color = "#999" })
 
-        header.append(handle, link, badge, delBtn)
+        header.append(handle, link, delBtn)
 
-        // Content container with height limit
+        // ── Body scroll region + D fade/pill ──
         const contentWrapper = document.createElement("div")
-        contentWrapper.style.cssText = `
-          position: relative;
-          max-height: 200px;
-          overflow: hidden;
-          transition: max-height 0.3s ease;
-        `
+        contentWrapper.className = "distill-block__scroll"
 
         const content = document.createElement("div")
-        content.style.cssText = `padding: 10px 14px; font-size: 13px; line-height: 1.6; color: #333;`
+        // prose / prose-sm: match app markdown heading·list·code styles
+        content.className = "distill-block__body prose prose-sm max-w-none"
+
+        const fade = document.createElement("div")
+        fade.className = "distill-block__fade"
+        fade.setAttribute("aria-hidden", "true")
+
+        const pill = document.createElement("button")
+        pill.type = "button"
+        pill.className = "distill-block__pill"
+        pill.textContent = "Show more"
+        pill.setAttribute("data-action", "expand")
+        pill.setAttribute("aria-expanded", "false")
+
+        fade.appendChild(pill)
+        contentWrapper.append(content, fade)
 
         // Latest attrs for speaker re-paint (meeting names change while note stays open)
         let latestText = node.attrs.text as string
         let latestSourceId = node.attrs.sourceNoteId as string | null
         let latestLoading = !!node.attrs.loading
         let latestTitle = (node.attrs.sourceTitle as string) || "source"
+        let expandAnimating = false
+        let expandAnimCleanup: (() => void) | null = null
+
+        /** Cap expanded height: min(50vh, 28rem, content) — matches CSS --distill-expanded-h */
+        const expandedTargetPx = () => {
+          const rem =
+            parseFloat(getComputedStyle(document.documentElement).fontSize) ||
+            16
+          const cap = Math.min(window.innerHeight * 0.5, 28 * rem)
+          // Include fade strip so sticky less still fits when content is long
+          return Math.min(cap, Math.max(content.scrollHeight, COLLAPSED_MAX))
+        }
+
+        const prefersReducedMotion = () =>
+          typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+        const setExpandedChrome = (expanded: boolean) => {
+          dom.classList.toggle("is-expanded", expanded)
+          pill.textContent = expanded ? "Show less" : "Show more"
+          pill.setAttribute("aria-expanded", expanded ? "true" : "false")
+        }
+
+        /**
+         * Soft height tween between collapsed (200px) and expanded cap.
+         * Uses explicit px max-height so CSS transition always has concrete endpoints.
+         */
+        const animateExpand = (expand: boolean) => {
+          if (expandAnimating) return
+          if (latestLoading || !dom.classList.contains("is-overflow")) return
+
+          // Instant path
+          if (prefersReducedMotion()) {
+            setExpandedChrome(expand)
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            if (!expand) contentWrapper.scrollTop = 0
+            return
+          }
+
+          expandAnimCleanup?.()
+          expandAnimating = true
+          dom.classList.add("is-animating")
+          // Lock overflow while tweening
+          contentWrapper.style.overflow = "hidden"
+
+          const from = contentWrapper.getBoundingClientRect().height
+          const to = expand ? expandedTargetPx() : COLLAPSED_MAX
+
+          // Pin start height, then flip class + end height on next frame
+          contentWrapper.style.maxHeight = `${Math.round(from)}px`
+          // Force layout so the browser registers the start value
+          void contentWrapper.offsetHeight
+
+          if (expand) {
+            setExpandedChrome(true)
+          } else {
+            // Keep is-expanded until end so we still measure from open layout;
+            // label updates immediately for feedback
+            pill.textContent = "Show more"
+            pill.setAttribute("aria-expanded", "false")
+            contentWrapper.scrollTop = 0
+          }
+
+          contentWrapper.style.maxHeight = `${Math.round(to)}px`
+
+          const finish = () => {
+            contentWrapper.removeEventListener("transitionend", onEnd)
+            window.clearTimeout(fallbackTimer)
+            if (!expand) {
+              setExpandedChrome(false)
+              contentWrapper.scrollTop = 0
+            } else {
+              setExpandedChrome(true)
+            }
+            // Hand control back to CSS vars after settle
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            dom.classList.remove("is-animating")
+            expandAnimating = false
+            expandAnimCleanup = null
+          }
+
+          const onEnd = (ev: TransitionEvent) => {
+            if (ev.target !== contentWrapper) return
+            if (ev.propertyName !== "max-height") return
+            finish()
+          }
+
+          // Fallback if transitionend is skipped (display:none mid-flight, etc.)
+          const fallbackTimer = window.setTimeout(finish, 450)
+          contentWrapper.addEventListener("transitionend", onEnd)
+          expandAnimCleanup = () => {
+            contentWrapper.removeEventListener("transitionend", onEnd)
+            window.clearTimeout(fallbackTimer)
+            expandAnimating = false
+            expandAnimCleanup = null
+          }
+        }
+
+        pill.addEventListener("click", (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (latestLoading || !dom.classList.contains("is-overflow")) return
+          if (expandAnimating) return
+          const next = !dom.classList.contains("is-expanded")
+          animateExpand(next)
+        })
+
+        /**
+         * Wheel ownership:
+         * - Collapsed: never scroll inside the card — drive the outer note
+         *   scroller (.pm-ws-editor) so the document moves (not the browser
+         *   window / dialog, and not the clipped distill body).
+         * - Expanded: keep wheel inside the block; contain at ends.
+         */
+        const wheelDeltaY = (e: WheelEvent, linePx: number) => {
+          if (e.deltaMode === 1) return e.deltaY * 16
+          if (e.deltaMode === 2) return e.deltaY * linePx
+          return e.deltaY
+        }
+
+        const onWheel = (e: WheelEvent) => {
+          if (latestLoading || expandAnimating) return
+          if (e.deltaY === 0 && e.deltaX === 0) return
+
+          // Collapsed (or short content): scroll the note pane, not the block
+          if (
+            !dom.classList.contains("is-expanded") ||
+            !dom.classList.contains("is-overflow")
+          ) {
+            const outer =
+              (dom.closest(".pm-ws-editor") as HTMLElement | null) ||
+              (dom.closest(".ProseMirror")?.parentElement as HTMLElement | null)
+            if (!outer) return
+            e.preventDefault()
+            e.stopPropagation()
+            outer.scrollTop += wheelDeltaY(e, outer.clientHeight || 40)
+            return
+          }
+
+          // Expanded + long: internal scroll only
+          const el = contentWrapper
+          const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
+          if (maxScroll <= 0) return
+
+          const dy = wheelDeltaY(e, el.clientHeight || 40)
+          const top = el.scrollTop
+          const atTop = top <= 0
+          const atBottom = top >= maxScroll - 1
+          const canAbsorb =
+            (dy > 0 && !atBottom) || (dy < 0 && !atTop)
+
+          e.preventDefault()
+          e.stopPropagation()
+          if (canAbsorb) el.scrollTop = top + dy
+        }
+        dom.addEventListener("wheel", onWheel, { passive: false, capture: true })
+
+        const setLoadingChrome = (loading: boolean) => {
+          dom.classList.toggle("is-loading", loading)
+          dom.setAttribute("data-loading", loading ? "true" : "false")
+          if (loading) {
+            dom.draggable = false
+            handle.classList.add("is-disabled")
+          } else {
+            dom.draggable = true
+            handle.classList.remove("is-disabled")
+          }
+        }
+
+        const remeasureOverflow = () => {
+          if (latestLoading) {
+            expandAnimCleanup?.()
+            dom.classList.remove("is-overflow", "is-expanded", "is-animating")
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            fade.setAttribute("aria-hidden", "true")
+            pill.textContent = "Show more"
+            pill.setAttribute("aria-expanded", "false")
+            return
+          }
+          // content.scrollHeight is full content height regardless of max-height clip
+          const overflow = content.scrollHeight > COLLAPSED_MAX + 1
+          dom.classList.toggle("is-overflow", overflow)
+          if (!overflow) {
+            expandAnimCleanup?.()
+            dom.classList.remove("is-expanded", "is-animating")
+            contentWrapper.style.maxHeight = ""
+            contentWrapper.style.overflow = ""
+            pill.textContent = "Show more"
+            pill.setAttribute("aria-expanded", "false")
+          }
+          fade.setAttribute("aria-hidden", overflow ? "false" : "true")
+          if (dom.classList.contains("is-expanded") && !expandAnimating) {
+            pill.textContent = "Show less"
+            pill.setAttribute("aria-expanded", "true")
+          }
+        }
 
         const paintContent = (
           text: string,
@@ -1482,45 +1874,38 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           latestSourceId = sourceId
           latestLoading = loading
           latestTitle = title
+          setLoadingChrome(loading)
+
           if (loading) {
-            content.innerHTML = `
-              <div style="display: flex; align-items: center; gap: 8px; color: #666;">
-                <div class="loading-spinner" style="
-                  width: 16px; height: 16px; border: 2px solid #e0e0e0;
-                  border-top: 2px solid #1A5E3D; border-radius: 50%;
-                  animation: spin 1s linear infinite;
-                "></div>
-                <span>⏳ Distilling content from "${title}"...</span>
-              </div>
-            `
-            if (!document.getElementById("distill-loading-style")) {
-              const style = document.createElement("style")
-              style.id = "distill-loading-style"
-              style.textContent = `
-                @keyframes spin {
-                  0% { transform: rotate(0deg); }
-                  100% { transform: rotate(360deg); }
-                }
-              `
-              document.head.appendChild(style)
-            }
+            content.replaceChildren()
+            const row = document.createElement("div")
+            row.className = "distill-block__loading"
+            const spin = document.createElement("span")
+            spin.className = "distill-block__spinner"
+            spin.setAttribute("aria-hidden", "true")
+            const label = document.createElement("span")
+            label.textContent = `Distilling from “${title}”…`
+            row.append(spin, label)
+            content.appendChild(row)
+            remeasureOverflow()
             return
           }
+
           // Sync first paint (IDs as Speaker N until names load)
           content.innerHTML = renderMarkdown(
-            applySpeakerDisplay(text || "", {})
+            applySpeakerDisplay(text || "", {}),
           )
+          requestAnimationFrame(remeasureOverflow)
+
           // Always re-fetch latest speaker names for meeting distill sources
-          void resolveDistillTextForDisplay(text || "", sourceId).then((resolved) => {
-            if (content.isConnected) {
-              content.innerHTML = renderMarkdown(resolved)
-              requestAnimationFrame(() => {
-                if (content.scrollHeight > 200) {
-                  expandBtn.style.display = "block"
-                }
-              })
-            }
-          })
+          void resolveDistillTextForDisplay(text || "", sourceId).then(
+            (resolved) => {
+              if (content.isConnected) {
+                content.innerHTML = renderMarkdown(resolved)
+                requestAnimationFrame(remeasureOverflow)
+              }
+            },
+          )
         }
 
         // Loading / body
@@ -1531,35 +1916,14 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           node.attrs.sourceTitle || "source",
         )
 
-        contentWrapper.appendChild(content)
-
-        // Expand button (only show if content is long)
-        const expandBtn = document.createElement("button")
-        expandBtn.textContent = "▼ Show more"
-        expandBtn.style.cssText = `
-          display: none;
-          width: 100%;
-          padding: 6px;
-          background: linear-gradient(transparent, rgba(26,94,61,0.03));
-          border: none;
-          border-top: 1px solid rgba(26,94,61,0.12);
-          color: #1A5E3D;
-          font-size: 12px;
-          cursor: pointer;
-          text-align: center;
-        `
-        expandBtn.addEventListener("click", () => {
-          const isExpanded = contentWrapper.style.maxHeight === "none"
-          contentWrapper.style.maxHeight = isExpanded ? "200px" : "none"
-          expandBtn.textContent = isExpanded ? "▼ Show more" : "▲ Show less"
-        })
-
-        dom.append(header, contentWrapper, expandBtn)
+        dom.append(header, contentWrapper)
 
         // Re-resolve speakers when names change (Meeting page) or tab becomes visible
         const onSpeakersChanged = (ev: Event) => {
           if (latestLoading || !content.isConnected) return
-          const detail = (ev as CustomEvent).detail as { meetingId?: string } | undefined
+          const detail = (ev as CustomEvent).detail as
+            | { meetingId?: string }
+            | undefined
           const parsed = parseMeetingSourceId(latestSourceId)
           if (
             detail?.meetingId &&
@@ -1568,7 +1932,12 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
           ) {
             return
           }
-          paintContent(latestText, latestSourceId, latestLoading, latestTitle)
+          paintContent(
+            latestText,
+            latestSourceId,
+            latestLoading,
+            latestTitle,
+          )
         }
         const onVisible = () => {
           if (document.visibilityState === "visible") {
@@ -1578,12 +1947,8 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
         window.addEventListener("meeting-speakers-changed", onSpeakersChanged)
         document.addEventListener("visibilitychange", onVisible)
 
-        // Check if content overflows
-        requestAnimationFrame(() => {
-          if (content.scrollHeight > 200) {
-            expandBtn.style.display = "block"
-          }
-        })
+        // Initial overflow check after layout
+        requestAnimationFrame(remeasureOverflow)
 
         return {
           dom,
@@ -1598,40 +1963,23 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
               updatedNode.attrs.sourceTitle || "source",
             )
 
-            link.textContent = `📎 ${updatedNode.attrs.sourceTitle}`
-            badge.textContent = updatedNode.attrs.sourceNoteId?.slice(-3) || "?"
+            const t = (updatedNode.attrs.sourceTitle as string) || "source"
+            link.textContent = t
+            link.title = t
             dom.setAttribute("data-block-id", updatedNode.attrs.blockId)
-            dom.setAttribute("data-loading", updatedNode.attrs.loading ? "true" : "false")
 
-            // Toggle handle drag state on loading transition
-            if (updatedNode.attrs.loading) {
-              handle.style.cursor = "not-allowed"
-              handle.style.color = "#bbb"
-              handle.setAttribute("draggable", "false")
-              dom.draggable = false
-              dom.style.cursor = "default"
-            } else {
-              handle.style.cursor = "grab"
-              handle.style.color = "#666"
-              handle.removeAttribute("draggable")
-              dom.draggable = true
-              dom.style.cursor = ""
-            }
-
-            // Re-check overflow
-            requestAnimationFrame(() => {
-              if (content.scrollHeight > 200) {
-                expandBtn.style.display = "block"
-              } else {
-                expandBtn.style.display = "none"
-              }
-            })
-
+            requestAnimationFrame(remeasureOverflow)
             return true
           },
           // Only clean listeners — do not flush note content here
           destroy: () => {
-            window.removeEventListener("meeting-speakers-changed", onSpeakersChanged)
+            expandAnimCleanup?.()
+            disarmDelete()
+            dom.removeEventListener("wheel", onWheel, true)
+            window.removeEventListener(
+              "meeting-speakers-changed",
+              onSpeakersChanged,
+            )
             document.removeEventListener("visibilitychange", onVisible)
           },
         }
@@ -1655,8 +2003,16 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
 }
 
 // ──────────────────────────────────────────────
-// Callout Node Extension
+// Callout Node Extension — Premium soft rail card
 // ──────────────────────────────────────────────
+const CALLOUT_ICONS: Record<string, string> = {
+  // Lucide-weight monoline (currentColor)
+  info: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>`,
+  warning: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5L2.5 19.5h19L12 3.5z"/><path d="M12 10v4"/><path d="M12 17h.01"/></svg>`,
+  success: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>`,
+  error: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg>`,
+}
+
 function createCalloutExtension() {
   return Node.create({
     name: "callout",
@@ -1668,7 +2024,8 @@ function createCalloutExtension() {
       return {
         type: {
           default: "info",
-          parseHTML: (element: HTMLElement) => element.getAttribute("data-callout-type") || "info",
+          parseHTML: (element: HTMLElement) =>
+            element.getAttribute("data-callout-type") || "info",
           renderHTML: (attrs: any) => ({ "data-callout-type": attrs.type }),
         },
       }
@@ -1678,41 +2035,46 @@ function createCalloutExtension() {
       return [{ tag: 'div[data-type="callout"]' }]
     },
 
-    renderHTML({ HTMLAttributes }) {
-      return ["div", mergeAttributes(HTMLAttributes, { "data-type": "callout" })]
+    renderHTML({ HTMLAttributes, node }) {
+      const t = node?.attrs?.type || "info"
+      return [
+        "div",
+        mergeAttributes(HTMLAttributes, {
+          "data-type": "callout",
+          "data-callout-type": t,
+          class: `pm-callout pm-callout--${t}`,
+        }),
+        0,
+      ]
     },
 
     addNodeView() {
       return ({ node }) => {
         const dom = document.createElement("div")
-        dom.setAttribute("data-type", "callout")
-        dom.setAttribute("data-callout-type", node.attrs.type)
-
-        const colors: Record<string, { bg: string; border: string; icon: string }> = {
-          info: { bg: "rgba(26,94,61,0.06)", border: "#1A5E3D", icon: "💡" },
-          warning: { bg: "#fff3e0", border: "#f57c00", icon: "⚠️" },
-          success: { bg: "#e8f5e9", border: "#388e3c", icon: "✅" },
-          error: { bg: "#ffebee", border: "#d32f2f", icon: "❌" },
-        }
-
-        const color = colors[node.attrs.type] || colors.info
-        dom.style.cssText = `
-          border-left: 4px solid ${color.border}; background: ${color.bg};
-          border-radius: 4px; padding: 12px 16px; margin: 8px 0;
-        `
-
-        const icon = document.createElement("span")
-        icon.textContent = color.icon
-        icon.style.cssText = `margin-right: 8px;`
-
+        const iconEl = document.createElement("span")
+        iconEl.className = "pm-callout__icon"
+        iconEl.setAttribute("aria-hidden", "true")
         const content = document.createElement("div")
-        content.style.cssText = `display: inline;`
+        content.className = "pm-callout__body"
 
-        dom.append(icon, content)
+        const applyType = (type: string) => {
+          const t = CALLOUT_ICONS[type] ? type : "info"
+          dom.setAttribute("data-type", "callout")
+          dom.setAttribute("data-callout-type", t)
+          dom.className = `pm-callout pm-callout--${t}`
+          iconEl.innerHTML = CALLOUT_ICONS[t]
+        }
+        applyType(node.attrs.type || "info")
+        dom.append(iconEl, content)
 
         return {
           dom,
           contentDOM: content,
+          update: (updated: ProseMirrorNode) => {
+            if (updated.type.name !== "callout") return false
+            applyType(updated.attrs.type || "info")
+            return true
+          },
         }
       }
     },
@@ -1723,7 +2085,6 @@ function createCalloutExtension() {
 // Slash Command Extension
 // ──────────────────────────────────────────────
 function createSlashCommandExtension(
-  onDistill?: () => void,
   onImageUpload?: (file: File) => Promise<string>
 ) {
   return Extension.create({
@@ -1734,7 +2095,7 @@ function createSlashCommandExtension(
           const { from } = editor.state.selection
           const textBefore = editor.state.doc.textBetween(Math.max(0, from - 1), from, "")
           if (from === 1 || textBefore === "\n" || textBefore === "") {
-            showSlashMenu(editor, from, onDistill, onImageUpload)
+            showSlashMenu(editor, from, onImageUpload)
             return true
           }
           return false
@@ -1750,7 +2111,6 @@ function createSlashCommandExtension(
 function showSlashMenu(
   editor: any,
   position: number,
-  onDistill?: () => void,
   onImageUpload?: (file: File) => Promise<string>
 ) {
   const existingMenu = document.getElementById("slash-menu") as HTMLElement & {
@@ -1800,18 +2160,6 @@ function showSlashMenu(
             input.click()
           },
         },
-        {
-          label: "Video",
-          icon: "🎬",
-          desc: "YouTube embed",
-          action: () => {
-            const url = prompt("YouTube URL:")
-            if (url) {
-              const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/)
-              if (match) editor.chain().focus().setYoutubeVideo({ src: `https://www.youtube.com/watch?v=${match[1]}` }).run()
-            }
-          },
-        },
       ],
     },
     {
@@ -1819,45 +2167,49 @@ function showSlashMenu(
       commands: [
         { label: "Table", icon: "📊", desc: "Insert table", action: () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
         { label: "Code Block", icon: "💻", desc: "Code block", action: () => editor.chain().focus().toggleCodeBlock().run() },
-        { label: "Callout", icon: "💡", desc: "Info callout", action: () => editor.chain().focus().insertContent({ type: "callout", attrs: { type: "info" }, content: [{ type: "paragraph", content: [{ type: "text", text: "Callout" }] }] }).run() },
-      ],
-    },
-    {
-      label: "AI & Integration",
-      commands: [
-        { label: "Distill Block", icon: "🔗", desc: "Extract from note", action: () => onDistill ? onDistill() : alert("Drag a note to distill") },
+        {
+          label: "Callout",
+          icon: "💡",
+          desc: "Info callout",
+          action: () =>
+            editor
+              .chain()
+              .focus()
+              .insertContent({
+                type: "callout",
+                attrs: { type: "info" },
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "Note" }],
+                  },
+                ],
+              })
+              .run(),
+        },
       ],
     },
   ]
 
   const menu = document.createElement("div")
   menu.id = "slash-menu"
-  // Compact single-line rows; fixed height with internal scroll
-  menu.style.cssText = `
-    position: fixed;
-    background: white;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-    padding: 0;
-    z-index: 1000;
-    width: 220px;
-    height: 220px;
-    max-height: min(220px, 50vh);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  `
+  menu.className = "pm-slash-menu"
+  menu.setAttribute("role", "listbox")
+  menu.setAttribute("aria-label", "Insert block")
 
   const searchContainer = document.createElement("div")
-  searchContainer.style.cssText = `padding: 4px 8px; border-bottom: 1px solid #e0e0e0; flex-shrink: 0;`
+  searchContainer.className = "pm-slash-menu__search"
   const searchInput = document.createElement("input")
-  searchInput.placeholder = "Filter..."
-  searchInput.style.cssText = `width: 100%; border: none; outline: none; font-size: 12px; line-height: 20px; height: 24px; background: transparent;`
+  searchInput.className = "pm-slash-menu__input"
+  searchInput.type = "search"
+  searchInput.placeholder = "Filter commands…"
+  searchInput.setAttribute("aria-label", "Filter commands")
+  searchInput.autocomplete = "off"
+  searchInput.spellcheck = false
   searchContainer.appendChild(searchInput)
 
   const commandList = document.createElement("div")
-  commandList.style.cssText = `flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0;`
+  commandList.className = "pm-slash-menu__list"
   menu.append(searchContainer, commandList)
 
   let allCommands: any[] = []
@@ -1881,35 +2233,56 @@ function showSlashMenu(
     })
 
     if (filteredCommands.length === 0) {
-      commandList.innerHTML = '<div style="padding: 8px; text-align: center; color: #999; font-size: 12px;">No commands</div>'
+      const empty = document.createElement("div")
+      empty.className = "pm-slash-menu__empty"
+      empty.textContent = "No commands"
+      commandList.appendChild(empty)
       return
     }
 
-    const grouped: any = {}
+    const grouped: Record<string, any[]> = {}
     filteredCommands.forEach((cmd) => {
       if (!grouped[cmd.group]) grouped[cmd.group] = []
       grouped[cmd.group].push(cmd)
     })
 
     let itemIndex = 0
-    Object.entries(grouped).forEach(([, commands]) => {
-      ;(commands as any[]).forEach((cmd) => {
-        const item = document.createElement("div")
-        // Single-line row (~24px): small icon + label only
-        item.style.cssText = `
-          display: flex; align-items: center; gap: 6px;
-          height: 24px; padding: 0 8px; cursor: pointer;
-          box-sizing: border-box;
-        `
+    Object.entries(grouped).forEach(([groupLabel, commands]) => {
+      const groupEl = document.createElement("div")
+      groupEl.className = "pm-slash-menu__group"
+      groupEl.textContent = groupLabel
+      commandList.appendChild(groupEl)
+
+      commands.forEach((cmd) => {
+        const item = document.createElement("button")
+        item.type = "button"
+        item.className = "pm-slash-menu__item"
         item.dataset.index = String(itemIndex++)
+        item.setAttribute("role", "option")
 
-        item.innerHTML = `
-          <div style="width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; border-radius: 3px; font-size: 10px; line-height: 1;">${cmd.icon}</div>
-          <div style="flex: 1; min-width: 0; font-size: 12px; font-weight: 500; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cmd.label}</div>
-        `
+        const icon = document.createElement("span")
+        icon.className = "pm-slash-menu__icon"
+        icon.setAttribute("aria-hidden", "true")
+        icon.textContent = cmd.icon
 
-        item.addEventListener("mouseenter", () => { item.style.background = "#f0f7ff" })
-        item.addEventListener("mouseleave", () => { item.style.background = "white" })
+        const label = document.createElement("span")
+        label.className = "pm-slash-menu__label"
+        label.textContent = cmd.label
+
+        const desc = document.createElement("span")
+        desc.className = "pm-slash-menu__desc"
+        desc.textContent = cmd.desc || ""
+
+        item.append(icon, label, desc)
+
+        item.addEventListener("mouseenter", () => {
+          selectedIndex = Number(item.dataset.index) || 0
+          updateSelection()
+        })
+        item.addEventListener("mousedown", (ev) => {
+          // Keep focus in filter; prevent editor blur before click
+          ev.preventDefault()
+        })
         item.addEventListener("click", (ev) => {
           ev.preventDefault()
           ev.stopPropagation()
@@ -1925,11 +2298,14 @@ function showSlashMenu(
   }
 
   function updateSelection() {
-    const items = commandList.querySelectorAll("div[data-index]")
+    const items = commandList.querySelectorAll(".pm-slash-menu__item[data-index]")
     items.forEach((item, i) => {
-      ;(item as HTMLElement).style.background = i === selectedIndex ? "#f0f7ff" : "white"
+      const el = item as HTMLElement
+      const on = i === selectedIndex
+      el.classList.toggle("is-on", on)
+      el.setAttribute("aria-selected", on ? "true" : "false")
     })
-    const selectedItem = items[selectedIndex] as HTMLElement
+    const selectedItem = items[selectedIndex] as HTMLElement | undefined
     if (selectedItem) selectedItem.scrollIntoView({ block: "nearest" })
   }
 
@@ -2020,16 +2396,13 @@ function showSlashMenu(
     renderCommands((e.target as HTMLInputElement).value)
   })
 
-  // Render commands FIRST so we measure actual menu dimensions
+  // Mount hidden → measure → place → soft open
   menu.style.visibility = "hidden"
-  menu.style.position = "fixed"
   document.body.appendChild(menu)
   renderCommands()
 
-  // Position menu with actual content dimensions
   const coords = editor.view.coordsAtPos(position)
   const PADDING = 12
-
   const menuRect = menu.getBoundingClientRect()
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
@@ -2037,19 +2410,28 @@ function showSlashMenu(
   let top = coords.bottom + 8
   let left = coords.left
 
-  if (left + menuRect.width > viewportWidth - PADDING) left = viewportWidth - menuRect.width - PADDING
+  if (left + menuRect.width > viewportWidth - PADDING) {
+    left = viewportWidth - menuRect.width - PADDING
+  }
   if (left < PADDING) left = PADDING
-  if (top + menuRect.height > viewportHeight - PADDING) top = coords.top - menuRect.height - 8
-  if (top < PADDING) { top = PADDING; menu.style.maxHeight = `${viewportHeight - PADDING * 2}px` }
+  if (top + menuRect.height > viewportHeight - PADDING) {
+    top = coords.top - menuRect.height - 8
+  }
+  if (top < PADDING) {
+    top = PADDING
+    menu.style.maxHeight = `${viewportHeight - PADDING * 2}px`
+  }
 
-  menu.style.top = `${top}px`
-  menu.style.left = `${left}px`
+  menu.style.top = `${Math.round(top)}px`
+  menu.style.left = `${Math.round(left)}px`
   menu.style.visibility = "visible"
+  requestAnimationFrame(() => {
+    menu.classList.add("is-open")
+  })
 
   searchInput.focus()
 
-  // Capture-phase pointerdown so clicks on editor / sidebar still dismiss
-  // (bubble-phase click was often swallowed by ProseMirror / React).
+  // Capture-phase pointerdown so clicks on editor / sidebar still dismiss.
   // Defer one frame so the opening keystroke doesn't immediately close.
   requestAnimationFrame(() => {
     document.addEventListener("pointerdown", onPointerDownOutside, true)
@@ -2124,17 +2506,18 @@ function showTableContextMenu(event: MouseEvent, editor: any) {
 // ──────────────────────────────────────────────
 function showTableFloatingMenu(table: HTMLElement, editor: any) {
   if (_isPreviewMode) return
-  const existing = document.getElementById("table-floating-menu")
-  if (existing) existing.remove()
+
+  // Same table already open → keep
+  if (
+    document.getElementById("table-floating-menu") &&
+    _floatBarAnchor === table
+  ) {
+    return
+  }
 
   const menu = document.createElement("div")
   menu.id = "table-floating-menu"
-  menu.style.cssText = `
-    position: absolute; top: -44px; left: 0; transform: none;
-    background: #1e1e1e; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-    padding: 6px; display: flex; gap: 4px; z-index: 100; white-space: nowrap;
-    align-items: center;
-  `
+  menu.setAttribute("aria-label", "Table")
 
   // ★ KEY FIX: prevent mousedown from stealing focus out of ProseMirror.
   // Without this, clicking a button causes the browser to blur the editor,
@@ -2143,119 +2526,26 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
   menu.addEventListener("mousedown", (e) => {
     if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault()
   })
-
-  const btnStyle = `
-    padding: 5px 7px; border: none; background: transparent;
-    border-radius: 4px; cursor: pointer; color: white;
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s; font-size: 14px;
-  `
-  const hover = (btn: HTMLButtonElement) => {
-    btn.addEventListener("mouseenter", () => { btn.style.background = "rgba(255,255,255,0.15)" })
-    btn.addEventListener("mouseleave", () => { btn.style.background = "transparent" })
-  }
-
-  const dismissFloatingMenu = () => {
-    menu.remove()
-  }
+  menu.addEventListener("click", (e) => e.stopPropagation())
 
   const makeBtn = (
     title: string,
     svg: string,
     action: () => void,
     /** Close the floating bar after the action (delete ops). */
-    closeAfter = false
+    closeAfter = false,
+    danger = false,
   ) => {
-    const b = document.createElement("button")
-    b.innerHTML = svg
-    b.title = title
-    b.style.cssText = btnStyle
-    hover(b)
+    const b = makeFloatBarBtn(title, svg, { danger })
     b.addEventListener("click", (e) => {
       e.stopPropagation()
       action()
-      if (closeAfter) dismissFloatingMenu()
+      if (closeAfter) dismissPremiumFloatBars()
     })
     return b
   }
 
-  const makeDivider = () => {
-    const d = document.createElement("div")
-    d.style.cssText = `width: 1px; background: rgba(255,255,255,0.2); margin: 2px; height: 22px;`
-    return d
-  }
-
-  // Row buttons
-  menu.appendChild(makeBtn("Insert row above",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M8 1v3M5 1l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="11" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addRowBefore().run()))
-  menu.appendChild(makeBtn("Insert row below",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12h12M8 15v-3M5 15l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="7" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addRowAfter().run()))
-
-  menu.appendChild(makeDivider())
-
-  // Column buttons
-  menu.appendChild(makeBtn("Insert column left",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 2v12M1 8h3M1 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="6" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="11" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addColumnBefore().run()))
-  menu.appendChild(makeBtn("Insert column right",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 2v12M15 8h-3M15 5l-3 3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="7" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().addColumnAfter().run()))
-
-  menu.appendChild(makeDivider())
-
-  // Delete row/column — close bar after delete (stale selection otherwise)
-  menu.appendChild(makeBtn(
-    "Delete row",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 6h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 3l8 10M13 3L5 13" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteRow().run(),
-    true
-  ))
-  menu.appendChild(makeBtn(
-    "Delete column",
-    `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 5l10 8M3 13L13 5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>`,
-    () => editor.chain().focus().deleteColumn().run(),
-    true
-  ))
-
-  menu.appendChild(makeDivider())
-
-  // Delete table — red icon; always dismiss menu
-  const delTableBtn = document.createElement("button")
-  delTableBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" stroke="#ef4444" stroke-width="1.3" rx="1"/><path d="M5 5l6 6M11 5l-6 6" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/></svg>`
-  delTableBtn.title = "Delete table"
-  delTableBtn.style.cssText = btnStyle
-  hover(delTableBtn)
-  delTableBtn.addEventListener("click", (e) => {
-    e.stopPropagation()
-    editor.chain().focus().deleteTable().run()
-    dismissFloatingMenu()
-  })
-  menu.appendChild(delTableBtn)
-
-  menu.appendChild(makeDivider())
-
-  // Resize grid button (9 rows × 5 columns grid + custom inputs)
-  const resizeWrap = document.createElement("div")
-  resizeWrap.style.cssText = `position: relative;`
-  const resizeBtn = document.createElement("button")
-  resizeBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="1" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/></svg>`
-  resizeBtn.title = "Resize table"
-  resizeBtn.style.cssText = btnStyle
-  hover(resizeBtn)
-  resizeWrap.appendChild(resizeBtn)
-
-  let dropdownEl: HTMLDivElement | null = null
-  let closeGridHandler: ((ev: MouseEvent) => void) | null = null
-
-  const closeDropdown = () => {
-    if (dropdownEl) { dropdownEl.remove(); dropdownEl = null }
-    if (closeGridHandler) { document.removeEventListener("click", closeGridHandler); closeGridHandler = null }
-  }
-
   // Find the position of a cell at (targetRow, targetCol) inside a SPECIFIC table node
-  // (not just the first table in the document)
   const findCellPos = (tablePos: number, targetRow: number, targetCol: number): number => {
     let result = -1
     let currentRow = -1
@@ -2292,7 +2582,6 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     editor.view.state.doc.descendants((node: ProseMirrorNode, pos: number) => {
       if (result >= 0) return false
       if (node.type.name === "table") {
-        // Check if this table node's DOM matches the clicked element
         const dom = editor.view.nodeDOM(pos) as HTMLElement | null
         if (dom === tableEl || dom?.contains(tableEl) || tableEl.contains(dom)) {
           result = pos
@@ -2316,7 +2605,6 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
       const curRows = tableNode.childCount
       const curCols = curRows > 0 ? tableNode.firstChild!.childCount : 0
 
-      // Helper: set cursor in target cell via editor.chain(), return true if succeeded
       const goTo = (row: number, col: number): boolean => {
         const cellPos = findCellPos(tablePos, row, col)
         if (cellPos < 0) return false
@@ -2362,29 +2650,45 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     } catch { /* table may become invalid during resize */ }
   }
 
+  // Resize grid button (9 rows × 5 columns grid + custom inputs)
+  const resizeWrap = document.createElement("div")
+  resizeWrap.style.cssText = `position: relative; display: inline-flex;`
+  const resizeBtn = makeFloatBarBtn(
+    "Resize table",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="1" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="1" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/><rect x="9" y="9" width="6" height="6" stroke="currentColor" stroke-width="1.3" rx="0.5"/></svg>`,
+  )
+  resizeWrap.appendChild(resizeBtn)
+
+  let dropdownEl: HTMLDivElement | null = null
+  let closeGridHandler: ((ev: MouseEvent) => void) | null = null
+
+  const closeDropdown = () => {
+    if (dropdownEl) { dropdownEl.remove(); dropdownEl = null }
+    if (closeGridHandler) {
+      document.removeEventListener("mousedown", closeGridHandler, true)
+      closeGridHandler = null
+    }
+    resizeBtn.classList.remove("is-on")
+  }
+
   resizeBtn.addEventListener("click", (e) => {
     e.stopPropagation()
     if (dropdownEl) { closeDropdown(); return }
 
     const dropdown = document.createElement("div")
-    dropdown.className = "table-resize-dropdown"
-    dropdown.style.cssText = `
-      position: absolute; top: 100%; left: 0; margin-top: 4px;
-      background: #2c2c2c; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      padding: 12px; z-index: 101;
-    `
+    dropdown.className = "pm-float-bar-panel table-resize-dropdown"
     dropdownEl = dropdown
+    resizeBtn.classList.add("is-on")
 
-    // 9 rows × 5 columns grid
     const GRID_ROWS = 9
     const GRID_COLS = 5
     const grid = document.createElement("div")
-    grid.style.cssText = `display: grid; grid-template-columns: repeat(${GRID_COLS}, 18px); gap: 2px; justify-content: center;`
+    grid.className = "pm-float-bar-grid"
+    grid.style.gridTemplateColumns = `repeat(${GRID_COLS}, 16px)`
     dropdown.appendChild(grid)
 
-    // Preview: target dimensions on hover
     const preview = document.createElement("div")
-    preview.style.cssText = `color: rgba(255,255,255,0.6); font-size: 11px; margin-top: 8px; text-align: center; min-height: 16px;`
+    preview.className = "pm-float-bar-panel-meta"
     preview.textContent = "hover to select"
     dropdown.appendChild(preview)
 
@@ -2392,23 +2696,14 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
     for (let r = 1; r <= GRID_ROWS; r++) {
       for (let c = 1; c <= GRID_COLS; c++) {
         const cell = document.createElement("div")
+        cell.className = "pm-float-bar-grid-cell"
         cell.dataset.row = String(r)
         cell.dataset.col = String(c)
-        cell.style.cssText = `width: 18px; height: 18px;
-          border: 1px solid rgba(255,255,255,0.12); background: transparent;
-          border-radius: 2px; cursor: pointer; transition: background 0.06s, border-color 0.06s;`
         cell.addEventListener("mouseenter", () => {
-          // Highlight all cells from (1,1) to (r,c)
           cells.forEach((d) => {
             const cr = Number(d.dataset.row)
             const cc = Number(d.dataset.col)
-            if (cr <= r && cc <= c) {
-              d.style.background = "rgba(59,130,246,0.6)"
-              d.style.borderColor = "rgba(59,130,246,0.9)"
-            } else {
-              d.style.background = "transparent"
-              d.style.borderColor = "rgba(255,255,255,0.12)"
-            }
+            d.classList.toggle("is-hot", cr <= r && cc <= c)
           })
           preview.textContent = `${r} × ${c}`
         })
@@ -2416,66 +2711,56 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
           ev.stopPropagation()
           resizeTable(r, c)
           closeDropdown()
-          menu.remove()
+          dismissPremiumFloatBars()
         })
         cells.push(cell)
         grid.appendChild(cell)
       }
     }
 
-    // Reset grid highlight when mouse leaves grid area
     grid.addEventListener("mouseleave", () => {
-      cells.forEach((d) => {
-        d.style.background = "transparent"
-        d.style.borderColor = "rgba(255,255,255,0.12)"
-      })
+      cells.forEach((d) => d.classList.remove("is-hot"))
       preview.textContent = "hover to select"
     })
 
-    // Divider between grid and custom inputs
     const sep = document.createElement("div")
-    sep.style.cssText = `height: 1px; background: rgba(255,255,255,0.15); margin: 10px 0 8px;`
+    sep.className = "pm-float-bar-panel-rule"
     dropdown.appendChild(sep)
 
-    // Custom row/col inputs
     const inputRow = document.createElement("div")
-    inputRow.style.cssText = `display: flex; gap: 8px; align-items: center; justify-content: center;`
-
-    const inputStyle = `width: 48px; height: 26px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 4px; color: white; text-align: center; font-size: 12px; outline: none;`
-    const labelStyle = `color: rgba(255,255,255,0.5); font-size: 11px;`
+    inputRow.className = "pm-float-bar-panel-row"
 
     const rowsLabel = document.createElement("span")
-    rowsLabel.style.cssText = labelStyle
+    rowsLabel.className = "pm-float-bar-panel-label"
     rowsLabel.textContent = "rows"
     const rowsInput = document.createElement("input")
     rowsInput.type = "number"
     rowsInput.min = "1"
     rowsInput.value = String(table.querySelectorAll("tr").length)
-    rowsInput.style.cssText = inputStyle
+    rowsInput.className = "pm-float-bar-panel-input"
 
     const colsLabel = document.createElement("span")
-    colsLabel.style.cssText = labelStyle
+    colsLabel.className = "pm-float-bar-panel-label"
     colsLabel.textContent = "cols"
     const colsInput = document.createElement("input")
     colsInput.type = "number"
     colsInput.min = "1"
     colsInput.value = String(table.querySelector("tr")?.querySelectorAll("th,td").length || 3)
-    colsInput.style.cssText = inputStyle
+    colsInput.className = "pm-float-bar-panel-input"
 
     const applyBtn = document.createElement("button")
-    applyBtn.textContent = "✓"
-    applyBtn.style.cssText = `width: 26px; height: 26px; background: rgba(59,130,246,0.7); border: none;
-      border-radius: 4px; color: white; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center;`
-    applyBtn.addEventListener("mouseenter", () => { applyBtn.style.background = "rgba(59,130,246,0.9)" })
-    applyBtn.addEventListener("mouseleave", () => { applyBtn.style.background = "rgba(59,130,246,0.7)" })
+    applyBtn.type = "button"
+    applyBtn.className = "pm-float-bar-panel-apply"
+    applyBtn.title = "Apply"
+    applyBtn.setAttribute("aria-label", "Apply")
+    applyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.5 3.5L13 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`
 
     const applyCustom = () => {
       const r = Math.max(1, parseInt(rowsInput.value) || 1)
       const c = Math.max(1, parseInt(colsInput.value) || 1)
       resizeTable(r, c)
       closeDropdown()
-      menu.remove()
+      dismissPremiumFloatBars()
     }
     applyBtn.addEventListener("click", (ev) => { ev.stopPropagation(); applyCustom() })
     rowsInput.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") applyCustom() })
@@ -2490,52 +2775,107 @@ function showTableFloatingMenu(table: HTMLElement, editor: any) {
 
     resizeWrap.appendChild(dropdown)
 
-    // Close dropdown when clicking outside it
     setTimeout(() => {
       closeGridHandler = (ev: MouseEvent) => {
-        if (dropdownEl && !dropdownEl.contains(ev.target as HTMLElement) && ev.target !== resizeBtn) {
+        if (
+          dropdownEl &&
+          !dropdownEl.contains(ev.target as HTMLElement) &&
+          ev.target !== resizeBtn &&
+          !(
+            ev.target instanceof globalThis.Node &&
+            resizeBtn.contains(ev.target)
+          )
+        ) {
           closeDropdown()
         }
       }
-      document.addEventListener("click", closeGridHandler)
-    }, 10)
+      document.addEventListener("mousedown", closeGridHandler, true)
+    }, 0)
   })
 
-  // Insert resize button as FIRST element in the menu
-  menu.insertBefore(resizeWrap, menu.firstChild)
-  const resizeDivider = makeDivider()
-  menu.insertBefore(resizeDivider, resizeWrap.nextSibling)
+  menu.appendChild(resizeWrap)
+  menu.appendChild(makeFloatBarSep())
 
-  // Prevent clicks inside menu from bubbling to the table/ProseMirror
-  menu.addEventListener("click", (e) => e.stopPropagation())
+  // Row buttons
+  menu.appendChild(makeBtn(
+    "Insert row above",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M8 1v3M5 1l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="11" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addRowBefore().run(),
+  ))
+  menu.appendChild(makeBtn(
+    "Insert row below",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 12h12M8 15v-3M5 15l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="2" y="7" width="12" height="3" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addRowAfter().run(),
+  ))
 
-  table.style.position = "relative"
-  table.appendChild(menu)
+  menu.appendChild(makeFloatBarSep())
 
-  // Close menu when clicking outside the table
-  setTimeout(() => {
-    const close = (e: MouseEvent) => {
-      if (!table.contains(e.target as HTMLElement)) {
-        menu.remove()
-        document.removeEventListener("click", close)
-      }
-    }
-    document.addEventListener("click", close)
-  }, 10)
+  // Column buttons
+  menu.appendChild(makeBtn(
+    "Insert column left",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 2v12M1 8h3M1 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="6" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="11" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addColumnBefore().run(),
+  ))
+  menu.appendChild(makeBtn(
+    "Insert column right",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M12 2v12M15 8h-3M15 5l-3 3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/><rect x="7" y="2" width="3" height="12" stroke="currentColor" stroke-width="1" rx="0.5" opacity="0.5"/></svg>`,
+    () => editor.chain().focus().addColumnAfter().run(),
+  ))
+
+  menu.appendChild(makeFloatBarSep())
+
+  // Delete row/column — Lucide-weight icons (row/col bands + small X), close after
+  menu.appendChild(makeBtn(
+    "Delete row",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2" width="13" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><rect x="1.5" y="6.8" width="8.2" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25"/><rect x="1.5" y="11.6" width="13" height="2.4" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><path d="M11.2 6.4l3.2 3.2M14.4 6.4l-3.2 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    () => editor.chain().focus().deleteRow().run(),
+    true,
+  ))
+  menu.appendChild(makeBtn(
+    "Delete column",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="1.5" width="2.4" height="13" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><rect x="6.8" y="1.5" width="2.4" height="8.2" rx="0.7" stroke="currentColor" stroke-width="1.25"/><rect x="11.6" y="1.5" width="2.4" height="13" rx="0.7" stroke="currentColor" stroke-width="1.25" opacity="0.32"/><path d="M6.4 11.2l3.2 3.2M9.6 11.2l-3.2 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    () => editor.chain().focus().deleteColumn().run(),
+    true,
+  ))
+
+  menu.appendChild(makeFloatBarSep())
+
+  // Delete table
+  menu.appendChild(makeBtn(
+    "Delete table",
+    `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" stroke="currentColor" stroke-width="1.3" rx="1"/><path d="M5 5l6 6M11 5l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    () => editor.chain().focus().deleteTable().run(),
+    true,
+    true,
+  ))
+
+  mountPremiumFloatBar(menu, table, { align: "start" })
 }
 
 // ──────────────────────────────────────────────
-// Utility: Simple Markdown Renderer
+// Utility: Markdown → HTML for distill NodeView body
+// (naive regex missed headings / GFM lists; use remark pipeline)
 // ──────────────────────────────────────────────
 function renderMarkdown(md: string): string {
-  return md
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/`(.+?)`/g, "<code>$1</code>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>")
-    .replace(/\n/g, "<br>")
+  if (!md) return ""
+  try {
+    return String(
+      unified()
+        .use(remarkParse)
+        .use(remarkGfm)
+        .use(remarkBreaks)
+        .use(remarkRehype)
+        .use(rehypeStringify)
+        .processSync(md),
+    )
+  } catch {
+    // Safe fallback: escape only
+    return md
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>")
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -2618,12 +2958,28 @@ interface MarkdownEditorProps {
   onDistillNavigate?: (noteId: string) => void // Add this for distill block navigation
   /** Called when the editor instance is ready. Passes back the Tiptap editor. */
   onEditorReady?: (editor: any) => void
+  /**
+   * Fired after ProseMirror has taken focus (and click selection is applied).
+   * Prefer this over parent mousedown for dual-pane focus — avoids select-all thrash.
+   */
+  onEditorFocus?: () => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
   /** Top offset for sticky toolbar (px). */
   stickyToolbarOffset?: number
   /** Extra toolbar actions on the right side. */
   toolbarActions?: ReactNode
+  /**
+   * Remove default EditorContent padding (p-4).
+   * Use for flush reading surfaces (e.g. Collection Overview summary)
+   * so body width matches plain text siblings.
+   */
+  flush?: boolean
+  /**
+   * Enable `/` slash command menu. Default true (message / note surfaces).
+   * Compact fields (e.g. todo description) pass false — toolbar still available.
+   */
+  enableSlash?: boolean
 }
 
 // ──────────────────────────────────────────────
@@ -2697,25 +3053,33 @@ function markdownToHtml(md: string): string {
 }
 
 // ──────────────────────────────────────────────
-// Editor Toolbar
+// Editor Toolbar — Premium R2 strip (Master locked)
 // ──────────────────────────────────────────────
 
-const HIGHLIGHT_PRESETS = [
-  { color: "#fef08a", label: "Yellow" },
-  { color: "#bbf7d0", label: "Green" },
-  { color: "#fca5a5", label: "Red" },
-  { color: "#c4b5fd", label: "Purple" },
-  { color: "#fdba74", label: "Orange" },
-]
+/** Solid hex for TipTap data-color + lower-half marker CSS via --pm-hl */
+const HIGHLIGHT_SWATCHES = [
+  { color: "#e8d48b", label: "Yellow", swatch: "#e8d48b" },
+  { color: "#c5dccf", label: "Green", swatch: "#c5dccf" },
+  { color: "#f0c9c4", label: "Rose", swatch: "#f0c9c4" },
+  { color: "#ddd6c8", label: "Warm gray", swatch: "#ddd6c8" },
+  { color: "#d4e0f0", label: "Cool mist", swatch: "#d4e0f0" },
+] as const
 
+/** Premium text colors — --pm-* family (no deep-green twin) */
 const TEXT_COLOR_PRESETS = [
-  { color: "#000000", label: "Black" },
-  { color: "#8C2E2E", label: "Red" },
-  { color: "#2D7A55", label: "Green" },
-  { color: "#3b82f6", label: "Blue" },
-  { color: "#a855f7", label: "Purple" },
-  { color: "#f97316", label: "Orange" },
-]
+  { color: "#121410", label: "Ink" },
+  { color: "#1a5e3d", label: "Green" },
+  { color: "#b42318", label: "Danger" },
+  { color: "#6a706a", label: "Muted" },
+  { color: "#8a7355", label: "Warm" },
+] as const
+
+const TEXT_COLOR_QUICK = TEXT_COLOR_PRESETS.slice(0, 3)
+const HIGHLIGHT_QUICK = HIGHLIGHT_SWATCHES.slice(0, 3)
+
+function FmtSep() {
+  return <span className="pm-fmt-sep" aria-hidden />
+}
 
 function ToolbarBtn({
   active, disabled, tooltip, onClick, children, className,
@@ -2730,19 +3094,15 @@ function ToolbarBtn({
       data-active={active || undefined}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        "h-7 w-7 p-0 flex items-center justify-center rounded-sm",
-        "transition-colors cursor-pointer",
-        "disabled:opacity-30 disabled:pointer-events-none",
-        className,
-      )}
+      className={cn("pm-fmt-btn", active && "is-on", className)}
     >
       {children}
     </button>
   )
 }
 
-function ColorSwatch({
+/** Highlight swatch — half-fill hints marker style */
+function HighlightSwatch({
   color, active, tooltip, onClick,
 }: {
   color: string; active: boolean; tooltip: string; onClick: () => void
@@ -2752,50 +3112,177 @@ function ColorSwatch({
       type="button"
       title={tooltip}
       onClick={onClick}
-      className={cn(
-        "h-5 w-5 rounded-full border border-border cursor-pointer transition-transform hover:scale-110",
-        active && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
-      )}
-      style={{ backgroundColor: color }}
+      className={cn("pm-fmt-hl", active && "is-on")}
+      style={{
+        background: `linear-gradient(to bottom, transparent 50%, ${color} 50%)`,
+      }}
     />
   )
 }
 
-function ColorDropdown({
-  trigger, presets, activeColor, onSelect,
+/** Text color — light A + thin bar */
+function TextColorSwatch({
+  color, active, tooltip, onClick,
 }: {
-  trigger: ReactNode; presets: typeof HIGHLIGHT_PRESETS; activeColor: string | null; onSelect: (color: string) => void
+  color: string; active: boolean; tooltip: string; onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={tooltip}
+      onClick={onClick}
+      className={cn("pm-fmt-tc", active && "is-on")}
+    >
+      <span className="pm-fmt-tc-a" style={{ color }}>A</span>
+      <span className="pm-fmt-tc-bar" style={{ backgroundColor: color }} />
+    </button>
+  )
+}
+
+function ColorPaletteMenu({
+  kind,
+  presets,
+  activeColor,
+  onSelect,
+  /** Highlight only: empty chip clears mark (no “Clear” text row) */
+  onClearHighlight,
+  /** Narrow bar: one trigger opens full palette (no inline swatches) */
+  compact = false,
+}: {
+  kind: "highlight" | "text"
+  presets: readonly { color: string; label: string; swatch?: string }[]
+  activeColor: string | null
+  onSelect: (color: string) => void
+  onClearHighlight?: () => void
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const anchorRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) setOpen(false)
+      const t = e.target
+      if (t instanceof globalThis.Node && ref.current?.contains(t)) return
+      // Portaled SoftMenu lives under body — still treat as "inside"
+      if (
+        t instanceof Element &&
+        t.closest('[data-slot="menu"][data-menu-portal="true"]')
+      ) {
+        return
+      }
+      setOpen(false)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
   }, [open])
 
+  const preview = presets.find((p) => p.color === activeColor)
+  const previewSw =
+    preview && "swatch" in preview && preview.swatch
+      ? preview.swatch
+      : preview?.color ?? (kind === "highlight" ? "#e8d48b" : "#121410")
+  const noHighlight = kind === "highlight" && !activeColor
+
   return (
     <div ref={ref} className="relative">
-      <div onClick={() => setOpen(o => !o)} className="cursor-pointer">
-        {trigger}
-      </div>
-      {open && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 bg-popover border border-border rounded-md shadow-md p-2 flex gap-1.5">
-          {presets.map(p => (
-            <ColorSwatch
-              key={p.color}
-              color={p.color}
-              tooltip={p.label}
-              active={activeColor === p.color}
-              onClick={() => { onSelect(p.color); setOpen(false) }}
+      {compact ? (
+        <button
+          ref={anchorRef}
+          type="button"
+          title={kind === "highlight" ? "Highlight" : "Text color"}
+          className={cn("pm-fmt-compact", open && "is-on")}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {kind === "highlight" ? (
+            <span
+              className={cn("pm-fmt-hl", noHighlight && "is-none")}
+              style={
+                noHighlight
+                  ? undefined
+                  : {
+                      background: `linear-gradient(to bottom, transparent 50%, ${previewSw} 50%)`,
+                    }
+              }
             />
-          ))}
-        </div>
+          ) : (
+            <span className="pm-fmt-tc">
+              <span
+                className="pm-fmt-tc-a"
+                style={{ color: activeColor || "#121410" }}
+              >
+                A
+              </span>
+              <span
+                className="pm-fmt-tc-bar"
+                style={{ backgroundColor: activeColor || "#121410" }}
+              />
+            </span>
+          )}
+          <span className="pm-fmt-compact-chev" aria-hidden>
+            ▾
+          </span>
+        </button>
+      ) : (
+        <button
+          ref={anchorRef}
+          type="button"
+          title={kind === "highlight" ? "More highlights" : "More text colors"}
+          className={cn("pm-fmt-more", open && "is-on")}
+          onClick={() => setOpen((o) => !o)}
+        >
+          +
+        </button>
       )}
+      <SoftMenu
+        open={open}
+        portal
+        anchorRef={anchorRef}
+        align="center"
+        className="pm-fmt-palette"
+      >
+        {/* Single compact row of chips — none (hl only) + presets */}
+        <div className="pm-fmt-palette-row">
+          {kind === "highlight" && (
+            <button
+              type="button"
+              title="No highlight"
+              className={cn("pm-fmt-hl is-none", !activeColor && "is-on")}
+              onClick={() => {
+                onClearHighlight?.()
+                setOpen(false)
+              }}
+            />
+          )}
+          {presets.map((p) => {
+            const sw = "swatch" in p && p.swatch ? p.swatch : p.color
+            const isActive = activeColor === p.color
+            return (
+              <button
+                key={p.color}
+                type="button"
+                title={p.label}
+                className={cn(
+                  kind === "highlight" ? "pm-fmt-hl" : "pm-fmt-palette-dot",
+                  isActive && "is-on",
+                )}
+                style={
+                  kind === "highlight"
+                    ? {
+                        background: `linear-gradient(to bottom, transparent 48%, ${sw} 48%)`,
+                      }
+                    : { backgroundColor: sw }
+                }
+                onClick={() => {
+                  onSelect(p.color)
+                  setOpen(false)
+                }}
+              />
+            )
+          })}
+        </div>
+      </SoftMenu>
     </div>
   )
 }
@@ -2803,19 +3290,27 @@ function ColorDropdown({
 function HeadingDropdown({ editor }: { editor: Editor }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const anchorRef = useRef<HTMLButtonElement>(null)
 
-  const levels: { level: 1 | 2 | 3; Icon: typeof Heading1; label: string }[] = [
-    { level: 1, Icon: Heading1, label: "Heading 1" },
-    { level: 2, Icon: Heading2, label: "Heading 2" },
-    { level: 3, Icon: Heading3, label: "Heading 3" },
-  ]
-
-  const activeLevel = levels.find(l => editor.isActive("heading", { level: l.level }))
+  const level = ([1, 2, 3] as const).find((l) =>
+    editor.isActive("heading", { level: l }),
+  )
+  // No Paragraph row — default trigger is “H” when body text
+  const triggerLabel =
+    level === 1 ? "H1" : level === 2 ? "H2" : level === 3 ? "H3" : "H"
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) setOpen(false)
+      const t = e.target
+      if (t instanceof globalThis.Node && ref.current?.contains(t)) return
+      if (
+        t instanceof Element &&
+        t.closest('[data-slot="menu"][data-menu-portal="true"]')
+      ) {
+        return
+      }
+      setOpen(false)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
@@ -2824,195 +3319,395 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
   return (
     <div ref={ref} className="relative">
       <button
+        ref={anchorRef}
         type="button"
-        title="Headings"
-        onClick={() => setOpen(o => !o)}
-        className={cn(
-          "h-7 px-1.5 flex items-center gap-0.5 rounded-sm text-muted-foreground text-xs font-medium cursor-pointer",
-          "hover:bg-accent hover:text-foreground transition-colors",
-          activeLevel && "bg-accent text-foreground",
-        )}
+        title="Heading"
+        className={cn("pm-fmt-hd", level && "is-on")}
+        onClick={() => setOpen((o) => !o)}
       >
-        {activeLevel ? <activeLevel.Icon className="h-4 w-4" /> : <Heading1 className="h-4 w-4" />}
-        <ChevronDown className="h-3 w-3" />
+        {triggerLabel}
+        <span className="pm-fmt-hd-chev" aria-hidden>
+          ▾
+        </span>
       </button>
-      {open && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 bg-popover border border-border rounded-md shadow-md p-1 flex gap-0.5">
-          {levels.map(({ level, Icon, label }) => (
-            <ToolbarBtn
-              key={level}
-              active={editor.isActive("heading", { level })}
-              tooltip={label}
-              onClick={() => { editor.chain().focus().toggleHeading({ level }).run(); setOpen(false) }}
-            >
-              <Icon className="h-4 w-4" />
-            </ToolbarBtn>
-          ))}
-        </div>
-      )}
+      <SoftMenu
+        open={open}
+        portal
+        anchorRef={anchorRef}
+        align="start"
+        className="pm-fmt-hd-menu min-w-[11rem]"
+      >
+        {([1, 2, 3] as const).map((l) => (
+          <MenuItem
+            key={l}
+            active={level === l}
+            className="pm-fmt-hd-item"
+            onClick={() => {
+              // Same level again → toggle off to paragraph (TipTap toggleHeading)
+              editor.chain().focus().toggleHeading({ level: l }).run()
+              setOpen(false)
+            }}
+          >
+            <span className={cn("pm-fmt-hd-item-label", `is-h${l}`)}>
+              Heading {l}
+            </span>
+            <span className="pm-fmt-hd-item-tag">H{l}</span>
+          </MenuItem>
+        ))}
+      </SoftMenu>
     </div>
   )
 }
 
-export function EditorToolbar({ editor, stickyOffset = 0, actions }: { editor: Editor; stickyOffset?: number; actions?: ReactNode }) {
-  // Force re-render on selection/content changes so active states stay in sync
+/** Collapse highlight + text-color swatches into ▾ menus below this width */
+const FMT_COMPACT_PX = 420
+
+export function EditorToolbar({
+  editor,
+  stickyOffset = 0,
+  actions,
+}: {
+  editor: Editor
+  stickyOffset?: number
+  actions?: ReactNode
+}) {
   const [, setTick] = useState(0)
-  useEffect(() => {
-    const cb = () => setTick(t => t + 1)
-    editor.on("selectionUpdate", cb)
-    editor.on("transaction", cb)
-    return () => { editor.off("selectionUpdate", cb); editor.off("transaction", cb) }
+  const barRef = useRef<HTMLDivElement>(null)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [compactColors, setCompactColors] = useState(false)
+  const [editing, setEditing] = useState(false)
+
+  const showToolbar = useCallback(() => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = null
+    }
+    setEditing(true)
+  }, [])
+
+  /** Debounced hide — avoids flash when PM blurs for a frame on toolbar click */
+  const scheduleHideToolbar = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = setTimeout(() => {
+      hideTimerRef.current = null
+      // Note switch / unmount: editor may already be destroyed
+      if (editor.isDestroyed) {
+        setEditing(false)
+        return
+      }
+      try {
+        if (editor.view.hasFocus()) return
+      } catch {
+        setEditing(false)
+        return
+      }
+      const bar = barRef.current
+      const ae = document.activeElement
+      if (bar && ae && bar.contains(ae)) return
+      // Open SoftMenu (incl. body-portaled submenus) keeps toolbar "editing"
+      if (
+        bar?.querySelector(
+          '[data-slot="menu"].is-open, .pm-menu--soft.is-open'
+        ) ||
+        document.querySelector(
+          '[data-slot="menu"][data-menu-portal="true"].is-open, [data-slot="menu"][data-menu-portal="true"].pm-menu--soft.is-open'
+        )
+      ) {
+        return
+      }
+      setEditing(false)
+    }, 160)
   }, [editor])
 
-  // Find active highlight color
+  useEffect(() => {
+    let alive = true
+    const cb = () => {
+      if (!alive || editor.isDestroyed) return
+      setTick((t) => t + 1)
+    }
+    const onFocus = () => {
+      if (!alive || editor.isDestroyed) return
+      showToolbar()
+    }
+    const onBlur = () => {
+      if (!alive || editor.isDestroyed) return
+      scheduleHideToolbar()
+    }
+    editor.on("selectionUpdate", cb)
+    editor.on("transaction", cb)
+    editor.on("focus", onFocus)
+    editor.on("blur", onBlur)
+    try {
+      if (editor.view.hasFocus()) showToolbar()
+    } catch {
+      /* destroyed */
+    }
+    return () => {
+      alive = false
+      editor.off("selectionUpdate", cb)
+      editor.off("transaction", cb)
+      editor.off("focus", onFocus)
+      editor.off("blur", onBlur)
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current)
+        hideTimerRef.current = null
+      }
+    }
+  }, [editor, showToolbar, scheduleHideToolbar])
+
+  useEffect(() => {
+    const el = barRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0
+      setCompactColors(w > 0 && w < FMT_COMPACT_PX)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const activeHighlight: string | null = (() => {
-    const attrs = editor.getAttributes("highlight")
-    return attrs.color ?? (editor.isActive("highlight") ? "#fef08a" : null)
+    if (editor.isDestroyed) return null
+    try {
+      const attrs = editor.getAttributes("highlight")
+      return (
+        attrs.color ??
+        (editor.isActive("highlight") ? HIGHLIGHT_QUICK[0].color : null)
+      )
+    } catch {
+      return null
+    }
   })()
 
-  // Find active text color
   const activeTextColor: string | null = (() => {
-    const attrs = editor.getAttributes("textStyle")
-    return attrs.color ?? null
+    if (editor.isDestroyed) return null
+    try {
+      const attrs = editor.getAttributes("textStyle")
+      return attrs.color ?? null
+    } catch {
+      return null
+    }
   })()
+
+  const applyTextColor = (color: string) => {
+    if (color === "#121410" || color === "#000000") {
+      // Ink / legacy black → clear mark (default body color)
+      editor.chain().focus().unsetColor().run()
+    } else {
+      editor.chain().focus().setColor(color).run()
+    }
+  }
+
+  const toggleHighlight = (color: string) => {
+    if (activeHighlight === color) {
+      editor.chain().focus().unsetHighlight().run()
+    } else {
+      editor.chain().focus().toggleHighlight({ color }).run()
+    }
+  }
 
   return (
     <div
-      className="flex items-center gap-0.5 px-3 h-9 rounded-full mx-2 mt-2 mb-1 shrink-0 sticky z-10
-        [&_button]:text-[#1C2E24] [&_button]:hover:text-[#1A5E3D] [&_button]:hover:bg-[rgba(26,94,61,0.06)]
-        [&_button]:active:bg-[rgba(26,94,61,0.10)] [&_button[data-active]]:text-[#1A5E3D] [&_button[data-active]]:bg-[rgba(26,94,61,0.08)]
-        [&_.w-px]:bg-[rgba(26,94,61,0.15)] [&_svg]:stroke-current
-        [&>.cursor-pointer]:text-[#1C2E24] [&>.cursor-pointer:hover]:text-[#1A5E3D]
-        [&_.relative_.cursor-pointer]:text-[#1C2E24] [&_.relative_.cursor-pointer:hover]:text-[#1A5E3D]
-        animate-toolbar-float"
-      style={{
-        backgroundColor: "#FAFAF7",
-        border: "1px solid rgba(26,94,61,0.30)",
-        boxShadow:
-          "0 12px 40px -6px rgba(10,18,14,0.22)," +
-          "0 4px 12px -3px rgba(10,18,14,0.12)," +
-          "0 0 0 1px rgba(26,94,61,0.06) inset",
-        top: stickyOffset ?? 0,
+      ref={barRef}
+      className={cn(
+        "pm-fmt-toolbar shrink-0 sticky z-10",
+        editing && "is-editing",
+      )}
+      style={{ top: stickyOffset ?? 0 }}
+      onMouseDown={(e) => {
+        // Keep visible + keep PM selection (table-menu pattern)
+        showToolbar()
+        if ((e.target as HTMLElement).closest("button, [role='menu']")) {
+          e.preventDefault()
+        }
+      }}
+      onMouseLeave={() => {
+        try {
+          if (!editor.isDestroyed && !editor.view.hasFocus()) {
+            scheduleHideToolbar()
+          }
+        } catch {
+          scheduleHideToolbar()
+        }
       }}
     >
-      {/* Text style */}
-      <ToolbarBtn active={editor.isActive("bold")} tooltip="Bold (Ctrl+B)"
-        onClick={() => editor.chain().focus().toggleBold().run()}>
-        <Bold className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("italic")} tooltip="Italic (Ctrl+I)"
-        onClick={() => editor.chain().focus().toggleItalic().run()}>
-        <Italic className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("strike")} tooltip="Strikethrough"
-        onClick={() => editor.chain().focus().toggleStrike().run()}>
-        <Strikethrough className="h-4 w-4" />
-      </ToolbarBtn>
-
-      <div className="w-px h-5 bg-border mx-1" />
-
-      {/* Highlight — 2 primary + more dropdown */}
-      <ToolbarBtn
-        active={activeHighlight === "#fef08a"}
-        tooltip="Highlight Yellow"
-        onClick={() => editor.chain().focus().toggleHighlight({ color: "#fef08a" }).run()}
-      >
-        <div className="relative">
-          <Highlighter className="h-4 w-4" />
-          <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-yellow-300 border border-border" />
+      <div className="pm-fmt-inner">
+        <div className="pm-fmt-grp">
+          <ToolbarBtn
+            active={editor.isActive("bold")}
+            tooltip="Bold (Ctrl+B)"
+            onClick={() => editor.chain().focus().toggleBold().run()}
+          >
+            <Bold className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("italic")}
+            tooltip="Italic (Ctrl+I)"
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+          >
+            <Italic className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("strike")}
+            tooltip="Strikethrough"
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+          >
+            <Strikethrough className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </ToolbarBtn>
         </div>
-      </ToolbarBtn>
-      <ToolbarBtn
-        active={activeHighlight === "#bbf7d0"}
-        tooltip="Highlight Green"
-        onClick={() => editor.chain().focus().toggleHighlight({ color: "#bbf7d0" }).run()}
-      >
-        <div className="relative">
-          <Highlighter className="h-4 w-4" />
-          <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-300 border border-border" />
+
+        <FmtSep />
+
+        <div className="pm-fmt-grp">
+          {compactColors ? (
+            <ColorPaletteMenu
+              kind="highlight"
+              compact
+              presets={HIGHLIGHT_SWATCHES}
+              activeColor={activeHighlight}
+              onSelect={(c) => toggleHighlight(c)}
+              onClearHighlight={() =>
+                editor.chain().focus().unsetHighlight().run()
+              }
+            />
+          ) : (
+            <>
+              {HIGHLIGHT_QUICK.map((p) => (
+                <HighlightSwatch
+                  key={p.color}
+                  color={p.swatch}
+                  active={activeHighlight === p.color}
+                  tooltip={`Highlight ${p.label}`}
+                  onClick={() => toggleHighlight(p.color)}
+                />
+              ))}
+              <ColorPaletteMenu
+                kind="highlight"
+                presets={HIGHLIGHT_SWATCHES}
+                activeColor={activeHighlight}
+                onSelect={(c) => toggleHighlight(c)}
+                onClearHighlight={() =>
+                  editor.chain().focus().unsetHighlight().run()
+                }
+              />
+            </>
+          )}
         </div>
-      </ToolbarBtn>
-      <ColorDropdown
-        trigger={
-          <div className="h-7 w-5 flex items-center justify-center cursor-pointer">
-            <ChevronDown className="h-3 w-3" />
-          </div>
-        }
-        presets={HIGHLIGHT_PRESETS}
-        activeColor={activeHighlight}
-        onSelect={(color) => editor.chain().focus().toggleHighlight({ color }).run()}
-      />
 
-      <div className="w-px h-5 bg-border mx-1" />
+        <FmtSep />
 
-      {/* Text color — 3 primary + more dropdown */}
-      {TEXT_COLOR_PRESETS.slice(0, 3).map(p => (
-        <ToolbarBtn
-          key={p.color}
-          active={activeTextColor === p.color}
-          tooltip={`Text ${p.label}`}
-          onClick={() => {
-            if (p.color === "#000000") {
-              editor.chain().focus().unsetMark("textStyle").run()
-            } else {
-              editor.chain().focus().setColor(p.color).run()
-            }
-          }}
-        >
-          <div className="flex flex-col items-center">
-            <span className="text-xs font-bold leading-none" style={{ color: p.color }}>A</span>
-            <div className="w-3 h-0.5 rounded-full mt-0.5" style={{ backgroundColor: p.color }} />
-          </div>
-        </ToolbarBtn>
-      ))}
-      <ColorDropdown
-        trigger={
-          <div className="h-7 w-5 flex items-center justify-center cursor-pointer">
-            <ChevronDown className="h-3 w-3" />
-          </div>
-        }
-        presets={TEXT_COLOR_PRESETS}
-        activeColor={activeTextColor}
-        onSelect={(color) => {
-          if (color === "#000000") {
-            editor.chain().focus().unsetMark("textStyle").run()
-          } else {
-            editor.chain().focus().setColor(color).run()
-          }
-        }}
-      />
+        <div className="pm-fmt-grp">
+          {compactColors ? (
+            <ColorPaletteMenu
+              kind="text"
+              compact
+              presets={TEXT_COLOR_PRESETS}
+              activeColor={activeTextColor}
+              onSelect={applyTextColor}
+            />
+          ) : (
+            <>
+              {TEXT_COLOR_QUICK.map((p) => (
+                <TextColorSwatch
+                  key={p.color}
+                  color={p.color}
+                  active={
+                    p.color === "#121410"
+                      ? !activeTextColor ||
+                        activeTextColor === "#121410" ||
+                        activeTextColor === "#000000"
+                      : activeTextColor === p.color
+                  }
+                  tooltip={`Text ${p.label}`}
+                  onClick={() => applyTextColor(p.color)}
+                />
+              ))}
+              <ColorPaletteMenu
+                kind="text"
+                presets={TEXT_COLOR_PRESETS}
+                activeColor={activeTextColor}
+                onSelect={applyTextColor}
+              />
+            </>
+          )}
+        </div>
 
-      <div className="w-px h-5 bg-border mx-1" />
+        <FmtSep />
 
-      {/* Heading dropdown */}
-      <HeadingDropdown editor={editor} />
+        <HeadingDropdown editor={editor} />
 
-      <div className="w-px h-5 bg-border mx-1" />
+        <FmtSep />
 
-      {/* Lists */}
-      <ToolbarBtn active={editor.isActive("bulletList")} tooltip="Bullet List"
-        onClick={() => editor.chain().focus().toggleBulletList().run()}>
-        <List className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("orderedList")} tooltip="Numbered List"
-        onClick={() => editor.chain().focus().toggleOrderedList().run()}>
-        <ListOrdered className="h-4 w-4" />
-      </ToolbarBtn>
-      <ToolbarBtn active={editor.isActive("taskList")} tooltip="Task List"
-        onClick={() => editor.chain().focus().toggleTaskList().run()}>
-        <ListTodo className="h-4 w-4" />
-      </ToolbarBtn>
-      {actions && (
-        <>
-          <div className="w-px h-5 bg-border mx-1" />
-          <div className="flex items-center gap-1 ml-auto">
-            {actions}
-          </div>
-        </>
-      )}
+        <div className="pm-fmt-grp">
+          <ToolbarBtn
+            active={editor.isActive("bulletList")}
+            tooltip="Bullet list"
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+          >
+            <List className="h-4 w-4" strokeWidth={1.75} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("orderedList")}
+            tooltip="Numbered list"
+            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          >
+            <ListOrdered className="h-4 w-4" strokeWidth={1.75} />
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={editor.isActive("taskList")}
+            tooltip="Task list"
+            onClick={() => editor.chain().focus().toggleTaskList().run()}
+          >
+            <ListTodo className="h-4 w-4" strokeWidth={1.75} />
+          </ToolbarBtn>
+        </div>
+
+        {actions && (
+          <>
+            <FmtSep />
+            <div className="pm-fmt-grp ml-auto">{actions}</div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
+
+/**
+ * Highlight mark: store color as --pm-hl for lower-half marker CSS.
+ * Merge parent attrs so TipTap Highlight schema stays compatible.
+ */
+const PremiumHighlight = Highlight.extend({
+  addAttributes() {
+    const parent = this.parent?.() ?? {}
+    return {
+      ...parent,
+      color: {
+        default: null,
+        parseHTML: (element: HTMLElement) => {
+          const raw =
+            element.getAttribute("data-color") ||
+            element.style.getPropertyValue("--pm-hl")?.trim() ||
+            element.style.backgroundColor ||
+            null
+          if (!raw) return null
+          // Normalize rgb(...) from older inline styles if needed — keep as-is for presets
+          return raw
+        },
+        renderHTML: (attributes: { color?: string | null }) => {
+          if (!attributes.color) {
+            return { class: "pm-mark-hl" }
+          }
+          return {
+            class: "pm-mark-hl",
+            "data-color": attributes.color,
+            style: `--pm-hl: ${attributes.color}`,
+          }
+        },
+      },
+    }
+  },
+}).configure({ multicolor: true })
 
 /** Shared empty-editor hint for message-style MarkdownEditors. */
 export const MESSAGE_EDITOR_PLACEHOLDER =
@@ -3020,23 +3715,34 @@ export const MESSAGE_EDITOR_PLACEHOLDER =
 
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
-  readonly = false, onImageUpload, onNoteLinkClick, onDistill, onDistillNavigate, onEditorReady,
+  readonly = false, onImageUpload, onNoteLinkClick, onDistillNavigate, onEditorReady,
+  onEditorFocus,
   showToolbar = true,
   stickyToolbarOffset, toolbarActions,
+  flush = false,
+  enableSlash = true,
 }: Omit<MarkdownEditorProps, "variant" | "minHeight">) {
   const lastEmitted = useRef(value)
   const externalUpdateRef = useRef(false)
   const editorRef = useRef<any>(null)
   const _readonlyRef = useRef(readonly)
   _readonlyRef.current = readonly
+  // Stable focus callback — avoid re-creating useEditor on parent re-renders
+  const onEditorFocusRef = useRef(onEditorFocus)
+  onEditorFocusRef.current = onEditorFocus
   // Placeholder extension is configured once; read latest text via ref so
   // prop updates / HMR are not stuck on the first mount string.
-  const placeholderRef = useRef(placeholder || MESSAGE_EDITOR_PLACEHOLDER)
-  placeholderRef.current = placeholder || MESSAGE_EDITOR_PLACEHOLDER
+  const defaultPlaceholder = enableSlash
+    ? MESSAGE_EDITOR_PLACEHOLDER
+    : "Write…"
+  const placeholderRef = useRef(placeholder || defaultPlaceholder)
+  placeholderRef.current = placeholder || defaultPlaceholder
 
   const DistillBlock = useRef(createDistillBlockExtension(onDistillNavigate || onNoteLinkClick)).current
   const Callout = useRef(createCalloutExtension()).current
-  const SlashCmd = useRef(createSlashCommandExtension(onDistill, onImageUpload)).current
+  const SlashCmd = useRef(
+    enableSlash ? createSlashCommandExtension(onImageUpload) : null
+  ).current
   const ResizableImage = useRef(createResizableImageExtension()).current
 
   // Markdown Hover Extension
@@ -3052,7 +3758,9 @@ export function TiptapEditor({
     name: "tableEnhancement",
   })).current
 
-  // Prevent deletion of distill blocks and images in readonly mode
+  // Prevent deletion of distill blocks and images in readonly mode.
+  // Must tolerate setContent / full-doc replace (collection switch, prop updates)
+  // — naive nodesBetween(from,to) on intermediate docs throws nodeSize on undefined.
   const ReadonlyProtectExt = useRef(Extension.create({
     name: "readonlyProtect",
     addProseMirrorPlugins() {
@@ -3060,32 +3768,29 @@ export function TiptapEditor({
         key: new PluginKey("readonlyProtect"),
         filterTransaction: (tr) => {
           if (!_readonlyRef.current) return true
-          for (const step of tr.steps) {
-            const map = (step as any).getMap?.()
-            if (!map) continue
-            // Check if any deleted range contains a distill-block or image
-            const from = (step as any).from
-            const to = (step as any).to
-            if (from == null || to == null) continue
-            tr.doc.nodesBetween(from, Math.min(to, tr.doc.nodeSize - 1), (node) => {
-              if (node.type.name === "distillBlock" || node.type.name === "resizableImage") {
-                throw new Error("BLOCKED")
-              }
-            })
-            try {
-              tr.before.nodesBetween(from, Math.min(to, (tr as any).before.nodeSize - 1), (node: any) => {
-                if (node.type.name === "distillBlock" || node.type.name === "resizableImage") {
-                  throw new Error("CHECK_DELETED")
-                }
-              })
-            } catch (e: any) {
-              if (e.message === "CHECK_DELETED") {
-                // Node existed before but exists now too — check if it's being deleted
-                const beforeCount = countNodes(tr.before, "distillBlock") + countNodes(tr.before, "resizableImage")
-                const afterCount = countNodes(tr.doc, "distillBlock") + countNodes(tr.doc, "resizableImage")
-                if (afterCount < beforeCount) return false
+          if (!tr.docChanged) return true
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const before = (tr as any).before as { content?: { size: number }; descendants?: (fn: (n: any) => void) => void } | undefined
+            const after = tr.doc
+            if (!before?.content || !after?.content) return true
+
+            // Full document replace (TipTap setContent) — always allow
+            const beforeSize = before.content.size
+            for (const step of tr.steps) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const s = step as any
+              if (typeof s.from === "number" && typeof s.to === "number" && s.from === 0 && s.to >= beforeSize) {
+                return true
               }
             }
+
+            const beforeProtected = countProtectedNodes(before)
+            const afterProtected = countProtectedNodes(after)
+            // Block only when protected nodes are removed (user delete)
+            if (afterProtected < beforeProtected) return false
+          } catch {
+            return true
           }
           return true
         },
@@ -3093,11 +3798,19 @@ export function TiptapEditor({
     },
   })).current
 
-  function countNodes(doc: any, typeName: string): number {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function countProtectedNodes(doc: any): number {
     let count = 0
-    doc.nodesBetween(0, doc.nodeSize, (node: any) => {
-      if (node.type.name === typeName) count++
-    })
+    try {
+      if (!doc?.descendants) return 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      doc.descendants((node: any) => {
+        const n = node?.type?.name
+        if (n === "distillBlock" || n === "resizableImage") count++
+      })
+    } catch {
+      /* ignore corrupt/partial docs during apply */
+    }
     return count
   }
 
@@ -3107,14 +3820,16 @@ export function TiptapEditor({
       Table.configure({ resizable: true }), TableRow, TableCell, TableHeader,
       TaskList, TaskItem.configure({ nested: true }),
       Placeholder.configure({
-        placeholder: () => placeholderRef.current || MESSAGE_EDITOR_PLACEHOLDER,
+        placeholder: () =>
+          placeholderRef.current ||
+          (enableSlash ? MESSAGE_EDITOR_PLACEHOLDER : "Write…"),
         showOnlyWhenEditable: true,
         showOnlyCurrent: false,
         includeChildren: false,
       }),
-      SlashCmd,
+      ...(SlashCmd ? [SlashCmd] : []),
       Youtube.configure({ width: 640, height: 360 }),
-      Highlight.configure({ multicolor: true }),
+      PremiumHighlight,
       TextStyle,
       Color,
       Markdown.configure({
@@ -3135,9 +3850,23 @@ export function TiptapEditor({
       lastEmitted.current = processed
       if (!externalUpdateRef.current) onChange?.(processed)
     },
+    onFocus: () => {
+      // After PM applied the click caret/selection — notify pane chrome.
+      // Double-rAF so we don't re-render (distill rail, etc.) mid-gesture.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          onEditorFocusRef.current?.()
+        })
+      })
+    },
     editorProps: {
       attributes: { class: "focus:outline-none" },
       handleDOMEvents: {
+        // Empty pad under last line → caret at end (not stuck mid-void)
+        mousedown: (view, event) => {
+          if (_readonlyRef.current) return false
+          return placeCaretAtEndIfClickBelowContent(view, event as MouseEvent)
+        },
         contextmenu: (_view, event) => {
           const target = event.target as HTMLElement
           const table = target.closest("table")
@@ -3197,21 +3926,74 @@ export function TiptapEditor({
     if (!shouldReload) return
     externalUpdateRef.current = true
     const { processed } = preprocessDistillBlocks(enriched)
-    editor.commands.setContent(processed)
+    // Preserve cursor only for small in-place edits — full note switch resets caret.
+    // Restoring old note positions into a new doc (esp. with atom distill nodes) can throw.
+    const prevSel = editor.state.selection
+    const hadFocus = editor.isFocused
+    const prevSize = editor.state.doc.content.size
+    const isLikelyNoteSwitch =
+      Math.abs((enriched?.length ?? 0) - (lastEmitted.current?.length ?? 0)) > 80 ||
+      (lastEmitted.current === "" && (enriched?.length ?? 0) > 0) ||
+      ((lastEmitted.current?.length ?? 0) > 0 && enriched === "")
+    try {
+      // emitUpdate: false avoids cascading onUpdate during external reload
+      editor.commands.setContent(processed, { emitUpdate: false })
+      try {
+        const maxPos = editor.state.doc.content.size
+        if (maxPos <= 0) {
+          /* empty doc */
+        } else if (isLikelyNoteSwitch || !hadFocus) {
+          // Note switch / unfocused: safe start, never transplant foreign selection
+          editor.commands.setTextSelection(Math.min(1, maxPos))
+          if (!hadFocus) editor.commands.blur()
+        } else {
+          // Same note external update: try keep caret, collapse accidental all-select
+          let from = Math.min(Math.max(prevSel.from, 1), maxPos)
+          let to = Math.min(Math.max(prevSel.to, 1), maxPos)
+          if (maxPos > 2 && to - from >= maxPos - 2) {
+            from = Math.min(Math.max(from, 1), maxPos)
+            to = from
+          }
+          // If doc shrank a lot, clamp more aggressively
+          if (prevSize > 0 && maxPos < prevSize * 0.5) {
+            from = to = Math.min(1, maxPos)
+          }
+          try {
+            if (from !== to) {
+              editor.commands.setTextSelection({ from, to })
+            } else {
+              editor.commands.setTextSelection(from)
+            }
+          } catch {
+            editor.commands.setTextSelection(Math.min(1, maxPos))
+          }
+        }
+      } catch {
+        try {
+          const maxPos = editor.state.doc.content.size
+          if (maxPos > 0) editor.commands.setTextSelection(Math.min(1, maxPos))
+          if (!hadFocus) editor.commands.blur()
+        } catch {
+          /* ignore selection restore */
+        }
+      }
+    } catch (err) {
+      // Fallback: destroy-range replace can throw on corrupt intermediate state
+      console.warn("[TiptapEditor] setContent failed, retry empty then content", err)
+      try {
+        editor.commands.clearContent(false)
+        editor.commands.setContent(processed, { emitUpdate: false })
+      } catch (err2) {
+        console.error("[TiptapEditor] setContent recovery failed", err2)
+      }
+    }
     // Use enriched as lastEmitted so the next render cycle sees that the
     // injected content is already applied and doesn't re-trigger setContent.
     lastEmitted.current = enriched
-    // setContent triggers onUpdate, but onUpdate skips onChange while
-    // externalUpdateRef is true. We must call onChange manually so that:
-    // 1. React state (content) is updated with the enriched markdown
-    // 2. handleContentChange schedules auto-save to persist to server
-    // Without this, the injected description only lives in the editor DOM
-    // and is lost on the next note switch.
+    // setContent with emitUpdate:false skips onUpdate — call onChange when
+    // AI description injection changed the markdown so state + save stay in sync.
     if (enriched !== value) {
       onChange?.(enriched)
-      // Also immediately flush the save to server — don't wait for the
-      // 800ms auto-save timer, because the user might switch notes before
-      // it fires. This mirrors how distill blocks flush-save before async ops.
       try { _flushSaveBeforeGenerate?.() } catch { /* best-effort */ }
     }
     requestAnimationFrame(() => { externalUpdateRef.current = false })
@@ -3233,12 +4015,9 @@ export function TiptapEditor({
     (e: React.MouseEvent) => {
       const target = e.target as HTMLElement
 
-      // Table click → show floating menu (same pattern as image floating menu)
+      // Table click → Premium float bar (portal; same-table guard inside show)
       const tableEl = target.closest("table") as HTMLElement | null
       if (tableEl && editorRef.current) {
-        const existing = document.getElementById("table-floating-menu")
-        if (existing && tableEl.contains(existing)) return // already showing for this table
-        if (existing) existing.remove()
         showTableFloatingMenu(tableEl, editorRef.current)
       }
 
@@ -3254,26 +4033,25 @@ export function TiptapEditor({
         const noteId = distillBlock.getAttribute("data-source-note-id")
         if (noteId) onNoteLinkClick?.(noteId)
       }
-      // If clicked outside ProseMirror content area (empty editor space),
-      // focus the editor and place cursor at the nearest content position.
-      const pmEl = editorRef.current?.view?.dom as HTMLElement | undefined
-      if (pmEl && !pmEl.contains(target)) {
-        const editor = editorRef.current
-        if (editor && !editor.isDestroyed) {
-          // Use posAtCoords to find the nearest valid document position
-          // for the click coordinates, then place the cursor there.
-          const pos = editor.view.posAtCoords({
-            left: e.clientX,
-            top: e.clientY,
-          })
-          if (pos) {
-            editor.commands.setTextSelection(pos.pos)
-          }
-          editor.commands.focus()
-        }
+      // Caret placement on chrome / empty pad:
+      // - Below last line only → end of document
+      // - Left/right margins → do nothing (no forced position)
+      const editor = editorRef.current
+      if (!editor || editor.isDestroyed || readonly) return
+      const pmEl = editor.view.dom as HTMLElement
+      const last = pmEl.lastElementChild as HTMLElement | null
+      const belowContent =
+        !last || e.clientY > last.getBoundingClientRect().bottom + 2
+      const outsidePm = !pmEl.contains(target)
+      const onPmSurface = target === pmEl || pmEl.contains(target)
+
+      if (belowContent && (outsidePm || onPmSurface)) {
+        e.preventDefault()
+        editor.chain().focus("end").run()
       }
+      // Left/right gutters: leave selection alone (no focus("end"), no Y snap)
     },
-    [onNoteLinkClick]
+    [onNoteLinkClick, readonly]
   )
 
   useEffect(() => {
@@ -3368,34 +4146,16 @@ export function TiptapEditor({
           margin: 0 !important;
           line-height: 1.5 !important;
         }
-        /* Table styles — Typora-like */
-        .tiptap-editor table {
-          position: relative;
-          border-collapse: collapse;
-          width: 100%;
-          margin: 8px 0;
-          font-size: 0.875rem;
-        }
-        .tiptap-editor table td,
-        .tiptap-editor table th {
-          border: 1px solid var(--border, #c0c0c0);
-          padding: 6px 12px;
-          position: relative;
-          min-width: 60px;
-          text-align: left;
-        }
-        /* Zebra striping — odd rows gray, even rows white */
-        .tiptap-editor table tr:nth-child(odd) td,
-        .tiptap-editor table tr:nth-child(odd) th {
-          background: var(--muted, #f0f0f0) !important;
-        }
-        .tiptap-editor table tr:nth-child(even) td,
-        .tiptap-editor table tr:nth-child(even) th {
-          background: transparent !important;
-        }
+        /* Table / quote / callout chrome → index.css (.pm-prose-*) */
       `}</style>
       {!readonly && showToolbar && <EditorToolbar editor={editor} stickyOffset={stickyToolbarOffset} actions={toolbarActions} />}
-      <EditorContent editor={editor} className="prose prose-sm dark:prose-invert max-w-none p-4 min-h-full flex-1" />
+      <EditorContent
+        editor={editor}
+        className={cn(
+          "prose prose-sm dark:prose-invert max-w-none min-h-full flex-1 w-full",
+          flush ? "p-0 !max-w-none" : "p-4"
+        )}
+      />
     </div>
   )
 }

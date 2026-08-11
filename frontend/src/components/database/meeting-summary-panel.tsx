@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Loader2, Pencil, Eye } from "lucide-react"
+import { Loader2, Pencil, Eye, Columns2, X, Download } from "lucide-react"
 import { toast } from "sonner"
 import {
   getMeeting,
@@ -10,6 +10,7 @@ import {
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { Button } from "@/components/ui/button"
 import { SummaryMarkdownViewer } from "@/components/meeting/summary-markdown-viewer"
+import { cn } from "@/lib/utils"
 
 const SAVE_DELAY = 800
 
@@ -72,6 +73,19 @@ interface MeetingSummaryPanelProps {
   /** ``tab_general`` or a section tab id — one file at a time */
   tabId: string
   onMeetingLoaded?: (meeting: Meeting, sectionTitle: string) => void
+  /**
+   * Note-editor dual-pane chrome — same two-row header as NotePane:
+   * row1 meeting title · Split · close; row2 section name only · Edit.
+   */
+  paneChrome?: {
+    focused: boolean
+    /** Promote this meeting pane without requiring a prior body click */
+    onFocus?: () => void
+    showSplit?: boolean
+    onSplit?: () => void
+    showClose?: boolean
+    onClose?: () => void
+  }
 }
 
 /**
@@ -85,8 +99,12 @@ export function MeetingSummaryPanel({
   meetingId,
   tabId,
   onMeetingLoaded,
+  paneChrome,
 }: MeetingSummaryPanelProps) {
   const [loading, setLoading] = useState(true)
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
+  type DocSwapPhase = "idle" | "out" | "in"
+  const [docSwapPhase, setDocSwapPhase] = useState<DocSwapPhase>("idle")
   /**
    * Canonical raw markdown with real [ ] — used for viewer + disk.
    * Edit mode uses a protected copy for Tiptap only.
@@ -101,16 +119,32 @@ export function MeetingSummaryPanel({
   const baselineRef = useRef("")
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadKeyRef = useRef("")
+  const SWAP_OUT_MS = 280
+  const SWAP_IN_MS = 420
 
   useEffect(() => {
     let cancelled = false
     const loadKey = `${meetingId}:${tabId}`
     loadKeyRef.current = loadKey
+    const timers: ReturnType<typeof setTimeout>[] = []
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timers.push(setTimeout(resolve, ms))
+      })
+
     setLoading(true)
-    setRawContent("")
-    setEditContent("")
     setMode("view")
-    baselineRef.current = ""
+    const isSoft = hasLoadedOnce
+    const outStartedAt = performance.now()
+
+    if (!hasLoadedOnce) {
+      setRawContent("")
+      setEditContent("")
+      baselineRef.current = ""
+      setDocSwapPhase("idle")
+    } else {
+      setDocSwapPhase("out")
+    }
 
     ;(async () => {
       try {
@@ -145,11 +179,30 @@ export function MeetingSummaryPanel({
         if (cancelled || loadKeyRef.current !== loadKey) return
 
         const disk = raw ?? ""
-        // Repair files already corrupted by prior Tiptap escapes (\[ \] \~ \_)
         const text = unescapeMarkdownOverEscapes(disk)
+
+        if (isSoft) {
+          const elapsed = performance.now() - outStartedAt
+          if (elapsed < SWAP_OUT_MS) await wait(SWAP_OUT_MS - elapsed)
+          await wait(40)
+          if (cancelled || loadKeyRef.current !== loadKey) return
+        }
+
         setRawContent(text)
         baselineRef.current = text
         setLoading(false)
+        setHasLoadedOnce(true)
+
+        if (isSoft) {
+          await new Promise<void>((r) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => r()))
+          })
+        }
+        if (cancelled || loadKeyRef.current !== loadKey) return
+        setDocSwapPhase("in")
+        await wait(SWAP_IN_MS)
+        if (cancelled || loadKeyRef.current !== loadKey) return
+        setDocSwapPhase("idle")
 
         if (text !== disk && text) {
           saveSectionMd(meetingId, tabId, text).catch(() => {})
@@ -158,12 +211,14 @@ export function MeetingSummaryPanel({
         if (!cancelled) {
           toast.error("Failed to load meeting summary")
           setLoading(false)
+          setDocSwapPhase("idle")
         }
       }
     })()
 
     return () => {
       cancelled = true
+      for (const t of timers) clearTimeout(t)
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
@@ -220,69 +275,203 @@ export function MeetingSummaryPanel({
     }
   }
 
-  if (loading) {
+  const softLoading = loading && hasLoadedOnce
+  const hardLoading = loading && !hasLoadedOnce
+  const swapBusy =
+    docSwapPhase === "out" || docSwapPhase === "in" || softLoading
+
+  if (hardLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground min-h-0">
-        <Loader2 className="h-5 w-5 animate-spin mr-2" />
-        Loading...
+      <div className="pm-ws-loading flex-1 is-doc-in min-h-0">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Loading…
       </div>
     )
   }
 
+  const claimFocus = () => {
+    if (paneChrome && !paneChrome.focused) paneChrome.onFocus?.()
+  }
+
+  const handleDownload = () => {
+    claimFocus()
+    const body =
+      mode === "edit"
+        ? restoreCitationsFromTiptap(editContent)
+        : rawContent
+    const blob = new Blob([body || ""], {
+      type: "text/markdown;charset=utf-8",
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    const safeMeet = (meetingTitle || "meeting").replace(/[\\/:*?"<>|]+/g, "-")
+    const safeSec = (sectionTitle || "summary").replace(/[\\/:*?"<>|]+/g, "-")
+    a.download = `${safeMeet} - ${safeSec}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success("Downloaded")
+  }
+
+  const downloadBtn = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="pm-ws-icon-btn"
+      onClick={handleDownload}
+      title="Download"
+      aria-label="Download"
+    >
+      <Download className="h-3.5 w-3.5" />
+    </Button>
+  )
+
+  const editToggle = (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="pm-ws-action shrink-0"
+      onClick={() => {
+        claimFocus()
+        if (mode === "view") enterEdit()
+        else exitEdit()
+      }}
+      title={
+        mode === "view"
+          ? "Edit with Tiptap (citations protected)"
+          : "Back to Meeting-style preview"
+      }
+    >
+      {mode === "view" ? (
+        <>
+          <Pencil className="h-3.5 w-3.5" />
+          Edit
+        </>
+      ) : (
+        <>
+          <Eye className="h-3.5 w-3.5" />
+          Preview
+        </>
+      )}
+    </Button>
+  )
+
+  /** Title for row 1 — meeting name (not section) */
+  const headerMeetingTitle = meetingTitle || "Meeting"
+
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground shrink-0">
-          {tabId === "tab_general" ? "General" : "Section"}
-        </span>
-        <span className="text-xs text-foreground truncate flex-1">
-          {tabId === "tab_general"
-            ? meetingTitle || sectionTitle
-            : `${meetingTitle || "Meeting"} · ${sectionTitle}`}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-[10px] uppercase tracking-[0.1em] text-muted-foreground hover:text-primary gap-1"
-          onClick={() => (mode === "view" ? enterEdit() : exitEdit())}
-          title={
-            mode === "view"
-              ? "Edit with Tiptap (citations protected)"
-              : "Back to Meeting-style preview"
-          }
+      {paneChrome ? (
+        /* Same two-row chrome language as NotePane */
+        <div
+          className={cn("pm-ws-pane-h", paneChrome.focused && "is-focus")}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9">
+            <span
+              className={cn(
+                "pm-ws-pane-title flex-1 min-w-0",
+                docSwapPhase === "out" && "is-title-out",
+                docSwapPhase === "in" && "is-title-in"
+              )}
+              onClick={claimFocus}
+            >
+              {headerMeetingTitle}
+            </span>
+            {paneChrome.showSplit && paneChrome.onSplit && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-icon-btn !h-6 !w-6"
+                onClick={() => {
+                  claimFocus()
+                  paneChrome.onSplit?.()
+                }}
+                title="Split into second page"
+              >
+                <Columns2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {paneChrome.showClose && paneChrome.onClose && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-icon-btn !h-6 !w-6"
+                onClick={() => paneChrome.onClose?.()}
+                title="Close page"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+          {/* Row 2: section name · Download · Edit/Preview */}
+          <div className="flex flex-nowrap items-center gap-0.5 px-4 pb-2.5 min-w-0">
+            <span
+              className="pm-meta truncate flex-1 min-w-0 text-[var(--pm-muted)]"
+              title={sectionTitle}
+            >
+              {sectionTitle}
+            </span>
+            {downloadBtn}
+            {editToggle}
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-2.5 pb-2 pt-1.5 min-w-0 shrink-0">
+          <span
+            className="pm-meta truncate flex-1 min-w-0 text-[var(--pm-muted)]"
+            title={sectionTitle}
+          >
+            {sectionTitle}
+          </span>
+          {downloadBtn}
+          {editToggle}
+        </div>
+      )}
+
+      <div
+        className={cn(
+          "pm-ws-doc-body pm-ws-meeting-summary relative flex-1 min-h-0 flex flex-col",
+          docSwapPhase === "out" && "is-doc-out",
+          docSwapPhase === "in" && "is-doc-in",
+          docSwapPhase === "idle" && "is-doc-idle"
+        )}
+      >
+        {/*
+          Same reading shell as Meeting content card Summary:
+          body-prose pad + body-read + SummaryMarkdownViewer (full card width).
+        */}
+        <div
+          className={cn(
+            "flex-1 overflow-y-auto min-h-0",
+            swapBusy && "pointer-events-none select-none"
+          )}
         >
           {mode === "view" ? (
-            <>
-              <Pencil className="h-3 w-3" />
-              Edit raw
-            </>
+            <div className="pm-meeting-body-prose pm-ws-meeting-body-prose">
+              <div className="pm-meeting-body-read">
+                <SummaryMarkdownViewer
+                  md={rawContent}
+                  speakerNames={speakerNames}
+                  onRefClick={() => {
+                    /* note context: no transcript seek */
+                  }}
+                />
+              </div>
+            </div>
           ) : (
-            <>
-              <Eye className="h-3 w-3" />
-              Preview
-            </>
+            <div className="pm-meeting-body-prose pm-ws-meeting-body-prose">
+              <MarkdownEditor
+                value={editContent}
+                onChange={swapBusy ? () => {} : handleEditChange}
+                showToolbar={false}
+                flush
+                className="min-h-[200px] w-full max-w-none"
+                placeholder="Summary is empty..."
+              />
+            </div>
           )}
-        </Button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
-        {mode === "view" ? (
-          <SummaryMarkdownViewer
-            md={rawContent}
-            speakerNames={speakerNames}
-            onRefClick={() => {
-              /* note context: no transcript seek */
-            }}
-          />
-        ) : (
-          <MarkdownEditor
-            value={editContent}
-            onChange={handleEditChange}
-            showToolbar={false}
-            className="min-h-[200px]"
-            placeholder="Summary is empty..."
-          />
-        )}
+        </div>
       </div>
     </div>
   )

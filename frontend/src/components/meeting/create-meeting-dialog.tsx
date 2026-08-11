@@ -4,10 +4,21 @@ import { createMeeting } from "@/api/client"
 import { toast } from "sonner"
 
 interface CreateMeetingButtonProps {
-  onCreated: (meetingId: string) => void
+  onCreated: (meetingId: string, opts?: { stayOnCurrent?: boolean }) => void
+  /**
+   * While a capture is live, create still works but does not navigate away —
+   * prevents replacing the recording meeting in the main stage.
+   */
+  stayOnCurrent?: boolean
+  /** Title of the meeting currently recording (for toast). */
+  recordingTitle?: string | null
 }
 
-export function CreateMeetingButton({ onCreated }: CreateMeetingButtonProps) {
+export function CreateMeetingButton({
+  onCreated,
+  stayOnCurrent = false,
+  recordingTitle = null,
+}: CreateMeetingButtonProps) {
   const [creating, setCreating] = useState(false)
 
   const handleCreate = async () => {
@@ -18,8 +29,16 @@ export function CreateMeetingButton({ onCreated }: CreateMeetingButtonProps) {
         hour: "2-digit", minute: "2-digit",
       }).replace(/\//g, "-")
       const meeting = await createMeeting(title)
-      toast.success("Meeting created")
-      onCreated(meeting.id)
+      if (stayOnCurrent) {
+        const label = (recordingTitle || "current meeting").trim()
+        toast.success("Meeting created", {
+          description: `Still recording “${label}”. New meeting is in the list.`,
+        })
+        onCreated(meeting.id, { stayOnCurrent: true })
+      } else {
+        toast.success("Meeting created")
+        onCreated(meeting.id)
+      }
     } catch (err) {
       toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -30,13 +49,17 @@ export function CreateMeetingButton({ onCreated }: CreateMeetingButtonProps) {
   return (
     <button
       type="button"
+      className="pm-rail-new shrink-0"
       onClick={handleCreate}
       disabled={creating}
-      className="text-[10px] font-medium uppercase tracking-[0.1em] px-2 py-0.5 cursor-pointer transition-opacity hover:opacity-85 bg-primary text-primary-foreground border-none t-sans-family"
-      style={{ borderRadius: "2px" }}
+      title={
+        stayOnCurrent
+          ? "New meeting (stay on recording)"
+          : "New meeting"
+      }
     >
-      {creating ? <Loader2 className="h-3 w-3 animate-spin inline mr-1" /> : null}
-      + New
+      {creating ? <Loader2 className="size-3 animate-spin" /> : null}
+      New
     </button>
   )
 }

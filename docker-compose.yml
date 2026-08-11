@@ -1,29 +1,38 @@
+# Default: pull pre-built image from Docker Hub (no local source build).
+#
+#   docker compose pull && docker compose up -d
+#   open http://localhost:18900
+#   UI → Download local models (fetches GitHub Release ONNX pack)
+#
+# To build from this repository instead:
+#   docker compose -f docker-compose.build.yml up -d --build
+#
+# Nested layout (optional):
+#   my-sinkduce/
+#     docker-compose.yml      ← this file
+#     data/
+#     SinkDuce-build/         ← git clone of this repo
+#   Then from SinkDuce-build:
+#     SINKDUCE_DATA=../data docker compose -f docker-compose.build.yml up -d --build
+
 services:
   qdrant:
     image: qdrant/qdrant:v1.13.2
     restart: unless-stopped
     volumes:
-      - ./data/qdrant:/qdrant/storage
+      - ${SINKDUCE_DATA:-./data}/qdrant:/qdrant/storage
     entrypoint: ["/bin/sh", "-c", "find /qdrant/storage -name .DS_Store -delete 2>/dev/null; exec ./entrypoint.sh"]
     environment:
       - QDRANT__SERVICE__GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
       - QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER=1
 
   app:
-    build:
-      context: .
-      args:
-        # Defaults match Dockerfile (Docker Hub). CI relies on these.
-        # Local CN mirror (optional .env):
-        #   NODE_IMAGE=docker.1ms.run/library/node:20-slim
-        #   PYTHON_IMAGE=docker.1ms.run/library/python:3.11-slim
-        NODE_IMAGE: ${NODE_IMAGE:-node:20-slim}
-        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
-        UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.6.14}
+    image: ${SINKDUCE_IMAGE:-jethrohou/sinkduce}:${SINKDUCE_IMAGE_TAG:-latest}
+    pull_policy: ${SINKDUCE_PULL_POLICY:-always}
     ports:
       - "${API_PORT:-18900}:18900"
     volumes:
-      - ./data:/app/data
+      - ${SINKDUCE_DATA:-./data}:/app/data
     environment:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333

@@ -248,13 +248,14 @@ class TestMeetingStore:
 
         assert list_meetings() == []
 
-    def test_list_meetings_sorted_by_updated_at(self):
-        """list_meetings returns meetings sorted by updated_at descending."""
-        from src.meeting.store import create_meeting, list_meetings
+    def test_list_meetings_sorted_by_created_at(self):
+        """list_meetings returns meetings sorted by created_at descending (newest first)."""
+        from src.meeting.store import create_meeting, list_meetings, update_meeting
 
         m1 = create_meeting("First")
         m2 = create_meeting("Second")
-        # m2 was created after m1 so it should appear first
+        # Touch older meeting — must stay below newer by creation time
+        update_meeting(m1.id, title="First (edited)")
         meetings = list_meetings()
         assert len(meetings) == 2
         assert meetings[0].id == m2.id
@@ -465,7 +466,10 @@ class TestTranscribeHandler:
 
         with patch("src.meeting.service.store") as mock_store, \
              patch("src.meeting.service.get_config", return_value=config), \
-             patch("src.meeting.service.create_file_transcription_provider", return_value=provider):
+             patch("src.meeting.service.create_file_transcription_provider", return_value=provider), \
+             patch("src.meeting.service.cached_provider", side_effect=lambda key, factory: factory()), \
+             patch("src.services._is_builtin_model_downloaded", return_value=True), \
+             patch("src.providers.load_state.get_state", return_value="loaded"):
             mock_store.get_meeting.return_value = meeting
             mock_store.update_meeting.return_value = meeting
             mock_store.save_transcript.return_value = "/tmp/transcript.json"
@@ -511,11 +515,15 @@ class TestMeetingService:
         from src.meeting.service import MeetingService
 
         config = AppConfig()
-        with patch("src.meeting.service.get_config", return_value=config):
+        with patch("src.meeting.service.get_config", return_value=config), \
+             patch("src.meeting.service.create_file_transcription_provider") as mock_create, \
+             patch("src.meeting.service.cached_provider", side_effect=lambda key, factory: factory()):
+            mock_create.return_value = MagicMock()
             svc = MeetingService()
-            # System always falls back to built-in local FunASR provider
+            # System always falls back to built-in local FunASR (ONNX) provider
             provider = svc.get_active_file_provider()
             assert provider is not None
+            assert mock_create.call_args[0][0].adapter == "funasr_onnx"
 
     def test_get_active_realtime_provider(self):
         """Returns provider when active realtime provider is configured."""
@@ -539,11 +547,15 @@ class TestMeetingService:
         from src.meeting.service import MeetingService
 
         config = AppConfig()
-        with patch("src.meeting.service.get_config", return_value=config):
+        with patch("src.meeting.service.get_config", return_value=config), \
+             patch("src.meeting.service.create_realtime_transcription_provider") as mock_create, \
+             patch("src.meeting.service.cached_provider", side_effect=lambda key, factory: factory()):
+            mock_create.return_value = MagicMock()
             svc = MeetingService()
-            # System always falls back to built-in local realtime provider
+            # System always falls back to built-in local ONNX realtime provider
             provider = svc.get_active_realtime_provider()
             assert provider is not None
+            assert mock_create.call_args[0][0].adapter == "funasr_onnx_realtime"
 
     @pytest.mark.skip(reason="v3: generate_summary replaced by _do_blueprint_summary (async task-based)")
     def test_generate_summary(self):
@@ -640,14 +652,43 @@ class TestTranscriptionFactory:
 class TestDashScopeTranscription:
     """DashScope file and realtime transcription implementations."""
 
-    def test_file_transcription_fixed_model(self):
-        """DashScopeFileTranscription always uses fixed Qwen-Audio filetrans model."""
-        from src.meeting.transcription.dashscope_file import DashScopeFileTranscription
+    def test_file_transcription_respects_selected_model(self):
+        """DashScopeFileTranscription uses config.model when it is an allowed id."""
+        from src.meeting.transcription.dashscope_file import (
+            DashScopeFileTranscription,
+            MODEL_FUN_ASR,
+            MODEL_QWEN_FILETRANS,
+        )
 
         with patch("src.meeting.transcription.dashscope_file._HAS_DASHSCOPE", True):
-            cfg = TranscriptionProviderConfig(api_key="sk-test", model="fun-asr")
-            provider = DashScopeFileTranscription(cfg)
-            assert provider._model == "qwen-audio-3.0-asr-flash-filetrans"
+            fun = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_FUN_ASR)
+            )
+            assert fun._model == MODEL_FUN_ASR
+            assert fun._uses_precompiled_vocabulary() is True
+
+            qwen = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_QWEN_FILETRANS)
+            )
+            assert qwen._model == MODEL_QWEN_FILETRANS
+            assert qwen._uses_precompiled_vocabulary() is False
+
+    def test_file_transcription_unknown_model_falls_back_to_fun_asr(self):
+        """Unknown / empty model falls back to fun-asr."""
+        from src.meeting.transcription.dashscope_file import (
+            DashScopeFileTranscription,
+            MODEL_FUN_ASR,
+        )
+
+        with patch("src.meeting.transcription.dashscope_file._HAS_DASHSCOPE", True):
+            empty = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=None)
+            )
+            assert empty._model == MODEL_FUN_ASR
+            bad = DashScopeFileTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model="not-a-real-model")
+            )
+            assert bad._model == MODEL_FUN_ASR
 
     def test_build_instant_vocabulary_file(self):
         """Instant vocabulary maps app hot-word weights into DashScope 1–5 range."""
@@ -661,6 +702,23 @@ class TestDashScopeTranscription:
         assert vocab == {"SinkDuce": 3, "Qdrant": 5}
         assert _build_instant_vocabulary(None) is None
         assert _build_instant_vocabulary([]) is None
+
+    def test_build_precompiled_vocabulary_items(self):
+        """Fun-ASR precompiled vocabulary items include weight mapping and lang."""
+        from src.meeting.transcription.dashscope_file import (
+            _build_precompiled_vocabulary_items,
+        )
+
+        items = _build_precompiled_vocabulary_items([
+            {"text": "SinkDuce", "weight": 4, "lang": "zh"},
+            {"text": "Qdrant", "weight": 10},
+            {"text": "", "weight": 5},
+        ])
+        assert items == [
+            {"text": "SinkDuce", "weight": 3, "lang": "zh"},
+            {"text": "Qdrant", "weight": 5},
+        ]
+        assert _build_precompiled_vocabulary_items(None) is None
 
     def test_realtime_transcription_fixed_model(self):
         """DashScopeRealtimeTranscription always uses fixed Qwen-Audio streaming model."""

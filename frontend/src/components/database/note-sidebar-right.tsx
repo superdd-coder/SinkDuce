@@ -1,6 +1,12 @@
 import { useState, useCallback } from "react"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+  TabsIndicator,
+} from "@/components/ui/tabs"
 import { Link2, ArrowUpRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type NoteReference } from "@/api/client"
@@ -25,33 +31,39 @@ export function NoteSidebarRight({
   const hasReferences = references.length > 0
   const hasInjectedInto = injectedInto.length > 0
 
-  // Track current block index for each source
   const [blockIndices, setBlockIndices] = useState<Map<string, number>>(new Map())
 
-  const handleSourceClick = useCallback((sourceId: string, blockIds: string[]) => {
-    if (blockIds.length === 0) return
-
-    const currentIndex = blockIndices.get(sourceId) || 0
-    const nextIndex = (currentIndex + 1) % blockIds.length
-    setBlockIndices(prev => new Map(prev).set(sourceId, nextIndex))
-    onSelectBlock(blockIds[nextIndex])
-  }, [blockIndices, onSelectBlock])
+  /**
+   * Distill In: open source note/meeting beside (parent handles split / other pane).
+   * Multi-block sources still cycle highlight on the *current* note's distill blocks.
+   */
+  const handleSourceClick = useCallback(
+    (sourceId: string, blockIds: string[]) => {
+      onNavigateToNote(sourceId)
+      if (blockIds.length === 0) return
+      const currentIndex = blockIndices.get(sourceId) || 0
+      const nextIndex = (currentIndex + 1) % blockIds.length
+      setBlockIndices((prev) => new Map(prev).set(sourceId, nextIndex))
+      onSelectBlock(blockIds[nextIndex])
+    },
+    [blockIndices, onSelectBlock, onNavigateToNote]
+  )
 
   if (!hasReferences && !hasInjectedInto) return null
 
   const showTabs = hasReferences && hasInjectedInto
   const defaultTab = hasReferences ? "in" : "out"
 
-  // Distill In: sources of injection blocks in this note
   const sourcesContent = (
-    <div className="p-1.5 space-y-0.5">
+    <div className="p-1.5 space-y-0">
       {references.length === 0 ? (
-        <p className="text-xs text-muted-foreground px-2 py-4 text-center">
-          No distill blocks from other notes
-        </p>
+        <p className="pm-ws-empty">No distill blocks from other notes</p>
       ) : (
         (() => {
-          const sourceMap = new Map<string, { title: string; blockIds: string[] }>()
+          const sourceMap = new Map<
+            string,
+            { title: string; blockIds: string[] }
+          >()
           for (const ref of references) {
             const existing = sourceMap.get(ref.source_note_id)
             if (existing) {
@@ -65,53 +77,53 @@ export function NoteSidebarRight({
               })
             }
           }
-          return Array.from(sourceMap.entries()).map(([sourceId, { title, blockIds }]) => {
-            const currentIndex = blockIndices.get(sourceId) || 0
-            const isActive = blockIds.some(id => id === activeBlockId)
-            const count = blockIds.length
+          return Array.from(sourceMap.entries()).map(
+            ([sourceId, { title, blockIds }]) => {
+              const currentIndex = blockIndices.get(sourceId) || 0
+              const isActive = blockIds.some((id) => id === activeBlockId)
+              const count = blockIds.length
 
-            return (
-              <button
-                key={sourceId}
-                className={cn(
-                  "w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-primary font-medium"
-                    : "hover:bg-accent/50 text-foreground"
-                )}
-                onClick={() => handleSourceClick(sourceId, blockIds)}
-                title={count > 1 ? `Click to cycle through ${count} blocks` : undefined}
-              >
-                <Link2 className="h-3 w-3 text-muted-foreground shrink-0" />
-                <span className="truncate flex-1">{title}</span>
-                {count > 1 && (
-                  <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full shrink-0">
-                    {currentIndex + 1}/{count}
-                  </span>
-                )}
-              </button>
-            )
-          })
+              return (
+                <button
+                  key={sourceId}
+                  type="button"
+                  className={cn("pm-ws-item", isActive && "is-focus")}
+                  onClick={() => handleSourceClick(sourceId, blockIds)}
+                  title={
+                    count > 1
+                      ? `Click to cycle through ${count} blocks`
+                      : undefined
+                  }
+                >
+                  <Link2 className="pm-ws-item-icon h-3 w-3" />
+                  <span className="truncate flex-1">{title}</span>
+                  {count > 1 && (
+                    <span className="pm-ws-badge is-live tabular-nums">
+                      {currentIndex + 1}/{count}
+                    </span>
+                  )}
+                </button>
+              )
+            }
+          )
         })()
       )}
     </div>
   )
 
-  // Distill Out: notes that this note has been distilled into
   const injectedContent = (
-    <div className="p-1.5 space-y-0.5">
+    <div className="p-1.5 space-y-0">
       {injectedInto.length === 0 ? (
-        <p className="text-xs text-muted-foreground px-2 py-4 text-center">
-          Not distilled into any notes
-        </p>
+        <p className="pm-ws-empty">Not distilled into any notes</p>
       ) : (
         injectedInto.map((targetId) => (
           <button
             key={targetId}
-            className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-accent/50 transition-colors"
+            type="button"
+            className="pm-ws-item"
             onClick={() => onNavigateToNote(targetId)}
           >
-            <ArrowUpRight className="h-3 w-3 text-muted-foreground shrink-0" />
+            <ArrowUpRight className="pm-ws-item-icon h-3 w-3" />
             <span className="truncate">
               {injectedIntoTitles.get(targetId) || targetId}
             </span>
@@ -121,16 +133,15 @@ export function NoteSidebarRight({
     </div>
   )
 
-  // Single tab — no tab bar needed
   if (!showTabs) {
     return (
-      <div className="w-52 border-l flex flex-col shrink-0 bg-muted/30">
-        <div className="px-3 py-2 border-b">
-          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+      <div className="pm-ws-rail pm-ws-rail-r">
+        <div className="pm-ws-seg !justify-start">
+          <span className="pm-label px-1">
             {hasReferences ? "Distill In" : "Distill Out"}
           </span>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           {hasReferences ? sourcesContent : injectedContent}
         </ScrollArea>
       </div>
@@ -138,21 +149,26 @@ export function NoteSidebarRight({
   }
 
   return (
-    <div className="w-52 border-l flex flex-col shrink-0 bg-muted/30">
+    <div className="pm-ws-rail pm-ws-rail-r">
       <Tabs defaultValue={defaultTab} className="flex flex-col flex-1 min-h-0">
-        <div className="px-2 py-1.5 border-b">
-          <TabsList className="h-7 w-full">
-            <TabsTrigger value="in" className="text-xs flex-1">
-              Distill In ({new Set(references.map(r => r.source_note_id)).size})
+        <div className="pm-ws-seg">
+          <TabsList variant="pill" className="w-full !h-auto">
+            <TabsIndicator renderBeforeHydration className="pm-tabs-indicator" />
+            <TabsTrigger value="in" className="flex-1">
+              In ({new Set(references.map((r) => r.source_note_id)).size})
             </TabsTrigger>
-            <TabsTrigger value="out" className="text-xs flex-1">
-              Distill Out ({injectedInto.length})
+            <TabsTrigger value="out" className="flex-1">
+              Out ({injectedInto.length})
             </TabsTrigger>
           </TabsList>
         </div>
-        <ScrollArea className="flex-1">
-          <TabsContent value="in">{sourcesContent}</TabsContent>
-          <TabsContent value="out">{injectedContent}</TabsContent>
+        <ScrollArea className="flex-1 min-h-0">
+          <TabsContent value="in" className="mt-0">
+            {sourcesContent}
+          </TabsContent>
+          <TabsContent value="out" className="mt-0">
+            {injectedContent}
+          </TabsContent>
         </ScrollArea>
       </Tabs>
     </div>

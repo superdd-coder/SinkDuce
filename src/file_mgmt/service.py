@@ -1801,6 +1801,12 @@ def create_node(
             ).fetchone()
 
         emit_event("node.created", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            schedule_todo_suggestion_refresh(collection_id, chain_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after create_node failed", exc_info=True)
         return _row_to_node(row)
     finally:
         conn.close()
@@ -1813,12 +1819,14 @@ def update_node(
 
     conn = _open_db(collection_id)
     try:
+        old_chain_id = None
         with conn:
             node = conn.execute(
                 "SELECT * FROM nodes WHERE node_id=?", (node_id,)
             ).fetchone()
             if not node:
                 raise HTTPException(404, f"Node '{node_id}' not found")
+            old_chain_id = node["chain_id"]
 
             if "group_id" in updates and updates["group_id"] is not None:
                 grp = conn.execute(
@@ -1860,6 +1868,15 @@ def update_node(
             ).fetchone()
 
         emit_event("node.updated", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            new_chain_id = row["chain_id"] if row else old_chain_id
+            schedule_todo_suggestion_refresh(collection_id, new_chain_id)
+            if old_chain_id and new_chain_id and old_chain_id != new_chain_id:
+                schedule_todo_suggestion_refresh(collection_id, old_chain_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after update_node failed", exc_info=True)
         return _row_to_node(row)
     finally:
         conn.close()
@@ -1993,6 +2010,13 @@ def delete_node(collection_id: str, node_id: str) -> dict | None:
                 result = {"affected_files": affected_files}
 
         emit_event("node.deleted", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            # chain_id still available from deleted node snapshot above
+            schedule_todo_suggestion_refresh(collection_id, node["chain_id"])
+        except Exception:
+            logger.debug("todo suggestion schedule after delete_node failed", exc_info=True)
         return result
     finally:
         conn.close()
@@ -2043,6 +2067,12 @@ def reorder_node(
             ).fetchall()
 
         emit_event("node.reordered", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            schedule_todo_suggestion_refresh(collection_id, chain_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after reorder_node failed", exc_info=True)
         return [_row_to_node(r) for r in rows]
     finally:
         conn.close()
@@ -2293,8 +2323,13 @@ def _row_to_file_out(
         entry = _load_file_index(collection_id).get(file_id) if collection_id else None
     label, src = _index_entry_display(entry)
     f.source = src or f"__file__:{file_id}"
-    f.display_name = label or f.filename or file_id
     f.doc_kind = _doc_kind_from_source(f.source)
+    # Managed files: SQLite current storage name is canonical (survives rename
+    # even if files.json was briefly stale). Notes/meetings keep index titles.
+    if f.doc_kind == "file" and (f.filename or "").strip():
+        f.display_name = f.filename.strip()
+    else:
+        f.display_name = label or f.filename or file_id
     return f
 
 
@@ -4188,21 +4223,13 @@ def upload_file_to_folder(
                     task_id = task.id
                     chunk_count = -1  # pending, actual count unknown yet
                 except Exception as e:
+                    # No second system_version row — "Initial upload" is created below.
                     logger.warning(
                         "Failed to queue ingest task for file %s (%s): %s",
                         file_id, safe_name, e,
                     )
-                    err_msg_id = uuid.uuid4().hex
-                    conn.execute(
-                        """INSERT INTO messages
-                           (message_id, owner_type, owner_id, source_node_id, body,
-                            author_type, author_id, created_at, edited_at, edited_by, version)
-                           VALUES (?, 'system_version', ?, NULL, ?,
-                            'system', 'system', ?, NULL, NULL, 1)""",
-                        (err_msg_id, file_id, f"Failed to queue ingest: {e}", now),
-                    )
 
-            # 8. Create system version message
+            # 8. Exactly one system_version message for v1 (never a separate file message)
             message_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO messages
@@ -4435,7 +4462,9 @@ def upload_file_version(
                 (new_version_id, unsupported, file_id),
             )
 
-            # 5. Create system version message (editable note; default body)
+            # 5. Create exactly ONE system_version message for this version.
+            # User's Update-dialog note (commit_message) becomes this message body —
+            # never create a separate owner_type=file message for it.
             message_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO messages
@@ -4476,25 +4505,13 @@ def upload_file_version(
                     )
                     task_id = task.id
                 except Exception as e:
+                    # Do NOT insert a second system_version row — that would look
+                    # like an "extra" message next to the user's version note.
                     logger.warning(
                         "Failed to queue version ingest for file %s (%s): %s",
                         file_id,
                         safe_name,
                         e,
-                    )
-                    err_msg_id = uuid.uuid4().hex
-                    conn.execute(
-                        """INSERT INTO messages
-                           (message_id, owner_type, owner_id, source_node_id, body,
-                            author_type, author_id, created_at, edited_at, edited_by, version)
-                           VALUES (?, 'system_version', ?, NULL, ?,
-                            'system', 'system', ?, NULL, NULL, 1)""",
-                        (
-                            err_msg_id,
-                            file_id,
-                            f"Failed to queue ingest: {e}",
-                            now,
-                        ),
                     )
 
             # 6b. Always refresh files.json so display_name / original_ext match
@@ -4629,6 +4646,53 @@ def list_old_versions(collection_id: str) -> list[OldVersionOut]:
         conn.close()
 
 
+def _purge_version_permanent(
+    conn,
+    collection_id: str,
+    file_id: str,
+    ver_row,
+) -> str:
+    """Hard-delete one version row: blob, Qdrant, system_version msg, DB row.
+
+    *ver_row* is a sqlite Row / mapping for ``file_versions``.
+    Returns the storage_file_id (for logging). Caller owns the transaction.
+    """
+    version_id = ver_row["version_id"]
+    storage_name = ver_row["storage_file_id"] or ""
+    ver_created = ver_row["created_at"] or ""
+    commit_body = (ver_row["commit_message"] or "").strip()
+
+    from src.file_mgmt.storage_paths import delete_version_storage
+
+    delete_version_storage(collection_id, file_id, version_id, storage_name)
+    _delete_qdrant_chunks_by_version_id(collection_id, version_id)
+
+    msg = conn.execute(
+        """SELECT message_id FROM messages
+           WHERE owner_type='system_version' AND owner_id=?
+             AND created_at=?""",
+        (file_id, ver_created),
+    ).fetchone()
+    if not msg and commit_body:
+        msg = conn.execute(
+            """SELECT message_id FROM messages
+               WHERE owner_type='system_version' AND owner_id=?
+                 AND body=?
+               ORDER BY created_at DESC LIMIT 1""",
+            (file_id, commit_body),
+        ).fetchone()
+    if msg:
+        conn.execute(
+            "DELETE FROM messages WHERE message_id=?",
+            (msg["message_id"],),
+        )
+
+    conn.execute(
+        "DELETE FROM file_versions WHERE version_id=?", (version_id,)
+    )
+    return storage_name
+
+
 def delete_file_version(
     collection_id: str, file_id: str, version_id: str
 ) -> dict:
@@ -4666,44 +4730,8 @@ def delete_file_version(
                     404, f"Version '{version_id}' not found for file '{file_id}'"
                 )
 
-            storage_name = ver["storage_file_id"] or ""
-            ver_created = ver["created_at"] or ""
-            commit_body = (ver["commit_message"] or "").strip()
-
-            # 1. Disk: remove this version's directory (or legacy flat blob)
-            from src.file_mgmt.storage_paths import delete_version_storage
-
-            delete_version_storage(
-                collection_id, file_id, version_id, storage_name
-            )
-
-            # 2. Qdrant: points tagged with this version_id
-            _delete_qdrant_chunks_by_version_id(collection_id, version_id)
-
-            # 3. Paired system_version message (same file, same created_at when possible)
-            msg = conn.execute(
-                """SELECT message_id FROM messages
-                   WHERE owner_type='system_version' AND owner_id=?
-                     AND created_at=?""",
-                (file_id, ver_created),
-            ).fetchone()
-            if not msg and commit_body:
-                msg = conn.execute(
-                    """SELECT message_id FROM messages
-                       WHERE owner_type='system_version' AND owner_id=?
-                         AND body=?
-                       ORDER BY created_at DESC LIMIT 1""",
-                    (file_id, commit_body),
-                ).fetchone()
-            if msg:
-                conn.execute(
-                    "DELETE FROM messages WHERE message_id=?",
-                    (msg["message_id"],),
-                )
-
-            # 4. Version row
-            conn.execute(
-                "DELETE FROM file_versions WHERE version_id=?", (version_id,)
+            storage_name = _purge_version_permanent(
+                conn, collection_id, file_id, ver
             )
 
         emit_event(
@@ -4722,6 +4750,250 @@ def delete_file_version(
         }
     finally:
         conn.close()
+
+
+def rollback_file_version(
+    collection_id: str, file_id: str, version_id: str
+) -> dict:
+    """Make *version_id* the current version and hard-delete all later versions.
+
+    Later = ``version_no`` greater than the target. Those rows are permanently
+    removed (blob + Qdrant + system_version log), **not** archived.
+
+    Target version is set ``archived=0`` and ``files.current_version_id``.
+    Its Qdrant chunks are restored (``archived=false``, ``is_current=true``).
+    Earlier versions (lower version_no) are left as history (archived).
+    """
+    conn = _open_db(collection_id)
+    deleted_ids: list[str] = []
+    target_storage = ""
+    target_no = 0
+    try:
+        with conn:
+            file_row = conn.execute(
+                "SELECT * FROM files WHERE file_id=?", (file_id,)
+            ).fetchone()
+            if not file_row:
+                raise HTTPException(404, f"File '{file_id}' not found")
+
+            target = conn.execute(
+                "SELECT * FROM file_versions WHERE version_id=? AND file_id=?",
+                (version_id, file_id),
+            ).fetchone()
+            if not target:
+                raise HTTPException(
+                    404, f"Version '{version_id}' not found for file '{file_id}'"
+                )
+
+            if file_row["current_version_id"] == version_id:
+                raise HTTPException(
+                    400,
+                    "This version is already current. Nothing to roll back.",
+                )
+
+            target_no = int(target["version_no"] or 0)
+            target_storage = target["storage_file_id"] or ""
+
+            later = conn.execute(
+                """SELECT * FROM file_versions
+                   WHERE file_id=? AND version_no > ?
+                   ORDER BY version_no DESC""",
+                (file_id, target_no),
+            ).fetchall()
+
+            if not later:
+                # Target not current but no higher version_no — still promote.
+                logger.warning(
+                    "rollback: target %s has no later versions but is not current",
+                    version_id,
+                )
+
+            for ver in later:
+                vid = ver["version_id"]
+                # Temporarily clear current_version_id if it points at this row
+                # so FK / constraints don't block purge of the live version.
+                if file_row["current_version_id"] == vid:
+                    conn.execute(
+                        "UPDATE files SET current_version_id=NULL WHERE file_id=?",
+                        (file_id,),
+                    )
+                _purge_version_permanent(conn, collection_id, file_id, ver)
+                deleted_ids.append(vid)
+
+            # Promote target to current
+            conn.execute(
+                "UPDATE file_versions SET archived=0 WHERE version_id=?",
+                (version_id,),
+            )
+            conn.execute(
+                """UPDATE files
+                   SET current_version_id=?, version=COALESCE(version, 0)+1
+                   WHERE file_id=?""",
+                (version_id, file_id),
+            )
+
+            # Keep remaining older versions marked archived (history only)
+            conn.execute(
+                """UPDATE file_versions SET archived=1
+                   WHERE file_id=? AND version_id != ?""",
+                (file_id, version_id),
+            )
+
+        # Qdrant: restore target as searchable current; leave older as archived
+        restored = _restore_qdrant_version_as_current(
+            collection_id, file_id, version_id
+        )
+
+        # files.json display name → target blob name
+        try:
+            from src.collections.file_index import add as add_file_index
+
+            file_source = f"__file__:{file_id}"
+            # Preserve note/meeting source if present in index
+            idx = _load_file_index(collection_id)
+            entry = idx.get(file_id) or {}
+            existing_source = (entry.get("source") or "").strip()
+            if existing_source.startswith("__note__:") or existing_source.startswith(
+                "__meeting__:"
+            ):
+                file_source = existing_source
+            label = Path(target_storage).name if target_storage else target_storage
+            if not label:
+                label = (entry.get("source_label") or "").strip() or file_id
+            orig_ext = Path(label).suffix.lower().lstrip(".") or None
+            idx_type = (
+                "note"
+                if file_source.startswith("__note__:")
+                else "meeting"
+                if file_source.startswith("__meeting__:")
+                else (entry.get("file_type") or "file")
+            )
+            add_file_index(
+                collection_id,
+                file_id,
+                file_source,
+                label,
+                idx_type,
+                entry.get("chunks") or 0,
+                orig_ext,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to update files.json after rollback for %s",
+                file_id,
+                exc_info=True,
+            )
+
+        emit_event(
+            "file.version_rolled_back",
+            collection_id,
+            {
+                "file_id": file_id,
+                "version_id": version_id,
+                "version_no": target_no,
+                "deleted_version_ids": deleted_ids,
+                "restored_chunks": restored,
+            },
+        )
+        return {
+            "file_id": file_id,
+            "version_id": version_id,
+            "version_no": target_no,
+            "storage_file_id": target_storage,
+            "deleted_version_ids": deleted_ids,
+            "deleted_count": len(deleted_ids),
+            "restored_chunks": restored,
+            "current": True,
+        }
+    finally:
+        conn.close()
+
+
+def _restore_qdrant_version_as_current(
+    collection_id: str, file_id: str, version_id: str
+) -> int:
+    """Mark chunks for *version_id* as current; other file_id chunks non-current.
+
+    Does not create vectors — only flips payload flags for existing points.
+    """
+    _log = logging.getLogger("file_mgmt.service")
+    try:
+        from src.services import services
+        if services.db is None:
+            return 0
+        from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
+
+        source_key = f"__file__:{file_id}"
+        all_points: list[tuple[str, object, dict]] = []
+        seen_ids: set[str] = set()
+
+        def _collect(filt: Filter) -> None:
+            offset = None
+            while True:
+                pts, offset = services.db.client.scroll(
+                    collection_name=collection_id,
+                    scroll_filter=filt,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                for p in pts:
+                    pid = str(p.id)
+                    if pid in seen_ids:
+                        continue
+                    seen_ids.add(pid)
+                    payload = dict(p.payload or {})
+                    if payload.get("version_id") == version_id:
+                        payload["archived"] = False
+                        payload["is_current"] = True
+                    else:
+                        # Older leftovers (or untagged): keep out of search
+                        payload["archived"] = True
+                        payload["is_current"] = False
+                    all_points.append((pid, p.vector, payload))
+                if offset is None:
+                    break
+
+        _collect(
+            Filter(
+                must=[
+                    FieldCondition(key="file_id", match=MatchValue(value=file_id))
+                ]
+            )
+        )
+        _collect(
+            Filter(
+                must=[
+                    FieldCondition(
+                        key="source", match=MatchValue(value=source_key)
+                    )
+                ]
+            )
+        )
+
+        if not all_points:
+            return 0
+
+        points = [
+            PointStruct(id=id_, vector=vec, payload=pl)
+            for id_, vec, pl in all_points
+        ]
+        services.db.client.upsert(collection_name=collection_id, points=points)
+        restored = sum(
+            1
+            for _, _, pl in all_points
+            if pl.get("version_id") == version_id and pl.get("is_current") is True
+        )
+        return restored
+    except Exception:
+        _log.warning(
+            "Failed to restore Qdrant chunks for rollback file=%s version=%s",
+            file_id,
+            version_id,
+            exc_info=True,
+        )
+        return 0
 
 
 def _delete_qdrant_chunks_by_version_id(
@@ -4964,6 +5236,27 @@ def update_file(
                     old_storage_for_disk,
                     new_base,
                 )
+                # Keep files.json label in lockstep (Recall / All Files / list_files)
+                try:
+                    from src.collections.file_index import update_source_label
+
+                    ext = Path(new_base).suffix.lower().lstrip(".") or None
+                    update_source_label(
+                        collection_id,
+                        file_id,
+                        new_base,
+                        original_ext=ext,
+                        source=f"__file__:{file_id}",
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to sync files.json source_label after rename "
+                        "col=%s file=%s → %s",
+                        collection_id,
+                        file_id,
+                        new_base,
+                        exc_info=True,
+                    )
 
             old_definitive = bool(file_row["is_definitive"])
             new_definitive = (
@@ -5680,6 +5973,12 @@ def attach_file_to_node(
         # node upload (Add Node / node attach), so file detail allows all tabs.
         if upload_task_id:
             out.task_id = upload_task_id
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_for_node
+
+            schedule_for_node(collection_id, node_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after attach_file failed", exc_info=True)
         return out
     finally:
         conn.close()
@@ -5863,6 +6162,12 @@ def detach_file_from_node(
             collection_id,
             {"file_id": file_id, "node_id": node_id},
         )
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_for_node
+
+            schedule_for_node(collection_id, node_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after detach_file failed", exc_info=True)
     finally:
         conn.close()
 
@@ -5931,6 +6236,13 @@ def create_message(collection_id: str, req: MessageCreate) -> MessageOut:
             collection_id,
             {"message_id": message_id, "owner_type": req.owner_type, "owner_id": req.owner_id},
         )
+        if (req.owner_type or "").strip().lower() == "node":
+            try:
+                from src.file_mgmt.todo_suggestions import schedule_for_node
+
+                schedule_for_node(collection_id, req.owner_id)
+            except Exception:
+                logger.debug("todo suggestion schedule after create_message failed", exc_info=True)
         return _row_to_message(row, conn)
     finally:
         conn.close()
@@ -6012,6 +6324,13 @@ def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> M
             collection_id,
             {"message_id": message_id},
         )
+        if owner_type == "node":
+            try:
+                from src.file_mgmt.todo_suggestions import schedule_for_node
+
+                schedule_for_node(collection_id, msg["owner_id"])
+            except Exception:
+                logger.debug("todo suggestion schedule after update_message failed", exc_info=True)
         return _row_to_message(row, conn)
     finally:
         conn.close()
@@ -6037,6 +6356,13 @@ def delete_message(collection_id: str, message_id: str) -> None:
             collection_id,
             {"message_id": message_id},
         )
+        if (msg["owner_type"] or "").strip().lower() == "node":
+            try:
+                from src.file_mgmt.todo_suggestions import schedule_for_node
+
+                schedule_for_node(collection_id, msg["owner_id"])
+            except Exception:
+                logger.debug("todo suggestion schedule after delete_message failed", exc_info=True)
     finally:
         conn.close()
 
@@ -6419,8 +6745,23 @@ def create_todo(collection_id: str, req: TodoCreate) -> TodoOut:
             row = conn.execute(
                 "SELECT * FROM todos WHERE todo_id=?", (todo_id,)
             ).fetchone()
+        out = _row_to_todo(row, conn)
         emit_event("todo.created", collection_id, {"todo_id": todo_id})
-        return _row_to_todo(row, conn)
+        # Consume smart-suggestion after successful create
+        sid = (getattr(req, "suggestion_id", None) or "").strip()
+        if sid:
+            try:
+                from src.file_mgmt.todo_suggestions import consume_suggestion
+
+                consume_suggestion(collection_id, out.chain_id, sid)
+            except Exception:
+                logger.debug(
+                    "consume suggestion failed todo=%s sid=%s",
+                    todo_id,
+                    sid,
+                    exc_info=True,
+                )
+        return out
     finally:
         conn.close()
 

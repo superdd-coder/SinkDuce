@@ -1,0 +1,44 @@
+# Build SinkDuce from source in this repository (paths unchanged: src/, frontend/, …).
+#
+# From repo root:
+#   docker compose -f docker-compose.build.yml up -d --build
+#
+# Nested under a deploy folder (share parent data/):
+#   SINKDUCE_DATA=../data docker compose -f docker-compose.build.yml up -d --build
+#
+# Default “pull image only” stack: docker-compose.yml
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    restart: unless-stopped
+    volumes:
+      - ${SINKDUCE_DATA:-./data}/qdrant:/qdrant/storage
+    entrypoint: ["/bin/sh", "-c", "find /qdrant/storage -name .DS_Store -delete 2>/dev/null; exec ./entrypoint.sh"]
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=${QDRANT_GRPC_PORT:-6334}
+      - QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER=1
+
+  app:
+    build:
+      context: .
+      args:
+        # Defaults match Dockerfile (Docker Hub). CI relies on these.
+        # Local CN mirror (optional .env):
+        #   NODE_IMAGE=docker.1ms.run/library/node:20-slim
+        #   PYTHON_IMAGE=docker.1ms.run/library/python:3.11-slim
+        NODE_IMAGE: ${NODE_IMAGE:-node:20-slim}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
+        UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.6.14}
+    ports:
+      - "${API_PORT:-18900}:18900"
+    volumes:
+      - ${SINKDUCE_DATA:-./data}:/app/data
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - HF_HOME=/app/data/models
+      - MODELSCOPE_CACHE=/app/data/models
+    depends_on:
+      - qdrant
+    restart: unless-stopped

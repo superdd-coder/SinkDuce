@@ -124,12 +124,18 @@ def _dedup_by_id(
 
     Returns (new_chunks, updated_seen_ids). The seen_ids set is NOT mutated;
     the caller should update the state.
+
+    Falls back to chunk_id, then a text-prefix key when point id is missing,
+    so batches without ``metadata.id`` are not silently dropped.
     """
     new_ids: set[str] = set()
     new_chunks: list[RetrievedChunk] = []
     for c in chunks:
-        cid = c.metadata.get("id", "")
-        if cid and cid not in seen_ids:
+        meta = c.metadata if isinstance(getattr(c, "metadata", None), dict) else {}
+        cid = meta.get("id") or meta.get("chunk_id") or ""
+        if not cid:
+            cid = f"txt:{hash((getattr(c, 'text', '') or '')[:240])}"
+        if cid and cid not in seen_ids and cid not in new_ids:
             new_ids.add(cid)
             new_chunks.append(c)
     return new_chunks, new_ids

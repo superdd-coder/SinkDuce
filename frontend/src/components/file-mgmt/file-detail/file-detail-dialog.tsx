@@ -10,6 +10,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -18,7 +19,10 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
+  DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -47,9 +51,17 @@ import {
   FolderOpen,
   GitBranch,
   Star,
+  History,
   X,
 } from "lucide-react"
 import { cn, transformImageBlocks } from "@/lib/utils"
+import { ChunkMd } from "@/components/shared/chunk-md"
+import {
+  SoftMenu,
+  MenuItem,
+  MenuItemDescription,
+  MenuItemTitle,
+} from "@/components/ui/menu"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
 import { useAppStore } from "@/stores/app-store"
@@ -80,6 +92,8 @@ import {
   deleteFile,
   deleteMessage,
   createFileMessage,
+  rollbackFileVersion,
+  FileMgmtApiError,
 } from "@/api/file-mgmt"
 import type {
   FileDetail,
@@ -444,6 +458,28 @@ export function FileMgmtDetailDialog({
   const [timelineFilter, setTimelineFilter] = useState<"all" | "versions">(
     "all"
   )
+  /**
+   * Log All|Versions content swap — sequential fade (out → swap → in).
+   * Avoid dual-opacity crossfade (phantom list) and hard cut.
+   */
+  const [logListPhase, setLogListPhase] = useState<"idle" | "out" | "in">(
+    "idle"
+  )
+  const logSwapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const logScopeRef = useRef<HTMLDivElement>(null)
+  const logScopeAllRef = useRef<HTMLButtonElement>(null)
+  const logScopeVerRef = useRef<HTMLButtonElement>(null)
+  const [logScopeInd, setLogScopeInd] = useState({ left: 2, width: 0 })
+  /**
+   * Paths | Nodes | Log accordion (Overview Notes/Meetings language).
+   * At most one open; default Log. Click open panel again to collapse all.
+   * Lower stack keeps fixed height; open card flex-grows when expanded.
+   */
+  type SideRailPanel = "paths" | "nodes" | "log"
+  const [openSide, setOpenSide] = useState<SideRailPanel | null>("log")
+  const toggleSide = useCallback((panel: SideRailPanel) => {
+    setOpenSide((prev) => (prev === panel ? null : panel))
+  }, [])
   const [msgBusy, setMsgBusy] = useState(false)
   /** Open MessageEditorDialog to add a file-level message (no inline textarea). */
   const [addMsgDialogOpen, setAddMsgDialogOpen] = useState(false)
@@ -456,6 +492,8 @@ export function FileMgmtDetailDialog({
   // Actions
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [rollbackConfirm, setRollbackConfirm] = useState(false)
+  const [rollingBack, setRollingBack] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   /** Bottom action dropdowns — same pattern as folder toolbar (Archive / Delete). */
   const [actionMenu, setActionMenu] = useState<"archive" | "delete" | null>(
@@ -899,22 +937,28 @@ export function FileMgmtDetailDialog({
   const isParentChild = chunks.some((c) => c.chunk_type === "parent")
   const groupedChunks = useMemo(() => {
     if (!isParentChild) return null
-    const groups: Array<{ parent: ChunkDetail; children: ChunkDetail[] }> = []
-    let currentParent: ChunkDetail | null = null
-    let currentChildren: ChunkDetail[] = []
+    // Group by parent_id (not sequential scan) so children still attach when
+    // API order is imperfect or children were recovered without version_id.
+    const parents = chunks
+      .filter((c) => c.chunk_type === "parent")
+      .slice()
+      .sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0))
+    const childrenByParent = new Map<string, ChunkDetail[]>()
     for (const c of chunks) {
-      if (c.chunk_type === "parent") {
-        if (currentParent)
-          groups.push({ parent: currentParent, children: currentChildren })
-        currentParent = c
-        currentChildren = []
-      } else if (c.chunk_type === "child") {
-        currentChildren.push(c)
-      }
+      if (c.chunk_type !== "child") continue
+      const pid = (c.parent_id || "").trim()
+      if (!pid) continue
+      const list = childrenByParent.get(pid) || []
+      list.push(c)
+      childrenByParent.set(pid, list)
     }
-    if (currentParent)
-      groups.push({ parent: currentParent, children: currentChildren })
-    return groups
+    for (const list of childrenByParent.values()) {
+      list.sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0))
+    }
+    return parents.map((parent) => ({
+      parent,
+      children: childrenByParent.get(parent.id) || [],
+    }))
   }, [chunks, isParentChild])
 
   const timeline = useMemo(
@@ -923,6 +967,70 @@ export function FileMgmtDetailDialog({
         ? buildTimeline(detail.versions, detail.messages, timelineFilter)
         : [],
     [detail, timelineFilter]
+  )
+
+  /** Sliding pill under All | Versions — measure active button. */
+  const measureLogScopeInd = useCallback(() => {
+    const host = logScopeRef.current
+    const btn =
+      timelineFilter === "all"
+        ? logScopeAllRef.current
+        : logScopeVerRef.current
+    if (!host || !btn) return
+    const hr = host.getBoundingClientRect()
+    const br = btn.getBoundingClientRect()
+    setLogScopeInd({
+      left: Math.round(br.left - hr.left),
+      width: Math.round(br.width),
+    })
+  }, [timelineFilter])
+
+  useLayoutEffect(() => {
+    measureLogScopeInd()
+  }, [measureLogScopeInd, openSide, detail?.messages?.length])
+
+  useEffect(() => {
+    const onResize = () => measureLogScopeInd()
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [measureLogScopeInd])
+
+  useEffect(() => {
+    return () => {
+      if (logSwapTimerRef.current) clearTimeout(logSwapTimerRef.current)
+    }
+  }, [])
+
+  /**
+   * All ↔ Versions: fade out (~140ms) → swap list → fade in (~180ms).
+   * Symmetric soft material; reduced-motion snaps.
+   */
+  const handleTimelineFilter = useCallback(
+    (next: "all" | "versions") => {
+      if (next === timelineFilter) return
+      if (logSwapTimerRef.current) {
+        clearTimeout(logSwapTimerRef.current)
+        logSwapTimerRef.current = null
+      }
+      const reduce =
+        typeof window !== "undefined" &&
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+      if (reduce) {
+        setTimelineFilter(next)
+        setLogListPhase("idle")
+        return
+      }
+      setLogListPhase("out")
+      logSwapTimerRef.current = setTimeout(() => {
+        setTimelineFilter(next)
+        setLogListPhase("in")
+        logSwapTimerRef.current = setTimeout(() => {
+          setLogListPhase("idle")
+          logSwapTimerRef.current = null
+        }, 200)
+      }, 140)
+    },
+    [timelineFilter]
   )
 
   const handleLocate = (chunk: ChunkDetail) => {
@@ -1202,6 +1310,39 @@ export function FileMgmtDetailDialog({
     }
   }
 
+  /** Make focused historical version current; hard-delete all later versions. */
+  const handleRollback = async () => {
+    if (!fileId || !focusVersionId || !isHistoricalFocus) return
+    setRollingBack(true)
+    try {
+      const res = await rollbackFileVersion(
+        collectionId,
+        fileId,
+        focusVersionId
+      )
+      const n = res.deleted_count ?? res.deleted_version_ids?.length ?? 0
+      toast.success(
+        n > 0
+          ? `Rolled back to v${res.version_no} — permanently deleted ${n} later version${n === 1 ? "" : "s"}`
+          : `Rolled back to v${res.version_no}`
+      )
+      setRollbackConfirm(false)
+      // Reopen as current (drop historical pin)
+      await loadDetail()
+      await refreshFiles(collectionId)
+      onOpenChange(false)
+      onDeleted?.()
+    } catch (err) {
+      toast.error(
+        err instanceof FileMgmtApiError
+          ? err.message
+          : `Rollback failed: ${err instanceof Error ? err.message : String(err)}`
+      )
+    } finally {
+      setRollingBack(false)
+    }
+  }
+
   const handleDeleteMessage = async (msg: Message) => {
     if (msg.author_type === "system" || isVersionUpdateMessage(msg)) {
       toast.error("Version update notes cannot be deleted")
@@ -1279,76 +1420,99 @@ export function FileMgmtDetailDialog({
         open={open && !!(fileId || source)}
         onOpenChange={onOpenChange}
       >
-        <DialogContent className="!max-w-[94vw] !w-[94vw] h-[88vh] flex flex-col p-4 gap-3">
-          <DialogHeader className="shrink-0">
-            <DialogTitle className="flex items-center gap-2 min-w-0">
-              <span className="truncate font-light" title={titleName}>
-                {titleName}
-              </span>
-              {isIngesting && (
-                <Badge
-                  variant="secondary"
-                  className="text-[10px] shrink-0 border-transparent bg-sky-500/15 text-sky-700 dark:text-sky-300"
-                  title={ingestProgress?.message || "Ingesting…"}
-                >
-                  <Loader2 className="h-3 w-3 animate-spin mr-1 inline" />
-                  Ingesting
-                  {typeof ingestProgress?.progress === "number"
-                    ? ` ${Math.round(ingestProgress.progress)}%`
-                    : ""}
-                </Badge>
-              )}
-              {isHistoricalFocus && (
-                <Badge
-                  variant="secondary"
-                  className="text-[10px] shrink-0 border-transparent bg-muted text-muted-foreground"
-                >
-                  {focusVersion
-                    ? `v${focusVersion.version_no} · old version`
-                    : "old version"}
-                </Badge>
-              )}
-              {chunksTotal > 0 && !isIngesting && (
-                <Badge variant="secondary" className="ml-1 shrink-0">
-                  {chunksTotal} chunks
-                </Badge>
-              )}
-              {detail?.archived && (
-                <Badge variant="secondary" className="shrink-0 text-[10px]">
-                  archived
-                </Badge>
-              )}
-              {detail?.unsupported && !isHistoricalFocus && (
-                <Badge variant="outline" className="shrink-0 text-[10px]">
-                  unsupported
-                </Badge>
-              )}
-              {detail?.is_definitive && (
-                <Star className="h-3.5 w-3.5 shrink-0 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
-              )}
-            </DialogTitle>
-          </DialogHeader>
+        <DialogContent
+          showCloseButton
+          overlayClassName="pm-dialog-overlay--silk"
+          className={cn(
+            "pm-dialog pm-dialog--silk pm-workspace pm-ws-dialog",
+            "!max-w-[94vw] !w-[94vw] h-[88vh] flex flex-col p-0 !gap-0 overflow-hidden",
+            /* Strip default keyframe utilities — silk CSS owns opacity/scale + overlay fade */
+            "!animate-none data-open:!animate-none data-closed:!animate-none"
+          )}
+        >
+          <div className="pm-ws-chrome">
+            <DialogHeader className="shrink-0 flex-1 min-w-0 !p-0">
+              <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
+                <span className="pm-ws-title truncate" title={titleName}>
+                  {titleName}
+                </span>
+                {isIngesting && (
+                  <Badge
+                    variant="secondary"
+                    className="pm-ws-badge is-live"
+                    title={ingestProgress?.message || "Ingesting…"}
+                  >
+                    <Loader2 className="h-3 w-3 animate-spin mr-1 inline" />
+                    Ingesting
+                    {typeof ingestProgress?.progress === "number"
+                      ? ` ${Math.round(ingestProgress.progress)}%`
+                      : ""}
+                  </Badge>
+                )}
+                {isHistoricalFocus && (
+                  <Badge variant="secondary" className="pm-ws-badge">
+                    {focusVersion
+                      ? `v${focusVersion.version_no} · old version`
+                      : "old version"}
+                  </Badge>
+                )}
+                {chunksTotal > 0 && !isIngesting && (
+                  <Badge variant="secondary" className="ml-1 pm-ws-badge">
+                    {chunksTotal} chunks
+                  </Badge>
+                )}
+                {detail?.archived && (
+                  <Badge variant="secondary" className="pm-ws-badge">
+                    archived
+                  </Badge>
+                )}
+                {detail?.unsupported && !isHistoricalFocus && (
+                  <Badge variant="outline" className="pm-ws-badge">
+                    unsupported
+                  </Badge>
+                )}
+                {detail?.is_definitive && (
+                  <Star className="h-3.5 w-3.5 shrink-0 text-[var(--pm-green)] fill-[var(--pm-green)]" />
+                )}
+              </DialogTitle>
+            </DialogHeader>
+            {/* room for dialog close button */}
+            <div className="w-8 shrink-0" />
+          </div>
 
           {loading && isManagedFile && !detail ? (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" />
+            <div className="pm-ws-loading flex-1">
+              <Loader2 className="h-5 w-5 animate-spin" />
               Loading…
             </div>
           ) : (
-            <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
-              {/* ── Left ~68%: Preview / Parse (roomy A4-friendly frame) ── */}
-              <div className="w-[68%] flex flex-col min-h-0 min-w-0">
+            <div className="pm-ws-body">
+              {/* ── Left: large nested white content card ── */}
+              <div className="pm-ws-main pm-ws-card pm-ws-card--main">
                 <Tabs
                   value={isIngesting ? "raw" : activeTab}
                   onValueChange={handleTabChange}
                   className="flex flex-col h-full min-h-0"
                 >
-                  <div className="flex items-center justify-between gap-2 shrink-0 mb-2">
-                    <TabsList variant="line" className="relative">
-                      <TabsIndicator renderBeforeHydration />
+                  <div className="pm-ws-main-head flex items-center justify-between gap-2 shrink-0">
+                    <TabsList
+                      className={cn(
+                        "pm-tabs !h-auto w-fit bg-transparent p-0 gap-1 border-0 rounded-none",
+                        "relative shrink-0 items-center isolate"
+                      )}
+                    >
+                      <TabsIndicator
+                        renderBeforeHydration
+                        className="pm-tabs-indicator"
+                      />
                       <TabsTrigger
                         value="raw"
-                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary"
+                        className={cn(
+                          "pm-vtab relative z-[1]",
+                          "!h-auto min-h-0",
+                          "data-[state=active]:shadow-none data-active:bg-transparent",
+                          "after:!opacity-0 after:!content-none"
+                        )}
                       >
                         Preview
                       </TabsTrigger>
@@ -1360,7 +1524,13 @@ export function FileMgmtDetailDialog({
                             ? "Available after ingest finishes"
                             : undefined
                         }
-                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary disabled:opacity-40"
+                        className={cn(
+                          "pm-vtab relative z-[1]",
+                          "!h-auto min-h-0",
+                          "data-[state=active]:shadow-none data-active:bg-transparent",
+                          "after:!opacity-0 after:!content-none",
+                          "disabled:opacity-40"
+                        )}
                       >
                         Parse
                       </TabsTrigger>
@@ -1372,7 +1542,13 @@ export function FileMgmtDetailDialog({
                             ? "Available after ingest finishes"
                             : undefined
                         }
-                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary disabled:opacity-40"
+                        className={cn(
+                          "pm-vtab relative z-[1]",
+                          "!h-auto min-h-0",
+                          "data-[state=active]:shadow-none data-active:bg-transparent",
+                          "after:!opacity-0 after:!content-none",
+                          "disabled:opacity-40"
+                        )}
                       >
                         Summary
                       </TabsTrigger>
@@ -1384,57 +1560,78 @@ export function FileMgmtDetailDialog({
                             ? "Available after ingest finishes"
                             : undefined
                         }
-                        className="font-light uppercase tracking-wider after:!opacity-0 data-[state=active]:text-primary disabled:opacity-40"
+                        className={cn(
+                          "pm-vtab relative z-[1]",
+                          "!h-auto min-h-0",
+                          "data-[state=active]:shadow-none data-active:bg-transparent",
+                          "after:!opacity-0 after:!content-none",
+                          "disabled:opacity-40"
+                        )}
                       >
                         Chunks
                         {chunksTotal > 0 && !isIngesting && (
-                          <span className="ml-1.5 tabular-nums text-[10px] text-muted-foreground font-normal normal-case tracking-normal">
+                          <span className="ml-1.5 tabular-nums pm-meta normal-case tracking-normal">
                             {chunksTotal}
                           </span>
                         )}
                       </TabsTrigger>
                     </TabsList>
-                    {goToLabel && (
-                      <button
-                        type="button"
-                        className="text-[10px] font-medium uppercase tracking-[0.1em] text-primary hover:opacity-80 transition-opacity cursor-pointer t-sans-family shrink-0"
-                        style={{ background: "none", border: "none" }}
-                        onClick={handleGoToSource}
-                      >
-                        {goToLabel}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isHistoricalFocus && focusVersionId && fileId && (
+                        <button
+                          type="button"
+                          className="pm-ws-link shrink-0 inline-flex items-center gap-1"
+                          disabled={rollingBack || actionBusy}
+                          onClick={() => setRollbackConfirm(true)}
+                          title="Make this version current and permanently delete newer versions"
+                        >
+                          <History className="h-3 w-3" strokeWidth={1.75} />
+                          Roll back
+                        </button>
+                      )}
+                      {goToLabel && (
+                        <button
+                          type="button"
+                          className="pm-ws-link shrink-0"
+                          onClick={handleGoToSource}
+                        >
+                          {goToLabel}
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Preview — original file (PDF / Office / md / txt) */}
+                  {/* Preview — original file; white stage inside main card */}
                   <TabsContent
                     value="raw"
                     className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
                   >
-                    <RawFileViewer
-                      key={`raw:${focusVersionId || "current"}:${viewStorageFile || ""}`}
-                      url={currentRawUrl}
-                      filename={resolveRawFilename(
-                        viewStorageFile,
-                        focusVersion?.storage_file_id,
-                        storageFileIdProp,
-                        detail?.filename,
-                        detail?.original_ext
-                          ? `file.${detail.original_ext}`
-                          : null,
-                        // Note/meeting ingest → .md even when storage_file_id is a label
-                        detail?.doc_kind === "note" ||
-                          detail?.doc_kind === "meeting" ||
-                          source?.startsWith("__note__:") ||
-                          source?.startsWith("__meeting__:")
-                          ? source || "document.md"
-                          : null,
-                        isHistoricalFocus ? undefined : detail?.display_name,
-                        source
-                      )}
-                      downloadUrl={downloadUrl}
-                      className="h-full"
-                    />
+                    <div className="pm-ws-doc-stage">
+                      <RawFileViewer
+                        key={`raw:${focusVersionId || "current"}:${viewStorageFile || ""}`}
+                        url={currentRawUrl}
+                        filename={resolveRawFilename(
+                          viewStorageFile,
+                          focusVersion?.storage_file_id,
+                          storageFileIdProp,
+                          detail?.filename,
+                          detail?.original_ext
+                            ? `file.${detail.original_ext}`
+                            : null,
+                          // Note/meeting ingest → .md even when storage_file_id is a label
+                          detail?.doc_kind === "note" ||
+                            detail?.doc_kind === "meeting" ||
+                            source?.startsWith("__note__:") ||
+                            source?.startsWith("__meeting__:")
+                            ? source || "document.md"
+                            : null,
+                          isHistoricalFocus ? undefined : detail?.display_name,
+                          source
+                        )}
+                        downloadUrl={downloadUrl}
+                        className="h-full !rounded-none !border-0 !bg-white"
+                      />
+                    </div>
                   </TabsContent>
 
                   {/* Parse — extracted / parsed text */}
@@ -1442,15 +1639,15 @@ export function FileMgmtDetailDialog({
                     value="source"
                     className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
                   >
-                    <div className="h-full min-h-0 overflow-hidden rounded-lg border border-border">
+                    <div className="pm-ws-doc-stage">
                       {previewLoading ||
                       (!isUnsupported && chunksLoading && !previewContent) ? (
-                        <div className="flex items-center justify-center h-full text-muted-foreground">
-                          <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                        <div className="pm-ws-loading h-full">
+                          <Loader2 className="h-5 w-5 animate-spin" />
                           Loading…
                         </div>
                       ) : isUnsupported ? (
-                        <div className="flex flex-col items-center justify-center h-full text-sm text-muted-foreground p-6 text-center gap-2">
+                        <div className="pm-ws-empty h-full flex flex-col items-center justify-center gap-2 px-6">
                           <p>No parse text for this version (unsupported type).</p>
                         </div>
                       ) : previewContent ? (
@@ -1476,14 +1673,14 @@ export function FileMgmtDetailDialog({
                         <ScrollArea className="h-full">
                           <div className="p-4 space-y-2">
                             {isHistoricalFocus ? (
-                              <p className="text-[10px] text-muted-foreground mb-2">
+                              <p className="pm-meta mb-2">
                                 Parse text reconstructed from this version’s chunks
                               </p>
                             ) : null}
                             {chunks.map((chunk, i) => (
                               <p
                                 key={chunk.id || i}
-                                className="text-sm leading-relaxed whitespace-pre-wrap"
+                                className="pm-ws-prose-item"
                               >
                                 {chunk.text}
                               </p>
@@ -1491,7 +1688,7 @@ export function FileMgmtDetailDialog({
                           </div>
                         </ScrollArea>
                       ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-sm text-muted-foreground p-4 text-center gap-2">
+                        <div className="pm-ws-empty h-full flex flex-col items-center justify-center gap-2 px-4">
                           <p>No extracted text for this version.</p>
                         </div>
                       )}
@@ -1503,35 +1700,35 @@ export function FileMgmtDetailDialog({
                     value="summary"
                     className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
                   >
-                    <ScrollArea className="h-full rounded-lg border border-border">
+                    <ScrollArea className="pm-ws-doc-stage">
                       <div className="p-4">
                         {isGenerating ? (
-                          <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
+                          <div className="pm-ws-loading flex-col py-8">
                             <Loader2 className="h-5 w-5 animate-spin" />
-                            <p className="text-sm">Generating summary…</p>
+                            <p className="pm-meta">Generating summary…</p>
                           </div>
                         ) : isUnsupported ? (
-                          <div className="flex flex-col items-center justify-center py-8 gap-2 px-4 text-center">
-                            <p className="text-sm text-muted-foreground">
+                          <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
+                            <p className="pm-meta">
                               No summary for this unsupported version.
                             </p>
                           </div>
                         ) : summaryLoading ? (
-                          <div className="flex items-center justify-center py-8 text-muted-foreground">
-                            <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                          <div className="pm-ws-loading py-8">
+                            <Loader2 className="h-5 w-5 animate-spin" />
                             Loading summary…
                           </div>
                         ) : docSummary ? (
                           <div className="space-y-4">
                             {isHistoricalFocus && (
-                              <p className="text-[11px] text-muted-foreground px-0.5">
+                              <p className="pm-meta px-0.5">
                                 Summary for this version (read-only). Re-summarize
                                 is only available on the current version.
                               </p>
                             )}
                             {detail?.is_definitive && !isHistoricalFocus && (
-                              <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 px-0.5">
-                                <Star className="h-3 w-3 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
+                              <p className="pm-meta flex items-center gap-1.5 px-0.5">
+                                <Star className="h-3 w-3 text-[var(--pm-green)] fill-[var(--pm-green)]" />
                                 Definitive — included in Collection Summary
                               </p>
                             )}
@@ -1540,7 +1737,7 @@ export function FileMgmtDetailDialog({
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="font-light uppercase tracking-wider text-primary"
+                                  className="pm-ws-action !text-[var(--pm-green)]"
                                   disabled={isGenerating}
                                   onClick={async () => {
                                     if (!source || !collectionId) return
@@ -1596,30 +1793,30 @@ export function FileMgmtDetailDialog({
                             {docSummary.data.length === 0 &&
                               docSummary.facts.length === 0 &&
                               docSummary.insights.length === 0 && (
-                                <p className="text-sm text-muted-foreground">
+                                <p className="pm-meta">
                                   No summary available for this document.
                                 </p>
                               )}
                           </div>
                         ) : isHistoricalFocus ? (
-                          <div className="flex flex-col items-center justify-center py-8 gap-2 px-4 text-center">
-                            <p className="text-sm text-muted-foreground">
+                          <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
+                            <p className="pm-meta">
                               No summary stored for this version.
                             </p>
-                            <p className="text-xs text-muted-foreground max-w-sm">
+                            <p className="pm-meta max-w-sm">
                               Summarize / Re-summarize is only available for the
                               current version.
                             </p>
                           </div>
                         ) : (
-                          <div className="flex flex-col items-center justify-center py-8 gap-3">
-                            <p className="text-sm text-muted-foreground">
+                          <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-3">
+                            <p className="pm-meta">
                               No summary available for this document.
                             </p>
                             <Button
                               variant="outline"
                               size="sm"
-                              className="font-light uppercase tracking-wider text-primary border-primary"
+                              className="!text-[var(--pm-green)]"
                               disabled={
                                 !source ||
                                 !collectionId ||
@@ -1664,24 +1861,24 @@ export function FileMgmtDetailDialog({
                     value="chunks"
                     className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
                   >
-                    <div className="h-full min-h-0 overflow-hidden rounded-lg border border-border flex flex-col">
+                    <div className="pm-ws-doc-stage flex flex-col">
                       <ScrollArea className="flex-1 min-h-0">
                         <div className="p-3 space-y-2">
                           {chunksLoading ? (
-                            <div className="flex items-center justify-center py-12 text-muted-foreground">
-                              <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                            <div className="pm-ws-loading py-12">
+                              <Loader2 className="h-5 w-5 animate-spin" />
                               Loading chunks…
                             </div>
                           ) : chunks.length === 0 ? (
                             <div className="flex flex-col items-center justify-center gap-2 p-6 text-center">
-                              <p className="text-sm text-muted-foreground">
+                              <p className="pm-meta">
                                 {isHistoricalFocus
                                   ? "No chunks for this old version."
                                   : isUnsupported
                                     ? "No chunks — current version is not supported for ingest."
                                     : "No chunks for this version."}
                               </p>
-                              <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
+                              <p className="pm-meta max-w-sm leading-relaxed">
                                 {isHistoricalFocus
                                   ? "Chunks are stored per version_id. Older uploads may predate version tracking, or this blob was never ingested. Preview/Parse still show the original file when available."
                                   : isUnsupported
@@ -1697,11 +1894,11 @@ export function FileMgmtDetailDialog({
                               return (
                                 <div
                                   key={group.parent.id}
-                                  className="border border-border rounded-md overflow-hidden"
+                                  className="pm-ws-tile !p-0 overflow-hidden"
                                 >
                                   <button
                                     type="button"
-                                    className="w-full text-left p-3 hover:bg-accent/50 transition-colors flex items-start gap-2"
+                                    className="w-full text-left p-3 hover:bg-[var(--pm-green-wash)] transition-colors flex items-start gap-2 bg-transparent border-0 cursor-pointer"
                                     onClick={() =>
                                       toggleParent(group.parent.id)
                                     }
@@ -1715,13 +1912,13 @@ export function FileMgmtDetailDialog({
                                       <div className="flex items-center gap-2 mb-1">
                                         <Badge
                                           variant="default"
-                                          className="text-[10px]"
+                                          className="pm-meta"
                                         >
                                           Parent #{group.parent.chunk_index}
                                         </Badge>
                                         <Badge
                                           variant="outline"
-                                          className="text-[10px]"
+                                          className="pm-meta"
                                         >
                                           {group.children.length} children
                                         </Badge>
@@ -1729,7 +1926,7 @@ export function FileMgmtDetailDialog({
                                           role="button"
                                           tabIndex={0}
                                           title="Locate in Source"
-                                          className="ml-auto p-0.5 rounded hover:bg-accent text-muted-foreground cursor-pointer"
+                                          className="ml-auto p-0.5 rounded hover:bg-[var(--pm-green-wash)] text-[var(--pm-faint)] cursor-pointer"
                                           onClick={(e) => {
                                             e.stopPropagation()
                                             handleLocate(group.parent)
@@ -1748,20 +1945,33 @@ export function FileMgmtDetailDialog({
                                           <Crosshair className="h-3.5 w-3.5" />
                                         </div>
                                       </div>
-                                      <p className="text-sm text-muted-foreground line-clamp-3 whitespace-pre-wrap">
-                                        {group.parent.text}
-                                      </p>
+                                      <div
+                                        className={cn(
+                                          "line-clamp-3 overflow-hidden",
+                                          "text-[var(--pm-muted)]"
+                                        )}
+                                      >
+                                        <ChunkMd
+                                          text={group.parent.text}
+                                          collection={collectionId}
+                                          fileId={fileId || undefined}
+                                          source={docSource || undefined}
+                                        />
+                                      </div>
                                     </div>
                                   </button>
                                   {isExpanded && (
-                                    <div className="border-t border-border bg-muted/30 p-3 space-y-2 pl-8">
-                                      <p className="text-sm whitespace-pre-wrap">
-                                        {group.parent.text}
-                                      </p>
+                                    <div className="border-t border-[color-mix(in_srgb,var(--pm-ink)_7%,transparent)] bg-[color-mix(in_srgb,var(--pm-ink)_2%,transparent)] p-3 space-y-2 pl-8">
+                                      <ChunkMd
+                                        text={group.parent.text}
+                                        collection={collectionId}
+                                        fileId={fileId || undefined}
+                                        source={docSource || undefined}
+                                      />
                                       {group.children.map((child) => (
                                         <div
                                           key={child.id}
-                                          className="border border-border rounded-lg p-3 bg-background cursor-pointer hover:bg-accent/50"
+                                          className="pm-ws-tile cursor-pointer"
                                           onClick={() => handleLocate(child)}
                                           role="button"
                                           tabIndex={0}
@@ -1776,15 +1986,18 @@ export function FileMgmtDetailDialog({
                                           <div className="flex items-center gap-2 mb-1">
                                             <Badge
                                               variant="secondary"
-                                              className="text-[10px]"
+                                              className="pm-meta"
                                             >
                                               Child #{child.chunk_index}
                                             </Badge>
-                                            <Crosshair className="h-3 w-3 ml-auto text-muted-foreground" />
+                                            <Crosshair className="h-3 w-3 ml-auto text-[var(--pm-faint)]" />
                                           </div>
-                                          <p className="text-sm whitespace-pre-wrap">
-                                            {child.text}
-                                          </p>
+                                          <ChunkMd
+                                            text={child.text}
+                                            collection={collectionId}
+                                            fileId={fileId || undefined}
+                                            source={docSource || undefined}
+                                          />
                                         </div>
                                       ))}
                                     </div>
@@ -1800,28 +2013,28 @@ export function FileMgmtDetailDialog({
                                   key={chunk.id}
                                   data-chunk-index={chunk.chunk_index}
                                   className={cn(
-                                    "border rounded-lg p-3 transition-all",
+                                    "pm-ws-tile transition-all",
                                     highlightedIdx === chunk.chunk_index
-                                      ? "border-primary ring-1 ring-primary/30 bg-primary/5"
-                                      : "border-border"
+                                      ? "is-on"
+                                      : ""
                                   )}
                                 >
                                   <div className="flex items-center gap-2 mb-2">
                                     <Badge
                                       variant="outline"
-                                      className="text-[10px]"
+                                      className="pm-meta"
                                     >
                                       Chunk #{chunk.chunk_index}
                                     </Badge>
                                     {chunk.heading_path && (
-                                      <span className="text-[10px] text-muted-foreground truncate">
+                                      <span className="pm-meta truncate">
                                         {chunk.heading_path}
                                       </span>
                                     )}
                                     <button
                                       type="button"
                                       title="Locate in Source"
-                                      className="ml-auto p-0.5 rounded hover:bg-accent text-muted-foreground"
+                                      className="ml-auto p-0.5 rounded hover:bg-[var(--pm-green-wash)] text-[var(--pm-faint)]"
                                       onClick={() => handleLocate(chunk)}
                                     >
                                       <Crosshair className="h-3.5 w-3.5" />
@@ -1832,17 +2045,22 @@ export function FileMgmtDetailDialog({
                                     className="w-full text-left"
                                     onClick={() => toggleChunkExpand(chunk.id)}
                                   >
-                                    <p
+                                    <div
                                       className={cn(
-                                        "text-sm leading-relaxed whitespace-pre-wrap",
-                                        !expanded && "line-clamp-4"
+                                        !expanded &&
+                                          "line-clamp-4 overflow-hidden"
                                       )}
                                     >
-                                      {chunk.text}
-                                    </p>
+                                      <ChunkMd
+                                        text={chunk.text}
+                                        collection={collectionId}
+                                        fileId={fileId || undefined}
+                                        source={docSource || undefined}
+                                      />
+                                    </div>
                                     {!expanded &&
                                       (chunk.text?.length ?? 0) > 200 && (
-                                        <span className="text-[10px] text-primary mt-1 inline-block">
+                                        <span className="pm-ws-link mt-1 inline-block">
                                           Show more
                                         </span>
                                       )}
@@ -1858,11 +2076,11 @@ export function FileMgmtDetailDialog({
                 </Tabs>
               </div>
 
-              {/* ── Right 40% ── */}
-              <div className="w-[40%] flex flex-col min-h-0 min-w-0 gap-3">
+              {/* ── Right: Metadata / Paths / Nodes / Log as float cards ── */}
+              <div className="pm-ws-side">
                 {!detail ? (
-                  <div className="flex-1 flex items-center justify-center p-6 text-center rounded-lg border border-dashed border-border">
-                    <p className="text-xs text-muted-foreground leading-relaxed max-w-[220px]">
+                  <div className="pm-ws-side-card flex-1 flex items-center justify-center p-6 text-center border-dashed">
+                    <p className="pm-meta leading-relaxed max-w-[220px]">
                       {isManagedFile
                         ? "Could not load file management metadata."
                         : "This document is not a managed file. Paths, versions, and archive actions are unavailable. You can still read Source, Summary, and Chunks."}
@@ -1870,456 +2088,602 @@ export function FileMgmtDetailDialog({
                   </div>
                 ) : (
                 <>
-                <ScrollArea className="flex-1 min-h-0">
-                  <div className="space-y-4 pr-2">
-                    {/* Meta — for historical open, show THIS version's blob fields */}
-                    <section>
-                      <h4 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-                        Metadata
-                        {isHistoricalFocus ? (
-                          <span className="ml-1.5 normal-case tracking-normal font-normal text-muted-foreground/80">
-                            · this version
-                          </span>
-                        ) : null}
-                      </h4>
-                      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-                        {isHistoricalFocus &&
-                        (focusVersionId || focusVersion || storageFileIdProp) ? (
-                          <>
-                            <dt className="text-muted-foreground">Version ID</dt>
-                            <dd
-                              className="font-mono truncate text-[11px]"
-                              title={
-                                focusVersionId ||
-                                focusVersion?.version_id ||
-                                versionIdProp ||
-                                ""
-                              }
-                            >
-                              {focusVersionId ||
-                                focusVersion?.version_id ||
-                                versionIdProp ||
-                                "—"}
-                            </dd>
-                            <dt className="text-muted-foreground">Version</dt>
-                            <dd>
-                              v{focusVersion?.version_no ?? "—"}
-                              {focusVersion?.archived ? " · archived" : ""}
-                              {" · old"}
-                            </dd>
-                            <dt className="text-muted-foreground">Filename</dt>
-                            <dd
-                              className="truncate"
-                              title={
-                                viewStorageFile ||
-                                storageFileIdProp ||
-                                ""
-                              }
-                            >
-                              {viewStorageFile ||
-                                storageFileIdProp ||
-                                "—"}
-                            </dd>
-                            <dt className="text-muted-foreground">Ext</dt>
-                            <dd>
-                              {(
-                                viewStorageFile ||
-                                focusVersion?.storage_file_id ||
-                                storageFileIdProp ||
-                                ""
-                              )
-                                .split(".")
-                                .pop()
-                                ?.toLowerCase() || "—"}
-                            </dd>
-                            <dt className="text-muted-foreground">Created</dt>
-                            <dd>
-                              {formatTime(
-                                focusVersion?.created_at || detail?.created_at
-                              )}
-                            </dd>
-                            <dt className="text-muted-foreground">By</dt>
-                            <dd>
-                              {focusVersion?.created_by ||
-                                detail?.created_by ||
-                                "local"}
-                            </dd>
-                            {focusVersion?.commit_message ? (
-                              <>
-                                <dt className="text-muted-foreground">Note</dt>
-                                <dd
-                                  className="truncate"
-                                  title={focusVersion.commit_message}
-                                >
-                                  {focusVersion.commit_message}
-                                </dd>
-                              </>
-                            ) : null}
-                            <dt className="text-muted-foreground">
-                              Managed file
-                            </dt>
-                            <dd
-                              className="font-mono truncate text-[11px] text-muted-foreground"
-                              title={detail.file_id}
-                            >
-                              {detail.file_id}
-                            </dd>
-                          </>
-                        ) : (
-                          <>
-                            <dt className="text-muted-foreground">File ID</dt>
-                            <dd
-                              className="font-mono truncate text-[11px]"
-                              title={detail.file_id}
-                            >
-                              {detail.file_id}
-                            </dd>
-                            <dt className="text-muted-foreground">Ext</dt>
-                            <dd>{detail?.original_ext || "—"}</dd>
-                            <dt className="text-muted-foreground">Filename</dt>
-                            <dd
-                              className="truncate"
-                              title={
-                                detail?.filename || detail?.display_name || ""
-                              }
-                            >
-                              {detail?.filename ||
-                                detail?.display_name ||
-                                "—"}
-                            </dd>
-                            <dt className="text-muted-foreground">Created</dt>
-                            <dd>{formatTime(detail?.created_at)}</dd>
-                            <dt className="text-muted-foreground">By</dt>
-                            <dd>{detail?.created_by || "local"}</dd>
-                          </>
-                        )}
-                        <dt className="text-muted-foreground">Versions</dt>
-                        <dd>{detail?.versions?.length ?? 0}</dd>
-                      </dl>
-                      <div className="mt-2">
-                        <TooltipProvider delay={300}>
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-[11px] px-2"
-                                  disabled={actionBusy || !detail}
-                                  onClick={() => void handleToggleDefinitive()}
-                                >
-                                  <Star
-                                    className={cn(
-                                      "h-3 w-3 mr-1",
-                                      detail?.is_definitive &&
-                                        "text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]"
-                                    )}
-                                  />
+                {/* Metadata — compact always-open card; definitive in title row */}
+                <section className="pm-ws-side-card pm-ws-side-card--meta shrink-0">
+                  <div className="pm-ws-side-h">
+                    <span
+                      className="pm-label"
+                      style={{ textTransform: "none", letterSpacing: "0.02em" }}
+                    >
+                      Metadata
+                    </span>
+                    {isHistoricalFocus ? (
+                      <span className="pm-meta ml-1.5">this version</span>
+                    ) : null}
+                    <div className="ml-auto shrink-0">
+                      <TooltipProvider delay={300}>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                className={cn(
+                                  "pm-ws-definitive pm-ws-definitive--header",
+                                  detail?.is_definitive && "is-on"
+                                )}
+                                disabled={actionBusy || !detail}
+                                onClick={() => void handleToggleDefinitive()}
+                                aria-pressed={!!detail?.is_definitive}
+                              >
+                                <Star
+                                  className={cn(
+                                    "pm-ws-definitive-star h-3.5 w-3.5",
+                                    detail?.is_definitive && "is-filled"
+                                  )}
+                                />
+                                <span className="pm-ws-definitive-label">
                                   {detail?.is_definitive
-                                    ? "Clear definitive"
+                                    ? "Definitive"
                                     : "Mark definitive"}
-                                </Button>
-                              }
-                            />
-                            <TooltipContent
-                              side="bottom"
-                              className="max-w-[240px]"
-                            >
-                              Definitive files feed Collection Summary (and show
-                              a star). Summary is kept if you clear the flag.
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
-                    </section>
-
-                    {/* Paths */}
-                    <section>
-                      <h4 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-                        Paths ({detail?.paths?.length ?? 0})
-                      </h4>
-                      {(detail?.paths?.length ?? 0) === 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                          No folder paths (orphan / root file)
-                        </p>
-                      ) : (
-                        <ul className="space-y-1.5">
-                          {detail!.paths.map((p) => {
-                            const srcNode = p.source_node_id
-                              ? detail!.nodes.find(
-                                  (n) => n.node_id === p.source_node_id
-                                )
-                              : undefined
-                            // Same folder: if any path is pinned, treat all mounts as pinned in UI
-                            const folderHasPinned =
-                              !!p.folder_id &&
-                              detail!.paths.some(
-                                (q) =>
-                                  q.folder_id === p.folder_id &&
-                                  !q.source_node_id
-                              )
-                            // Unpin only when demote can re-link to a node or drop
-                            // a pin that has a derived sibling — never on a lone
-                            // plain-folder mount (that would delete the path card).
-                            const canUnpin =
-                              !p.source_node_id &&
-                              (!!p.folder_id &&
-                                (detail!.paths.some(
-                                  (q) =>
-                                    q.folder_id === p.folder_id &&
-                                    !!q.source_node_id
-                                ) ||
-                                  detail!.nodes.length > 0))
-                            return (
-                              <PathRow
-                                key={p.path_id}
-                                path={p}
-                                sourceNodeTitle={
-                                  srcNode?.title?.trim() ||
-                                  (p.source_node_id ? "Untitled node" : null)
-                                }
-                                folderHasPinned={folderHasPinned}
-                                canUnpin={canUnpin}
-                                busy={actionBusy}
-                                onNavigate={() => {
-                                  if (p.folder_id && onNavigateToFolder) {
-                                    onNavigateToFolder(p.folder_id)
-                                    onOpenChange(false)
-                                  }
-                                }}
-                                onPromote={() => void handlePromote(p)}
-                                onUnpin={() => void handleUnpin(p)}
-                              />
-                            )
-                          })}
-                        </ul>
-                      )}
-                    </section>
-
-                    {/* Nodes */}
-                    <section>
-                      <h4 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-                        Nodes ({detail?.nodes?.length ?? 0})
-                      </h4>
-                      {(detail?.nodes?.length ?? 0) === 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                          Not attached to any node
-                        </p>
-                      ) : (
-                        <ul className="space-y-1.5">
-                          {detail!.nodes.map((n) => (
-                            <NodeRow
-                              key={n.node_id}
-                              node={n}
-                              onClick={() => setPreviewNodeId(n.node_id)}
-                            />
-                          ))}
-                        </ul>
-                      )}
-                    </section>
-
-                    {/* Version + message log */}
-                    <section>
-                      <div className="flex items-center justify-between mb-2 gap-2">
-                        <h4 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                          Log
-                        </h4>
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-6 text-[10px] px-2 shrink-0"
-                            disabled={msgBusy || !fileId}
-                            onClick={() => setAddMsgDialogOpen(true)}
+                                </span>
+                              </button>
+                            }
+                          />
+                          <TooltipContent
+                            side="bottom"
+                            className="max-w-[240px]"
                           >
-                            Add message
-                          </Button>
-                          <div className="flex rounded-md border border-border overflow-hidden text-[10px] shrink-0">
-                            <button
-                              type="button"
-                              className={cn(
-                                "px-2 py-0.5 transition-colors",
-                                timelineFilter === "all"
-                                  ? "bg-primary/10 text-primary"
-                                  : "text-muted-foreground hover:bg-muted/50"
-                              )}
-                              onClick={() => setTimelineFilter("all")}
-                            >
-                              All
-                            </button>
-                            <button
-                              type="button"
-                              className={cn(
-                                "px-2 py-0.5 border-l border-border transition-colors",
-                                timelineFilter === "versions"
-                                  ? "bg-primary/10 text-primary"
-                                  : "text-muted-foreground hover:bg-muted/50"
-                              )}
-                              onClick={() => setTimelineFilter("versions")}
-                            >
-                              Versions
-                            </button>
-                          </div>
+                            Definitive files feed Collection Summary (and show a
+                            star). Summary is kept if you clear the flag.
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  </div>
+                  <div className="pm-ws-side-pad pm-ws-side-pad--meta">
+                    <dl className="pm-ws-meta-grid">
+                      {isHistoricalFocus &&
+                      (focusVersionId || focusVersion || storageFileIdProp) ? (
+                        <>
+                          <dt>Filename</dt>
+                          <dd
+                            className="truncate"
+                            title={viewStorageFile || storageFileIdProp || ""}
+                          >
+                            {viewStorageFile || storageFileIdProp || "—"}
+                          </dd>
+                          <dt>File ID</dt>
+                          <dd
+                            className="font-mono truncate pm-meta"
+                            title={detail.file_id}
+                          >
+                            {detail.file_id}
+                          </dd>
+                          <dt>Version</dt>
+                          <dd>
+                            v{focusVersion?.version_no ?? "—"}
+                            {focusVersion?.archived ? " · archived" : ""}
+                            {" · old"}
+                          </dd>
+                          <dt>Created</dt>
+                          <dd>
+                            {formatTime(
+                              focusVersion?.created_at || detail?.created_at
+                            )}
+                          </dd>
+                          <dt>Versions</dt>
+                          <dd>{detail?.versions?.length ?? 0}</dd>
+                          {focusVersion?.commit_message ? (
+                            <>
+                              <dt>Note</dt>
+                              <dd
+                                className="truncate"
+                                title={focusVersion.commit_message}
+                              >
+                                {focusVersion.commit_message}
+                              </dd>
+                            </>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <dt>Filename</dt>
+                          <dd
+                            className="truncate"
+                            title={
+                              detail?.filename || detail?.display_name || ""
+                            }
+                          >
+                            {detail?.filename || detail?.display_name || "—"}
+                          </dd>
+                          <dt>File ID</dt>
+                          <dd
+                            className="font-mono truncate pm-meta"
+                            title={detail.file_id}
+                          >
+                            {detail.file_id}
+                          </dd>
+                          <dt>Created</dt>
+                          <dd>{formatTime(detail?.created_at)}</dd>
+                          <dt>Versions</dt>
+                          <dd>{detail?.versions?.length ?? 0}</dd>
+                        </>
+                      )}
+                    </dl>
+                  </div>
+                </section>
+
+                {/*
+                  Paths / Nodes / Log — fixed-height accordion stack
+                  (Overview .pm-rail-lower language). Exactly one expanded;
+                  default Log. Expanded card flex-grows to fill remaining height.
+                */}
+                <div className="pm-ws-side-lower">
+                  {/* Paths */}
+                  <section
+                    className={cn(
+                      "pm-ws-side-card",
+                      openSide === "paths" && "is-expanded"
+                    )}
+                  >
+                    <div className="pm-collapse-h shrink-0">
+                      <button
+                        type="button"
+                        className="pm-collapse-h-main"
+                        aria-expanded={openSide === "paths"}
+                        aria-label="Toggle Paths"
+                        onClick={() => toggleSide("paths")}
+                      >
+                        <span
+                          className={cn(
+                            "pm-rail-chev",
+                            openSide === "paths" && "is-open"
+                          )}
+                          aria-hidden
+                        >
+                          <ChevronRight className="size-3.5" strokeWidth={2} />
+                        </span>
+                        <span
+                          className="pm-label"
+                          style={{
+                            textTransform: "none",
+                            letterSpacing: "0.02em",
+                          }}
+                        >
+                          Paths
+                        </span>
+                        <span className="pm-count-pill">
+                          {detail?.paths?.length ?? 0}
+                        </span>
+                      </button>
+                    </div>
+                    <div
+                      className={cn(
+                        "pm-ws-side-collapse",
+                        openSide === "paths" && "is-open"
+                      )}
+                    >
+                      <div className="pm-ws-side-collapse-inner">
+                        <div className="pm-ws-side-pad pt-0">
+                          {(detail?.paths?.length ?? 0) === 0 ? (
+                            <p className="pm-meta">
+                              No folder paths (orphan / root file)
+                            </p>
+                          ) : (
+                            <ul className="pm-ws-list">
+                              {detail!.paths.map((p) => {
+                                const srcNode = p.source_node_id
+                                  ? detail!.nodes.find(
+                                      (n) => n.node_id === p.source_node_id
+                                    )
+                                  : undefined
+                                const folderHasPinned =
+                                  !!p.folder_id &&
+                                  detail!.paths.some(
+                                    (q) =>
+                                      q.folder_id === p.folder_id &&
+                                      !q.source_node_id
+                                  )
+                                const canUnpin =
+                                  !p.source_node_id &&
+                                  !!p.folder_id &&
+                                  (detail!.paths.some(
+                                    (q) =>
+                                      q.folder_id === p.folder_id &&
+                                      !!q.source_node_id
+                                  ) ||
+                                    detail!.nodes.length > 0)
+                                return (
+                                  <PathRow
+                                    key={p.path_id}
+                                    path={p}
+                                    sourceNodeTitle={
+                                      srcNode?.title?.trim() ||
+                                      (p.source_node_id
+                                        ? "Untitled node"
+                                        : null)
+                                    }
+                                    folderHasPinned={folderHasPinned}
+                                    canUnpin={canUnpin}
+                                    busy={actionBusy}
+                                    onNavigate={() => {
+                                      if (p.folder_id && onNavigateToFolder) {
+                                        onNavigateToFolder(p.folder_id)
+                                        onOpenChange(false)
+                                      }
+                                    }}
+                                    onPromote={() => void handlePromote(p)}
+                                    onUnpin={() => void handleUnpin(p)}
+                                  />
+                                )
+                              })}
+                            </ul>
+                          )}
                         </div>
                       </div>
+                    </div>
+                  </section>
 
-                      <ul className="space-y-2">
-                        {timeline.length === 0 ? (
-                          <p className="text-xs text-muted-foreground">
-                            No log yet
-                          </p>
-                        ) : (
-                          timeline.map((item) => {
-                            if (item.kind === "version") {
-                              // Display-only orphan version (no linked message)
-                              return (
-                                <li
-                                  key={item.id}
-                                  className="rounded-md border border-border/50 bg-muted/20 p-2 text-xs"
-                                >
-                                  <div className="flex items-center gap-1.5 mb-1 min-w-0">
-                                    <Badge
-                                      variant="secondary"
-                                      className="text-[9px] shrink-0 border-transparent bg-[var(--ze-green,#1A5E3D)]/15 text-[var(--ze-green,#1A5E3D)]"
+                  {/* Nodes */}
+                  <section
+                    className={cn(
+                      "pm-ws-side-card",
+                      openSide === "nodes" && "is-expanded"
+                    )}
+                  >
+                    <div className="pm-collapse-h shrink-0">
+                      <button
+                        type="button"
+                        className="pm-collapse-h-main"
+                        aria-expanded={openSide === "nodes"}
+                        aria-label="Toggle Nodes"
+                        onClick={() => toggleSide("nodes")}
+                      >
+                        <span
+                          className={cn(
+                            "pm-rail-chev",
+                            openSide === "nodes" && "is-open"
+                          )}
+                          aria-hidden
+                        >
+                          <ChevronRight className="size-3.5" strokeWidth={2} />
+                        </span>
+                        <span
+                          className="pm-label"
+                          style={{
+                            textTransform: "none",
+                            letterSpacing: "0.02em",
+                          }}
+                        >
+                          Nodes
+                        </span>
+                        <span className="pm-count-pill">
+                          {detail?.nodes?.length ?? 0}
+                        </span>
+                      </button>
+                    </div>
+                    <div
+                      className={cn(
+                        "pm-ws-side-collapse",
+                        openSide === "nodes" && "is-open"
+                      )}
+                    >
+                      <div className="pm-ws-side-collapse-inner">
+                        <div className="pm-ws-side-pad pt-0">
+                          {(detail?.nodes?.length ?? 0) === 0 ? (
+                            <p className="pm-meta">Not attached to any node</p>
+                          ) : (
+                            <ul className="pm-ws-list">
+                              {detail!.nodes.map((n) => (
+                                <NodeRow
+                                  key={n.node_id}
+                                  node={n}
+                                  onClick={() => setPreviewNodeId(n.node_id)}
+                                />
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Log — default open */}
+                  <section
+                    className={cn(
+                      "pm-ws-side-card pm-ws-side-card--log",
+                      openSide === "log" && "is-expanded"
+                    )}
+                  >
+                    <div className="pm-collapse-h shrink-0">
+                      <button
+                        type="button"
+                        className="pm-collapse-h-main"
+                        aria-expanded={openSide === "log"}
+                        aria-label="Toggle Log"
+                        onClick={() => toggleSide("log")}
+                      >
+                        <span
+                          className={cn(
+                            "pm-rail-chev",
+                            openSide === "log" && "is-open"
+                          )}
+                          aria-hidden
+                        >
+                          <ChevronRight className="size-3.5" strokeWidth={2} />
+                        </span>
+                        <span
+                          className="pm-label"
+                          style={{
+                            textTransform: "none",
+                            letterSpacing: "0.02em",
+                          }}
+                        >
+                          Log
+                        </span>
+                        <span className="pm-count-pill">{timeline.length}</span>
+                      </button>
+                      <div className="pm-collapse-h-actions items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="pm-ws-log-add shrink-0"
+                          disabled={msgBusy || !fileId}
+                          onClick={() => setAddMsgDialogOpen(true)}
+                        >
+                          Add
+                        </button>
+                        <div
+                          ref={logScopeRef}
+                          className="pm-ws-scope shrink-0"
+                          data-on={timelineFilter}
+                        >
+                          <span
+                            className="pm-ws-scope-ind"
+                            aria-hidden
+                            style={{
+                              transform: `translateX(${logScopeInd.left}px)`,
+                              width: logScopeInd.width,
+                              opacity: logScopeInd.width > 0 ? 1 : 0,
+                            }}
+                          />
+                          <button
+                            ref={logScopeAllRef}
+                            type="button"
+                            className={cn(
+                              "pm-ws-scope-btn",
+                              timelineFilter === "all" && "is-on"
+                            )}
+                            onClick={() => handleTimelineFilter("all")}
+                          >
+                            All
+                          </button>
+                          <button
+                            ref={logScopeVerRef}
+                            type="button"
+                            className={cn(
+                              "pm-ws-scope-btn",
+                              timelineFilter === "versions" && "is-on"
+                            )}
+                            onClick={() => handleTimelineFilter("versions")}
+                          >
+                            Versions
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      className={cn(
+                        "pm-ws-side-collapse",
+                        openSide === "log" && "is-open"
+                      )}
+                    >
+                      <div className="pm-ws-side-collapse-inner">
+                        <div className="pm-ws-side-pad pt-0 pm-ws-side-log-body">
+                          <ul
+                            className={cn(
+                              "pm-ws-log-list",
+                              logListPhase === "out" && "is-out",
+                              logListPhase === "in" && "is-in"
+                            )}
+                          >
+                            {timeline.length === 0 ? (
+                              <p className="pm-meta px-2 py-1">No log yet</p>
+                            ) : (
+                              timeline.map((item) => {
+                                if (item.kind === "version") {
+                                  /**
+                                   * Orphan file version (no paired system_version message).
+                                   * Still open dual-pane when we can recover a message by
+                                   * time/body; otherwise show note only (not editable yet).
+                                   */
+                                  const orphanMsg =
+                                    detail?.messages?.find((m) => {
+                                      if (
+                                        (m.owner_type || "").toLowerCase() !==
+                                        "system_version"
+                                      )
+                                        return false
+                                      if (
+                                        m.created_at &&
+                                        item.version.created_at &&
+                                        m.created_at === item.version.created_at
+                                      )
+                                        return true
+                                      const body = (m.body || "").trim()
+                                      const cm = (
+                                        item.version.commit_message || ""
+                                      ).trim()
+                                      return !!body && !!cm && body === cm
+                                    }) ?? null
+                                  return (
+                                    <li
+                                      key={item.id}
+                                      className={cn(
+                                        "pm-ws-log-item is-version",
+                                        orphanMsg && "is-clickable group"
+                                      )}
+                                      onClick={
+                                        orphanMsg
+                                          ? () =>
+                                              setLogMsgOpen({
+                                                message: orphanMsg,
+                                                version: item.version,
+                                              })
+                                          : undefined
+                                      }
                                     >
-                                      version update
-                                    </Badge>
-                                    {item.version.archived && (
-                                      <span className="text-[9px] text-muted-foreground uppercase shrink-0">
-                                        archived
-                                      </span>
-                                    )}
-                                    <span className="text-[9px] text-muted-foreground shrink-0">
-                                      v{item.version.version_no}
-                                    </span>
-                                    <span className="ml-auto text-[10px] text-muted-foreground tabular-nums shrink-0 text-right">
-                                      {formatTime(item.created_at)}
-                                    </span>
-                                  </div>
-                                  <p className="text-muted-foreground">
-                                    {versionUpdateBody(
-                                      item.version.commit_message
-                                    )}
-                                  </p>
-                                </li>
-                              )
-                            }
-
-                            const msg = item.message
-                            const isVer = item.isVersionUpdate
-                            const canDelete =
-                              !isVer && msg.author_type !== "system"
-                            const displayBody = isVer
-                              ? versionUpdateBody(msg.body)
-                              : msg.body || ""
-
-                            return (
-                              <li
-                                key={item.id}
-                                className={cn(
-                                  "rounded-md border p-2 text-xs group cursor-pointer transition-colors",
-                                  "hover:border-primary/30 hover:bg-muted/20",
-                                  isVer
-                                    ? "border-border/50 bg-muted/20"
-                                    : "border-border/40"
-                                )}
-                                onClick={() =>
-                                  setLogMsgOpen({
-                                    message: msg,
-                                    version: item.version ?? null,
-                                  })
-                                }
-                              >
-                                <div className="flex items-center gap-1.5 mb-1 min-w-0">
-                                  {isVer ? (
-                                    <>
-                                      <Badge
-                                        variant="secondary"
-                                        className="text-[9px] shrink-0 border-transparent bg-[var(--ze-green,#1A5E3D)]/15 text-[var(--ze-green,#1A5E3D)]"
-                                      >
-                                        version update
-                                      </Badge>
-                                      {item.version && (
-                                        <span className="text-[9px] text-muted-foreground shrink-0">
-                                          v{item.version.version_no}
-                                        </span>
-                                      )}
-                                      {item.version?.archived && (
-                                        <span className="text-[9px] text-muted-foreground uppercase shrink-0">
-                                          archived
-                                        </span>
-                                      )}
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Badge
-                                        variant="secondary"
-                                        className="text-[9px] shrink-0"
-                                      >
-                                        message
-                                      </Badge>
-                                      {/* author_id "local" is the single-user default — hide it */}
-                                      {msg.author_id &&
-                                        msg.author_id !== "local" &&
-                                        msg.author_id !== "user" && (
-                                          <span className="text-[10px] text-muted-foreground shrink-0">
-                                            {msg.author_id}
+                                      <div className="flex items-center gap-1.5 mb-1 min-w-0">
+                                        <span
+                                          className="pm-ws-log-dot"
+                                          aria-hidden
+                                        />
+                                        <Badge
+                                          variant="secondary"
+                                          className="pm-ws-badge is-live shrink-0"
+                                        >
+                                          version update
+                                        </Badge>
+                                        {item.version.archived && (
+                                          <span className="pm-meta uppercase shrink-0">
+                                            archived
                                           </span>
                                         )}
-                                    </>
-                                  )}
-                                  {msg.edited_at && (
-                                    <Badge
-                                      variant="outline"
-                                      className="text-[9px] shrink-0"
-                                    >
-                                      edited
-                                    </Badge>
-                                  )}
-                                  <div className="ml-auto flex items-center gap-0.5 shrink-0">
-                                    {canDelete && (
-                                      <button
-                                        type="button"
-                                        className="p-0.5 rounded hover:bg-muted text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                                        title="Delete"
-                                        disabled={msgBusy}
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          void handleDeleteMessage(msg)
-                                        }}
-                                      >
-                                        <Trash2 className="h-3 w-3" />
-                                      </button>
-                                    )}
-                                    <span className="text-[10px] text-muted-foreground tabular-nums text-right">
-                                      {formatTime(item.created_at)}
-                                    </span>
-                                  </div>
-                                </div>
-                                <MessageBody
-                                  body={displayBody}
-                                  className="prose prose-xs dark:prose-invert max-w-none text-xs line-clamp-4"
-                                />
-                              </li>
-                            )
-                          })
-                        )}
-                      </ul>
-                    </section>
-                  </div>
-                </ScrollArea>
+                                        <span className="pm-meta shrink-0">
+                                          v{item.version.version_no}
+                                        </span>
+                                        <span className="ml-auto pm-meta tabular-nums shrink-0 text-right">
+                                          {formatTime(item.created_at)}
+                                        </span>
+                                      </div>
+                                      <p className="pm-meta text-[var(--pm-faint)]">
+                                        {versionUpdateBody(
+                                          item.version.commit_message
+                                        )}
+                                      </p>
+                                    </li>
+                                  )
+                                }
 
-                {/* Bottom actions */}
-                <div className="shrink-0 border-t border-border pt-2 space-y-2">
+                                const msg = item.message
+                                const isVer = item.isVersionUpdate
+                                const canDelete =
+                                  !isVer && msg.author_type !== "system"
+                                const displayBody = isVer
+                                  ? versionUpdateBody(msg.body)
+                                  : msg.body || ""
+
+                                return (
+                                  <li
+                                    key={item.id}
+                                    className={cn(
+                                      "pm-ws-log-item is-clickable group",
+                                      isVer && "is-version"
+                                    )}
+                                    onClick={() =>
+                                      setLogMsgOpen({
+                                        message: msg,
+                                        version: item.version ?? null,
+                                      })
+                                    }
+                                  >
+                                    <div className="flex items-center gap-1.5 mb-1 min-w-0">
+                                      {isVer ? (
+                                        <>
+                                          <span
+                                            className="pm-ws-log-dot"
+                                            aria-hidden
+                                          />
+                                          <Badge
+                                            variant="secondary"
+                                            className="pm-ws-badge is-live shrink-0"
+                                          >
+                                            version update
+                                          </Badge>
+                                          {item.version && (
+                                            <span className="pm-meta shrink-0">
+                                              v{item.version.version_no}
+                                            </span>
+                                          )}
+                                          {item.version?.archived && (
+                                            <span className="pm-meta uppercase shrink-0">
+                                              archived
+                                            </span>
+                                          )}
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Badge
+                                            variant="secondary"
+                                            className="pm-ws-badge shrink-0"
+                                          >
+                                            message
+                                          </Badge>
+                                          {msg.author_id &&
+                                            msg.author_id !== "local" &&
+                                            msg.author_id !== "user" && (
+                                              <span className="pm-meta shrink-0">
+                                                {msg.author_id}
+                                              </span>
+                                            )}
+                                        </>
+                                      )}
+                                      {msg.edited_at && (
+                                        <Badge
+                                          variant="outline"
+                                          className="pm-ws-badge shrink-0"
+                                        >
+                                          edited
+                                        </Badge>
+                                      )}
+                                      <div
+                                        className={cn(
+                                          "ml-auto flex items-center gap-1.5 shrink-0",
+                                          /* keep actions visible while armed (same as message rail) */
+                                        )}
+                                      >
+                                        {canDelete && (
+                                          <LogMsgDeleteButton
+                                            disabled={msgBusy}
+                                            onConfirm={() =>
+                                              void handleDeleteMessage(msg)
+                                            }
+                                          />
+                                        )}
+                                        <span className="pm-meta tabular-nums text-right">
+                                          {formatTime(item.created_at)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <MessageBody
+                                      body={displayBody}
+                                      className={cn(
+                                        "pm-ws-msg-md line-clamp-4",
+                                        "max-w-none",
+                                        "[&_p]:my-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5 [&_li]:my-0"
+                                      )}
+                                    />
+                                  </li>
+                                )
+                              })
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+
+                {/* Bottom action dock — pinned under rail cards */}
+                <div className="pm-ws-side-actions">
                   {deleteConfirm ? (
-                    <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-2 space-y-2">
-                      <p className="text-xs font-medium text-destructive">
+                    <div className="rounded-[var(--pm-r-sm)] bg-[color-mix(in_srgb,var(--pm-danger)_6%,transparent)] p-2.5 space-y-2">
+                      <p className="pm-title text-[var(--pm-danger)]">
                         Permanently delete this file?
                       </p>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="pm-meta">
                         All paths will be removed:
                       </p>
-                      <ul className="text-[11px] text-muted-foreground space-y-0.5 max-h-24 overflow-y-auto">
+                      <ul className="pm-meta space-y-0.5 max-h-24 overflow-y-auto">
                         {(detail?.paths?.length ?? 0) === 0 ? (
                           <li className="italic">
                             (no folder paths — orphan file)
@@ -2335,61 +2699,57 @@ export function FileMgmtDetailDialog({
                           ))
                         )}
                       </ul>
-                      <div className="flex gap-1.5">
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="h-7 text-[11px]"
+                      <div className="pm-ws-side-actions-row">
+                        <button
+                          type="button"
+                          className="pm-ws-foot-btn pm-ws-foot-btn--danger"
                           disabled={actionBusy}
                           onClick={() => void handleDelete()}
                         >
                           {actionBusy ? (
-                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                            <Loader2 className="animate-spin" />
                           ) : (
-                            <Trash2 className="h-3 w-3 mr-1" />
+                            <Trash2 />
                           )}
-                          Confirm delete
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 text-[11px]"
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          className="pm-ws-foot-btn pm-ws-foot-btn--ghost"
                           onClick={() => setDeleteConfirm(false)}
                         >
                           Cancel
-                        </Button>
+                        </button>
                       </div>
                     </div>
                   ) : (
                     <div
                       ref={actionMenuRef}
-                      className="flex flex-nowrap items-center gap-1.5 overflow-visible"
+                      className="pm-ws-side-actions-row overflow-visible"
                     >
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-[11px] shrink-0"
+                      <button
+                        type="button"
+                        className="pm-ws-foot-btn pm-ws-foot-btn--pri"
                         disabled={actionBusy}
                         onClick={() => {
                           setActionMenu(null)
                           setUpdateDialogOpen(true)
                         }}
                       >
-                        <Upload className="h-3 w-3 mr-1" />
-                        Update file
-                      </Button>
+                        <Upload />
+                        Update
+                      </button>
 
                       {/* Archive dropdown — context-aware path vs global */}
                       {(canArchiveCurrentPath ||
                         canArchiveGlobally ||
                         canRestore) && (
-                        <div className="relative shrink-0">
-                          <Button
-                            size="sm"
-                            variant="outline"
+                        <div className="relative">
+                          <button
+                            type="button"
                             className={cn(
-                              "h-7 text-[11px]",
-                              actionMenu === "archive" && "bg-accent"
+                              "pm-ws-foot-btn pm-ws-foot-btn--ghost",
+                              actionMenu === "archive" && "is-on"
                             )}
                             disabled={actionBusy}
                             title="Archive options"
@@ -2399,73 +2759,70 @@ export function FileMgmtDetailDialog({
                               )
                             }
                           >
-                            <Archive className="h-3 w-3 mr-1" />
+                            <Archive />
                             Archive
-                            <ChevronDown className="h-3 w-3 ml-0.5 opacity-60" />
-                          </Button>
-                          {actionMenu === "archive" && (
-                            <div
-                              className="absolute left-0 bottom-full mb-1 z-50 min-w-[260px] rounded-md border border-border bg-background text-foreground shadow-lg py-1"
-                              role="menu"
-                            >
-                              {canRestore && (
-                                <ActionMenuItem
-                                  icon={
-                                    <ArchiveRestore className="h-3.5 w-3.5" />
-                                  }
-                                  title="Restore"
-                                  description={
-                                    fileArchived
-                                      ? "Re-enable search (and restore current path if archived)."
-                                      : contextNodeId
-                                        ? "Restore this file's path(s) for the current node."
-                                        : "Restore this file's current path."
-                                  }
-                                  onClick={() => {
-                                    setActionMenu(null)
-                                    void handleRestore()
-                                  }}
-                                />
-                              )}
-                              {canArchiveCurrentPath && (
-                                <ActionMenuItem
-                                  icon={<Archive className="h-3.5 w-3.5" />}
-                                  title="Archive current path"
-                                  description={
-                                    contextNodeId
-                                      ? "Grey out node-related path(s) only (group + branch). Leaves other mounts active."
-                                      : "Grey out this file on the current folder path only."
-                                  }
-                                  onClick={() => {
-                                    setActionMenu(null)
-                                    void handleArchiveCurrentPath()
-                                  }}
-                                />
-                              )}
-                              {canArchiveGlobally && (
-                                <ActionMenuItem
-                                  icon={<SearchX className="h-3.5 w-3.5" />}
-                                  title="Archive globally"
-                                  description="Exclude this file from search everywhere."
-                                  onClick={() => {
-                                    setActionMenu(null)
-                                    void handleArchiveGlobally()
-                                  }}
-                                />
-                              )}
-                            </div>
-                          )}
+                            <ChevronDown className="opacity-50 !w-3 !h-3" />
+                          </button>
+                          <SoftMenu
+                            open={actionMenu === "archive"}
+                            className="absolute left-0 bottom-full mb-1.5 z-50 min-w-[260px] pm-menu--drop-up"
+                          >
+                            {canRestore && (
+                              <ActionMenuItem
+                                icon={
+                                  <ArchiveRestore className="h-3.5 w-3.5" />
+                                }
+                                title="Restore"
+                                description={
+                                  fileArchived
+                                    ? "Re-enable search (and restore current path if archived)."
+                                    : contextNodeId
+                                      ? "Restore this file's path(s) for the current node."
+                                      : "Restore this file's current path."
+                                }
+                                onClick={() => {
+                                  setActionMenu(null)
+                                  void handleRestore()
+                                }}
+                              />
+                            )}
+                            {canArchiveCurrentPath && (
+                              <ActionMenuItem
+                                icon={<Archive className="h-3.5 w-3.5" />}
+                                title="Archive current path"
+                                description={
+                                  contextNodeId
+                                    ? "Grey out node-related path(s) only (group + branch). Leaves other mounts active."
+                                    : "Grey out this file on the current folder path only."
+                                }
+                                onClick={() => {
+                                  setActionMenu(null)
+                                  void handleArchiveCurrentPath()
+                                }}
+                              />
+                            )}
+                            {canArchiveGlobally && (
+                              <ActionMenuItem
+                                icon={<SearchX className="h-3.5 w-3.5" />}
+                                title="Archive globally"
+                                description="Exclude this file from search everywhere."
+                                onClick={() => {
+                                  setActionMenu(null)
+                                  void handleArchiveGlobally()
+                                }}
+                              />
+                            )}
+                          </SoftMenu>
                         </div>
                       )}
 
                       {/* Delete dropdown: remove path + permanent delete */}
-                      <div className="relative shrink-0">
-                        <Button
-                          size="sm"
-                          variant="outline"
+                      <div className="relative">
+                        <button
+                          type="button"
                           className={cn(
-                            "h-7 text-[11px] text-destructive border-destructive/30 hover:bg-destructive/10",
-                            actionMenu === "delete" && "bg-destructive/10"
+                            "pm-ws-foot-btn pm-ws-foot-btn--danger",
+                            actionMenu === "delete" && "is-on"
                           )}
                           disabled={actionBusy}
                           title="Remove or delete"
@@ -2475,42 +2832,40 @@ export function FileMgmtDetailDialog({
                             )
                           }
                         >
-                          <Trash2 className="h-3 w-3 mr-1" />
+                          <Trash2 />
                           Delete
-                          <ChevronDown className="h-3 w-3 ml-0.5 opacity-60" />
-                        </Button>
-                        {actionMenu === "delete" && (
-                          <div
-                            className="absolute right-0 bottom-full mb-1 z-50 min-w-[260px] rounded-md border border-border bg-background text-foreground shadow-lg py-1"
-                            role="menu"
-                          >
-                            {canRemoveCurrentPath && (
-                              <ActionMenuItem
-                                icon={<X className="h-3.5 w-3.5" />}
-                                title="Remove current path"
-                                description={
-                                  contextNodeId
-                                    ? "Detach from this node and remove its path(s) (group + branch). Other mounts stay."
-                                    : "Remove this file from the current folder path only."
-                                }
-                                onClick={() => {
-                                  setActionMenu(null)
-                                  void handleRemoveCurrentPath()
-                                }}
-                              />
-                            )}
+                          <ChevronDown className="opacity-50 !w-3 !h-3" />
+                        </button>
+                        <SoftMenu
+                          open={actionMenu === "delete"}
+                          className="absolute right-0 bottom-full mb-1.5 z-50 min-w-[260px] pm-menu--drop-up"
+                        >
+                          {canRemoveCurrentPath && (
                             <ActionMenuItem
-                              icon={<Trash2 className="h-3.5 w-3.5" />}
-                              title="Delete file globally"
-                              description="Permanently delete this file everywhere."
-                              destructive
+                              icon={<X className="h-3.5 w-3.5" />}
+                              title="Remove current path"
+                              description={
+                                contextNodeId
+                                  ? "Detach from this node and remove its path(s) (group + branch). Other mounts stay."
+                                  : "Remove this file from the current folder path only."
+                              }
                               onClick={() => {
                                 setActionMenu(null)
-                                setDeleteConfirm(true)
+                                void handleRemoveCurrentPath()
                               }}
                             />
-                          </div>
-                        )}
+                          )}
+                          <ActionMenuItem
+                            icon={<Trash2 className="h-3.5 w-3.5" />}
+                            title="Delete file globally"
+                            description="Permanently delete this file everywhere."
+                            destructive
+                            onClick={() => {
+                              setActionMenu(null)
+                              setDeleteConfirm(true)
+                            }}
+                          />
+                        </SoftMenu>
                       </div>
                     </div>
                   )}
@@ -2546,7 +2901,9 @@ export function FileMgmtDetailDialog({
         key="file-add-msg"
         open={addMsgDialogOpen}
         onOpenChange={setAddMsgDialogOpen}
-        title="Add Message"
+        title="Add message"
+        kicker="File"
+        description="New message on this file."
         initialContent=""
         onSave={(content) => void handleAddMessage(content)}
         readonly={false}
@@ -2557,6 +2914,7 @@ export function FileMgmtDetailDialog({
       <LogMessageDialog
         open={!!logMsgOpen}
         onOpenChange={(v) => {
+          // Clear immediately — LogMessageDialog.held keeps payload for exit silk
           if (!v) setLogMsgOpen(null)
         }}
         collectionId={collectionId}
@@ -2568,7 +2926,13 @@ export function FileMgmtDetailDialog({
           !!detail?.current_version_id &&
           logMsgOpen.version.version_id === detail.current_version_id
         }
-        onSaved={() => {
+        onSaved={(updated) => {
+          // Keep open dialog's lock version in sync with server
+          setLogMsgOpen((prev) =>
+            prev && prev.message.message_id === updated.message_id
+              ? { ...prev, message: updated }
+              : prev
+          )
           void loadDetail()
         }}
         onVersionDeleted={() => {
@@ -2576,7 +2940,87 @@ export function FileMgmtDetailDialog({
           void loadDetail()
           void refreshFiles(collectionId)
         }}
+        onVersionRolledBack={() => {
+          setLogMsgOpen(null)
+          void loadDetail()
+          void refreshFiles(collectionId)
+        }}
       />
+
+      {/* Rollback historical version — premium compact confirm */}
+      <Dialog
+        open={rollbackConfirm}
+        onOpenChange={(v) => {
+          if (!rollingBack) setRollbackConfirm(v)
+        }}
+      >
+        <DialogContent
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+          className="pm-dialog pm-dialog-confirm"
+        >
+          <DialogHeader>
+            <DialogKicker>Version</DialogKicker>
+            <DialogTitle>Roll back to this version?</DialogTitle>
+            {focusVersion || focusVersionId ? (
+              <p
+                className="pm-dialog-confirm-target"
+                title={
+                  focusVersion?.storage_file_id
+                    ? `v${focusVersion.version_no} · ${focusVersion.storage_file_id}`
+                    : focusVersion
+                      ? `v${focusVersion.version_no}`
+                      : "Selected version"
+                }
+              >
+                {focusVersion ? (
+                  <>
+                    <span className="tabular-nums">
+                      v{focusVersion.version_no}
+                    </span>
+                    {focusVersion.storage_file_id
+                      ? ` · ${focusVersion.storage_file_id}`
+                      : ""}
+                  </>
+                ) : (
+                  "Selected version"
+                )}
+              </p>
+            ) : null}
+            <DialogDescription>
+              Make this the live revision. Later revisions are permanently
+              deleted. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={rollingBack}
+              onClick={() => setRollbackConfirm(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive-solid"
+              size="sm"
+              disabled={rollingBack}
+              onClick={() => void handleRollback()}
+            >
+              {rollingBack ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                  Rolling back…
+                </>
+              ) : (
+                "Roll back"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <NodePreviewSheet
         collectionId={collectionId}
@@ -2627,7 +3071,98 @@ export function FileMgmtDetailDialog({
 
 // ── subcomponents ──
 
-/** Dropdown row — same layout as folder-view toolbar MenuItem. */
+/**
+ * Two-step delete (× → DELETE) — same anti-mis-tap pattern as message sidebar
+ * (message-card.tsx · .pm-msg-delete).
+ */
+function LogMsgDeleteButton({
+  disabled,
+  onConfirm,
+}: {
+  disabled?: boolean
+  onConfirm: () => void
+}) {
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const deleteBtnRef = useRef<HTMLButtonElement>(null)
+
+  const disarmDelete = useCallback(() => {
+    setDeleteArmed(false)
+    if (deleteArmTimerRef.current) {
+      clearTimeout(deleteArmTimerRef.current)
+      deleteArmTimerRef.current = null
+    }
+  }, [])
+
+  const armDelete = useCallback(() => {
+    setDeleteArmed(true)
+    if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    deleteArmTimerRef.current = setTimeout(() => disarmDelete(), 4000)
+  }, [disarmDelete])
+
+  useEffect(() => {
+    if (!deleteArmed) return
+    const onPointerDown = (ev: Event) => {
+      const t = ev.target as Node | null
+      if (t && deleteBtnRef.current?.contains(t)) return
+      disarmDelete()
+    }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") disarmDelete()
+    }
+    const t = window.setTimeout(() => {
+      document.addEventListener("pointerdown", onPointerDown, true)
+      document.addEventListener("keydown", onKey, true)
+    }, 0)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [deleteArmed, disarmDelete])
+
+  useEffect(() => {
+    return () => {
+      if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    }
+  }, [])
+
+  return (
+    <button
+      ref={deleteBtnRef}
+      type="button"
+      disabled={disabled}
+      className={cn(
+        "pm-msg-delete",
+        deleteArmed ? "is-confirm opacity-100" : "opacity-0 group-hover:opacity-100",
+        "transition-opacity"
+      )}
+      title={deleteArmed ? "Click again to delete" : "Delete message"}
+      aria-label={
+        deleteArmed ? "Confirm delete message" : "Delete message"
+      }
+      aria-expanded={deleteArmed}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (disabled) return
+        if (!deleteArmed) {
+          armDelete()
+          return
+        }
+        disarmDelete()
+        onConfirm()
+      }}
+    >
+      <span className="pm-msg-delete-x" aria-hidden>
+        ×
+      </span>
+      <span className="pm-msg-delete-label">Delete</span>
+    </button>
+  )
+}
+
+/** Dropdown row — shared Menu primitive. */
 function ActionMenuItem({
   icon,
   title,
@@ -2642,49 +3177,36 @@ function ActionMenuItem({
   destructive?: boolean
 }) {
   return (
-    <button
-      type="button"
-      role="menuitem"
-      className={cn(
-        "w-full flex items-start gap-2 px-2.5 py-2 text-left hover:bg-accent/80 transition-colors",
-        destructive && "hover:bg-destructive/10"
-      )}
-      onClick={onClick}
-    >
+    <MenuItem destructive={destructive} onClick={onClick}>
       <span
         className={cn(
           "mt-0.5 shrink-0",
-          destructive ? "text-destructive" : "text-muted-foreground"
+          destructive ? "text-[var(--pm-danger)]" : "text-[var(--pm-faint)]"
         )}
       >
         {icon}
       </span>
       <span className="min-w-0">
-        <span
-          className={cn(
-            "block text-xs font-medium",
-            destructive ? "text-destructive" : "text-foreground"
-          )}
+        <MenuItemTitle
+          className={destructive ? "text-[var(--pm-danger)]" : undefined}
         >
           {title}
-        </span>
-        <span className="block text-[10px] text-muted-foreground leading-snug">
-          {description}
-        </span>
+        </MenuItemTitle>
+        <MenuItemDescription>{description}</MenuItemDescription>
       </span>
-    </button>
+    </MenuItem>
   )
 }
 
 function SummarySection({ title, items }: { title: string; items: string[] }) {
   return (
     <div>
-      <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+      <h5 className="pm-ws-section-label">
         {title}
       </h5>
       <ul className="space-y-1">
         {items.map((item, i) => (
-          <li key={i} className="text-sm leading-relaxed">
+          <li key={i} className="pm-ws-prose-item">
             {item}
           </li>
         ))}
@@ -2735,15 +3257,15 @@ function PathRow({
   return (
     <li
       className={cn(
-        "flex items-start gap-1.5 rounded-md border border-border/40 px-2 py-1.5 text-xs",
+        "pm-ws-path-row",
         path.is_greyed && "opacity-50"
       )}
     >
-      <FolderOpen className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+      <FolderOpen className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
       <div className="flex-1 min-w-0">
         <button
           type="button"
-          className="text-left truncate w-full hover:text-primary transition-colors"
+          className="text-left truncate w-full bg-transparent border-0 p-0 cursor-pointer hover:text-[var(--pm-green)] transition-colors"
           onClick={onNavigate}
           title={path.folder_path || path.folder_id || ""}
           disabled={!path.folder_id}
@@ -2752,18 +3274,18 @@ function PathRow({
         </button>
         <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
           <span
-            className="text-[10px] text-muted-foreground truncate"
+            className="pm-meta truncate"
             title={typeLabel}
           >
             {typeLabel}
           </span>
           {path.is_primary && (
-            <Badge variant="outline" className="text-[8px] h-4 shrink-0">
+            <Badge variant="outline" className="pm-meta h-4 shrink-0">
               main
             </Badge>
           )}
           {path.is_greyed && (
-            <span className="text-[9px] text-amber-600 shrink-0">archived</span>
+            <span className="pm-meta text-[var(--pm-danger)] shrink-0">archived</span>
           )}
         </div>
       </div>
@@ -2773,7 +3295,7 @@ function PathRow({
           <Button
             size="sm"
             variant="ghost"
-            className="h-6 px-1.5 text-[10px] justify-start text-muted-foreground hover:text-foreground"
+            className="pm-ws-action !h-6 justify-start"
             disabled={busy}
             title="Unpin from folder. If a node-derived path exists for the same folder, only the pin is removed."
             onClick={onUnpin}
@@ -2784,7 +3306,7 @@ function PathRow({
         ) : isPersistent ? (
           // Plain folder mount — not a demotable timeline pin
           <span
-            className="h-6 px-1.5 text-[10px] text-muted-foreground/50 leading-6"
+            className="h-6 px-1.5 pm-meta leading-6 opacity-50"
             title="Folder placement. Use Remove from folder in the footer to unlink."
           >
             —
@@ -2792,7 +3314,7 @@ function PathRow({
         ) : folderHasPinned ? (
           // Derived sibling: folder already has a real pin — no second Pin action
           <span
-            className="h-6 px-1.5 text-[10px] text-muted-foreground/50 leading-6"
+            className="h-6 px-1.5 pm-meta leading-6 opacity-50"
             title="This folder is already pinned. Use Unpin on the “Pinned to folder” row."
           >
             —
@@ -2801,7 +3323,7 @@ function PathRow({
           <Button
             size="sm"
             variant="ghost"
-            className="h-6 px-1.5 text-[10px] justify-start"
+            className="pm-ws-action !h-6 justify-start"
             disabled={busy}
             title="Pin this file to the folder even if the timeline node is removed or archived."
             onClick={onPromote}
@@ -2828,16 +3350,16 @@ function NodeRow({
         type="button"
         onClick={onClick}
         className={cn(
-          "w-full text-left flex items-start gap-1.5 rounded-md border border-border/40 px-2 py-1.5 text-xs hover:bg-accent/50 transition-colors",
+          "pm-ws-path-row",
           node.greyed && "opacity-50"
         )}
       >
-        <GitBranch className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+        <GitBranch className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
         <div className="flex-1 min-w-0">
-          <p className="truncate font-medium">
+          <p className="truncate pm-title">
             {node.title || "Untitled node"}
           </p>
-          <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+          <p className="pm-meta mt-0.5 truncate">
             {[
               node.group_name || (node.group_id ? "Group" : "No group"),
               node.chain_title || (node.chain_id ? "Chain" : null),
@@ -2848,7 +3370,7 @@ function NodeRow({
             {node.greyed ? " · greyed" : ""}
           </p>
         </div>
-        <ChevronRight className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+        <ChevronRight className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
       </button>
     </li>
   )

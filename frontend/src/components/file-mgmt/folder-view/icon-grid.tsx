@@ -393,8 +393,8 @@ export function IconGrid({
   return (
     <div
       className={cn(
-        "h-full min-h-0 flex flex-col transition-colors",
-        dragOver && "bg-primary/5 ring-2 ring-primary/20 ring-inset"
+        "h-full min-h-0 flex flex-col transition-colors duration-200",
+        dragOver && "bg-[var(--pm-green-wash)] ring-2 ring-[var(--pm-green-soft)] ring-inset rounded-[var(--pm-r-sm)]"
       )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -445,11 +445,11 @@ export function IconGrid({
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {filesLoading && sortedItems.length === 0 ? (
           <div className="flex items-center justify-center h-32">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <Loader2 className="h-5 w-5 animate-spin text-[var(--pm-faint)]" />
           </div>
         ) : (
           <TooltipProvider delay={TIP_OPEN_MS} closeDelay={TIP_CLOSE_MS}>
-            <div className="flex flex-wrap gap-1 p-3">
+            <div className="pm-files-grid">
               {sortedItems.map((item) =>
                 item.kind === "folder" ? (
                   <FolderIconItem
@@ -500,7 +500,7 @@ export function IconGrid({
                 )
               )}
               {sortedItems.length === 0 && (
-                <div className="w-full text-center text-muted-foreground text-sm py-8">
+                <div className="pm-files-empty">
                   This folder is empty. Drag files here to upload.
                 </div>
               )}
@@ -518,9 +518,9 @@ export function IconGrid({
           }
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="pm-dialog max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-sm">
+            <DialogTitle>
               {editTarget?.kind === "folder" ? "Edit Folder" : "Rename File"}
             </DialogTitle>
           </DialogHeader>
@@ -530,7 +530,7 @@ export function IconGrid({
                 <div className="flex items-center gap-3">
                   <div
                     key={`${editIconMode}-${editIconKey}-${editIconColor}-${editSymbol}`}
-                    className="h-10 w-10 rounded-lg border border-border flex items-center justify-center bg-muted/30 shrink-0"
+                    className="h-10 w-10 rounded-[var(--pm-r-sm)] flex items-center justify-center bg-[var(--pm-green-wash)] shrink-0"
                   >
                     <GroupIconView
                       source={editFolderPreview}
@@ -538,9 +538,7 @@ export function IconGrid({
                     />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                      Name
-                    </label>
+                    <label className="pm-field-label">Name</label>
                     <Input
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
@@ -549,7 +547,7 @@ export function IconGrid({
                         if (e.key === "Enter") void handleSaveEdit()
                       }}
                       autoFocus
-                      className="h-8 text-xs"
+                      className="h-8"
                     />
                   </div>
                 </div>
@@ -566,9 +564,7 @@ export function IconGrid({
               </>
             ) : (
               <div>
-                <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                  File name
-                </label>
+                <label className="pm-field-label">File name</label>
                 <div className="flex items-center gap-1.5 min-w-0">
                   <Input
                     value={editName}
@@ -578,18 +574,18 @@ export function IconGrid({
                       if (e.key === "Enter") void handleSaveEdit()
                     }}
                     autoFocus
-                    className="h-8 text-xs flex-1 min-w-0 font-mono"
+                    className="h-8 flex-1 min-w-0 font-mono"
                   />
                   {editFileExt && (
                     <span
-                      className="shrink-0 text-xs font-mono text-muted-foreground bg-muted/50 border border-border/50 rounded-md px-2 h-8 inline-flex items-center"
+                      className="shrink-0 pm-meta font-mono bg-[var(--pm-green-wash)] rounded-[var(--pm-r-sm)] px-2 h-8 inline-flex items-center"
                       title="Extension cannot be changed"
                     >
                       {editFileExt}
                     </span>
                   )}
                 </div>
-                <p className="text-[10px] text-muted-foreground mt-1.5">
+                <p className="pm-meta mt-1.5">
                   Extension is fixed and cannot be changed.
                 </p>
               </div>
@@ -656,10 +652,8 @@ function FolderIconItem({
           <button
             type="button"
             className={cn(
-              "group flex flex-col items-center gap-1 p-2 rounded-lg transition-colors w-[88px] shrink-0",
-              selected
-                ? "bg-primary/10 ring-1 ring-primary/30"
-                : "hover:bg-muted/50"
+              "pm-files-item group",
+              selected && "is-selected"
             )}
             onClick={onSelect}
             onDoubleClick={(e) => {
@@ -677,21 +671,19 @@ function FolderIconItem({
               </span>
               {itemCount > 0 && (
                 <span
-                  className="absolute -bottom-0.5 -right-0.5 text-[9px] font-medium bg-muted text-muted-foreground rounded-full px-1 min-w-[14px] text-center"
+                  className="pm-files-item-badge"
                   title={`${folder.file_count || 0} file(s), ${folder.children?.length || 0} folder(s)`}
                 >
                   {itemCount}
                 </span>
               )}
               {selected && multiSelectMode && (
-                <div className="absolute -top-1 -right-1 bg-primary rounded-full p-0.5">
-                  <Check className="h-2.5 w-2.5 text-primary-foreground" />
+                <div className="pm-files-item-check">
+                  <Check className="h-2.5 w-2.5" />
                 </div>
               )}
             </div>
-            <span className="text-[11px] text-center text-muted-foreground truncate w-full leading-tight">
-              {fullName}
-            </span>
+            <span className="pm-files-item-name">{fullName}</span>
           </button>
         }
       />
@@ -702,7 +694,8 @@ function FolderIconItem({
       >
         <div className={cn("flex items-start gap-1 px-2 py-1.5", TIP_MAX)}>
           <span
-            className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2 break-all"
+            className="flex-1 min-w-0 pm-meta leading-snug line-clamp-2 break-all"
+            style={{ color: "inherit" }}
             title={fullName}
           >
             {fullName}
@@ -766,12 +759,10 @@ function FileIconItem({
           <button
             type="button"
             className={cn(
-              "group flex flex-col items-center gap-1 p-2 rounded-lg transition-colors w-[88px] shrink-0",
-              selected && !isIngesting
-                ? "bg-primary/10 ring-1 ring-primary/30"
-                : !isIngesting && "hover:bg-muted/50",
-              isArchived && "opacity-40",
-              isIngesting && "ring-1 ring-sky-500/40 bg-sky-500/5 cursor-default"
+              "pm-files-item group",
+              selected && !isIngesting && "is-selected",
+              isArchived && "is-archived",
+              isIngesting && "is-busy"
             )}
             onClick={onSelect}
             onDoubleClick={(e) => {
@@ -802,47 +793,34 @@ function FileIconItem({
               </span>
               {isIngesting && (
                 <div
-                  className="absolute inset-0 flex items-center justify-center rounded-md bg-background/50 pointer-events-none"
+                  className="absolute inset-0 flex items-center justify-center rounded-md bg-[var(--pm-float)]/55 pointer-events-none"
                   title={
                     ingesting?.message
                       ? `${ingesting.message} — open when done`
                       : "Ingesting… open when done"
                   }
                 >
-                  <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+                  <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-green)]" />
                 </div>
               )}
               {file.is_definitive && !isIngesting && (
-                <Star className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 text-[var(--ze-green,#1A5E3D)] fill-[var(--ze-green,#1A5E3D)]" />
+                <Star className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 text-[var(--pm-green)] fill-[var(--pm-green)]" />
               )}
               {selected && multiSelectMode && (
-                <div className="absolute -top-1 -right-1 bg-primary rounded-full p-0.5">
-                  <Check className="h-2.5 w-2.5 text-primary-foreground" />
+                <div className="pm-files-item-check">
+                  <Check className="h-2.5 w-2.5" />
                 </div>
               )}
             </div>
-            <span
-              className={cn(
-                "text-[11px] text-center truncate w-full leading-tight",
-                isArchived
-                  ? "text-muted-foreground/60"
-                  : "text-muted-foreground"
-              )}
-            >
-              {fullName}
-            </span>
+            <span className="pm-files-item-name">{fullName}</span>
             {isIngesting ? (
-              <span className="text-[9px] text-sky-600 font-medium tabular-nums">
+              <span className="pm-files-item-meta is-busy">
                 {progressPct > 0 ? `${progressPct}%` : "updating…"}
               </span>
             ) : isArchived ? (
-              <span className="text-[9px] text-muted-foreground/50 uppercase tracking-wide">
-                archived
-              </span>
+              <span className="pm-files-item-meta">archived</span>
             ) : ext ? (
-              <span className="text-[9px] text-muted-foreground/40 uppercase">
-                {ext}
-              </span>
+              <span className="pm-files-item-meta">{ext}</span>
             ) : null}
           </button>
         }
@@ -855,13 +833,14 @@ function FileIconItem({
         <div className={cn("flex items-start gap-1 px-2 py-1.5", TIP_MAX)}>
           <div className="flex-1 min-w-0">
             <span
-              className="block text-[11px] leading-snug line-clamp-2 break-all"
+              className="block pm-meta leading-snug line-clamp-2 break-all"
+              style={{ color: "inherit" }}
               title={fullName}
             >
               {fullName}
             </span>
             {isIngesting && (
-              <span className="block text-[10px] text-sky-200/90 mt-0.5 line-clamp-2">
+              <span className="block pm-meta mt-0.5 line-clamp-2 opacity-90">
                 {ingesting?.message || "Ingesting…"}
                 {progressPct > 0 ? ` · ${progressPct}%` : ""}
                 {" · "}

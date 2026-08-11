@@ -25,7 +25,7 @@ interface ConflictViewerDialogProps {
 function ConflictQuote({ content }: { content: string }) {
   return (
     <div className="px-4 pt-3 pb-2 shrink-0">
-      <p className="text-sm leading-relaxed whitespace-pre-wrap text-amber-600 dark:text-amber-400 font-medium border-l-2 border-amber-400 pl-3">
+      <p className="pm-dialog-callout">
         &ldquo;{content}&rdquo;
       </p>
     </div>
@@ -73,11 +73,11 @@ function SourcePanel({
   return (
     <div className="w-1/2 flex flex-col min-h-0">
       <div className="flex items-center gap-2 mb-2">
-        <h4 className="text-sm font-medium text-muted-foreground truncate">
+        <h4 className="pm-title truncate text-[var(--pm-muted)]">
           {label}
         </h4>
       </div>
-      <div className="flex-1 overflow-hidden rounded-lg border border-border min-h-0">
+      <div className="flex-1 overflow-hidden pm-nested-pane min-h-0">
         <Tabs defaultValue={defaultTab} className="flex flex-col h-full">
           <TabsList variant="line" className="mx-2 mt-2">
             {showRaw && <TabsTrigger value="raw">Raw</TabsTrigger>}
@@ -109,20 +109,20 @@ function SourcePanel({
               <CardContent className="p-4">
                 {!showRaw && <ConflictQuote content={content} />}
                 {summaryLoading ? (
-                  <div className="flex items-center justify-center py-8 text-muted-foreground">
-                    <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                  <div className="flex items-center justify-center py-8 pm-meta">
+                    <Loader2 className="h-5 w-5 animate-spin mr-2 text-[var(--pm-faint)]" />
                     Loading summary...
                   </div>
                 ) : summary ? (
                   <div className="space-y-4">
                     {summary.data.length > 0 && (
                       <div>
-                        <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                        <h5 className="pm-field-label mb-2">
                           Data Points
                         </h5>
                         <ul className="space-y-1">
                           {summary.data.map((item, i) => (
-                            <li key={i} className="text-sm leading-relaxed">
+                            <li key={i} className="pm-dialog-body text-[var(--pm-text)]">
                               {item}
                             </li>
                           ))}
@@ -131,12 +131,12 @@ function SourcePanel({
                     )}
                     {summary.facts.length > 0 && (
                       <div>
-                        <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                        <h5 className="pm-field-label mb-2">
                           Facts
                         </h5>
                         <ul className="space-y-1">
                           {summary.facts.map((item, i) => (
-                            <li key={i} className="text-sm leading-relaxed">
+                            <li key={i} className="pm-dialog-body text-[var(--pm-text)]">
                               {item}
                             </li>
                           ))}
@@ -145,12 +145,12 @@ function SourcePanel({
                     )}
                     {summary.insights.length > 0 && (
                       <div>
-                        <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                        <h5 className="pm-field-label mb-2">
                           Insights
                         </h5>
                         <ul className="space-y-1">
                           {summary.insights.map((item, i) => (
-                            <li key={i} className="text-sm leading-relaxed">
+                            <li key={i} className="pm-dialog-body text-[var(--pm-text)]">
                               {item}
                             </li>
                           ))}
@@ -160,13 +160,13 @@ function SourcePanel({
                     {summary.data.length === 0 &&
                       summary.facts.length === 0 &&
                       summary.insights.length === 0 && (
-                        <p className="text-sm text-muted-foreground">
+                        <p className="pm-meta">
                           No summary available.
                         </p>
                       )}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">
+                  <p className="pm-meta">
                     No summary available.
                   </p>
                 )}
@@ -186,7 +186,7 @@ export function ConflictViewerDialog({
 }: ConflictViewerDialogProps) {
   return (
     <Dialog open={!!conflict} onOpenChange={(v) => onOpenChange(v)}>
-      <DialogContent className="!max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col">
+      <DialogContent className="pm-dialog !max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Conflict</DialogTitle>
         </DialogHeader>

@@ -64,19 +64,13 @@ function isFileArchived(f: FileSummary): boolean {
 }
 
 function ToolbarDivider() {
-  return <div className="w-px h-3 bg-border/50 mx-0.5 shrink-0 self-center" aria-hidden />
+  return <div className="pm-files-tb-div" aria-hidden />
 }
 
-/**
- * Match database tab bar type scale:
- * text-[10px] · font-medium · uppercase · tracking-[0.12em]
- */
-const tbBtn =
-  "h-6 gap-1 px-1.5 text-[10px] font-medium uppercase tracking-[0.12em] leading-none shrink-0 [&_svg:not([class*='size-'])]:size-3"
-const tbIconBtn =
-  "size-6 shrink-0 [&_svg:not([class*='size-'])]:size-3.5"
-const tbLabel =
-  "inline-flex h-6 items-center px-1 text-[10px] font-medium uppercase tracking-[0.12em] leading-none tabular-nums text-muted-foreground shrink-0"
+/** Premium Files toolbar — type roles via .pm-files-tb-* (see index.css) */
+const tbBtn = "pm-files-tb-btn shrink-0"
+const tbIconBtn = "pm-files-tb-icon shrink-0"
+const tbLabel = "pm-files-tb-label"
 
 /**
  * Toolbar chrome crossfade — opacity only (no slide/blur/scale; those felt dizzy).
@@ -132,9 +126,8 @@ type ToolbarChrome =
       isRootView: boolean
     }
 
-/** Dropdown surface — solid fill; parent toolbar must sit above the icon grid (z-index). */
-const tbMenuPanel =
-  "absolute left-0 top-full mt-1 z-50 min-w-[260px] rounded-md border border-border bg-background text-foreground shadow-lg py-1"
+/** Dropdown surface — nested white + soft shadow; parent toolbar z-index above grid. */
+const tbMenuPanel = "pm-files-menu absolute left-0 top-full mt-1 min-w-[260px]"
 
 function chromeToolKey(c: ToolbarChrome): string {
   switch (c.kind) {
@@ -184,32 +177,20 @@ function MenuItem({
     <button
       type="button"
       role="menuitem"
-      className={cn(
-        "w-full flex items-start gap-2 px-2.5 py-2 text-left hover:bg-accent/80 transition-colors",
-        destructive && "hover:bg-destructive/10"
-      )}
+      className={cn("pm-files-menu-item", destructive && "is-danger")}
       onClick={onClick}
     >
       <span
         className={cn(
           "mt-0.5 shrink-0",
-          destructive ? "text-destructive" : "text-muted-foreground"
+          destructive ? "text-[var(--pm-danger)]" : "text-[var(--pm-muted)]"
         )}
       >
         {icon}
       </span>
       <span className="min-w-0">
-        <span
-          className={cn(
-            "block text-xs font-medium",
-            destructive ? "text-destructive" : "text-foreground"
-          )}
-        >
-          {title}
-        </span>
-        <span className="block text-[10px] text-muted-foreground leading-snug">
-          {description}
-        </span>
+        <span className="pm-files-menu-item-title">{title}</span>
+        <span className="pm-files-menu-item-desc">{description}</span>
       </span>
     </button>
   )
@@ -585,9 +566,10 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                 <FolderInput />
                 Upload Folder
               </Button>
+              <ToolbarDivider />
             </>
           )}
-          {/* Sort files in current folder */}
+          {/* Sort / Select — secondary cluster */}
           <div className="relative">
             <Button
               variant="ghost"
@@ -597,7 +579,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                 setOpenMenu((m) => (m === "sort" ? null : "sort"))
               }
               title="Sort files"
-              className={cn(tbBtn, openMenu === "sort" && opts.menus && "bg-accent")}
+              className={cn(tbBtn, openMenu === "sort" && opts.menus && "is-on")}
               tabIndex={tab}
             >
               <ArrowUpDown />
@@ -606,7 +588,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
             </Button>
             {opts.menus && openMenu === "sort" && (
               <div
-                className="absolute left-0 top-full mt-1 z-50 min-w-[200px] rounded-md border border-border bg-background text-foreground shadow-lg py-1"
+                className={cn(tbMenuPanel, "min-w-[200px]")}
                 role="menu"
               >
                 {(
@@ -620,9 +602,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                     type="button"
                     role="menuitem"
                     className={cn(
-                      "w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted/60",
-                      folderFileSort === opt.id &&
-                        "bg-primary/10 text-primary font-medium"
+                      "pm-files-menu-opt",
+                      folderFileSort === opt.id && "is-on"
                     )}
                     onClick={() => {
                       setFolderFileSort(collectionId, opt.id)
@@ -636,9 +617,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                   type="button"
                   role="menuitem"
                   className={cn(
-                    "w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted/60",
-                    isCreatedSortMode(folderFileSort) &&
-                      "bg-primary/10 text-primary font-medium"
+                    "pm-files-menu-opt",
+                    isCreatedSortMode(folderFileSort) && "is-on"
                   )}
                   title="Click again to toggle newest ↔ oldest"
                   onClick={() => {
@@ -651,25 +631,18 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                 >
                   By created
                   {folderFileSort === "created_desc" && (
-                    <span className="text-muted-foreground font-normal">
-                      {" "}
-                      · newest
-                    </span>
+                    <span className="text-[var(--pm-faint)]"> · newest</span>
                   )}
                   {folderFileSort === "created_asc" && (
-                    <span className="text-muted-foreground font-normal">
-                      {" "}
-                      · oldest
-                    </span>
+                    <span className="text-[var(--pm-faint)]"> · oldest</span>
                   )}
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   className={cn(
-                    "w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted/60",
-                    isUpdatedSortMode(folderFileSort) &&
-                      "bg-primary/10 text-primary font-medium"
+                    "pm-files-menu-opt",
+                    isUpdatedSortMode(folderFileSort) && "is-on"
                   )}
                   title="Folder time = latest file update inside. Click again to toggle direction."
                   onClick={() => {
@@ -682,16 +655,10 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                 >
                   By updated
                   {folderFileSort === "updated_desc" && (
-                    <span className="text-muted-foreground font-normal">
-                      {" "}
-                      · newest
-                    </span>
+                    <span className="text-[var(--pm-faint)]"> · newest</span>
                   )}
                   {folderFileSort === "updated_asc" && (
-                    <span className="text-muted-foreground font-normal">
-                      {" "}
-                      · oldest
-                    </span>
+                    <span className="text-[var(--pm-faint)]"> · oldest</span>
                   )}
                 </button>
               </div>
@@ -720,14 +687,14 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
             size="xs"
             onClick={() => on && exitMultiSelectMode()}
             title="Exit multi-select (or click empty area)"
-            className={cn(tbBtn, "bg-primary/10 text-primary hover:bg-primary/15")}
+            className={cn(tbBtn, "is-accent")}
             tabIndex={tab}
           >
             <CheckSquare />
             Select
           </Button>
           <ToolbarDivider />
-          <span className={cn(tbLabel, "text-primary/80")}>Tap to select</span>
+          <span className={cn(tbLabel, "is-accent")}>Tap to select</span>
           <Button
             variant="ghost"
             size="xs"
@@ -754,7 +721,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               <Button
                 variant="ghost"
                 size="xs"
-                className={cn(tbBtn, "text-destructive hover:bg-destructive/10")}
+                className={cn(tbBtn, "is-danger")}
                 onClick={() => on && setConfirmAction("deleteFolder")}
                 title="Delete folder(s)"
                 tabIndex={tab}
@@ -786,10 +753,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                 <Button
                   variant="ghost"
                   size="xs"
-                  className={cn(
-                    tbBtn,
-                    "text-destructive hover:bg-destructive/10"
-                  )}
+                  className={cn(tbBtn, "is-danger")}
                   onClick={() => on && setConfirmAction("deleteFolder")}
                   title="Delete folder(s)"
                   tabIndex={tab}
@@ -873,10 +837,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                   size="xs"
                   onClick={() => on && pickMenuAction("delete")}
                   title="Permanently delete selected files"
-                  className={cn(
-                    tbBtn,
-                    "text-destructive hover:text-destructive hover:bg-destructive/10"
-                  )}
+                  className={cn(tbBtn, "is-danger")}
                   tabIndex={tab}
                 >
                   <Trash2 />
@@ -892,7 +853,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                     onClick={() => on && toggleMenu("move")}
                     className={cn(
                       tbBtn,
-                      openMenu === "move" && opts.menus && "bg-accent"
+                      openMenu === "move" && opts.menus && "is-on"
                     )}
                     title="Move or mirror to another folder"
                     tabIndex={tab}
@@ -936,7 +897,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                       onClick={() => on && toggleMenu("archive")}
                       className={cn(
                         tbBtn,
-                        openMenu === "archive" && opts.menus && "bg-accent"
+                        openMenu === "archive" && opts.menus && "is-on"
                       )}
                       title="Archive options"
                       tabIndex={tab}
@@ -987,8 +948,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                     onClick={() => on && toggleMenu("delete")}
                     className={cn(
                       tbBtn,
-                      openMenu === "delete" && opts.menus && "bg-accent",
-                      "text-destructive hover:text-destructive hover:bg-destructive/10"
+                      "is-danger",
+                      openMenu === "delete" && opts.menus && "is-on"
                     )}
                     title="Remove or delete"
                     tabIndex={tab}
@@ -1048,8 +1009,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                   <Star
                     className={cn(
                       filePart.isDefinitive
-                        ? "fill-[var(--ze-green,#1A5E3D)] text-[var(--ze-green,#1A5E3D)]"
-                        : "text-[var(--ze-green,#1A5E3D)]"
+                        ? "fill-[var(--pm-green)] text-[var(--pm-green)]"
+                        : "text-[var(--pm-green)]"
                     )}
                   />
                   Definitive
@@ -1063,21 +1024,25 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
   }
 
   return (
-    <div className="flex items-center gap-0.5 py-0.5 px-1 min-h-7">
-      {/* Up one level — icon only (stays put during mode swap) */}
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={handleGoUp}
-        disabled={!canGoUp}
-        title={canGoUp ? "Go up one level" : "Already at root"}
-        className={tbIconBtn}
-      >
-        <ChevronLeft />
-      </Button>
+    <div className="pm-files-toolbar">
+      {/* Nav well — stays put while tool chrome crossfades */}
+      <div className="pm-files-tb-nav">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleGoUp}
+          disabled={!canGoUp}
+          title={canGoUp ? "Go up one level" : "Already at root"}
+          className={tbIconBtn}
+        >
+          <ChevronLeft />
+        </Button>
+      </div>
 
-      {/* Any toolKey change → dual-layer crossfade (CSS keyframes on mount) */}
-      <div className="relative flex-1 min-w-0 h-6 overflow-visible" ref={menusRef}>
+      <div className="pm-files-tb-sep" aria-hidden />
+
+      {/* Primary tool strip — dual-layer crossfade on mode swap */}
+      <div className="pm-files-toolbar-tools relative flex-1 min-w-0 overflow-visible" ref={menusRef}>
         {leaving && (
           <div
             key={`leave-${leaving.swapId}`}
@@ -1138,23 +1103,21 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
           if (!open) resetNewFolderForm()
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="pm-dialog max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-sm">New Folder</DialogTitle>
+            <DialogTitle>New Folder</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-1">
             <div className="flex items-center gap-3">
               <div
                 key={`${newFolderIconMode}-${newFolderIconKey}-${newFolderIconColor}-${newFolderSymbol}`}
-                className="h-10 w-10 rounded-lg border border-border flex items-center justify-center bg-muted/30 shrink-0"
+                className="h-10 w-10 rounded-[var(--pm-r-sm)] flex items-center justify-center bg-[var(--pm-green-wash)] shrink-0"
                 title="Preview"
               >
                 <GroupIconView source={newFolderPreview} className="h-5 w-5" />
               </div>
               <div className="flex-1 min-w-0">
-                <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                  Name
-                </label>
+                <label className="pm-field-label">Name</label>
                 <Input
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
@@ -1163,7 +1126,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                     if (e.key === "Enter") void handleCreateFolder()
                   }}
                   autoFocus
-                  className="h-8 text-xs"
+                  className="h-8"
                 />
               </div>
             </div>
@@ -1201,7 +1164,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
       </Dialog>
 
       <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
             <DialogTitle>Move to… ({selectedIds.length} file(s))</DialogTitle>
           </DialogHeader>
@@ -1210,7 +1173,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               {availableFolders.map((f) => (
                 <button
                   key={f.id}
-                  className="text-left text-xs px-2 py-1.5 rounded hover:bg-muted transition-colors truncate"
+                  type="button"
+                  className="pm-files-menu-opt truncate text-left"
                   style={{ paddingLeft: `${8 + f.depth * 12}px` }}
                   onClick={async () => {
                     await moveFilesToFolder(collectionId, selectedIds, f.id)
@@ -1226,7 +1190,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
       </Dialog>
 
       <Dialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
             <DialogTitle>Mirror to… ({selectedIds.length} file(s))</DialogTitle>
           </DialogHeader>
@@ -1235,7 +1199,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               {availableFolders.map((f) => (
                 <button
                   key={f.id}
-                  className="text-left text-xs px-2 py-1.5 rounded hover:bg-muted transition-colors truncate"
+                  type="button"
+                  className="pm-files-menu-opt truncate text-left"
                   style={{ paddingLeft: `${8 + f.depth * 12}px` }}
                   onClick={async () => {
                     await copyFilesToFolder(collectionId, selectedIds, f.id)
@@ -1254,7 +1219,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
         open={!!confirmAction}
         onOpenChange={(v) => !v && setConfirmAction(null)}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
             <DialogTitle>
               {confirmAction === "delete" && "Delete file globally?"}
@@ -1265,7 +1230,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               {confirmAction === "unlink" && "Remove from this folder?"}
             </DialogTitle>
           </DialogHeader>
-          <p className="text-xs text-muted-foreground">
+          <p className="pm-dialog-body">
             {confirmAction === "delete" &&
               "Permanently delete selected files everywhere. This cannot be undone."}
             {confirmAction === "deleteFolder" &&
@@ -1296,6 +1261,11 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                   : "default"
               }
               size="sm"
+              className={
+                confirmAction === "delete" || confirmAction === "deleteFolder"
+                  ? undefined
+                  : ""
+              }
               onClick={async () => {
                 if (confirmAction === "delete")
                   await permanentlyDeleteFiles(collectionId, selectedIds)

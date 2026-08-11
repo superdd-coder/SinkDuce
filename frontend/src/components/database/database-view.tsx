@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { List, Settings } from "lucide-react"
+import { List, MoreVertical } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/stores/app-store"
 import { getFiles, deleteDocument, getTasks, type FileListItem } from "@/api/client"
@@ -86,10 +86,31 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<DbTab>(() => loadInitialDbTab())
+  /**
+   * Last Overview/Files/Timeline selection for the pill Tabs.
+   * Settings (config) is opened via the ⋮ button — not a Tabs value.
+   * Base UI Tabs auto-resets to the first tab when `value` is undefined /
+   * unmatched and fires onValueChange, which would undo open-config.
+   */
+  const [contentTab, setContentTab] = useState<"info" | "files" | "timeline">(
+    () => {
+      const t = loadInitialDbTab()
+      return t === "config" ? "info" : t
+    }
+  )
   /** Tabs visited at least once — keepMounted after first open for snappy re-switch. */
   const [visitedTabs, setVisitedTabs] = useState<Set<DbTab>>(
     () => new Set([loadInitialDbTab()])
   )
+  /**
+   * Sequential panel motion (no dual semi-transparent stack = no ghost):
+   * 1) fade out stageTab  2) swap stageTab to activeTab  3) fade in
+   * Same path for Overview / Files / Timeline / Config.
+   */
+  const [stageTab, setStageTab] = useState<DbTab>(() => loadInitialDbTab())
+  const [stagePhase, setStagePhase] = useState<"shown" | "hiding">("shown")
+  const panelMotionGen = useRef(0)
+  const PANEL_OUT_MS = 140
   const [files, setFiles] = useState<FileListItem[]>([])
   /** Unified file detail — fileId for metadata, source for chunks/meeting/note. */
   const [detailOpen, setDetailOpen] = useState<{
@@ -117,6 +138,9 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
         ? tab
         : "info"
     setActiveTab(next)
+    if (next === "info" || next === "files" || next === "timeline") {
+      setContentTab(next)
+    }
     setVisitedTabs((prev) => {
       if (prev.has(next)) return prev
       const n = new Set(prev)
@@ -133,12 +157,74 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     handleTabChange("timeline")
   }, [timelineNavRequest, handleTabChange])
 
-  // Collection switch remounts the panel tree (key=activeCollection); reset visit
-  // cache so we don't keepMounted-mount every prior tab for the new collection.
-  useEffect(() => {
-    setVisitedTabs(new Set([activeTab]))
+  /**
+   * Collection switch: keep stage + tab panels mounted (no visitedTabs wipe —
+   * that remounted InfoPanel and flashed white). Soft-fade title, tab bar, and
+   * body together so nothing hard-cuts alone.
+   */
+  const [collectionSoftFaded, setCollectionSoftFaded] = useState(false)
+  const collectionSoftSkipRef = useRef(true)
+  const collectionSoftGenRef = useRef(0)
+
+  useLayoutEffect(() => {
+    // Reset tab stage to current (panels stay mounted; props swap)
+    setStageTab(activeTab)
+    setStagePhase("shown")
+    panelMotionGen.current += 1
+
+    if (collectionSoftSkipRef.current) {
+      collectionSoftSkipRef.current = false
+      return
+    }
+    if (!activeCollection) {
+      setCollectionSoftFaded(false)
+      return
+    }
+    // Paint new collection at opacity 0, then fade in (title + tab bar + body)
+    collectionSoftGenRef.current += 1
+    setCollectionSoftFaded(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on collection change
   }, [activeCollection])
+
+  useEffect(() => {
+    if (!collectionSoftFaded) return
+    const gen = collectionSoftGenRef.current
+    // Brief hold so browser commits opacity:0 with new data, then fade up
+    const t = window.setTimeout(() => {
+      if (collectionSoftGenRef.current !== gen) return
+      setCollectionSoftFaded(false)
+    }, 40)
+    return () => window.clearTimeout(t)
+  }, [collectionSoftFaded, activeCollection])
+
+  // Sequential fade: hide current paint → swap → show next (never two UIs at once).
+  useEffect(() => {
+    if (activeTab === stageTab && stagePhase === "shown") return
+
+    // Already on target but still marked hiding — finish show
+    if (activeTab === stageTab && stagePhase === "hiding") {
+      setStagePhase("shown")
+      return
+    }
+
+    const gen = ++panelMotionGen.current
+    setStagePhase("hiding")
+    const t = window.setTimeout(() => {
+      if (panelMotionGen.current !== gen) return
+      setStageTab(activeTab)
+      setStagePhase("shown")
+    }, PANEL_OUT_MS)
+    return () => {
+      window.clearTimeout(t)
+    }
+  }, [activeTab, stageTab, stagePhase])
+
+  // Close float only on Config (FAB hidden). Timeline also has a right rail.
+  useEffect(() => {
+    if (quickChatOpen && activeTab === "config") {
+      setQuickChatOpen(false)
+    }
+  }, [activeTab, quickChatOpen])
 
   // Listen for "Create New Database" events from other components (e.g. meeting ingest)
   useEffect(() => {
@@ -372,8 +458,72 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
     }
   }
 
+  const collectionDisplayName =
+    collections.find((c) => c.id === activeCollection)?.name || activeCollection || ""
+
+  /**
+   * Pill tabs — Overview | Files | Timeline (same language as Meeting content tabs).
+   * White soft tray + sliding indicator; Settings stays on the title ⋮.
+   */
+  const collectionTabs = (
+    <div className="pm-collection-tabs-bar">
+      <Tabs
+        value={contentTab}
+        onValueChange={handleTabChange}
+        className="min-w-0 gap-0"
+      >
+        <TabsList className="pm-pill-tabs relative shrink-0 items-center isolate">
+          <TabsIndicator
+            renderBeforeHydration
+            className="pm-tabs-indicator"
+          />
+          {(
+            [
+              ["info", "Overview"],
+              ["files", "Files"],
+              ["timeline", "Timeline"],
+            ] as const
+          ).map(([value, label]) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              // While Settings is open, contentTab may still equal this value —
+              // onValueChange won't re-fire; force leave Settings on click.
+              onClick={() => {
+                if (activeTab === "config") handleTabChange(value)
+              }}
+              className={cn(
+                "pm-vtab relative z-[1]",
+                activeTab === "config" && "opacity-60",
+              )}
+            >
+              {label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      {/* All Files — sits beside the pill tray (only on Files tab) */}
+      {activeTab === "files" && (
+        <div className="pm-collection-tabs-actions">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setClassicFilesOpen(true)}
+            title="All Files"
+            className="pm-collection-all-files-btn shrink-0 gap-1.5"
+          >
+            <List className="size-3.5" />
+            <span>All Files</span>
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+
   return (
-    <div className="h-full flex">
+    /* overflow visible so stage + collections soft shadows are not clipped */
+    <div className="pm-shell-workspace h-full min-h-0 min-w-0">
       <CollectionList
         collections={collections}
         activeCollection={activeCollection}
@@ -383,114 +533,85 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
         onRename={setRenameTarget}
       />
 
-      <div className="flex-1 overflow-hidden" key={activeCollection || "empty"}>
+      <div className="pm-shell-stage-slot flex-1 min-h-0 min-w-0">
         {activeCollection ? (
-          <div className="h-full flex flex-col px-10 py-8 animate-tab-in">
-            {/* Collection name header — AI-COMP-001 Heading LG */}
-            <div className="flex items-center justify-between gap-3 mb-5">
-              <span
-                className="truncate t-body-family min-w-0"
-                style={{
-                  fontSize: "24px",
-                  fontWeight: 300,
-                  letterSpacing: "-0.01em",
-                  lineHeight: 1.2,
-                  color: "var(--ze-ink)",
+          /* Big soft stage — stable mount (no key=collectionId remount flash) */
+          <div className="pm-stage pm-float-surface h-full min-h-0 flex flex-col overflow-hidden">
+            {/* Collection header — title left, Settings ⋮ far right (not in tab bar) */}
+            <header
+              className={cn(
+                "pm-collection-chrome shrink-0 min-w-0 flex items-start justify-between gap-3",
+                "pm-collection-soft-fade",
+                collectionSoftFaded && "is-faded",
+              )}
+              style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
+            >
+              <div className="min-w-0">
+                <p className="pm-label mb-0.5">Collection</p>
+                <h1 className="pm-display truncate">{collectionDisplayName}</h1>
+              </div>
+              <button
+                type="button"
+                title="Collection settings"
+                aria-label="Collection settings"
+                aria-pressed={activeTab === "config"}
+                onClick={() => {
+                  // Toggle: open config, or close back to last content tab
+                  if (activeTab === "config") handleTabChange(contentTab)
+                  else handleTabChange("config")
                 }}
-              >
-                {collections.find(c => c.id === activeCollection)?.name || activeCollection}
-              </span>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-[10px] text-muted-foreground tabular-nums">
-                  {files.length > 0 && `${files.length} files · `}
-                  {collections.find(c => c.id === activeCollection)?.points_count ?? 0} chunks
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleTabChange("config")}
-                  title="Collection settings"
-                  className={cn(
-                    "p-1.5 rounded-md transition-colors",
-                    activeTab === "config"
-                      ? "text-primary bg-primary/10"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                  )}
-                >
-                  <Settings className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 flex flex-col min-h-0 min-w-0">
-              {/*
-                Tab list only uses Base UI Tabs (for indicator).
-                Panels are custom — NO TabsContent: its [hidden]/starting-style
-                transitions zero size and flash Timeline on every switch.
-              */}
-              <div className="shrink-0 flex items-center justify-between gap-3 min-w-0 w-full h-7">
-                <Tabs
-                  value={activeTab}
-                  onValueChange={handleTabChange}
-                  className="min-w-0"
-                >
-                  <TabsList className="!h-7 w-fit bg-transparent p-0 gap-5 border-0 rounded-none relative shrink-0 items-center">
-                    <TabsIndicator
-                      renderBeforeHydration
-                      className="!bottom-0 h-0.5"
-                    />
-                    {(
-                      [
-                        ["info", "Info"],
-                        ["files", "Files"],
-                        ["timeline", "Timeline"],
-                      ] as const
-                    ).map(([value, label]) => (
-                      <TabsTrigger
-                        key={value}
-                        value={value}
-                        className={cn(
-                          "!h-7 min-h-0 px-0 py-0 rounded-none bg-transparent",
-                          "data-[state=active]:shadow-none data-active:bg-transparent",
-                          "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
-                          "text-muted-foreground data-active:text-primary",
-                          "after:!opacity-0 after:!content-none",
-                          "inline-flex items-center justify-center"
-                        )}
-                        style={{ borderColor: "transparent" }}
-                      >
-                        {label}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                </Tabs>
-                {/* Files tab only: All Files flat list dialog — right edge of tab bar row */}
-                {activeTab === "files" && (
-                  <button
-                    type="button"
-                    onClick={() => setClassicFilesOpen(true)}
-                    title="All Files"
-                    className={cn(
-                      "shrink-0 inline-flex items-center gap-1.5 h-7 px-1.5 rounded-md ml-auto",
-                      "text-[10px] font-medium uppercase tracking-[0.12em] leading-none",
-                      "text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                    )}
-                  >
-                    <List className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">All Files</span>
-                  </button>
+                className={cn(
+                  "shrink-0 mt-1 inline-flex h-8 w-8 items-center justify-center rounded-full",
+                  "transition-colors duration-150",
+                  activeTab === "config"
+                    ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+                    : "text-[var(--pm-muted)] hover:text-[var(--pm-ink)] hover:bg-black/[0.04]"
                 )}
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+            </header>
+
+            {/* overflow-visible: QC fab park sits top: -40px above panel */}
+            <div className="pm-collection-body flex-1 flex flex-col min-h-0 min-w-0 overflow-visible">
+              {/*
+                Single always-mounted tab bar (Overview | Files | Timeline).
+                Must NOT move between InfoPanel chrome and this shell — remounting
+                kills TabsIndicator slide (new instance, no left/width tween).
+                value={contentTab} so Config open still keeps last pill for slide-back.
+                Soft-fades with title/body on collection switch (same opacity).
+              */}
+              {/*
+                Do NOT add .is-in here — it forces opacity:1 and overrides
+                .pm-collection-soft-fade.is-faded (same specificity, later in CSS).
+              */}
+              <div
+                className={cn(
+                  "pm-tabs-shell pm-collection-tabs-shell shrink-0 min-w-0",
+                  "pm-collection-soft-fade",
+                  collectionSoftFaded && "is-faded",
+                )}
+                style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
+              >
+                {collectionTabs}
               </div>
 
               {/*
-                Keep-alive tab panels (SaaS-style):
-                - Visit once → stay mounted (no remount / Loading flash).
-                - Inactive = opacity-0 + inert (NOT display:none, NOT visibility:hidden).
-                  · opacity cannot be re-opened by descendants → no residual bleed.
-                  · display:none zeroed Timeline's viewport → wrong pan, nodes clipped on return.
-                  · visibility:hidden can be overridden by child visibility:visible.
-                - Active panel has solid bg + higher z so nothing shows through.
+                Keep-alive surfaces + sequential fade (out → swap → in).
+                Same motion for Overview / Files / Timeline / Config.
+                Soft-fade on collection switch (title + tab bar + body).
               */}
-              <div className="relative flex-1 min-h-0 min-w-0 mt-1 bg-background isolate">
+              {/*
+                overflow-visible so QC diamond park (top: -40px) is not clipped.
+                transparent — never paint canvas gray over .pm-stage cream
+              */}
+              <div
+                className={cn(
+                  "relative flex-1 min-h-0 min-w-0 bg-transparent isolate overflow-visible",
+                  "pm-collection-soft-fade",
+                  collectionSoftFaded && "is-faded",
+                )}
+              >
                 {(
                   [
                     ["info", visitedTabs.has("info")] as const,
@@ -500,76 +621,137 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
                   ] as const
                 ).map(([tab, visited]) => {
                   if (!visited) return null
-                  const isActive = activeTab === tab
+                  const isStage = tab === stageTab
+                  const isInteractive =
+                    tab === activeTab &&
+                    stageTab === activeTab &&
+                    stagePhase === "shown"
+                  const phaseClass =
+                    isStage && stagePhase === "shown"
+                      ? "is-active z-20"
+                      : isStage && stagePhase === "hiding"
+                        ? "is-exiting z-20"
+                        : "is-idle z-0 select-none"
                   return (
                     <div
                       key={tab}
                       className={cn(
-                        "absolute inset-0 flex flex-col overflow-hidden bg-background",
-                        "transition-opacity duration-0",
-                        isActive
-                          ? "z-10 opacity-100"
-                          : "z-0 opacity-0 pointer-events-none select-none"
+                        "absolute inset-0 flex flex-col bg-transparent",
+                        "pm-panel pm-panel-fade",
+                        /*
+                         * Overview + Files: overflow visible so rail card shadows paint.
+                         * Diamond is parked outside panels (data-pm-qc-fab-anchor).
+                         */
+                        tab === "info" || tab === "files" || tab === "timeline"
+                          ? "overflow-visible"
+                          : "overflow-hidden",
+                        phaseClass,
+                        !isInteractive && "pointer-events-none"
                       )}
-                      aria-hidden={!isActive}
-                      inert={!isActive ? true : undefined}
+                      aria-hidden={!isInteractive}
+                      inert={!isInteractive ? true : undefined}
                     >
                       {tab === "info" && (
-                        <ScrollArea className="h-full">
-                          <InfoPanel collection={activeCollection} />
-                        </ScrollArea>
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
+                          <InfoPanel
+                            collection={activeCollection}
+                            railCovered={quickChatOpen}
+                          />
+                        </div>
                       )}
                       {tab === "files" && (
-                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                          <FolderView collectionId={activeCollection} />
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
+                          <FolderView
+                            collectionId={activeCollection}
+                            railCovered={quickChatOpen}
+                          />
                         </div>
                       )}
                       {tab === "timeline" && (
-                        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                        <div className="absolute inset-0 flex min-h-0 flex-col overflow-visible p-0.5">
                           <TimelineView
                             collectionId={activeCollection}
-                            // Only "live" when Collection sidebar is open AND Timeline sub-tab is selected
-                            active={active && isActive}
+                            /* Live only when fully shown — avoid pan/measure mid-fade */
+                            active={
+                              active &&
+                              activeTab === "timeline" &&
+                              stageTab === "timeline" &&
+                              stagePhase === "shown"
+                            }
+                            railCovered={quickChatOpen}
                           />
                         </div>
                       )}
                       {tab === "config" && (
                         <ScrollArea className="h-full">
-                          <CollectionConfig collection={activeCollection} />
+                          {/* Soft pad so nested card shadows aren’t clipped */}
+                          <div className="px-0.5 pb-6">
+                            <CollectionConfig collection={activeCollection} />
+                          </div>
                         </ScrollArea>
                       )}
                     </div>
                   )
                 })}
+
+                {/*
+                  Stable QC diamond park — same top-right of content for
+                  Overview / Files / Timeline. Config hides the icon (fabVisible).
+                */}
+                <div
+                  className="pm-qc-fab-park"
+                  data-pm-qc-fab-anchor
+                  aria-hidden
+                />
               </div>
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-full text-muted-foreground animate-tab-in">
-            <div className="text-center">
+          <div className="pm-stage h-full flex items-center justify-center text-muted-foreground pm-collection-enter">
+            <div className="pm-collection-chrome text-center">
               <p className="text-sm t-body-family">Select a collection or create one</p>
             </div>
           </div>
         )}
       </div>
 
-      {/* Quick Chat — always mounted for floating button, sidebar shown on demand */}
+      {/*
+        Quick Chat: FAB parks on stage (stable). Float still fills right rail
+        on Overview/Files. Hidden on Config.
+      */}
       {activeCollection && (
         <QuickChat
           collectionId={activeCollection}
-          collectionName={collections.find(c => c.id === activeCollection)?.name || activeCollection}
+          collectionName={
+            collections.find((c) => c.id === activeCollection)?.name ||
+            activeCollection
+          }
           open={quickChatOpen}
-          onOpen={() => setQuickChatOpen(true)}
+          onOpen={() => {
+            // Files: Messages curtain may be width-0 — expand before QC portals in
+            if (activeTab === "files") {
+              useFileMgmtStore.getState().setMessageSidebarOpen(true)
+            }
+            setQuickChatOpen(true)
+          }}
           onClose={() => setQuickChatOpen(false)}
+          /* Rail float cover — Overview / Files / Timeline all have a right rail */
+          railActive={
+            activeTab === "info" ||
+            activeTab === "files" ||
+            activeTab === "timeline"
+          }
+          railKey={activeTab}
+          /* Hide diamond on Collection Settings */
+          fabVisible={activeTab !== "config"}
           files={files}
           onSourceClick={(source) => {
-            setActiveTab("files")
-            const fileId =
-              source.startsWith("__file__:")
-                ? source.slice("__file__:".length)
-                : /^[a-f0-9]{32}$/i.test(source.trim())
-                  ? source.trim()
-                  : null
+            // Open file detail only — do not switch away from Overview (or current tab)
+            const fileId = source.startsWith("__file__:")
+              ? source.slice("__file__:".length)
+              : /^[a-f0-9]{32}$/i.test(source.trim())
+                ? source.trim()
+                : null
             setDetailOpen({ fileId, source })
           }}
         />
@@ -622,17 +804,30 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
 
       {/* File deletion confirmation (Quick Chat / pendingOpenFile paths) */}
       <Dialog open={!!deleteFileTarget} onOpenChange={(v) => !v && setDeleteFileTarget(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
             <DialogTitle>Delete File</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Are you sure you want to delete <span className="font-medium text-foreground truncate max-w-[200px] inline-block align-bottom">{deleteFileDisplay}</span>?
-            This will remove all its chunks from the database.
+          <p className="pm-dialog-body">
+            Are you sure you want to delete{" "}
+            <span className="font-medium text-[var(--pm-ink)] truncate max-w-[200px] inline-block align-bottom">
+              {deleteFileDisplay}
+            </span>
+            ? This will remove all its chunks from the database.
           </p>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setDeleteFileTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDeleteFile}>Delete</Button>
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteFileTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive-solid"
+              onClick={handleDeleteFile}
+            >
+              Delete
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

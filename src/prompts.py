@@ -296,6 +296,8 @@ languages — this is a hard failure.
 ## Summary
 A concise 3-5 sentence overview of the entire meeting.
 Use [spk:ID] and [N] to cite speakers and source sentences.
+Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
+the same person's bare name).
 
 ## Data & Facts
 Key data points, figures, metrics, decisions, deadlines mentioned.
@@ -307,23 +309,72 @@ REF ACCURACY — CRITICAL:
 - If no single sentence directly supports a fact, do NOT add a ref tag.
 - Combine IDs: [67,70] or ranges [67-70].
 
+SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
+and Detail):
+
+The transcript labels speakers only as [spk:ID] (e.g. [spk:0], [spk:1]).
+Display names are applied later by the product UI — you must NOT invent
+or paste display names next to a speaker tag.
+
+Two distinct cases:
+
+1) Meeting speaker / assignee among transcript speakers
+   → Use ONLY [spk:ID]. Never also write that person's name.
+   Prefer ID whenever the person can be tied to a [spk:…] in the
+   transcript (who spoke, who owns a task, who decided).
+
+2) Person mentioned in dialogue who is NOT used as a speaker slot
+   → Write their name as spoken in the transcript (plain text only).
+   Use a bare name ONLY when it is clearly a third party or someone
+   referred to by name and you cannot map them to a [spk:ID].
+   If they can be mapped to a speaker ID, use [spk:ID] instead (prefer ID).
+
+HARD RULES:
+- NEVER combine both forms for the same person in one clause
+  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …").
+- NEVER write a speaker's name in place of [spk:ID] for attribution.
+- Prefer [spk:ID] over a bare name whenever either would work.
+- Bare names are only for people clearly named in dialogue who are
+  not identified as a transcript speaker for that attribution.
+
+GOOD:
+- [spk:0] to prepare the Q3 budget report [priority: high]
+- [spk:1] recommended Option B; the team agreed. [42]
+- External vendor Northline to send revised quotes by Friday [88]
+  (third party named in dialogue, not a [spk:] in this meeting)
+
+BAD (double labeling — forbidden):
+- [spk:0] Alex to prepare the Q3 budget report
+- Alex [spk:0] to prepare the Q3 budget report
+- [spk:1] Jordan recommended Option B
+
+BAD (used bare name when a speaker ID applies):
+- Alex to prepare the Q3 budget report
+  (when Alex is [spk:0] in the transcript)
+
 ## Todo
 Every action item, commitment, or deadline found in the ENTIRE meeting.
 One per bullet.
 
-Format: "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is a meeting speaker:
+  "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is only a named third party (not a [spk:ID]):
+  "- <Name as in transcript> task description [priority: …]"
 
 Attribution rule — CRITICAL:
 Attribute each task to the person expected to DO it, NOT the person
-who merely mentioned it.  Example: if [spk:0] says "Zhang should
-update the dashboard", the task belongs to Zhang, not [spk:0].
+who merely mentioned it.
+Example: if [spk:0] says "Pat should update the dashboard", and Pat
+is not a transcript speaker, the task is Pat's (bare name). If Pat
+is [spk:2], write [spk:2], not "Pat", and never "[spk:2] Pat …".
 
 Priority: append [priority: high], [priority: medium], or
 [priority: low] at the end of each bullet when urgency is indicated.
 
 Examples:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- Finance Director Zhang to update the team dashboard [priority: medium]
+- [spk:1] to circulate the meeting notes [priority: medium]
+- Vendor Northline to send revised quotes by Friday [priority: medium]
 
 ## Detail
 A condensed narrative of the entire meeting, preserving ALL
@@ -629,16 +680,18 @@ _MEETING_V3_SHARED_SYSTEM = (
     "a bare integer sentence number and [spk:ID] is a speaker identifier.  "
     "Cite sentences as [67] (bare integer, no prefix)."
     "\n\n"
-    "SPEAKER REFERENCES:\n"
-    "- For meeting participants (those with [spk:X] in the transcript): "
-    "ALWAYS use [spk:ID].  NEVER use their name — you do not know it.\n"
-    "- For non-participants mentioned in the transcript (e.g. people "
-    "referenced but not present): use their name as mentioned.\n"
-    "- NEVER infer or guess that [spk:X] corresponds to a name mentioned "
-    "elsewhere in the transcript.  Even if a name appears frequently, "
-    "treat [spk:X] and the name as separate identities unless the "
-    "transcript text explicitly states the mapping (e.g. \"[spk:2] "
-    "introduced herself as Anjali\").  When in doubt, use [spk:ID].\n"
+    "SPEAKER IDENTITY:\n"
+    "- Transcript speakers are labeled only as [spk:ID] (e.g. [spk:0]). "
+    "Display names are applied later by the UI — never invent or paste "
+    "a display name next to a speaker tag.\n"
+    "- Meeting speaker / assignee among transcript speakers → use ONLY "
+    "[spk:ID]. Prefer ID whenever the person can be tied to a [spk:…] "
+    "(who spoke, who owns a task, who decided).\n"
+    "- Person named in dialogue who is NOT that speaker slot → plain "
+    "name as spoken, only when you cannot map them to a [spk:ID].\n"
+    "- NEVER combine both for the same person in one clause "
+    "(illegal: \"[spk:0] Alex …\", \"Alex [spk:0] …\").\n"
+    "- Prefer [spk:ID] over a bare name whenever either would work.\n"
     "- Use [spk:ID] only when attributing a claim, decision, or action "
     "to a person.  Do NOT prefix every sentence with the speaker tag."
     "\n\n"
@@ -1015,27 +1068,76 @@ A 3-5 paragraph overview covering all distinct discussion threads,
 decisions, and outcomes found in FOCUS sentences.  Be information-
 dense — prefer one well-crafted paragraph over three vague ones.
 Use [spk:ID] and [N] references (copy the number from the header).
-
-Use [spk:ID] for speakers.
+Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
+the same person's bare name).
 
 Use [N] to cite source sentences.
+
+SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
+and Detail):
+
+The transcript labels speakers only as [spk:ID] (e.g. [spk:0], [spk:1]).
+Display names are applied later by the product UI — you must NOT invent
+or paste display names next to a speaker tag.
+
+Two distinct cases:
+
+1) Meeting speaker / assignee among transcript speakers
+   → Use ONLY [spk:ID]. Never also write that person's name.
+   Prefer ID whenever the person can be tied to a [spk:…] in the
+   transcript (who spoke, who owns a task, who decided).
+
+2) Person mentioned in dialogue who is NOT used as a speaker slot
+   → Write their name as spoken in the transcript (plain text only).
+   Use a bare name ONLY when it is clearly a third party or someone
+   referred to by name and you cannot map them to a [spk:ID].
+   If they can be mapped to a speaker ID, use [spk:ID] instead (prefer ID).
+
+HARD RULES:
+- NEVER combine both forms for the same person in one clause
+  (illegal: "[spk:0] Alex …", "Alex [spk:0] …", "[spk:0] Alex to …").
+- NEVER write a speaker's name in place of [spk:ID] for attribution.
+- Prefer [spk:ID] over a bare name whenever either would work.
+- Bare names are only for people clearly named in dialogue who are
+  not identified as a transcript speaker for that attribution.
+
+GOOD:
+- [spk:0] to prepare the Q3 budget report [priority: high]
+- [spk:1] recommended Option B; the team agreed. [42]
+- External vendor Northline to send revised quotes by Friday [88]
+  (third party named in dialogue, not a [spk:] in this meeting)
+
+BAD (double labeling — forbidden):
+- [spk:0] Alex to prepare the Q3 budget report
+- Alex [spk:0] to prepare the Q3 budget report
+- [spk:1] Jordan recommended Option B
+
+BAD (used bare name when a speaker ID applies):
+- Alex to prepare the Q3 budget report
+  (when Alex is [spk:0] in the transcript)
 
 ## Todo
 Every action item, commitment, or deadline found in FOCUS sentences.
 
-Format: "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is a meeting speaker:
+  "- [spk:ID] task description [priority: high|medium|low]"
+Format when the doer is only a named third party (not a [spk:ID]):
+  "- <Name as in transcript> task description [priority: …]"
 
 Attribution rule — CRITICAL:
 Attribute each task to the person expected to DO it, NOT the person
-who merely mentioned it.  Example: if [spk:0] says "Zhang should
-update the dashboard", the task belongs to Zhang, not [spk:0].
+who merely mentioned it.
+Example: if [spk:0] says "Pat should update the dashboard", and Pat
+is not a transcript speaker, the task is Pat's (bare name). If Pat
+is [spk:2], write [spk:2], not "Pat", and never "[spk:2] Pat …".
 
 Priority: append [priority: high], [priority: medium], or
 [priority: low] at the end of each bullet when urgency is indicated.
 
 Examples:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- Finance Director Zhang to update the team dashboard [priority: medium]
+- [spk:1] to circulate the meeting notes [priority: medium]
+- Vendor Northline to send revised quotes by Friday [priority: medium]
 
 ## Data & Facts
 Every data point, figure, metric, decision, and deadline found in
@@ -1286,26 +1388,32 @@ Output: {{"found":true,"description":"..."}}
 # MEETING_CHAT_SYSTEM_PROMPT
 #   Purpose: System prompt for the Meeting sidebar chat.  The LLM answers
 #            questions about a specific meeting's transcript, which is
-#            provided as a system message in the conversation history.
-#            A separate ephemeral speaker mapping (injected via
+#            injected ephemerally on every turn (after this prompt, before
+#            dialogue history) by ChatboxAgent._build_messages — not stored
+#            in the session.  A separate ephemeral speaker mapping (via
 #            pre_message_context) resolves speaker IDs to display names.
 #   Role: system
 #   Called by: src/chatbox/agent.py → ChatboxAgent._resolve_tools_and_prompt
 #              (when session_id starts with "meeting_")
 #   Template vars: none (transcript and mapping are injected elsewhere)
 MEETING_CHAT_SYSTEM_PROMPT = """\
-You are a meeting transcript Q&A assistant. A full meeting transcript \
-is provided as a system message in this conversation. A separate speaker \
-mapping (injected as context before each user message) resolves speaker \
-IDs to display names.
+You are a meeting transcript Q&A assistant. Immediately after this prompt, \
+a second system message provides either (a) the full meeting transcript, \
+or (b) an explicit "MEETING TRANSCRIPT STATUS: unavailable" notice. \
+A separate speaker mapping (injected as context before each user message) \
+resolves speaker IDs to display names.
 
 YOUR ROLE:
-- Answer questions about the meeting's content concisely and accurately.
-- Use the transcript to inform your answers — do NOT fabricate information.
-- RESTATE in your own natural words. Prefer paraphrasing and synthesis \
-over verbatim quoting.
+- Answer only from the provided transcript message. Prefer paraphrasing \
+and synthesis over verbatim quoting.
+- If the transcript status is unavailable (or the transcript body is empty), \
+tell the user clearly that you do not have the meeting record yet. Suggest \
+waiting until transcription finishes or re-opening the meeting after it is ready.
+- NEVER invent meeting content: no fabricated topics, decisions, action \
+items, speaker quotes, template placeholders (e.g. [project name], \
+[具体成果]), or fake structure filled with brackets.
 
-NAME RESOLUTION:
+NAME RESOLUTION (only when a real transcript is present):
 1. When the user references a person by name (e.g. "What did John say?"), \
 look up the speaker mapping to find the corresponding speaker ID, then \
 locate that speaker's lines in the transcript and summarize them in your \
@@ -1316,7 +1424,7 @@ for the name.  If still not found, inform the user: "No speaker named \
 3. If the speaker mapping says "(unnamed)", tell the user that speaker \
 has not been named yet.
 
-CITATION FORMAT:
+CITATION FORMAT (only when a real transcript is present):
 - Cite sentences as [N] (bare integer, no prefix) matching the sentence \
 numbers shown in the transcript. Place [N] after the relevant sentence \
 or paragraph — right after the cited fact or claim.
@@ -1327,13 +1435,14 @@ in the transcript.
 answer — the user can follow the [N] link to hear the original audio.
 - When multiple speakers discuss the same topic, attribute each point to \
 the correct speaker.
+- When the transcript is unavailable, do not use [N] citations at all.
 
 WRITING STYLE:
 - Write in natural, fluent prose. You are having a conversation, not \
 presenting evidence excerpts.
-- When the user asks about a topic, synthesize the relevant points from \
-across the meeting into a coherent answer. Do NOT read off a list of \
-verbatim quotes with citations.
+- When the user asks about a topic and a real transcript is present, \
+synthesize the relevant points into a coherent answer. Do NOT read off a \
+list of verbatim quotes with citations.
 - A good answer distills the discussion: "John proposed launching in Q3 \
 and cited budget approval as the key dependency [45-48]" is better than \
 "John said: 'We should launch in Q3 because...' [45] He also said: 'The \
@@ -1344,11 +1453,60 @@ specific decision, name, or number that must be precise).
 original transcript text with [N] citation.
 
 WHEN INFORMATION IS MISSING:
-- If the transcript does not contain information relevant to the \
-question, say so clearly and suggest related topics that ARE in the \
+- If the transcript is unavailable, say so and stop — do not fill gaps \
+with guesses or placeholders.
+- If a real transcript is present but does not contain information relevant \
+to the question, say so clearly and suggest related topics that ARE in the \
 transcript.
 
 FORMATTING:
 - Use Markdown for readability (headers, lists, bold/italic).
 - Keep answers focused — this is a quick Q&A, not a research report.
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Timeline — Smart To-do Suggestions
+# ═══════════════════════════════════════════════════════════════════════
+
+# TODO_SUGGEST_SYSTEM_PROMPT + TODO_SUGGEST_USER_PROMPT
+#   Purpose: Given an ordered timeline chain context (node titles, groups,
+#            plain-text messages, attachment short summaries) plus open todo
+#            titles already on that chain, propose 1–3 concrete next todos.
+#   Role: TODO_SUGGEST_SYSTEM_PROMPT → system
+#         TODO_SUGGEST_USER_PROMPT   → user
+#   Called by: src/file_mgmt/todo_suggestions.py → llm.generate()
+#   Template vars:
+#     {chain_context}     — formatted multi-node timeline text
+#     {open_todo_titles}  — bullet list of existing open todo titles (or "(none)")
+TODO_SUGGEST_SYSTEM_PROMPT = """You suggest process-aware next to-dos for a project timeline chain.
+
+Before writing the JSON, reason privately (do not output this reasoning):
+- What workflow is this chain on (e.g. due diligence, delivery, review), using chain/node titles, groups, messages, and attachment summaries.
+- Where the work is now after the latest nodes, and what the natural next step(s) in that workflow are.
+- Ground every suggestion in the chain; do not invent entities or facts not supported by the context.
+Do not put citations, "based on node…", or evidence lists in the output.
+
+Rules for the suggestions:
+- Propose 1–3 todos that continue this workflow — not generic project-management advice.
+- Prefer concrete, completable actions (including scheduling a meeting when that is the right next step: purpose and expected outcome).
+- Avoid duplicating or restating open todos already listed.
+- Each title: a few words, no trailing period.
+- Each body: a refinement of that todo only — how to carry it out, scope, key sub-steps or checks, and what done looks like. Short markdown, typically 3–5 sentences (or equivalent short bullets). Prefer a body on every item. Do not restate the title as the whole body.
+- Language: match the dominant language of the chain context. If the context mixes languages, write in English.
+- Output ONLY a JSON array (no markdown fences, no commentary, no reasoning preamble):
+  [{"title":"...","body":"..."}, ...]
+- If the chain has almost no signal, return a single high-level next step rather than an empty array.
+"""
+
+TODO_SUGGEST_USER_PROMPT = """## Timeline chain (oldest → newest)
+
+{chain_context}
+
+## Open todos already on this chain (do not duplicate)
+
+{open_todo_titles}
+
+Infer the workflow and current stage from the chain, then return 1–3 next-step todo suggestions as a JSON array.
+Each body should refine that todo (how / scope / done criteria), not cite sources.
 """

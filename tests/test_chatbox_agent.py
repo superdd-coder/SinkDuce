@@ -482,21 +482,29 @@ class TestChatboxEdgeCases:
             for m in quick_msgs
         )
 
-        # ── Meeting: system prompt, transcript, dialogue, speaker, (user) ──
+        # ── Meeting: system prompt, live transcript, dialogue, speaker ──
         meeting = store.create_session(session_id="meeting_abc123")
-        store.add_message(meeting.id, "system", "FULL_TRANSCRIPT_TEXT")
+        # Legacy DB system rows must be ignored; live load supplies transcript
+        store.add_message(meeting.id, "system", "STALE_SHOULD_NOT_APPEAR")
         store.add_message(meeting.id, "user", "what was said?")
         store.add_message(meeting.id, "assistant", "summary")
         store.add_message(meeting.id, "user", "more?")
-        meet_msgs = agent._build_messages(
-            meeting.id, "more?",
-            system_prompt="MEETING_SYSTEM",
-            catalog_text="Knowledge base reference:\n- NO",
-            pre_message_context="Speaker mapping: S1=Alice",
-        )
+        with patch(
+            "src.chatbox.meeting_context.meeting_transcript_context_message",
+            return_value="FULL_TRANSCRIPT_TEXT",
+        ):
+            meet_msgs = agent._build_messages(
+                meeting.id, "more?",
+                system_prompt="MEETING_SYSTEM",
+                catalog_text="Knowledge base reference:\n- NO",
+                pre_message_context="Speaker mapping: S1=Alice",
+            )
         assert meet_msgs[0]["content"] == "MEETING_SYSTEM"
         assert meet_msgs[1]["role"] == "system"
         assert meet_msgs[1]["content"] == "FULL_TRANSCRIPT_TEXT"
+        assert not any(
+            "STALE_SHOULD_NOT_APPEAR" in (m.get("content") or "") for m in meet_msgs
+        )
         assert not any(
             "Knowledge base reference" in (m.get("content") or "") for m in meet_msgs
         )

@@ -12,11 +12,20 @@ interface ComboboxProps {
   className?: string
 }
 
-export function Combobox({ value, onChange, options, placeholder, disabled, className }: ComboboxProps) {
+/**
+ * Premium Combobox — Input + soft menu (same language as DropdownSelect).
+ */
+export function Combobox({
+  value,
+  onChange,
+  options,
+  placeholder,
+  disabled,
+  className,
+}: ComboboxProps) {
   const [open, setOpen] = useState(false)
   const [highlightIdx, setHighlightIdx] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   const filtered = options.filter((o) =>
     o.toLowerCase().includes((value || "").toLowerCase())
@@ -28,12 +37,15 @@ export function Combobox({ value, onChange, options, placeholder, disabled, clas
       setOpen(false)
       setHighlightIdx(-1)
     },
-    [onChange],
+    [onChange]
   )
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
         setOpen(false)
         setHighlightIdx(-1)
       }
@@ -44,10 +56,17 @@ export function Combobox({ value, onChange, options, placeholder, disabled, clas
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!open) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") { setOpen(true); e.preventDefault() }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        setOpen(true)
+        e.preventDefault()
+      }
       return
     }
-    if (e.key === "Escape") { setOpen(false); setHighlightIdx(-1); return }
+    if (e.key === "Escape") {
+      setOpen(false)
+      setHighlightIdx(-1)
+      return
+    }
     if (e.key === "Enter") {
       e.preventDefault()
       if (highlightIdx >= 0 && highlightIdx < filtered.length) {
@@ -73,37 +92,51 @@ export function Combobox({ value, onChange, options, placeholder, disabled, clas
   return (
     <div ref={containerRef} className={cn("relative", className)}>
       <Input
-        ref={inputRef}
         value={value}
         onChange={(e) => {
           onChange(e.target.value)
           setOpen(true)
           setHighlightIdx(-1)
         }}
-        onFocus={() => { if (filtered.length > 0) setOpen(true) }}
+        onFocus={() => {
+          if (filtered.length > 0) setOpen(true)
+        }}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         disabled={disabled}
         autoComplete="off"
       />
       {open && filtered.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-md max-h-48 overflow-y-auto">
-          {filtered.map((opt, i) => (
-            <button
-              key={opt}
-              type="button"
-              className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-sm hover:bg-accent",
-                i === highlightIdx && "bg-accent",
-                opt === value && "font-medium",
-              )}
-              onMouseDown={(e) => { e.preventDefault(); select(opt) }}
-              onMouseEnter={() => setHighlightIdx(i)}
-            >
-              <span className="flex-1 text-left truncate">{opt}</span>
-              {opt === value && <Check className="h-3.5 w-3.5 shrink-0 opacity-60" />}
-            </button>
-          ))}
+        <div
+          role="listbox"
+          className="pm-menu absolute z-50 mt-1 w-full max-h-48 overflow-y-auto"
+        >
+          {filtered.map((opt, i) => {
+            const on = opt === value
+            return (
+              <button
+                key={opt}
+                type="button"
+                role="option"
+                aria-selected={on}
+                className={cn(
+                  "pm-menu-item",
+                  on && "is-on",
+                  i === highlightIdx && !on && "bg-[var(--pm-green-wash)]"
+                )}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  select(opt)
+                }}
+                onMouseEnter={() => setHighlightIdx(i)}
+              >
+                <span className="flex-1 text-left truncate">{opt}</span>
+                {on && (
+                  <Check className="h-3.5 w-3.5 shrink-0 text-[var(--pm-green)]" />
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
     </div>

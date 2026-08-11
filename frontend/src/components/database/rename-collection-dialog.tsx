@@ -47,27 +47,34 @@ export function RenameCollectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="pm-dialog max-w-sm">
         <DialogHeader>
           <DialogTitle>Rename Collection</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">New Name</label>
+        <div className="space-y-3 py-1">
+          <div>
+            <label className="pm-field-label">New Name</label>
             <Input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Enter new name"
+              className="h-8"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleRename()
               }}
             />
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              variant="ghost"
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button onClick={handleRename} disabled={saving || !newName.trim()}>
+            <Button
+              onClick={handleRename}
+              disabled={saving || !newName.trim()}
+            >
               {saving ? "Renaming..." : "Rename"}
             </Button>
           </div>

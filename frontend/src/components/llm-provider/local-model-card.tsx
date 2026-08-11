@@ -1,10 +1,19 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Star, Plug, Loader2, Power, Download } from "lucide-react"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 
 export type LoadState = "unloaded" | "loading" | "loaded" | "error"
+
+export interface LoadDetail {
+  state?: LoadState
+  message?: string
+  error?: string
+  started_at?: number
+  load_s?: number
+}
 
 interface LocalModelCardProps {
   id: string
@@ -12,10 +21,22 @@ interface LocalModelCardProps {
   model: string
   isDefault: boolean
   loadState: LoadState
+  loadDetail?: LoadDetail
   isDownloaded: boolean
-  onTest: () => Promise<{ success: boolean; message?: string; error?: string }>
+  onTest: () => Promise<{
+    success: boolean
+    message?: string
+    error?: string
+    code?: string
+  }>
   onSetDefault: () => Promise<void>
-  onToggleLoad: () => Promise<void>
+  /** Parent starts load/unload; must return API payload with real status */
+  onToggleLoad: (action: "load" | "unload") => Promise<{
+    success: boolean
+    status?: string
+    message?: string
+    error?: string
+  }>
   onDownload: () => void
 }
 
@@ -24,6 +45,7 @@ export function LocalModelCard({
   model,
   isDefault,
   loadState,
+  loadDetail,
   isDownloaded,
   onTest,
   onSetDefault,
@@ -31,23 +53,83 @@ export function LocalModelCard({
   onDownload,
 }: LocalModelCardProps) {
   const [testing, setTesting] = useState(false)
-  const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
-  const [toggling, setToggling] = useState(false)
+  const [testNote, setTestNote] = useState<string | null>(null)
+  const [testOk, setTestOk] = useState<boolean | null>(null)
+  /** User clicked Load and we have not yet seen a terminal server state */
+  const [awaitingLoad, setAwaitingLoad] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [loadStartedAt, setLoadStartedAt] = useState<number | null>(null)
 
-  const statusColor = status === "ready" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-muted-foreground/40"
+  // Effective UI state: never show "loaded" while still awaiting a load.
+  // Only server loadState === "loaded" ends awaitingLoad.
+  const displayState: LoadState =
+    loadState === "loaded"
+      ? "loaded"
+      : loadState === "error"
+        ? "error"
+        : loadState === "loading" || awaitingLoad
+          ? "loading"
+          : "unloaded"
 
-  const isLoaded = loadState === "loaded"
-  const isLoading = loadState === "loading"
+  const isLoaded = displayState === "loaded"
+  const isLoading = displayState === "loading"
+  const isError = displayState === "error"
+
+  // Sync awaitingLoad with server: clear only on terminal states after a load attempt
+  useEffect(() => {
+    if (loadState === "loaded" || loadState === "error") {
+      setAwaitingLoad(false)
+    }
+    if (loadState === "loading") {
+      setAwaitingLoad(true)
+    }
+  }, [loadState])
+
+  // Live elapsed timer while loading
+  useEffect(() => {
+    if (!isLoading) {
+      setElapsed(0)
+      return
+    }
+    const startedMs =
+      typeof loadDetail?.started_at === "number"
+        ? loadDetail.started_at * 1000
+        : loadStartedAt ?? Date.now()
+    const tick = () =>
+      setElapsed(Math.max(0, Math.floor((Date.now() - startedMs) / 1000)))
+    tick()
+    const id = window.setInterval(tick, 500)
+    return () => window.clearInterval(id)
+  }, [isLoading, loadDetail?.started_at, loadStartedAt])
 
   const handleTest = async () => {
+    if (!isLoaded) {
+      toast.message("Load the model first", {
+        description: "Test only checks that the model is in memory.",
+      })
+      return
+    }
     setTesting(true)
+    setTestNote(null)
+    setTestOk(null)
     try {
       const res = await onTest()
-      setStatus(res.success ? "ready" : "error")
-      if (res.success) toast.success(res.message || "Test passed")
-      else toast.error(res.error || "Test failed")
-    } catch {
-      setStatus("error")
+      setTestOk(res.success)
+      if (res.success) {
+        // No long adapter/model dump on the card — keep UI quiet
+        setTestNote(null)
+        toast.success("Test passed")
+      } else {
+        setTestNote(res.error || "Test failed")
+        if (res.code === "not_loaded") {
+          toast.message("Not loaded", { description: res.error })
+        } else {
+          toast.error("Test failed", { description: res.error })
+        }
+      }
+    } catch (e) {
+      setTestOk(false)
+      setTestNote(String(e))
       toast.error("Test failed")
     } finally {
       setTesting(false)
@@ -55,93 +137,196 @@ export function LocalModelCard({
   }
 
   const handleToggle = async () => {
-    setToggling(true)
+    if (isLoading) return
+    setTestOk(null)
+    setTestNote(null)
+
+    const action: "load" | "unload" = isLoaded ? "unload" : "load"
+
+    if (action === "load") {
+      setAwaitingLoad(true)
+      setLoadStartedAt(Date.now())
+    }
+
     try {
-      await onToggleLoad()
-      toast.success(isLoaded ? "Unloaded" : "Loading...")
+      const res = await onToggleLoad(action)
+      if (!res.success) {
+        setAwaitingLoad(false)
+        toast.error(res.error || "Request failed")
+        return
+      }
+
+      // Trust server status only
+      if (res.status === "loading") {
+        setAwaitingLoad(true)
+        toast.message("Loading into memory…", {
+          description:
+            res.message ||
+            "CPU load often takes 10–60s. This card updates when ready.",
+        })
+        return
+      }
+      if (res.status === "loaded") {
+        setAwaitingLoad(false)
+        // Already in memory (e.g. second click) — only then show ready
+        toast.success("Already in memory", { description: res.message })
+        return
+      }
+      if (res.status === "unloaded") {
+        setAwaitingLoad(false)
+        toast.success("Unloaded", {
+          description: res.message || "Freed from memory. Files stay on disk.",
+        })
+        return
+      }
+      // Unknown status: keep awaiting if we started a load
+      if (action === "load") {
+        setAwaitingLoad(true)
+        toast.message("Loading…", {
+          description: "Waiting for server status updates.",
+        })
+      } else {
+        setAwaitingLoad(false)
+      }
     } catch {
-      toast.error("Failed")
-    } finally {
-      setToggling(false)
+      setAwaitingLoad(false)
+      toast.error("Load/unload failed")
     }
   }
 
-  const loadBadge = () => {
-    switch (loadState) {
-      case "loading":
-        return (
-          <Badge variant="outline" className="text-[10px] font-medium uppercase tracking-[0.1em] border-indigo-300 text-indigo-700 bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:bg-indigo-900/30">
-            <Loader2 className="h-3 w-3 mr-1 animate-spin" />Loading...
-          </Badge>
-        )
-      case "loaded":
-        return (
-          <Badge className="text-[10px] font-medium uppercase tracking-[0.1em] bg-emerald-50 text-emerald-700 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400">
-            Loaded
-          </Badge>
-        )
-      case "error":
-        return (
-          <Badge variant="outline" className="text-[10px] font-medium uppercase tracking-[0.1em] border-red-300 text-red-700 bg-red-50 dark:border-red-700 dark:text-red-300 dark:bg-red-900/30">
-            Error
-          </Badge>
-        )
-      default:
-        return (
-          <Badge variant="outline" className="text-[10px] font-medium uppercase tracking-[0.1em]">
-            Unloaded
-          </Badge>
-        )
+  const handleSetDefault = async () => {
+    try {
+      await onSetDefault()
+      // Parent shows which adapter became active
+    } catch {
+      toast.error("Failed to set default")
     }
   }
+
+  const statusDot = isError || testOk === false
+    ? "is-error"
+    : isLoading
+      ? "is-loading"
+      : isLoaded
+        ? "is-ready"
+        : ""
+
+  const badge = () => {
+    if (isLoading) {
+      return (
+        <Badge variant="secondary">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Loading{elapsed > 0 ? ` ${elapsed}s` : "…"}
+        </Badge>
+      )
+    }
+    if (isLoaded) {
+      return <Badge variant="default">In memory</Badge>
+    }
+    if (isError) {
+      return <Badge variant="destructive">Error</Badge>
+    }
+    if (!isDownloaded) {
+      return <Badge variant="outline">Not downloaded</Badge>
+    }
+    return <Badge variant="outline">On disk only</Badge>
+  }
+
+  const statusLine = (() => {
+    if (isLoading) {
+      return (
+        loadDetail?.message ||
+        `Loading into memory on CPU… ${elapsed > 0 ? `${elapsed}s elapsed` : "please wait"}`
+      )
+    }
+    if (isError) {
+      return loadDetail?.error || loadDetail?.message || "Load failed — try again"
+    }
+    if (isLoaded) {
+      const took =
+        typeof loadDetail?.load_s === "number" ? ` (loaded in ${loadDetail.load_s}s)` : ""
+      return (loadDetail?.message || "Ready in memory — meetings can use it") + took
+    }
+    if (!isDownloaded) {
+      return "Download model files first, then Load into memory"
+    }
+    return "Downloaded but not loaded — click Load before using or Test"
+  })()
 
   return (
-    <div className="border border-border/50 rounded-lg p-4 flex flex-col h-full">
-      {/* Row 1: Name + status + badges */}
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">{name}</span>
-          <div className={`h-2 w-2 rounded-full shrink-0 ${statusColor}`} />
+    <div className="pm-settings-provider-card">
+      <div className="pm-settings-provider-top">
+        <div className="pm-settings-provider-name-row">
+          <span className="pm-settings-provider-name">{name}</span>
+          <span className={cn("pm-settings-status-dot", statusDot)} aria-hidden />
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {isDefault && (
-            <Badge className="text-[10px] font-medium uppercase tracking-[0.1em] bg-emerald-50 text-emerald-700 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400"><Star className="h-3 w-3 mr-1" />Default</Badge>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isDefault && <Badge variant="default">Default</Badge>}
+          {badge()}
+        </div>
+      </div>
+
+      <p className="pm-settings-provider-meta">{model}</p>
+      <p
+        className={cn(
+          "pm-settings-local-status-line",
+          isError && "is-error",
+          isLoading && "is-loading",
+          isLoaded && "is-ok",
+        )}
+      >
+        {statusLine}
+      </p>
+      {testNote && (
+        <p
+          className={cn(
+            "pm-settings-local-status-line",
+            testOk === false ? "is-error" : "is-ok",
           )}
-          {loadBadge()}
-        </div>
-      </div>
+        >
+          Test: {testNote}
+        </p>
+      )}
 
-      {/* Row 2: Model */}
-      <div className="mt-1 min-h-[1.25rem]">
-        <p className="font-normal text-[12px] text-muted-foreground/80">{model}</p>
-      </div>
-
-      {/* Row 3: URL (reserved for uniform height) */}
-      <div className="min-h-[1rem]" />
-
-      {/* Row 4: Buttons */}
-      <div className="flex gap-2 mt-auto pt-3">
-        <Button variant="outline" size="sm" onClick={handleTest} disabled={testing || !isLoaded} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Plug className="h-3 w-3 mr-1" />}
+      <div className="pm-settings-provider-actions">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleTest}
+          disabled={testing || !isLoaded || isLoading}
+          title={!isLoaded ? "Load model first" : "Check that the model is in memory"}
+        >
+          {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plug className="h-3 w-3" />}
           Test
         </Button>
-        <Button variant="outline" size="sm" onClick={onSetDefault} disabled={isDefault || !isLoaded || !isDownloaded} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          <Star className="h-3 w-3 mr-1" />Default
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleSetDefault}
+          disabled={isDefault || !isLoaded || !isDownloaded || isLoading}
+          title={!isLoaded ? "Load model before setting default" : undefined}
+        >
+          <Star className="h-3 w-3" />
+          Default
         </Button>
         {isDownloaded ? (
           <Button
-            variant={isLoaded ? "outline" : "default"}
+            variant={isLoaded ? "ghost" : "default"}
             size="sm"
             onClick={handleToggle}
-            disabled={toggling || isLoading}
-            className="font-medium uppercase tracking-[0.1em] text-[10px]"
+            disabled={isLoading}
           >
-            {toggling || isLoading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Power className="h-3 w-3 mr-1" />}
-            {isLoaded ? "Unload" : "Load"}
+            {isLoading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Power className="h-3 w-3" />
+            )}
+            {isLoading ? "Loading…" : isLoaded ? "Unload" : "Load"}
           </Button>
         ) : (
-          <Button variant="outline" size="sm" onClick={onDownload} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-            <Download className="h-3 w-3 mr-1" />Download first
+          <Button variant="secondary" size="sm" onClick={onDownload}>
+            <Download className="h-3 w-3" />
+            Download
           </Button>
         )}
       </div>

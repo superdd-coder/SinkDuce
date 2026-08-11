@@ -2,17 +2,18 @@
  * Collection To-do card — Overview right rail + reusable list.
  * Spec: docs/superpowers/specs/2026-08-05-collection-todo-design.md
  */
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  ChevronDown,
   ChevronRight,
   GitBranch,
   Layers,
   Link2,
   Loader2,
   Plus,
+  X,
 } from "lucide-react"
 import { toast } from "sonner"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { onTodoRefresh, triggerTodoRefresh } from "@/lib/todo-refresh"
 import {
@@ -62,6 +63,9 @@ export function TodoCard({
   const [linkTodo, setLinkTodo] = useState<TodoItem | null>(null)
   const [detailTodo, setDetailTodo] = useState<TodoItem | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  /** Match pm-dialog--silk exit (~280ms + buffer) before clearing todo */
+  const detailCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const DETAIL_CLOSE_MS = 320
 
   const [internalCreateOpen, setInternalCreateOpen] = useState(false)
   const createOpen = createOpenProp ?? internalCreateOpen
@@ -182,6 +186,10 @@ export function TodoCard({
   }
 
   const openDetail = (t: TodoItem) => {
+    if (detailCloseTimerRef.current) {
+      clearTimeout(detailCloseTimerRef.current)
+      detailCloseTimerRef.current = null
+    }
     setDetailTodo(t)
     setDetailOpen(true)
   }
@@ -220,8 +228,10 @@ export function TodoCard({
         tabIndex={0}
         aria-label={`Open todo: ${t.title}`}
         className={cn(
-          "group/todo flex items-start gap-2 py-1.5 border-b border-dashed border-border last:border-0",
-          "cursor-pointer rounded-sm transition-colors hover:bg-muted/40",
+          /* Horizontal inset: checkbox + hover wash leave a margin from card edge */
+          "group/todo flex items-start gap-2 py-1.5 px-2 mx-0.5",
+          "border-b border-dashed border-border/40 last:border-0",
+          "cursor-pointer rounded-[var(--pm-r-sm,8px)] transition-colors hover:bg-black/[0.03]",
           busy && "opacity-70"
         )}
         onClick={() => openDetail(t)}
@@ -238,19 +248,18 @@ export function TodoCard({
           title={t.done ? "Mark incomplete" : "Mark complete"}
           aria-label={t.done ? "Mark incomplete" : "Mark complete"}
           className={cn(
-            "mt-0.5 h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors",
+            "mt-0.5 size-3.5 shrink-0 rounded-[4px] flex items-center justify-center transition-colors",
             t.done
-              ? "bg-[var(--ze-green,#1A5E3D)] border-[var(--ze-green,#1A5E3D)] text-white"
-              : "border-muted-foreground/40 hover:border-[var(--ze-green,#1A5E3D)]"
+              ? "bg-[var(--pm-green)] border-none text-[var(--pm-on)]"
+              : "border border-[rgba(26,94,61,0.35)] bg-transparent hover:border-[var(--pm-green)]"
           )}
-          style={{ background: t.done ? undefined : "none" }}
           onClick={(e) => {
             e.stopPropagation()
             if (!busy) void toggleDone(t)
           }}
         >
           {busy ? (
-            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+            <Loader2 className="size-2.5 animate-spin" />
           ) : t.done ? (
             <span className="text-[10px] leading-none">✓</span>
           ) : null}
@@ -278,7 +287,7 @@ export function TodoCard({
                   : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
               )}
             >
-              <GitBranch className="h-2.5 w-2.5" />
+              <GitBranch className="size-2.5" />
               {chainLabel}
             </span>
             {t.ddl && (
@@ -289,7 +298,7 @@ export function TodoCard({
           </div>
         </div>
         <div
-          className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/todo:opacity-100 focus-within:opacity-100 transition-opacity"
+          className="flex items-center gap-0.5 shrink-0 self-center opacity-0 group-hover/todo:opacity-100 focus-within:opacity-100 transition-opacity"
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -297,35 +306,35 @@ export function TodoCard({
             <button
               type="button"
               title="Add node to timeline"
-              className="p-1 text-muted-foreground hover:text-[var(--ze-green,#1A5E3D)]"
-              style={{ background: "none", border: "none" }}
+              aria-label="Add node to timeline"
+              className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:text-[var(--pm-green)] hover:bg-black/[0.04] border-none bg-transparent p-0 cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation()
                 openAddNode(t)
               }}
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="size-3.5" strokeWidth={2} />
             </button>
           )}
           {t.done && t.completed_node_id && (
             <span
               title="Linked to timeline node"
-              className="p-1 text-[var(--ze-green,#1A5E3D)]"
+              className="inline-flex size-6 items-center justify-center text-[var(--pm-green)]"
             >
-              <Link2 className="h-3.5 w-3.5" />
+              <Link2 className="size-3.5" strokeWidth={2} />
             </span>
           )}
           <button
             type="button"
             title="Delete"
-            className="p-1 text-muted-foreground hover:text-red-500 text-[10px]"
-            style={{ background: "none", border: "none" }}
+            aria-label="Delete todo"
+            className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/8 border-none bg-transparent p-0 cursor-pointer"
             onClick={(e) => {
               e.stopPropagation()
               void handleDelete(t)
             }}
           >
-            ×
+            <X className="size-3.5" strokeWidth={2} />
           </button>
         </div>
       </li>
@@ -371,13 +380,22 @@ export function TodoCard({
 
   const shell =
     variant === "card"
-      ? "rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm"
-      : "h-full flex flex-col min-h-0"
+      ? "pm-rail-card todo-card h-full min-h-0 flex flex-col"
+      : "todo-card h-full flex flex-col min-h-0"
 
   return (
     <div className={cn(shell, className)}>
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+      <div className="flex items-center justify-between gap-2 mb-2 shrink-0">
+        <span
+          className={
+            variant === "sidebar" ? "pm-timeline-panel-title" : "pm-label"
+          }
+          style={
+            variant === "sidebar"
+              ? undefined
+              : { textTransform: "none", letterSpacing: "0.02em" }
+          }
+        >
           To-do
         </span>
         <div className="flex items-center gap-1">
@@ -386,66 +404,70 @@ export function TodoCard({
             title={groupByChain ? "Ungroup" : "Group by chain"}
             onClick={() => setGroupByChain((v) => !v)}
             className={cn(
-              "p-1 rounded transition-colors",
+              "p-1 rounded-md transition-colors border-none",
               groupByChain
-                ? "text-[var(--ze-green,#1A5E3D)] bg-emerald-500/10"
-                : "text-muted-foreground hover:text-foreground"
+                ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+                : "text-[var(--pm-faint)] hover:text-[var(--pm-text)] bg-transparent"
             )}
-            style={{
-              background: groupByChain ? undefined : "none",
-              border: "none",
-            }}
           >
             <Layers className="h-3.5 w-3.5" />
           </button>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => setCreateOpen(true)}
-            className="text-[10px] font-medium uppercase tracking-[0.08em] px-2 py-0.5 rounded-md border border-border hover:bg-muted/40"
-            style={{ background: "none" }}
             title="Add todo"
           >
             Add
-          </button>
+          </Button>
         </div>
       </div>
 
       {loading ? (
-        <div className="flex items-center gap-2 py-4 text-muted-foreground justify-center">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          <span className="text-xs">Loading…</span>
+        <div className="todo-card-body flex flex-1 items-center gap-2 py-4 justify-center min-h-0">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--pm-faint)]" />
+          <span className="pm-meta">Loading…</span>
         </div>
       ) : (
-        <>
+        <div className="todo-card-body min-h-0 flex flex-col flex-1 overflow-auto">
           {openRows.length === 0 && completedRows.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-2">No todos yet.</p>
+            <p className="pm-meta py-2">No todos yet.</p>
           ) : (
             renderList(openRows)
           )}
 
           {completedRows.length > 0 && (
-            <div className="mt-3 pt-2 border-t border-border/50">
+            <div className="mt-3 pt-2 border-t border-border/40 shrink-0">
               <button
                 type="button"
-                className="flex items-center gap-1 text-[10px] uppercase tracking-[0.1em] text-muted-foreground w-full text-left"
-                style={{ background: "none", border: "none", padding: 0 }}
+                className="pm-subcollapse-trigger"
+                aria-expanded={completedOpen}
                 onClick={() => setCompletedOpen((o) => !o)}
               >
-                {completedOpen ? (
-                  <ChevronDown className="h-3 w-3" />
-                ) : (
-                  <ChevronRight className="h-3 w-3" />
-                )}
+                <span
+                  className={cn(
+                    "pm-rail-chev",
+                    completedOpen && "is-open"
+                  )}
+                  aria-hidden
+                >
+                  <ChevronRight className="size-3.5" strokeWidth={2} />
+                </span>
                 Completed · {completedRows.length}
               </button>
-              {completedOpen && (
-                <div className="mt-1 opacity-80">
-                  {renderList(completedRows)}
+              <div
+                className={cn("pm-subcollapse", completedOpen && "is-open")}
+              >
+                <div className="pm-subcollapse-panel">
+                  <div className="pm-subcollapse-inner mt-1 opacity-80">
+                    {renderList(completedRows)}
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
           )}
-        </>
+        </div>
       )}
 
       <CreateTodoDialog
@@ -467,8 +489,18 @@ export function TodoCard({
         todo={detailTodo}
         open={detailOpen}
         onOpenChange={(o) => {
+          if (detailCloseTimerRef.current) {
+            clearTimeout(detailCloseTimerRef.current)
+            detailCloseTimerRef.current = null
+          }
           setDetailOpen(o)
-          if (!o) setDetailTodo(null)
+          if (!o) {
+            // Keep todo until silk exit finishes (same as Note / Create todo)
+            detailCloseTimerRef.current = setTimeout(() => {
+              setDetailTodo(null)
+              detailCloseTimerRef.current = null
+            }, DETAIL_CLOSE_MS)
+          }
         }}
         onUpdated={(updated) => {
           setTodos((prev) =>

@@ -1,8 +1,15 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Copy, Check, ExternalLink } from "lucide-react"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Copy, Check, ExternalLink, ArrowRight } from "lucide-react"
 import type { UpdateInfo } from "@/hooks/use-update-check"
+import { cn } from "@/lib/utils"
 
 const UPDATE_COMMAND = "git pull && \\\ndocker compose up -d --build"
 
@@ -32,7 +39,6 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
       setCopied(true)
       setTimeout(() => setCopied(false), 2500)
     } catch {
-      // Fallback for insecure contexts
       const ta = document.createElement("textarea")
       ta.value = UPDATE_COMMAND
       ta.style.position = "fixed"
@@ -50,91 +56,103 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col">
-        <DialogHeader className="shrink-0">
-          <DialogTitle
-            className="text-base font-light tracking-[0.15em] uppercase t-sans-family"
-          >
-            Update Available
-          </DialogTitle>
+      <DialogContent
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-update-dialog",
+          "sm:max-w-lg max-h-[min(85vh,36rem)]",
+          "flex flex-col gap-0 overflow-hidden p-0",
+          "!animate-none data-open:!animate-none data-closed:!animate-none",
+        )}
+        overlayClassName="pm-dialog-overlay--silk"
+      >
+        <DialogHeader className="pm-update-dialog-head shrink-0">
+          <DialogKicker>Release</DialogKicker>
+          <DialogTitle>Update available</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3 overflow-y-auto flex-1 min-h-0">
-          {/* Version summary */}
-          <div className="flex items-baseline gap-2 text-sm">
-            <span
-              className="text-[10px] uppercase tracking-[0.12em] font-light text-muted-foreground t-sans-family"
-            >
-              Current
+        <div className="pm-update-dialog-body min-h-0 flex-1 overflow-y-auto">
+          {/* Version path */}
+          <div className="pm-update-ver-row" aria-label="Version change">
+            <span className="pm-update-ver-chip is-muted">
+              <span className="pm-update-ver-chip-label">Current</span>
+              <span className="pm-update-ver-chip-val">
+                v{update.currentVersion.replace(/^v/, "")}
+              </span>
             </span>
-            <span
-              className="font-light text-muted-foreground text-[13px] t-sans-family"
-            >
-              {update.currentVersion}
-            </span>
-            <span className="text-muted-foreground/60 mx-1">→</span>
-            <span
-              className="text-[13px] font-light t-sans-family"
-              style={{ color: "var(--ze-ink)" }}
-            >
-              {update.latestVersion}
+            <ArrowRight className="pm-update-ver-arrow" strokeWidth={1.75} aria-hidden />
+            <span className="pm-update-ver-chip is-new">
+              <span className="pm-update-ver-chip-label">Latest</span>
+              <span className="pm-update-ver-chip-val">
+                {update.latestVersion.startsWith("v")
+                  ? update.latestVersion
+                  : `v${update.latestVersion}`}
+              </span>
             </span>
           </div>
 
-          {/* Release notes */}
-          {releaseNotes && (
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60 mb-1.5">
-                What&rsquo;s New
-              </p>
-              <div
-                className="text-[12px] leading-relaxed text-muted-foreground whitespace-pre-line border border-border/60 rounded-md p-2.5 max-h-32 overflow-y-auto t-sans-family"
-              >
-                {releaseNotes}
-              </div>
-            </div>
-          )}
+          {releaseNotes ? (
+            <section className="pm-update-card" aria-label="Release notes">
+              <h3 className="pm-update-card-label">What&rsquo;s new</h3>
+              <div className="pm-update-notes">{releaseNotes}</div>
+            </section>
+          ) : null}
 
-          {/* How to update */}
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60 mb-1.5">
-              How to Update
-            </p>
-            <p className="text-[12px] text-muted-foreground leading-relaxed mb-1.5">
-              On the server where SinkDuce is deployed, <code className="text-[11px] bg-muted/60 px-1 rounded">cd</code> into the project directory first:
-            </p>
-            <div className="relative">
-              <pre
-                className="text-[12px] p-2.5 pr-24 rounded-md border border-border/60 bg-muted/40 overflow-x-auto whitespace-pre-wrap break-all t-mono-family"
-              >
-                {UPDATE_COMMAND}
-              </pre>
+          <section className="pm-update-card" aria-label="How to update">
+            <div className="pm-update-card-head-row">
+              <h3 className="pm-update-card-label">How to update</h3>
               <Button
+                type="button"
                 variant="ghost"
                 size="sm"
-                className="absolute right-1 top-0.5 h-7"
-                onClick={handleCopy}
+                className={cn(
+                  "pm-update-cmd-copy",
+                  copied && "is-copied",
+                )}
+                onClick={() => { void handleCopy() }}
               >
                 {copied ? (
-                  <><Check className="h-3 w-3 mr-1 text-emerald-600" /><span className="text-[10px] uppercase tracking-[0.08em] text-emerald-600">Copied</span></>
+                  <>
+                    <Check className="h-3.5 w-3.5" strokeWidth={2} />
+                    Copied
+                  </>
                 ) : (
-                  <><Copy className="h-3 w-3 mr-1" /><span className="text-[10px] uppercase tracking-[0.08em]">Copy</span></>
+                  <>
+                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    Copy
+                  </>
                 )}
               </Button>
             </div>
-          </div>
+            <p className="pm-update-help">
+              On the server,{" "}
+              <code className="pm-update-inline-code">cd</code> into the project
+              directory, then run:
+            </p>
+            <div className="pm-update-cmd">
+              <pre className="pm-update-cmd-pre">{UPDATE_COMMAND}</pre>
+            </div>
+          </section>
+        </div>
 
-          {/* External link to release */}
-          <div className="flex justify-between items-center">
+        {/* Plain footer — avoid DialogFooter flex-col-reverse / justify-end defaults */}
+        <div className="pm-update-dialog-foot shrink-0">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="pm-update-foot-link"
+            onClick={() => window.open(update.releaseUrl, "_blank")}
+          >
+            View on GitHub
+            <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </Button>
+          <div className="pm-update-foot-actions">
             <Button
-              variant="link"
+              type="button"
               size="sm"
-              className="h-auto px-0 text-[11px] text-muted-foreground hover:text-primary gap-1 font-light"
-              onClick={() => window.open(update.releaseUrl, "_blank")}
+              className="pm-update-foot-close"
+              onClick={() => onOpenChange(false)}
             >
-              View on GitHub <ExternalLink className="h-3 w-3" />
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} className="font-light uppercase text-[10px] tracking-[0.08em] h-7">
               Close
             </Button>
           </div>

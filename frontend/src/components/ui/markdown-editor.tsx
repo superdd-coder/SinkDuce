@@ -25,12 +25,21 @@ interface MarkdownEditorProps {
   onDistillNavigate?: (noteId: string) => void
   /** Called when the Tiptap editor instance is ready. */
   onEditorReady?: (editor: any) => void
+  /** Called when the editor gains focus (after click selection is applied). */
+  onEditorFocus?: () => void
   /** Whether to show the built-in formatting toolbar. Default true. */
   showToolbar?: boolean
   /** Top offset for sticky toolbar (px). Default 0. */
   stickyToolbarOffset?: number
   /** Extra toolbar actions rendered at the right side. */
   toolbarActions?: ReactNode
+  /**
+   * Remove default EditorContent padding (p-4).
+   * Note pane uses outer px/py so toolbar can sit tight above prose.
+   */
+  flush?: boolean
+  /** Enable `/` slash menu. Default true. Todo description etc. pass false. */
+  enableSlash?: boolean
 }
 
 // ─── Tiptap WYSIWYG editor ────────────────────────────────────────────────
@@ -48,9 +57,12 @@ function TyporaEditor({
   onDistill,
   onDistillNavigate,
   onEditorReady,
+  onEditorFocus,
   showToolbar,
   stickyToolbarOffset,
   toolbarActions,
+  flush,
+  enableSlash,
 }: Omit<MarkdownEditorProps, "variant">) {
   return (
     <TiptapEditor
@@ -65,9 +77,12 @@ function TyporaEditor({
       onDistill={onDistill}
       onDistillNavigate={onDistillNavigate}
       onEditorReady={onEditorReady}
+      onEditorFocus={onEditorFocus}
       showToolbar={showToolbar}
       stickyToolbarOffset={stickyToolbarOffset}
       toolbarActions={toolbarActions}
+      flush={flush}
+      enableSlash={enableSlash}
     />
   )
 }

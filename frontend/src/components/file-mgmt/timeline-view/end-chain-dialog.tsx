@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import { Button } from "@/components/ui/button"
+import { DatePicker } from "@/components/ui/date-picker"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { FieldLabel } from "@/components/ui/field-label"
 import {
   Dialog,
   DialogContent,
@@ -73,7 +76,6 @@ export function EndChainDialog({
     useState<FileSummary | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [loading, setLoading] = useState(false)
-  const dateInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const setSelectMode = (mode: "select" | null) => {
@@ -200,17 +202,6 @@ export function EndChainDialog({
     })
   }
 
-  const openDatePicker = () => {
-    const el = dateInputRef.current
-    if (!el) return
-    try {
-      el.showPicker?.()
-    } catch {
-      el.focus()
-      el.click()
-    }
-  }
-
   const handleSubmit = async () => {
     if (!chainNodeId) return
     const trimmedTitle = title.trim()
@@ -284,8 +275,9 @@ export function EndChainDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        overlayClassName="pm-dialog-overlay--silk"
         className={cn(
-          "max-w-[98vw] sm:max-w-[98vw] h-[85vh] max-h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
+          "pm-dialog pm-dialog--silk max-w-[98vw] sm:max-w-[98vw] h-[85vh] max-h-[85vh] !flex flex-row gap-0 p-0 overflow-hidden transition-[width] duration-300 ease-out",
           // Form body fixed (wider Message); preview is extra width on the left
           showSelectPreview
             ? "w-[min(calc(920px+min(calc(85vh*210/297),42vw)),98vw)]"
@@ -332,50 +324,34 @@ export function EndChainDialog({
             </div>
 
             <div>
-              <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                Group <span className="text-destructive">*</span>
-              </label>
-              <select
-                className="w-full text-xs border rounded px-2 py-1.5 bg-background"
+              <FieldLabel>
+                Group <span className="text-[var(--pm-danger)]">*</span>
+              </FieldLabel>
+              <DropdownSelect
+                size="sm"
                 value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-              >
-                {groups.length === 0 && <option value="">No groups</option>}
-                {groups.map((g) => (
-                  <option key={g.group_id} value={g.group_id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setGroupId}
+                placeholder="No groups"
+                options={
+                  groups.length === 0
+                    ? [{ value: "", label: "No groups" }]
+                    : groups.map((g) => ({
+                        value: g.group_id,
+                        label: g.name,
+                      }))
+                }
+              />
             </div>
 
             <div>
-              <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                Event Time (optional)
-              </label>
-              <div className="flex items-center gap-1">
-                <input
-                  ref={dateInputRef}
-                  type="date"
-                  value={eventTime}
-                  onChange={(e) => setEventTime(e.target.value)}
-                  onClick={openDatePicker}
-                  className={cn(
-                    "w-full text-xs border rounded px-2 py-1.5 bg-background cursor-pointer",
-                    !eventTime &&
-                      "[&::-webkit-datetime-edit]:text-transparent [&::-webkit-datetime-edit-fields-wrapper]:opacity-0"
-                  )}
-                />
-                {eventTime && (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-foreground shrink-0 p-1"
-                    onClick={() => setEventTime("")}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
+              <FieldLabel>Event Time</FieldLabel>
+              <DatePicker
+                size="sm"
+                value={eventTime}
+                onChange={setEventTime}
+                placeholder="Optional"
+                allowClear
+              />
             </div>
 
             {/* Attachments for merge node — compact drop; expand tree on Select */}

@@ -1,11 +1,21 @@
-import { useEffect, useState, useRef, useCallback } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Combobox } from "@/components/ui/combobox"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { FieldLabel } from "@/components/ui/field-label"
 import { Plus, Star, Pencil, Trash2, Plug, Loader2, Eye, EyeOff, Zap, Download, RefreshCw, Sparkles, MessageSquare, ChevronRight } from "lucide-react"
 import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { cn } from "@/lib/utils"
 import { useAppStore } from "@/stores/app-store"
 import {
   getLLMProviders, type LLMProvider,
@@ -22,13 +32,15 @@ import {
   testRealtimeTranscriptionProvider,
   type TranscriptionProvider, type LanguageHintOption,
   getConfig, updateConfig, toggleModelLoad, getModelState, getModelStatus, getAvailableModels,
+  deleteLocalModels,
+  type ModelStatus,
 } from "@/api/client"
 import { useProviderTypes } from "@/hooks/use-provider-types"
 import { toast } from "sonner"
 import { ProviderCard } from "./provider-card"
 import { AddProviderDialog } from "./add-provider-dialog"
 import { LocalModelCard } from "./local-model-card"
-import type { LoadState } from "./local-model-card"
+import type { LoadDetail, LoadState } from "./local-model-card"
 import { ModelDownloadDialog } from "@/components/model-download-dialog"
 import { HotWordsManager } from "./hot-words-manager"
 import { OneShotDashscopeDialog } from "./oneshot-dashscope-dialog"
@@ -65,7 +77,8 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
   const [testing, setTesting] = useState(false)
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
 
-  const statusColor = status === "ready" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-muted-foreground/40"
+  const statusClass =
+    status === "ready" ? "is-ready" : status === "error" ? "is-error" : ""
 
   const handleTest = async () => {
     setTesting(true)
@@ -86,7 +99,12 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
     try {
       const res = await onDelete(provider.id)
       if (res.error) toast.error(res.error)
-      else { toast.success(res.message || "Deleted"); onRefresh() }
+      else {
+        toast.success(
+          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+        )
+        onRefresh()
+      }
     } catch { toast.error("Delete failed") }
   }
 
@@ -94,51 +112,81 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
     try {
       const res = await onSetDefault(provider.id)
       if (res.error) toast.error(res.error)
-      else { toast.success(res.message || "Default updated"); onRefresh() }
+      else {
+        toast.success(
+          res.message || `Provider '${provider.name || "Unnamed"}' set as default`,
+        )
+        onRefresh()
+      }
     } catch { toast.error("Failed to set default") }
   }
 
   return (
-    <div className="border border-border/50 rounded-lg p-4 flex flex-col h-full">
-      {/* Row 1: Provider name + status + default badge */}
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">{provider.name || "Unnamed"}</span>
-          <div className={`h-2 w-2 rounded-full shrink-0 ${statusColor}`} />
+    <div className="pm-settings-provider-card">
+      <div className="pm-settings-provider-top">
+        <div className="pm-settings-provider-name-row">
+          <span className="pm-settings-provider-name">{provider.name || "Unnamed"}</span>
+          <span className={cn("pm-settings-status-dot", statusClass)} aria-hidden />
         </div>
         {provider.is_default && (
-          <Badge className="text-[10px] font-medium uppercase tracking-[0.1em] bg-emerald-50 text-emerald-700 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 shrink-0"><Star className="h-3 w-3 mr-1" />DEFAULT</Badge>
+          <Badge variant="default" className="shrink-0">
+            Default
+          </Badge>
         )}
       </div>
-
-      {/* Row 2: Model */}
-      <div className="mt-1 min-h-[1.25rem]">
-        <p className="font-normal text-[12px] text-muted-foreground/80">{provider.model || ""}</p>
-        {subtitle && <p className="font-normal text-[11px] text-muted-foreground/80">{subtitle}</p>}
-      </div>
-
-      {/* Row 3: URL */}
-      <div className="min-h-[1rem]">
-        <p className="font-normal text-[11px] text-muted-foreground/80 truncate max-w-[200px]">{provider.base_url || ""}</p>
-      </div>
-
-      {/* Row 4: Buttons */}
-      <div className="flex gap-2 mt-auto pt-3">
-        <Button variant="outline" size="sm" onClick={handleTest} disabled={testing} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Plug className="h-3 w-3 mr-1" />}
-          TEST
+      <p className="pm-settings-provider-meta">{provider.model || ""}</p>
+      {subtitle ? <p className="pm-settings-provider-meta">{subtitle}</p> : null}
+      <p className="pm-settings-provider-meta" title={provider.base_url || undefined}>
+        {provider.base_url || ""}
+      </p>
+      <div className="pm-settings-provider-actions">
+        <Button variant="ghost" size="sm" onClick={handleTest} disabled={testing}>
+          {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plug className="h-3 w-3" />}
+          Test
         </Button>
-        <Button variant="outline" size="sm" onClick={handleSetDefault} disabled={provider.is_default} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          <Star className="h-3 w-3 mr-1" />DEFAULT
+        <Button variant="ghost" size="sm" onClick={handleSetDefault} disabled={provider.is_default}>
+          <Star className="h-3 w-3" />
+          Default
         </Button>
-        <Button variant="outline" size="sm" onClick={() => onEdit(provider)} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          <Pencil className="h-3 w-3 mr-1" />EDIT
+        <Button variant="secondary" size="sm" onClick={() => onEdit(provider)}>
+          <Pencil className="h-3 w-3" />
+          Edit
         </Button>
-        <Button variant="outline" size="sm" onClick={handleDelete} className="font-medium uppercase tracking-[0.1em] text-[10px] hover:text-orange-600 dark:hover:text-orange-400">
-          <Trash2 className="h-3 w-3 mr-1" />DELETE
+        <Button variant="destructive" size="sm" onClick={handleDelete}>
+          <Trash2 className="h-3 w-3" />
+          Delete
         </Button>
       </div>
     </div>
+  )
+}
+
+function SettingsSwitch({
+  checked,
+  onCheckedChange,
+  label,
+  id,
+  disabled,
+}: {
+  checked: boolean
+  onCheckedChange: (next: boolean) => void
+  label: string
+  id: string
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      id={id}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      className={cn("pm-config-switch", checked && "is-on")}
+      onClick={() => !disabled && onCheckedChange(!checked)}
+    >
+      <span className="pm-config-switch-thumb" aria-hidden />
+    </button>
   )
 }
 
@@ -156,6 +204,8 @@ interface SimpleProviderDialogProps<T extends { id: string }> {
   open: boolean
   provider: T | null
   title: string
+  /** Green dialog kicker — model type: LLM · Embedding · Rerank · Transcription … */
+  kicker?: string
   fields: FieldDef[]
   getTransFields?: (form: Record<string, string>) => FieldDef[]
   defaults: Record<string, unknown>
@@ -170,7 +220,7 @@ interface SimpleProviderDialogProps<T extends { id: string }> {
 }
 
 function SimpleProviderDialog<T extends { id: string }>({
-  open, provider, title, fields, getTransFields, defaults, onOpenChange, onSaved, onCreate, onUpdate,
+  open, provider, title, kicker, fields, getTransFields, defaults, onOpenChange, onSaved, onCreate, onUpdate,
   checkboxField = "is_default", checkboxLabel = "Set as default",
   modelFetchSection, renderExtra,
 }: SimpleProviderDialogProps<T>) {
@@ -267,69 +317,121 @@ function SimpleProviderDialog<T extends { id: string }>({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-settings-dlg",
+          "sm:max-w-md",
+          "!animate-none data-open:!animate-none data-closed:!animate-none",
+        )}
+        overlayClassName="pm-dialog-overlay--silk"
+      >
         <DialogHeader>
-          <DialogTitle>{provider ? `Edit ${title}` : `Add ${title}`}</DialogTitle>
+          <DialogKicker>{kicker || title}</DialogKicker>
+          <DialogTitle>{provider ? "Edit provider" : "Add provider"}</DialogTitle>
+          <DialogDescription>
+            {provider
+              ? `Update connection details for this ${title.toLowerCase()}.`
+              : `Add a ${title.toLowerCase()} with endpoint and credentials.`}
+          </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2 min-w-0">
-          {resolvedFields.map((f) => (
-            <div key={f.key} className="space-y-1.5">
-              <label className="text-sm font-light uppercase tracking-wider">{f.label}</label>
-              {f.key === "model" && modelFetchSection && !f.options?.length ? (
-                <>
-                  <div className="flex gap-2">
-                    <Combobox
-                      value={form.model || ""}
-                      onChange={(v) => set("model", v)}
-                      options={availableModels}
-                      placeholder={f.placeholder}
-                      className="flex-1"
-                    />
-                    <Button
-                      variant="outline"
-                      className="h-8 w-8 shrink-0 p-0"
-                      onClick={fetchModels}
-                      disabled={fetchingModels || !form.base_url?.trim()}
-                    >
-                      {fetchingModels ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-4 w-4" />
-                      )}
-                    </Button>
+        <div className="pm-settings-dlg-scroll">
+          <div className="pm-dialog-body pm-settings-dlg-body">
+            <section className="pm-settings-dlg-card">
+              <span className="pm-settings-dlg-card-kicker">Connection</span>
+              <div className="pm-settings-dlg-fields">
+                {resolvedFields.map((f) => (
+                  <div key={f.key} className="pm-settings-dlg-field">
+                    <FieldLabel>{f.label}</FieldLabel>
+                    {f.key === "model" && modelFetchSection && !f.options?.length ? (
+                      <>
+                        <div className="flex gap-2">
+                          <Combobox
+                            value={form.model || ""}
+                            onChange={(v) => set("model", v)}
+                            options={availableModels}
+                            placeholder={f.placeholder}
+                            className="flex-1"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={fetchModels}
+                            disabled={fetchingModels || !form.base_url?.trim()}
+                            title="Fetch models"
+                          >
+                            {fetchingModels ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                        {availableModels.length === 0 && !fetchingModels && form.base_url?.trim() && (
+                          <p className="pm-settings-dlg-card-hint mt-1.5">
+                            Refresh to fetch models from the base URL.
+                          </p>
+                        )}
+                      </>
+                    ) : f.options ? (
+                      <DropdownSelect
+                        value={form[f.key] || ""}
+                        onChange={(v) => set(f.key, v)}
+                        options={f.options}
+                      />
+                    ) : f.key === "api_key" ? (
+                      <div className="pm-settings-dlg-secret">
+                        <Input
+                          type={showApiKey ? "text" : "password"}
+                          value={form[f.key] || ""}
+                          onChange={(e) => set(f.key, e.target.value)}
+                          placeholder={f.placeholder}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="pm-settings-dlg-secret-btn"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                        >
+                          {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Input
+                        type={f.type || "text"}
+                        value={form[f.key] || ""}
+                        onChange={(e) => set(f.key, e.target.value)}
+                        placeholder={f.placeholder}
+                      />
+                    )}
                   </div>
-                  {availableModels.length === 0 && !fetchingModels && form.base_url?.trim() && (
-                    <p className="text-xs text-muted-foreground">Click the refresh button to fetch models from the base URL.</p>
-                  )}
-                </>
-              ) : f.options ? (
-                <DropdownSelect
-                  value={form[f.key] || ""}
-                  onChange={(v) => set(f.key, v)}
-                  options={f.options}
-                />
-              ) : f.key === "api_key" ? (
-                <div className="relative">
-                  <Input type={showApiKey ? "text" : "password"} value={form[f.key] || ""} onChange={(e) => set(f.key, e.target.value)} placeholder={f.placeholder} />
-                  <Button variant="ghost" size="icon" className="absolute right-0 top-0 h-full px-3" onClick={() => setShowApiKey(!showApiKey)}>
-                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-              ) : (
-                <Input type={f.type || "text"} value={form[f.key] || ""} onChange={(e) => set(f.key, e.target.value)} placeholder={f.placeholder} className={f.key === "name" ? "uppercase" : ""} />
-              )}
-            </div>
-          ))}
-          {renderExtra?.(form, set)}
-          <label className="flex items-center gap-2 text-sm font-light uppercase tracking-wider cursor-pointer">
-            <input type="checkbox" checked={form[checkboxField] === "true"} onChange={(e) => set(checkboxField, e.target.checked ? "true" : "false")} className="rounded" />
-            {checkboxLabel}
-          </label>
+                ))}
+                {renderExtra?.(form, set)}
+              </div>
+              <div className="pm-settings-dlg-pref">
+                <p className="pm-settings-dlg-pref-label">
+                  Prefer this provider when multiple are available
+                </p>
+                <button
+                  type="button"
+                  className={cn("pm-field-chip", form[checkboxField] === "true" && "is-on")}
+                  aria-pressed={form[checkboxField] === "true"}
+                  onClick={() =>
+                    set(checkboxField, form[checkboxField] === "true" ? "false" : "true")
+                  }
+                >
+                  <Star className="h-3 w-3" strokeWidth={1.75} />
+                  {form[checkboxField] === "true" ? "Default" : checkboxLabel}
+                </button>
+              </div>
+            </section>
+          </div>
         </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="font-light uppercase">Cancel</Button>
-          <Button onClick={handleSave} disabled={saving} className="font-light uppercase">{saving ? "Saving..." : provider ? "Update" : "Create"}</Button>
-        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="default" onClick={handleSave} disabled={saving}>
+            {saving ? "Saving…" : provider ? "Update" : "Create"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
@@ -347,16 +449,17 @@ interface TranscriptionProviderCardProps {
   onTest: (id: string) => Promise<{ success: boolean; message?: string; error?: string }>
 }
 
-function TranscriptionProviderCard({ provider, kind, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
-  // DashScope adapters hardcode a single Qwen model (ignore stored config.model).
-  const modelLabel = provider.adapter?.startsWith("dashscope")
-    ? kind === "file"
-      ? "qwen-audio-3.0-asr-flash-filetrans"
-      : "qwen-audio-3.0-asr-flash-streaming"
-    : (provider.model || provider.adapter)
+function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
+  // Realtime DashScope still hardcodes streaming model; file DashScope uses config.model.
+  const modelLabel =
+    provider.adapter === "dashscope_funasr_realtime"
+      ? "qwen-audio-3.0-asr-flash-streaming"
+      : (provider.model || provider.adapter)
+
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
   const [testing, setTesting] = useState(false)
-  const statusColor = status === "ready" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-muted-foreground/40"
+  const statusClass =
+    status === "ready" ? "is-ready" : status === "error" ? "is-error" : ""
 
   const handleTest = async () => {
     setTesting(true)
@@ -381,7 +484,12 @@ function TranscriptionProviderCard({ provider, kind, onEdit, onRefresh, onDelete
     try {
       const res = await onDelete(provider.id)
       if (res.error) toast.error(res.error)
-      else { toast.success(res.message || "Deleted"); onRefresh() }
+      else {
+        toast.success(
+          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+        )
+        onRefresh()
+      }
     } catch { toast.error("Delete failed") }
   }
 
@@ -389,45 +497,46 @@ function TranscriptionProviderCard({ provider, kind, onEdit, onRefresh, onDelete
     try {
       const res = await onSetActive(provider.id)
       if (res.error) toast.error(res.error)
-      else { toast.success(res.message || "Default provider updated"); onRefresh() }
+      else {
+        toast.success(
+          res.message || `Provider '${provider.name || "Unnamed"}' set as default`,
+        )
+        onRefresh()
+      }
     } catch { toast.error("Failed to set default") }
   }
 
   return (
-    <div className="border border-border/50 rounded-lg p-4 flex flex-col h-full">
-      {/* Row 1: Provider name + status + default badge */}
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">{provider.name || "Unnamed"}</span>
-          <div className={`h-2 w-2 rounded-full shrink-0 ${statusColor}`} />
+    <div className="pm-settings-provider-card">
+      <div className="pm-settings-provider-top">
+        <div className="pm-settings-provider-name-row">
+          <span className="pm-settings-provider-name">{provider.name || "Unnamed"}</span>
+          <span className={cn("pm-settings-status-dot", statusClass)} aria-hidden />
         </div>
         {provider.is_active && (
-          <Badge className="text-[10px] font-medium uppercase tracking-[0.1em] bg-emerald-50 text-emerald-700 hover:bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 shrink-0"><Star className="h-3 w-3 mr-1" />DEFAULT</Badge>
+          <Badge variant="default" className="shrink-0">
+            Default
+          </Badge>
         )}
       </div>
-
-      {/* Row 2: Model */}
-      <div className="mt-1 min-h-[1.25rem]">
-        <p className="font-normal text-[12px] text-muted-foreground/80">{modelLabel}</p>
-      </div>
-
-      {/* Row 3: URL (reserved for uniform height) */}
+      <p className="pm-settings-provider-meta">{modelLabel}</p>
       <div className="min-h-[1rem]" />
-
-      {/* Row 4: Buttons */}
-      <div className="flex gap-2 mt-auto pt-3">
-        <Button variant="outline" size="sm" onClick={handleSetActive} disabled={provider.is_active} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          <Star className="h-3 w-3 mr-1" />DEFAULT
+      <div className="pm-settings-provider-actions">
+        <Button variant="ghost" size="sm" onClick={handleSetActive} disabled={provider.is_active}>
+          <Star className="h-3 w-3" />
+          Default
         </Button>
-        <Button variant="outline" size="sm" onClick={handleTest} disabled={testing} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          {testing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Zap className="h-3 w-3 mr-1" />}
-          TEST
+        <Button variant="ghost" size="sm" onClick={handleTest} disabled={testing}>
+          {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+          Test
         </Button>
-        <Button variant="outline" size="sm" onClick={() => onEdit(provider)} className="font-medium uppercase tracking-[0.1em] text-[10px]">
-          <Pencil className="h-3 w-3 mr-1" />EDIT
+        <Button variant="secondary" size="sm" onClick={() => onEdit(provider)}>
+          <Pencil className="h-3 w-3" />
+          Edit
         </Button>
-        <Button variant="outline" size="sm" onClick={handleDelete} className="font-medium uppercase tracking-[0.1em] text-[10px] hover:text-orange-600 dark:hover:text-orange-400">
-          <Trash2 className="h-3 w-3 mr-1" />DELETE
+        <Button variant="destructive" size="sm" onClick={handleDelete}>
+          <Trash2 className="h-3 w-3" />
+          Delete
         </Button>
       </div>
     </div>
@@ -472,22 +581,15 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   // Language hints config editor state for file transcription openai_compatible adapter
   const [fileTransLangHints, setFileTransLangHints] = useState<LanguageHintOption[]>([])
 
-  // Local model device
-  const [localDevice, setLocalDevice] = useState<string>("cpu")
+  // Local model catalog (download management)
+  const [localModelCatalog, setLocalModelCatalog] = useState<ModelStatus[]>([])
+  const [deletingModelIds, setDeletingModelIds] = useState<Set<string>>(new Set())
 
   // Visual Model selection
   const [visualModelId, setVisualModelId] = useState<string>("")
-  const [showVisualModelDropdown, setShowVisualModelDropdown] = useState(false)
-  const visualModelBtnRef = useRef<HTMLButtonElement>(null)
-  const visualModelMenuRef = useRef<HTMLDivElement>(null)
 
   // Chat Model selection
   const [chatModelId, setChatModelId] = useState<string>("")
-  const [showChatModelDropdown, setShowChatModelDropdown] = useState(false)
-  const chatModelBtnRef = useRef<HTMLButtonElement>(null)
-  const chatModelMenuRef = useRef<HTMLDivElement>(null)
-  const [chatModelPos, setChatModelPos] = useState({ top: 0, left: 0, width: 0 })
-  const [visualModelPos, setVisualModelPos] = useState({ top: 0, left: 0, width: 0 })
 
   // MinerU cloud parsing options
   const MINERU_MODEL_OPTIONS = [
@@ -520,8 +622,6 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const [meetingModel,setMeetingModel]=useState("");const [meetingThinking,setMeetingThinking]=useState(true);const [meetingThinkingConfirmOpen,setMeetingThinkingConfirmOpen]=useState(false)
   const [showAdvanced,setShowAdvanced]=useState(false)
   const [showModelConfig,setShowModelConfig]=useState(false)
-  const enrichModelBtnRef=useRef<HTMLButtonElement>(null);const enrichModelMenuRef=useRef<HTMLDivElement>(null);const [showEnrichModelDropdown,setShowEnrichModelDropdown]=useState(false);const [enrichModelPos,setEnrichModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
-  const meetingModelBtnRef=useRef<HTMLButtonElement>(null);const meetingModelMenuRef=useRef<HTMLDivElement>(null);const [showMeetingModelDropdown,setShowMeetingModelDropdown]=useState(false);const [meetingModelPos,setMeetingModelPos]=useState<{top:number;left:number;width:number}>({top:0,left:0,width:0})
   const _saveRag=(mode?:string)=>updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:mode??ragSearchMode,min_score:(parseInt(ragMinScore)||0)/100}).catch(()=>{})
   const _saveDir=(mode?:string)=>updateConfig("direct_rag",{top_k:parseInt(dirTopK)||20,rerank_top_k:parseInt(dirRerankTopK)||5,use_reranker:dirRerankEnabled,default_search_mode:mode??dirSearchMode,min_score:(parseInt(dirMinScore)||0)/100}).catch(()=>{})
   // MinerU cloud parsing settings
@@ -538,80 +638,30 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const [webSearchApiKey, setWebSearchApiKey] = useState("")
   const [showWebSearchKey, setShowWebSearchKey] = useState(false)
 
-  // MinerU custom dropdown state
-  const [showMineruModelDropdown, setShowMineruModelDropdown] = useState(false)
-  const [showMineruLanguageDropdown, setShowMineruLanguageDropdown] = useState(false)
-  const mineruModelBtnRef = useRef<HTMLButtonElement>(null)
-  const mineruModelMenuRef = useRef<HTMLDivElement>(null)
-  const mineruLangBtnRef = useRef<HTMLButtonElement>(null)
-  const mineruLangMenuRef = useRef<HTMLDivElement>(null)
-
-  // Close dropdowns on click outside
-  useEffect(() => {
-    if (!showVisualModelDropdown && !showChatModelDropdown && !showMineruModelDropdown && !showMineruLanguageDropdown) return
-    const handler = (e: MouseEvent) => {
-      if (showVisualModelDropdown &&
-          !visualModelBtnRef.current?.contains(e.target as Node) &&
-          !visualModelMenuRef.current?.contains(e.target as Node)) {
-        setShowVisualModelDropdown(false)
-      }
-      if (showChatModelDropdown &&
-          !chatModelBtnRef.current?.contains(e.target as Node) &&
-          !chatModelMenuRef.current?.contains(e.target as Node)) {
-        setShowChatModelDropdown(false)
-      }
-      if (showMineruModelDropdown &&
-          !mineruModelBtnRef.current?.contains(e.target as Node) &&
-          !mineruModelMenuRef.current?.contains(e.target as Node)) {
-        setShowMineruModelDropdown(false)
-      }
-      if (showMineruLanguageDropdown &&
-          !mineruLangBtnRef.current?.contains(e.target as Node) &&
-          !mineruLangMenuRef.current?.contains(e.target as Node)) {
-        setShowMineruLanguageDropdown(false)
-      }
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [showVisualModelDropdown, showMineruModelDropdown, showMineruLanguageDropdown])
-
-  // Dropdown position state — computed after DOM layout to avoid flying-in on first click
-  const [mineruModelPos, setMineruModelPos] = useState({ top: 0, left: 0, width: 0 })
-  const [mineruLangPos, setMineruLangPos] = useState({ top: 0, left: 0, width: 0 })
-
-  const updateMineruPositions = useCallback(() => {
-    if (mineruModelMenuRef.current && mineruModelBtnRef.current) {
-      const r = mineruModelMenuRef.current.getBoundingClientRect()
-      setMineruModelPos({ top: r.bottom + 4, left: r.left, width: mineruModelBtnRef.current.getBoundingClientRect().width })
-    }
-    if (mineruLangMenuRef.current && mineruLangBtnRef.current) {
-      const r = mineruLangMenuRef.current.getBoundingClientRect()
-      setMineruLangPos({ top: r.bottom + 4, left: r.left, width: mineruLangBtnRef.current.getBoundingClientRect().width })
-    }
-  }, [])
-
-  // Position is computed synchronously in onClick handlers (before state update)
-  // to avoid rendering at a stale position. Scroll/resize updates use the callback.
-
-  useEffect(() => {
-    if (!showVisualModelDropdown && !showMineruModelDropdown && !showMineruLanguageDropdown) return
-    const updateAll = () => {
-      updateMineruPositions()
-      if (visualModelMenuRef.current && visualModelBtnRef.current) {
-        const r = visualModelMenuRef.current.getBoundingClientRect()
-        setVisualModelPos({ top: r.bottom + 4, left: r.left, width: visualModelBtnRef.current.getBoundingClientRect().width })
-      }
-    }
-    window.addEventListener("scroll", updateAll, true)
-    window.addEventListener("resize", updateAll)
-    return () => {
-      window.removeEventListener("scroll", updateAll, true)
-      window.removeEventListener("resize", updateAll)
-    }
-  }, [showVisualModelDropdown, showMineruModelDropdown, showMineruLanguageDropdown, updateMineruPositions])
-
   // Runtime load states from backend
-  const [loadStates, setLoadStates] = useState<Record<string, string>>({})
+  const [loadStates, setLoadStates] = useState<Record<string, LoadState>>({})
+  const [loadDetails, setLoadDetails] = useState<Record<string, LoadDetail>>({})
+  const loadStatesRef = useRef(loadStates)
+  loadStatesRef.current = loadStates
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const asLoadState = (v: string | undefined): LoadState => {
+    if (v === "loading" || v === "loaded" || v === "error" || v === "unloaded") return v
+    return "unloaded"
+  }
+
+  const asLoadDetail = (
+    d?: { state?: string; message?: string; error?: string; started_at?: number; load_s?: number },
+  ): LoadDetail | undefined => {
+    if (!d) return undefined
+    return {
+      state: d.state ? asLoadState(d.state) : undefined,
+      message: d.message,
+      error: d.error,
+      started_at: d.started_at,
+      load_s: d.load_s,
+    }
+  }
 
   // Model download status (id → downloaded)
   const [modelDownloaded, setModelDownloaded] = useState<Record<string, boolean>>({})
@@ -619,6 +669,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const refreshModelDownloaded = async () => {
     try {
       const status = await getModelStatus()
+      setLocalModelCatalog(status)
       const map: Record<string, boolean> = {}
       for (const m of status) {
         map[m.id] = m.downloaded
@@ -627,7 +678,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       // builtin-local-rt needs realtime
       const fileTransReady = (map.transcription && map.vad && map.speaker && map.punc)
       setModelDownloaded({
-        "builtin-local-file": fileTransReady,
+        "builtin-local-file": !!fileTransReady,
         "builtin-local-rt": map.realtime || false,
       })
     } catch { /* ignore */ }
@@ -637,28 +688,78 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const refreshLoadStates = async () => {
     try {
       const state = await getModelState()
-      setLoadStates(state.load_states || {})
-      return state.load_states || {}
-    } catch { return {} }
+      const server = state.load_states || {}
+      const prev = loadStatesRef.current
+      // Merge: keep local "loading" until server reports a real terminal/loading state
+      const next: Record<string, LoadState> = { ...prev }
+      for (const [id, st] of Object.entries(server)) {
+        next[id] = asLoadState(st)
+      }
+      // Toast only on real transitions from loading → loaded/error
+      for (const [id, st] of Object.entries(next)) {
+        const was = prev[id]
+        if (was === "loading" && st === "loaded") {
+          const detail = state.load_details?.[id]
+          const took =
+            typeof detail?.load_s === "number" ? ` in ${detail.load_s}s` : ""
+          toast.success(
+            id === "builtin-local-rt"
+              ? `Realtime model ready${took}`
+              : `File transcription model ready${took}`,
+          )
+        }
+        if (was === "loading" && st === "error") {
+          const detail = state.load_details?.[id]
+          toast.error(detail?.error || detail?.message || "Model load failed")
+        }
+      }
+      setLoadStates(next)
+      setLoadDetails((prevDetails) => {
+        const merged: Record<string, LoadDetail> = { ...prevDetails }
+        for (const [id, d] of Object.entries(state.load_details || {})) {
+          const parsed = asLoadDetail(d)
+          if (parsed) merged[id] = parsed
+        }
+        return merged
+      })
+      return next
+    } catch {
+      return loadStatesRef.current
+    }
   }
 
-  const startPolling = () => {
+  const startPolling = (immediate = true) => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
     const poll = async () => {
       const states = await refreshLoadStates()
-      await refreshModelDownloaded()
+      // Avoid hammering full catalog during pure load; still refresh lightly
       const stillLoading = Object.values(states).some((v) => v === "loading")
-      // Check if any model is still downloading
       let stillDownloading = false
       try {
         const ms = await getModelStatus()
-        stillDownloading = ms.some((m) => m.status === "downloading")
+        setLocalModelCatalog(ms)
+        stillDownloading = ms.some(
+          (m) => m.status === "downloading" || m.status === "extracting"
+        )
+        const map: Record<string, boolean> = {}
+        for (const m of ms) map[m.id] = m.downloaded
+        setModelDownloaded({
+          "builtin-local-file": !!(map.transcription && map.vad && map.speaker && map.punc),
+          "builtin-local-rt": map.realtime || false,
+        })
       } catch { /* ignore */ }
       if (stillLoading || stillDownloading) {
-        setTimeout(poll, 1500)
+        // Fast poll while loading so UI feels responsive
+        pollTimerRef.current = setTimeout(poll, stillLoading ? 500 : 1500)
+      } else {
+        pollTimerRef.current = null
       }
     }
-    // Always start first poll immediately regardless of current state
-    setTimeout(poll, 1500)
+    if (immediate) void poll()
+    else pollTimerRef.current = setTimeout(poll, 500)
   }
 
   // Auto-poll on mount if anything is in progress
@@ -670,13 +771,18 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         const ms = await getModelStatus()
         const states = await getModelState()
         const isLoading = Object.values(states.load_states || {}).some((v) => v === "loading")
-        const isDownloading = ms.some((m) => m.status === "downloading")
+        const isDownloading = ms.some(
+          (m) => m.status === "downloading" || m.status === "extracting"
+        )
         if (isLoading || isDownloading) {
-          startPolling()
+          startPolling(true)
         }
       } catch { /* ignore */ }
     }
     init()
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    }
   }, [])
 
   // Extract built-in providers from each list
@@ -734,7 +840,6 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     fetchRtTransProviders()
     refreshModelDownloaded()
     getConfig().then((c) => {
-      setLocalDevice(typeof c.transcription?.local_device === "string" ? c.transcription.local_device as string : "cpu")
       // Load Visual Model config
       if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
       if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
@@ -793,17 +898,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
   const getFileTransFields = (form: Record<string, string>): FieldDef[] => {
     const adapter = form.adapter || ""
-    if (adapter.startsWith("funasr_local")) {
-      return [
-        ...fileTransFields,
-        { key: "device", label: "Device", options: [
-          { value: "auto", label: "Auto (recommended)" },
-          { value: "mps", label: "Apple Silicon (MPS)" },
-          { value: "cuda", label: "CUDA (NVIDIA)" },
-          { value: "cpu", label: "CPU" },
-        ]},
-      ]
-    }
+    // Local FunASR is ONNX-only (CPU via onnxruntime); no torch device picker.
     if (adapter === "openai_compatible") {
       return [
         ...fileTransFields,
@@ -820,7 +915,21 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         { key: "api_key", label: "API Key", type: "password", placeholder: "sk-or-v1-..." },
       ]
     }
-    // Remote adapters: only api_key
+    if (adapter === "dashscope_funasr") {
+      return [
+        ...fileTransFields,
+        {
+          key: "model",
+          label: "Model",
+          options: [
+            { value: "fun-asr", label: "fun-asr (FunASR cloud)" },
+            { value: "qwen-audio-3.0-asr-flash-filetrans", label: "qwen-audio-3.0-asr-flash-filetrans" },
+          ],
+        },
+        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+      ]
+    }
+    // Other remote adapters: only api_key
     return [
       ...fileTransFields,
       { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
@@ -834,17 +943,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
   const getRtTransFields = (form: Record<string, string>): FieldDef[] => {
     const adapter = form.adapter || ""
-    if (adapter.startsWith("funasr_local")) {
-      return [
-        ...rtTransFields,
-        { key: "device", label: "Device", options: [
-          { value: "auto", label: "Auto (recommended)" },
-          { value: "mps", label: "Apple Silicon (MPS)" },
-          { value: "cuda", label: "CUDA (NVIDIA)" },
-          { value: "cpu", label: "CPU" },
-        ]},
-      ]
-    }
+    // Local FunASR realtime is ONNX-only (CPU); no torch device picker.
     if (adapter === "openai_compatible") {
       return [
         ...rtTransFields,
@@ -859,416 +958,679 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     ]
   }
 
+
+  const visualModelOptions = (() => {
+    const visualModels = providers.flatMap((p) =>
+      (p.visual_model_ids || []).map((m) => ({
+        value: m,
+        label: `${p.name || p.id} / ${m}`,
+      })),
+    )
+    return [{ value: "", label: "None (disabled)" }, ...visualModels]
+  })()
+
+  const chatModelOptions = (() => {
+    const chatModels = providers
+      .flatMap((p) =>
+        (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
+          value: m,
+          label: `${p.name || p.id} / ${m}`,
+          isFunctionCall: ((p as { function_call_model_ids?: string[] }).function_call_model_ids || []).includes(m),
+        })),
+      )
+      .filter((cm) => cm.isFunctionCall)
+    return [{ value: "", label: "Default" }, ...chatModels.map(({ value, label }) => ({ value, label }))]
+  })()
+
+  const meetingModelOptions = (() => {
+    const meetingModels = providers.flatMap((p) =>
+      (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
+        value: `${p.id}|${m}`,
+        label: `${p.name || p.id} / ${m}`,
+      })),
+    )
+    return [{ value: "", label: "Default" }, ...meetingModels]
+  })()
+
+  const enrichModelOptions = [
+    { value: "", label: "Default" },
+    ...providers.map((p) => ({ value: p.id, label: `${p.name} / ${p.model}` })),
+  ]
+
+  const saveMineru = async (patch: Record<string, unknown>) => {
+    await updateConfig("mineru", {
+      enabled: mineruEnabled,
+      api_token: mineruToken,
+      base_url: "https://mineru.net/api/v4",
+      model_version: mineruModel,
+      is_ocr: mineruOcr,
+      enable_formula: mineruFormula,
+      enable_table: mineruTable,
+      language: mineruLanguage,
+      ...patch,
+    })
+  }
+
   return (
-    <div className="h-full overflow-auto p-6">
-      <div className="max-w-4xl mx-auto space-y-2">
-        {/* ── OneShot Dashscope ── */}
-        <div className="flex items-center justify-between pb-6 mb-2 border-b border-dashed border-border">
-          <div>
-            <p className="text-[18px] font-[350] tracking-tight uppercase">QUICK SETUP</p>
-            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">Quickly configure providers with a single API Key</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setOneshotDialogOpen(true)} className="font-light uppercase">
-              <Zap className="h-4 w-4 mr-2" />Dashscope
-            </Button>
-            <Button variant="outline" onClick={() => setOpenrouterDialogOpen(true)} className="font-light uppercase">
-              <Zap className="h-4 w-4 mr-2" />OpenRouter
-            </Button>
-          </div>
-        </div>
-
-        {/* ── LLM Providers ── */}
-        <section className="border-b border-border pb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-[18px] font-[350] tracking-tight uppercase">MODELS</h2>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="default" onClick={handleAdd} className="font-light uppercase">ADD</Button>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {providers.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
-              <ProviderCard key={p.id} provider={p} onEdit={handleEdit} onRefresh={fetchProviders} />
-            ))}
-          </div>
-
-          {/* ── Model Configuration (collapsible sub-menu) ── */}
-          <div className="pt-4 mt-4 border-t border-border/50">
-          <button
-            onClick={() => setShowModelConfig(!showModelConfig)}
-            className="flex items-center justify-between w-full text-left"
-          >
-            <div>
-              <h2 className="text-[14px] font-[350] tracking-tight uppercase">MORE</h2>
-            </div>
-            <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform duration-300 ${showModelConfig ? "rotate-90" : ""}`} />
-          </button>
-          <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${showModelConfig ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
-            <div className="overflow-hidden">
-
-            {/* Visual Model */}
-            <div className="pt-4">
-              <h3 className="text-[12px] font-[350] uppercase tracking-tight mb-2">VISUAL MODEL</h3>
-              {(() => {
-                const visualModels = providers.flatMap((p) =>
-                  (p.visual_model_ids || []).map((m) => ({
-                    model: m,
-                    providerName: p.name || p.id,
-                    providerId: p.id,
-                  }))
-                )
-                if (visualModels.length === 0) {
-                  return (
-                    <div className="border border-dashed border-muted-foreground/30 rounded-lg p-4 text-center">
-                      <Sparkles className="h-6 w-6 mx-auto mb-1 text-muted-foreground/40" />
-                      <p className="font-normal text-[11px] text-muted-foreground/70">No visual-capable models configured.</p>
-                    </div>
-                  )
-                }
-                return (
-                  <div className="flex items-center gap-3">
-                    <span className="text-[11px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
-                    <div className="flex-1 max-w-md relative" ref={visualModelMenuRef}>
-                      <button type="button" ref={visualModelBtnRef} onClick={() => { const r = visualModelMenuRef.current?.getBoundingClientRect(); if (r) setVisualModelPos({ top: r.bottom + 4, left: r.left, width: visualModelBtnRef.current?.getBoundingClientRect().width || r.width }); setShowVisualModelDropdown(!showVisualModelDropdown) }} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showVisualModelDropdown ? "var(--color-primary-foreground)" : visualModelId ? "var(--color-primary)" : "var(--color-muted-foreground)" }}>
-                        <span className="relative z-10 whitespace-nowrap">{visualModelId ? visualModels.find(vm => vm.model === visualModelId)?.model || visualModelId : "NONE (DISABLED)"}</span>
-                        <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{ transform: showVisualModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showVisualModelDropdown ? "right" : "left" }} />
-                      </button>
-                      <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showVisualModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{ width: visualModelPos.width, top: visualModelPos.top, left: visualModelPos.left }}>
-                        {[{ value: "", label: "NONE (DISABLED)" }, ...visualModels.map(vm => ({ value: vm.model, label: `${vm.providerName} / ${vm.model}` }))].map((opt) => (
-                          <button key={opt.value} type="button" onClick={async () => { setVisualModelId(opt.value); setShowVisualModelDropdown(false); try { await updateConfig("visual_model_id", { visual_model_id: opt.value || null }); toast.success("Visual model updated") } catch { toast.error("Failed to update visual model") } }} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{ background: "none", border: "none" }}>
-                            <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
-                              {visualModelId === opt.value || (!visualModelId && opt.value === "") ? <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" /> : <span className="w-1.5 h-1.5 shrink-0" />}
-                              {opt.label}
-                            </span>
-                            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
-            </div>
-
-            {/* Chat Model */}
-            <div className="pt-4 mt-3 border-t border-border/50">
-              <h3 className="text-[12px] font-[350] uppercase tracking-tight mb-2">CHAT MODEL</h3>
-              {(() => {
-                const chatModels = providers.flatMap((p) =>
-                  (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
-                    model: m,
-                    providerName: p.name || p.id,
-                    providerId: p.id,
-                    isFunctionCall: ((p as any).function_call_model_ids || []).includes(m),
-                  }))
-                ).filter((cm) => cm.isFunctionCall)
-                if (chatModels.length === 0) {
-                  return (
-                    <div className="border border-dashed border-muted-foreground/30 rounded-lg p-4 text-center">
-                      <MessageSquare className="h-6 w-6 mx-auto mb-1 text-muted-foreground/40" />
-                      <p className="font-normal text-[11px] text-muted-foreground/70">No chat-capable models configured.</p>
-                    </div>
-                  )
-                }
-                return (
-                  <div className="flex items-center gap-3">
-                    <span className="text-[11px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
-                    <div className="flex-1 max-w-md relative" ref={chatModelMenuRef}>
-                      <button type="button" ref={chatModelBtnRef} onClick={() => { const r = chatModelMenuRef.current?.getBoundingClientRect(); if (r) setChatModelPos({ top: r.bottom + 4, left: r.left, width: chatModelBtnRef.current?.getBoundingClientRect().width || r.width }); setShowChatModelDropdown(!showChatModelDropdown) }} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showChatModelDropdown ? "var(--color-primary-foreground)" : chatModelId ? "var(--color-primary)" : "var(--color-muted-foreground)" }}>
-                        <span className="relative z-10 whitespace-nowrap">{chatModelId ? chatModels.find(vm => vm.model === chatModelId)?.model || chatModelId : "DEFAULT"}</span>
-                        <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{ transform: showChatModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showChatModelDropdown ? "right" : "left" }} />
-                      </button>
-                      <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showChatModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{ width: chatModelPos.width, top: chatModelPos.top, left: chatModelPos.left }}>
-                        {[{ value: "", label: "DEFAULT" }, ...chatModels.map(vm => ({ value: vm.model, label: `${vm.providerName} / ${vm.model}` }))].map((opt) => (
-                          <button key={opt.value} type="button" onClick={async () => { setChatModelId(opt.value); setShowChatModelDropdown(false); try { await updateConfig("default_chat_model", { default_chat_model: opt.value || null }); toast.success("Chat model updated") } catch { toast.error("Failed to update chat model") } }} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{ background: "none", border: "none" }}>
-                            <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
-                              {chatModelId === opt.value || (!chatModelId && opt.value === "") ? <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" /> : <span className="w-1.5 h-1.5 shrink-0" />}
-                              {opt.label}
-                            </span>
-                            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
-            </div>
-
-            {/* Meeting Summary Model */}
-            <div className="pt-4 mt-3 border-t border-border/50 pb-2">
-              <h3 className="text-[12px] font-[350] uppercase tracking-tight mb-2">MEETING SUMMARY MODEL</h3>
-              {(() => {
-                const meetingModels = providers.flatMap((p) =>
-                  (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
-                    model: m,
-                    providerName: p.name || p.id,
-                    providerId: p.id,
-                  }))
-                )
-                if (meetingModels.length === 0) {
-                  return (
-                    <div className="border border-dashed border-muted-foreground/30 rounded-lg p-4 text-center">
-                      <p className="font-normal text-[11px] text-muted-foreground/70">No LLM providers configured.</p>
-                    </div>
-                  )
-                }
-                return (
-                  <div className="flex items-center gap-3">
-                    <span className="text-[11px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
-                    <div className="flex-1 max-w-md relative" ref={meetingModelMenuRef}>
-                      <button type="button" ref={meetingModelBtnRef} onClick={()=>{const r=meetingModelMenuRef.current?.getBoundingClientRect();if(r)setMeetingModelPos({top:r.bottom+4,left:r.left,width:meetingModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowMeetingModelDropdown(!showMeetingModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showMeetingModelDropdown?"var(--color-primary-foreground)":meetingModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
-                        <span className="relative z-10 whitespace-nowrap">{meetingModel?(()=>{const [pid,mid]=meetingModel.split("|");const p=providers.find(x=>x.id===pid);return p?(p.name||p.id)+" / "+mid:meetingModel})():"DEFAULT"}</span>
-                        <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{transform:showMeetingModelDropdown?"scaleX(1)":"scaleX(0)",transformOrigin:showMeetingModelDropdown?"right":"left"}}/>
-                      </button>
-                      <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showMeetingModelDropdown?"opacity-100 visible translate-y-0 pointer-events-auto":"opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{width:meetingModelPos.width,top:meetingModelPos.top,left:meetingModelPos.left}}>
-                        {[{value:"",label:"DEFAULT",providerId:"",model:""},...meetingModels.map(m=>({value:`${m.providerId}|${m.model}`,label:`${m.providerName} / ${m.model}`,providerId:m.providerId,model:m.model}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setMeetingModel(opt.value);setShowMeetingModelDropdown(false);try{await updateConfig("enrichment",{meeting_model:opt.value,meeting_thinking:meetingThinking});toast.success("Meeting model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{meetingModel===opt.value||(!meetingModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
-                      </div>
-                    </div>
-                    <button type="button" onClick={()=>{if(meetingThinking){setMeetingThinkingConfirmOpen(true)}else{setMeetingThinking(true);updateConfig("enrichment",{meeting_model:meetingModel,meeting_thinking:true}).catch(()=>{toast.error("Failed to update");setMeetingThinking(false)})}}} className={`flex items-center gap-1.5 cursor-pointer t-sans-family transition-all ${meetingThinking?"sk-thinking-flow text-primary":"border-none bg-transparent text-muted-foreground hover:text-primary"}`} style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:meetingThinking?"2px 7px":"0",borderRadius:"2px"}} title={meetingThinking?"Deep thinking ON":"Deep thinking OFF"}>
-                      THINKING {meetingThinking?"ON":"OFF"}
-                    </button>
-                  </div>
-                )
-              })()}
-            </div>
-
-            </div>
-          </div>
-          </div>
-        </section>
-
-        {/* ── Embedding Providers ── */}
-        <section className="border-b border-border pb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[18px] font-[350] tracking-tight uppercase">EMBEDDING MODELS</h2>
-            <Button variant="default" onClick={() => { setEditingEmb(null); setEmbDialogOpen(true) }} className="font-light uppercase">ADD</Button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {embProviders.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
-              <SimpleProviderCard key={p.id} provider={p}
-                onEdit={(p) => { setEditingEmb(p); setEmbDialogOpen(true) }}
-                onRefresh={fetchEmbProviders} onTest={testEmbeddingProvider}
-                onDelete={deleteEmbeddingProvider} onSetDefault={setDefaultEmbeddingProvider} />
-            ))}
-          </div>
-        </section>
-
-        {/* ── Rerank Providers ── */}
-        <section className="border-b border-border pb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[18px] font-[350] tracking-tight uppercase">RERANK MODELS</h2>
-            <Button variant="default" onClick={() => { setEditingRerank(null); setRerankDialogOpen(true) }} className="font-light uppercase">ADD</Button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {rerankProviders.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
-              <SimpleProviderCard key={p.id} provider={p} subtitle={undefined}
-                onEdit={(p) => { setEditingRerank(p); setRerankDialogOpen(true) }}
-                onRefresh={fetchRerankProviders} onTest={testRerankProvider}
-                onDelete={deleteRerankProvider} onSetDefault={setDefaultRerankProvider} />
-            ))}
-          </div>
-        </section>
-
-        {/* ── Transcription ── */}
-        <section className="border-b border-border pb-6">
-          <h2 className="text-[18px] font-[350] tracking-tight uppercase mb-4">TRANSCRIPTION</h2>
-
-          {/* File Transcription */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">FILE TRANSCRIPTION</h3>
-              <Button variant="default" size="sm" onClick={() => { setEditingFileTrans(null); setFileTransLangHints([]); setFileTransDialogOpen(true) }} className="font-light uppercase">ADD</Button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {builtinFileTrans && (
-                <LocalModelCard
-                  id={builtinFileTrans.id} name={builtinFileTrans.name} model={builtinFileTrans.model || builtinFileTrans.adapter}
-                  isDefault={builtinFileTrans?.is_active ?? false} loadState={(loadStates[builtinFileTrans.id] || "unloaded") as LoadState}
-                  isDownloaded={modelDownloaded["builtin-local-file"] ?? false}
-                  onTest={async () => { const r = await testFileTranscriptionProvider(builtinFileTrans.id); return { success: r.success, message: r.message, error: r.error } }}
-                  onSetDefault={async () => { await setActiveFileTranscriptionProvider(builtinFileTrans.id); fetchFileTransProviders() }}
-                  onToggleLoad={async () => {
-                    const res = await toggleModelLoad(builtinFileTrans.id)
-                    if (!res.success && res.error) toast.error(res.error)
-                    fetchFileTransProviders()
-                    startPolling()
-                  }}
-                  onDownload={() => setModelDownloadOpen(true)}
-                />
-              )}
-              {cloudFileProviders.map((p) => (
-                <TranscriptionProviderCard key={p.id} provider={p} kind="file"
-                  onEdit={(p) => { setEditingFileTrans(p); setFileTransLangHints(p.language_hints_config || []); setFileTransDialogOpen(true) }}
-                  onRefresh={fetchFileTransProviders} onDelete={deleteFileTranscriptionProvider}
-                  onSetActive={setActiveFileTranscriptionProvider} onTest={testFileTranscriptionProvider} />
-              ))}
-            </div>
-          </div>
-
-          {/* Realtime Transcription */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">REALTIME TRANSCRIPTION</h3>
-              <Button variant="default" size="sm" onClick={() => { setEditingRtTrans(null); setRtTransDialogOpen(true) }} className="font-light uppercase">ADD</Button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {builtinRtTrans && (
-                <LocalModelCard
-                  id={builtinRtTrans.id} name={builtinRtTrans.name} model={builtinRtTrans.model || builtinRtTrans.adapter}
-                  isDefault={builtinRtTrans?.is_active ?? false} loadState={(loadStates[builtinRtTrans.id] || "unloaded") as LoadState}
-                  isDownloaded={modelDownloaded["builtin-local-rt"] ?? false}
-                  onTest={async () => { const r = await testRealtimeTranscriptionProvider(builtinRtTrans.id); return { success: r.success, message: r.message, error: r.error } }}
-                  onSetDefault={async () => { await setActiveRealtimeTranscriptionProvider(builtinRtTrans.id); fetchRtTransProviders() }}
-                  onToggleLoad={async () => {
-                    const res = await toggleModelLoad(builtinRtTrans.id)
-                    if (!res.success && res.error) toast.error(res.error)
-                    fetchRtTransProviders()
-                    startPolling()
-                  }}
-                  onDownload={() => setModelDownloadOpen(true)}
-                />
-              )}
-              {cloudRtProviders.map((p) => (
-                <TranscriptionProviderCard key={p.id} provider={p} kind="realtime"
-                  onEdit={(p) => { setEditingRtTrans(p); setRtTransDialogOpen(true) }}
-                  onRefresh={fetchRtTransProviders} onDelete={deleteRealtimeTranscriptionProvider}
-                  onSetActive={setActiveRealtimeTranscriptionProvider} onTest={testRealtimeTranscriptionProvider} />
-              ))}
-            </div>
-          </div>
-
-        </section>
-
-        {/* ── Hot Words Management ── */}
-        <section className="border-b border-border pb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[18px] font-[350] tracking-tight uppercase">HOT WORDS</h2>
-            <Button variant="default" onClick={() => setHotWordsManagerOpen(true)} className="font-light uppercase">
-              Manage
-            </Button>
-          </div>
-          <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
-            Manage hot word libraries to improve transcription accuracy for domain-specific terms like names, acronyms, and jargon.
+    <div className="pm-settings">
+      <div className="pm-settings-inner">
+        <header className="pm-settings-mast">
+          <h1 className="pm-settings-page-title">Settings</h1>
+          <p className="pm-settings-page-desc">
+            Configure language models, retrieval, transcription, and system defaults.
           </p>
+        </header>
+
+        {/* Quick setup */}
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text min-w-0">
+                <h2 className="pm-settings-card-kicker">Quick setup</h2>
+                <p className="pm-settings-card-desc">
+                  Configure a full provider stack with a single API key.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2 shrink-0">
+                <Button variant="secondary" size="sm" onClick={() => setOneshotDialogOpen(true)}>
+                  <Zap className="h-3.5 w-3.5" />
+                  Dashscope
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => setOpenrouterDialogOpen(true)}>
+                  <Zap className="h-3.5 w-3.5" />
+                  OpenRouter
+                </Button>
+              </div>
+            </div>
+          </div>
         </section>
 
-        {/* ── WEB SEARCH (TAVILY) — API key only; toggle lives in Chat ── */}
-        <section className="pb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[18px] font-[350] tracking-tight">WEB SEARCH (TAVILY)</h2>
-          </div>
-          <div className="space-y-4">
-            <p className="font-normal text-[12px] text-muted-foreground/80 leading-relaxed">
-              Store your Tavily API key here. Turn web search on/off from the{" "}
-              <strong className="text-foreground">Chat</strong> toolbar (Globe / Web).
-              Even when on, every search still asks for confirmation, and results are labeled WEB
-              (not knowledge base). Meeting chat never uses web search. Get a key at{" "}
-              <a
-                href="https://tavily.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline"
-              >
-                tavily.com
-              </a>
-              .
-            </p>
+        {/* Models — one section soft-float card */}
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text">
+                <h2 className="pm-settings-card-kicker">Models</h2>
+                <p className="pm-settings-card-desc">LLM providers for chat, tools, and vision.</p>
+              </div>
+              <Button variant="default" size="sm" onClick={handleAdd}>Add</Button>
+            </div>
+            <div className="pm-settings-card-body">
+              <div className="pm-settings-provider-grid">
+                {providers.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
+                  <ProviderCard key={p.id} provider={p} onEdit={handleEdit} onRefresh={fetchProviders} />
+                ))}
+              </div>
 
-            <div className="space-y-2">
-              <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">
-                Tavily API Key
-              </label>
-              <div className="relative">
-                <Input
-                  type={showWebSearchKey ? "text" : "password"}
-                  value={webSearchApiKey}
-                  onChange={(e) => setWebSearchApiKey(e.target.value)}
-                  onBlur={async () => {
-                    try {
-                      await updateConfig("web_search", {
-                        provider: "tavily",
-                        api_key: webSearchApiKey,
-                      })
-                      toast.success(
-                        webSearchApiKey.trim()
-                          ? "Tavily API key saved"
-                          : "Tavily API key cleared",
-                      )
-                    } catch {
-                      toast.error("Failed to save Tavily API key")
-                    }
-                  }}
-                  placeholder="tvly-..."
-                  className="pr-10"
-                />
+              <div className="pm-settings-fold-card">
                 <button
                   type="button"
-                  onClick={() => setShowWebSearchKey(!showWebSearchKey)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  className={cn("pm-settings-fold-trigger", showModelConfig && "is-open")}
+                  onClick={() => setShowModelConfig(!showModelConfig)}
+                  aria-expanded={showModelConfig}
                 >
-                  {showWebSearchKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  <span className="pm-settings-subhead">More · visual · chat · meeting</span>
+                  <ChevronRight className="pm-settings-fold-chev" strokeWidth={1.75} />
                 </button>
+                <div className={cn("pm-config-fold", showModelConfig && "is-open")}>
+                  <div className="pm-config-fold-inner">
+                    <div className="pm-settings-fold-body">
+                      <div className="pm-settings-model-fields">
+                        {/* Visual model */}
+                        <div className="pm-settings-model-field">
+                          <FieldLabel>Visual model</FieldLabel>
+                          {visualModelOptions.length <= 1 ? (
+                            <div className="pm-settings-empty">
+                              <Sparkles className="h-5 w-5" />
+                              <p className="pm-meta">No visual-capable models configured.</p>
+                            </div>
+                          ) : (
+                            <DropdownSelect
+                              value={visualModelId}
+                              onChange={async (v) => {
+                                setVisualModelId(v)
+                                try {
+                                  await updateConfig("visual_model_id", { visual_model_id: v || null })
+                                  toast.success("Visual model updated")
+                                } catch {
+                                  toast.error("Failed to update visual model")
+                                }
+                              }}
+                              options={visualModelOptions}
+                              placeholder="None (disabled)"
+                            />
+                          )}
+                        </div>
+
+                        {/* Chat model */}
+                        <div className="pm-settings-model-field">
+                          <FieldLabel>Chat model</FieldLabel>
+                          {chatModelOptions.length <= 1 ? (
+                            <div className="pm-settings-empty">
+                              <MessageSquare className="h-5 w-5" />
+                              <p className="pm-meta">No chat-capable models configured.</p>
+                            </div>
+                          ) : (
+                            <DropdownSelect
+                              value={chatModelId}
+                              onChange={async (v) => {
+                                setChatModelId(v)
+                                try {
+                                  await updateConfig("default_chat_model", { default_chat_model: v || null })
+                                  toast.success("Chat model updated")
+                                } catch {
+                                  toast.error("Failed to update chat model")
+                                }
+                              }}
+                              options={chatModelOptions}
+                              placeholder="Default"
+                            />
+                          )}
+                        </div>
+
+                        {/* Meeting summary model + Think pill */}
+                        <div className="pm-settings-model-field">
+                          <FieldLabel>Meeting summary model</FieldLabel>
+                          {meetingModelOptions.length <= 1 ? (
+                            <div className="pm-settings-empty">
+                              <p className="pm-meta">No LLM providers configured.</p>
+                            </div>
+                          ) : (
+                            <div className="pm-settings-model-field-row">
+                              <div className="pm-settings-model-field-select">
+                                <DropdownSelect
+                                  value={meetingModel}
+                                  onChange={async (v) => {
+                                    setMeetingModel(v)
+                                    try {
+                                      await updateConfig("enrichment", {
+                                        meeting_model: v,
+                                        meeting_thinking: meetingThinking,
+                                      })
+                                      toast.success("Meeting model updated")
+                                    } catch {
+                                      toast.error("Failed to update")
+                                    }
+                                  }}
+                                  options={meetingModelOptions}
+                                  placeholder="Default"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className={cn(
+                                  "pm-chat-tool-chip pm-chat-tool-chip--flow shrink-0",
+                                  meetingThinking && "is-on",
+                                )}
+                                onClick={() => {
+                                  if (meetingThinking) setMeetingThinkingConfirmOpen(true)
+                                  else {
+                                    setMeetingThinking(true)
+                                    updateConfig("enrichment", {
+                                      meeting_model: meetingModel,
+                                      meeting_thinking: true,
+                                    }).catch(() => {
+                                      toast.error("Failed to update")
+                                      setMeetingThinking(false)
+                                    })
+                                  }
+                                }}
+                                title={
+                                  meetingThinking
+                                    ? "Deep thinking ON for meeting summary"
+                                    : "Deep thinking OFF for meeting summary"
+                                }
+                              >
+                                <Sparkles className="size-3" />
+                                Think
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed">
-                Without a key, the Chat “Web” toggle will have no effect.
-              </p>
             </div>
           </div>
         </section>
 
-        {/* ── MinerU CLOUD PARSING ── */}
-        <section className="pb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[18px] font-[350] tracking-tight">MinerU CLOUD PARSING</h2>
+        {/* Embedding */}
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text">
+                <h2 className="pm-settings-card-kicker">Embedding models</h2>
+                <p className="pm-settings-card-desc">Vector encoders for retrieval.</p>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => { setEditingEmb(null); setEmbDialogOpen(true) }}
+              >
+                Add
+              </Button>
+            </div>
+            <div className="pm-settings-card-body">
+              <div className="pm-settings-provider-grid">
+                {embProviders.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
+                  <SimpleProviderCard
+                    key={p.id}
+                    provider={p}
+                    onEdit={(p) => { setEditingEmb(p); setEmbDialogOpen(true) }}
+                    onRefresh={fetchEmbProviders}
+                    onTest={testEmbeddingProvider}
+                    onDelete={deleteEmbeddingProvider}
+                    onSetDefault={setDefaultEmbeddingProvider}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="space-y-4">
-              <p className="font-normal text-[12px] text-muted-foreground/80 mb-4 leading-relaxed">
-                Use MinerU's cloud API for high-quality document parsing with better table, formula, and layout preservation.
-                Get your API token at{" "}
-                <a href="https://mineru.net/apiManage/token" target="_blank" rel="noopener noreferrer" className="text-primary underline">mineru.net/apiManage/token</a>.
-                When enabled, activate per-collection in Collection Settings.
-              </p>
+        </section>
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">ENABLE MinerU</span>
-                  <p className="font-normal text-[11px] text-muted-foreground/80 mt-0.5 leading-relaxed">Toggle cloud parsing globally</p>
+        {/* Rerank */}
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text">
+                <h2 className="pm-settings-card-kicker">Rerank models</h2>
+                <p className="pm-settings-card-desc">Cross-encoder reranking for final ranking.</p>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => { setEditingRerank(null); setRerankDialogOpen(true) }}
+              >
+                Add
+              </Button>
+            </div>
+            <div className="pm-settings-card-body">
+              <div className="pm-settings-provider-grid">
+                {rerankProviders.filter((p) => !p.id.startsWith("builtin-")).map((p) => (
+                  <SimpleProviderCard
+                    key={p.id}
+                    provider={p}
+                    onEdit={(p) => { setEditingRerank(p); setRerankDialogOpen(true) }}
+                    onRefresh={fetchRerankProviders}
+                    onTest={testRerankProvider}
+                    onDelete={deleteRerankProvider}
+                    onSetDefault={setDefaultRerankProvider}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Transcription */}
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text">
+                <h2 className="pm-settings-card-kicker">Transcription</h2>
+                <p className="pm-settings-card-desc">File batch and realtime speech providers.</p>
+              </div>
+            </div>
+            <div className="pm-settings-card-body">
+              <div>
+                <div className="pm-settings-card-head mb-2">
+                  <h3 className="pm-settings-subhead">File transcription</h3>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => {
+                      setEditingFileTrans(null)
+                      setFileTransLangHints([])
+                      setFileTransDialogOpen(true)
+                    }}
+                  >
+                    Add
+                  </Button>
                 </div>
-                <button
-                  onClick={async () => {
-                    const next = !mineruEnabled
-                    setMineruEnabled(next)
-                    try {
-                      await updateConfig("mineru", {
-                        enabled: next,
-                        api_token: mineruToken,
-                        base_url: "https://mineru.net/api/v4",
-                        model_version: mineruModel,
-                        is_ocr: mineruOcr,
-                        enable_formula: mineruFormula,
-                        enable_table: mineruTable,
-                        language: mineruLanguage,
-                      })
-                      toast.success(next ? "MinerU enabled" : "MinerU disabled")
-                    } catch {
-                      toast.error("Failed to update MinerU setting")
-                      setMineruEnabled(!next)
-                    }
-                  }}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${mineruEnabled ? "bg-primary" : "bg-input"}`}
-                >
-                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${mineruEnabled ? "translate-x-6" : "translate-x-1"}`} />
-                </button>
+                <div className="pm-settings-provider-grid">
+                  {builtinFileTrans && (
+                    <LocalModelCard
+                      id={builtinFileTrans.id}
+                      name={builtinFileTrans.name}
+                      model={builtinFileTrans.model || builtinFileTrans.adapter}
+                      isDefault={builtinFileTrans?.is_active ?? false}
+                      loadState={loadStates[builtinFileTrans.id] || "unloaded"}
+                      loadDetail={loadDetails[builtinFileTrans.id]}
+                      isDownloaded={modelDownloaded["builtin-local-file"] ?? false}
+                      onTest={async () => {
+                        const r = await testFileTranscriptionProvider(builtinFileTrans.id)
+                        return {
+                          success: !!r.success,
+                          message: r.message,
+                          error: r.error,
+                          code: (r as { code?: string }).code,
+                        }
+                      }}
+                      onSetDefault={async () => {
+                        const res = await setActiveFileTranscriptionProvider(builtinFileTrans.id)
+                        fetchFileTransProviders()
+                        startPolling(true)
+                        const adapter = (res as { adapter?: string })?.adapter
+                        toast.success(
+                          adapter
+                            ? `Default file transcription → ${adapter}`
+                            : "Set as default file transcription",
+                        )
+                      }}
+                      onToggleLoad={async (action) => {
+                        const id = builtinFileTrans.id
+                        if (action === "load") {
+                          // Optimistic loading only — never optimistic "loaded"
+                          setLoadStates((s) => ({ ...s, [id]: "loading" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: {
+                              state: "loading",
+                              message: "Loading file transcription pack into memory…",
+                              started_at: Date.now() / 1000,
+                            },
+                          }))
+                        }
+                        const res = await toggleModelLoad(id, action)
+                        if (!res.success) {
+                          // Revert optimistic loading
+                          await refreshLoadStates()
+                          return res
+                        }
+                        // Apply only the real status from server
+                        if (res.status === "loading") {
+                          setLoadStates((s) => ({ ...s, [id]: "loading" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: {
+                              ...(d[id] || {}),
+                              state: "loading",
+                              message: res.message || d[id]?.message,
+                              started_at: d[id]?.started_at ?? Date.now() / 1000,
+                            },
+                          }))
+                          startPolling(true)
+                        } else if (res.status === "loaded") {
+                          setLoadStates((s) => ({ ...s, [id]: "loaded" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: { state: "loaded", message: res.message || "Ready" },
+                          }))
+                        } else if (res.status === "unloaded") {
+                          setLoadStates((s) => ({ ...s, [id]: "unloaded" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: { state: "unloaded", message: res.message || "Unloaded" },
+                          }))
+                        } else if (action === "load") {
+                          // Unknown status while loading — keep loading + poll
+                          setLoadStates((s) => ({ ...s, [id]: "loading" }))
+                          startPolling(true)
+                        }
+                        fetchFileTransProviders()
+                        return res
+                      }}
+                      onDownload={() => setModelDownloadOpen(true)}
+                    />
+                  )}
+                  {cloudFileProviders.map((p) => (
+                    <TranscriptionProviderCard
+                      key={p.id}
+                      provider={p}
+                      kind="file"
+                      onEdit={(p) => {
+                        setEditingFileTrans(p)
+                        setFileTransLangHints(p.language_hints_config || [])
+                        setFileTransDialogOpen(true)
+                      }}
+                      onRefresh={fetchFileTransProviders}
+                      onDelete={deleteFileTranscriptionProvider}
+                      onSetActive={setActiveFileTranscriptionProvider}
+                      onTest={testFileTranscriptionProvider}
+                    />
+                  ))}
+                </div>
               </div>
 
-              <div className={`grid transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${mineruEnabled ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
-                <div className="overflow-hidden">
-                  <div className="space-y-4 pt-4">
-                    <div className="space-y-2">
-                      <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">API Token</label>
+              <div>
+                <div className="pm-settings-card-head mb-2">
+                  <h3 className="pm-settings-subhead">Realtime transcription</h3>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => {
+                      setEditingRtTrans(null)
+                      setRtTransDialogOpen(true)
+                    }}
+                  >
+                    Add
+                  </Button>
+                </div>
+                <div className="pm-settings-provider-grid">
+                  {builtinRtTrans && (
+                    <LocalModelCard
+                      id={builtinRtTrans.id}
+                      name={builtinRtTrans.name}
+                      model={builtinRtTrans.model || builtinRtTrans.adapter}
+                      isDefault={builtinRtTrans?.is_active ?? false}
+                      loadState={loadStates[builtinRtTrans.id] || "unloaded"}
+                      loadDetail={loadDetails[builtinRtTrans.id]}
+                      isDownloaded={modelDownloaded["builtin-local-rt"] ?? false}
+                      onTest={async () => {
+                        const r = await testRealtimeTranscriptionProvider(builtinRtTrans.id)
+                        return {
+                          success: !!r.success,
+                          message: r.message,
+                          error: r.error,
+                          code: (r as { code?: string }).code,
+                        }
+                      }}
+                      onSetDefault={async () => {
+                        const res = await setActiveRealtimeTranscriptionProvider(builtinRtTrans.id)
+                        fetchRtTransProviders()
+                        startPolling(true)
+                        const adapter = (res as { adapter?: string })?.adapter
+                        toast.success(
+                          adapter
+                            ? `Default realtime transcription → ${adapter}`
+                            : "Set as default realtime transcription",
+                        )
+                      }}
+                      onToggleLoad={async (action) => {
+                        const id = builtinRtTrans.id
+                        if (action === "load") {
+                          setLoadStates((s) => ({ ...s, [id]: "loading" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: {
+                              state: "loading",
+                              message: "Loading realtime model into memory…",
+                              started_at: Date.now() / 1000,
+                            },
+                          }))
+                        }
+                        const res = await toggleModelLoad(id, action)
+                        if (!res.success) {
+                          await refreshLoadStates()
+                          return res
+                        }
+                        if (res.status === "loading") {
+                          setLoadStates((s) => ({ ...s, [id]: "loading" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: {
+                              ...(d[id] || {}),
+                              state: "loading",
+                              message: res.message || d[id]?.message,
+                              started_at: d[id]?.started_at ?? Date.now() / 1000,
+                            },
+                          }))
+                          startPolling(true)
+                        } else if (res.status === "loaded") {
+                          setLoadStates((s) => ({ ...s, [id]: "loaded" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: { state: "loaded", message: res.message || "Ready" },
+                          }))
+                        } else if (res.status === "unloaded") {
+                          setLoadStates((s) => ({ ...s, [id]: "unloaded" }))
+                          setLoadDetails((d) => ({
+                            ...d,
+                            [id]: { state: "unloaded", message: res.message || "Unloaded" },
+                          }))
+                        } else if (action === "load") {
+                          setLoadStates((s) => ({ ...s, [id]: "loading" }))
+                          startPolling(true)
+                        }
+                        fetchRtTransProviders()
+                        return res
+                      }}
+                      onDownload={() => setModelDownloadOpen(true)}
+                    />
+                  )}
+                  {cloudRtProviders.map((p) => (
+                    <TranscriptionProviderCard
+                      key={p.id}
+                      provider={p}
+                      kind="realtime"
+                      onEdit={(p) => {
+                        setEditingRtTrans(p)
+                        setRtTransDialogOpen(true)
+                      }}
+                      onRefresh={fetchRtTransProviders}
+                      onDelete={deleteRealtimeTranscriptionProvider}
+                      onSetActive={setActiveRealtimeTranscriptionProvider}
+                      onTest={testRealtimeTranscriptionProvider}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Hot words */}
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text min-w-0">
+                <h2 className="pm-settings-card-kicker">Hot words</h2>
+                <p className="pm-settings-card-desc">
+                  Libraries for domain terms — names, acronyms, jargon — to improve transcription.
+                </p>
+              </div>
+              <Button variant="default" size="sm" onClick={() => setHotWordsManagerOpen(true)}>
+                Manage
+              </Button>
+            </div>
+          </div>
+        </section>
+
+        {/* Web search */}
+        <section className="pm-settings-section">
+        <div className="pm-settings-card">
+          <div className="pm-settings-card-head-text">
+            <h2 className="pm-settings-card-kicker">Web search (Tavily)</h2>
+          </div>
+          <p className="pm-settings-card-desc">
+            Store your Tavily API key here. Turn web search on/off from the{" "}
+            <strong className="text-[var(--pm-ink)] font-normal">Chat</strong> toolbar (Globe / Web).
+            Even when on, every search still asks for confirmation, and results are labeled WEB
+            (not knowledge base). Meeting chat never uses web search. Get a key at{" "}
+            <a
+              href="https://tavily.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="pm-settings-link"
+            >
+              tavily.com
+            </a>
+            .
+          </p>
+          <div className="pm-config-field">
+            <FieldLabel>Tavily API key</FieldLabel>
+            <div className="relative">
+              <Input
+                type={showWebSearchKey ? "text" : "password"}
+                value={webSearchApiKey}
+                onChange={(e) => setWebSearchApiKey(e.target.value)}
+                onBlur={async () => {
+                  try {
+                    await updateConfig("web_search", {
+                      provider: "tavily",
+                      api_key: webSearchApiKey,
+                    })
+                    toast.success(
+                      webSearchApiKey.trim()
+                        ? "Tavily API key saved"
+                        : "Tavily API key cleared",
+                    )
+                  } catch {
+                    toast.error("Failed to save Tavily API key")
+                  }
+                }}
+                placeholder="tvly-..."
+                className="pr-10"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="absolute right-1 top-1/2 -translate-y-1/2"
+                onClick={() => setShowWebSearchKey(!showWebSearchKey)}
+              >
+                {showWebSearchKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="pm-meta mt-1.5">Without a key, the Chat “Web” toggle will have no effect.</p>
+          </div>
+        </div>
+        </section>
+
+        {/* MinerU */}
+        <section className="pm-settings-section">
+        <div className="pm-settings-card">
+          <div className="pm-settings-row-between">
+            <div className="min-w-0">
+              <h2 className="pm-settings-card-kicker">MinerU cloud parsing</h2>
+              <p className="pm-meta pm-settings-card-desc mt-1">
+                High-quality document parsing with better table, formula, and layout preservation.
+                Get a token at{" "}
+                <a
+                  href="https://mineru.net/apiManage/token"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="pm-settings-link"
+                >
+                  mineru.net
+                </a>
+                . Enable per-collection in Collection Settings when ready.
+              </p>
+            </div>
+            <SettingsSwitch
+              id="pm-settings-mineru"
+              label="Enable MinerU"
+              checked={mineruEnabled}
+              onCheckedChange={async (next) => {
+                setMineruEnabled(next)
+                try {
+                  await saveMineru({ enabled: next })
+                  toast.success(next ? "MinerU enabled" : "MinerU disabled")
+                } catch {
+                  toast.error("Failed to update MinerU setting")
+                  setMineruEnabled(!next)
+                }
+              }}
+            />
+          </div>
+
+          <div className={cn("pm-config-fold", mineruEnabled && "is-open")}>
+            <div className="pm-config-fold-inner">
+              <div className="space-y-4 pt-1">
+                <div className="pm-config-field">
+                  <FieldLabel>API token</FieldLabel>
                   <div className="relative">
                     <Input
                       type={showMineruToken ? "text" : "password"}
@@ -1276,365 +1638,730 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                       onChange={(e) => setMineruToken(e.target.value)}
                       onBlur={async () => {
                         try {
-                          await updateConfig("mineru", {
-                            enabled: mineruEnabled,
-                            api_token: mineruToken,
-                            base_url: "https://mineru.net/api/v4",
-                            model_version: mineruModel,
-                            is_ocr: mineruOcr,
-                            enable_formula: mineruFormula,
-                            enable_table: mineruTable,
-                            language: mineruLanguage,
-                          })
+                          await saveMineru({ api_token: mineruToken })
                         } catch { /* ignore */ }
                       }}
                       placeholder="Enter your MinerU API token"
                       disabled={!mineruEnabled}
                       className="pr-10"
                     />
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="absolute right-1 top-1/2 -translate-y-1/2"
                       onClick={() => setShowMineruToken(!showMineruToken)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      disabled={!mineruEnabled}
                     >
                       {showMineruToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
+                    </Button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Model Version — custom dropdown */}
-                  <div className="space-y-2">
-                    <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Model Version</label>
-                    <div className="relative" ref={mineruModelMenuRef}>
-                      <button
-                        type="button"
-                        ref={mineruModelBtnRef}
-                        onClick={() => { if (!mineruEnabled) return; updateMineruPositions(); setShowMineruLanguageDropdown(false); setShowMineruModelDropdown(!showMineruModelDropdown) }}
-                        disabled={!mineruEnabled}
-                        className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
-                        style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showMineruModelDropdown ? "var(--color-primary-foreground)" : "var(--color-primary)" }}
-                      >
-                        <span className="relative z-10 whitespace-nowrap">
-                          {MINERU_MODEL_OPTIONS.find(o => o.value === mineruModel)?.label || mineruModel}
-                        </span>
-                        <span
-                          className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-                          style={{ transform: showMineruModelDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showMineruModelDropdown ? "right" : "left" }}
+                <div className="pm-config-grid">
+                  <div className="pm-config-field">
+                    <FieldLabel>Model version</FieldLabel>
+                    <DropdownSelect
+                      value={mineruModel}
+                      onChange={async (v) => {
+                        setMineruModel(v)
+                        try {
+                          await saveMineru({ model_version: v })
+                        } catch { /* ignore */ }
+                      }}
+                      options={MINERU_MODEL_OPTIONS}
+                      disabled={!mineruEnabled}
+                    />
+                  </div>
+                  <div className="pm-config-field">
+                    <FieldLabel>Language</FieldLabel>
+                    <DropdownSelect
+                      value={mineruLanguage}
+                      onChange={async (v) => {
+                        setMineruLanguage(v)
+                        try {
+                          await saveMineru({ language: v })
+                        } catch { /* ignore */ }
+                      }}
+                      options={MINERU_LANGUAGE_OPTIONS}
+                      disabled={!mineruEnabled}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <FieldLabel>Parsing options</FieldLabel>
+                  <div className="space-y-3 mt-2">
+                    {(
+                      [
+                        {
+                          key: "ocr",
+                          label: "Force OCR",
+                          desc: "Force OCR on all pages. When off, MinerU auto-detects scanned or image pages.",
+                          checked: mineruOcr,
+                          set: setMineruOcr,
+                          patch: (v: boolean) => ({ is_ocr: v }),
+                        },
+                        {
+                          key: "formula",
+                          label: "Formula recognition",
+                          desc: "Recognize mathematical formulas and convert to LaTeX.",
+                          checked: mineruFormula,
+                          set: setMineruFormula,
+                          patch: (v: boolean) => ({ enable_formula: v }),
+                        },
+                        {
+                          key: "table",
+                          label: "Table recognition",
+                          desc: "Detect and extract tables as structured Markdown.",
+                          checked: mineruTable,
+                          set: setMineruTable,
+                          patch: (v: boolean) => ({ enable_table: v }),
+                        },
+                      ] as const
+                    ).map((opt) => (
+                      <div key={opt.key} className="pm-settings-row-between">
+                        <div className="min-w-0">
+                          <p className="pm-label text-[var(--pm-ink)]">{opt.label}</p>
+                          <p className="pm-meta mt-0.5">{opt.desc}</p>
+                        </div>
+                        <SettingsSwitch
+                          id={`pm-settings-mineru-${opt.key}`}
+                          label={opt.label}
+                          checked={opt.checked}
+                          disabled={!mineruEnabled}
+                          onCheckedChange={async (next) => {
+                            opt.set(next)
+                            try {
+                              await saveMineru(opt.patch(next))
+                            } catch {
+                              opt.set(!next)
+                            }
+                          }}
                         />
-                      </button>
-                      <div
-                        className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-                          showMineruModelDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"
-                        }`}
-                        style={{ width: mineruModelPos.width, top: mineruModelPos.top, left: mineruModelPos.left }}
-                      >
-                        {MINERU_MODEL_OPTIONS.map((opt) => (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => { setMineruModel(opt.value); setShowMineruModelDropdown(false) }}
-                            className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
-                            style={{ background: "none", border: "none" }}
-                          >
-                            <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
-                              {mineruModel === opt.value ? (
-                                <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
-                              ) : (
-                                <span className="w-1.5 h-1.5 shrink-0" />
-                              )}
-                              {opt.label}
-                            </span>
-                            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                          </button>
-                        ))}
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Language — custom dropdown */}
-                  <div className="space-y-2">
-                    <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Language</label>
-                    <div className="relative" ref={mineruLangMenuRef}>
-                      <button
-                        type="button"
-                        ref={mineruLangBtnRef}
-                        onClick={() => { if (!mineruEnabled) return; updateMineruPositions(); setShowMineruModelDropdown(false); setShowMineruLanguageDropdown(!showMineruLanguageDropdown) }}
-                        disabled={!mineruEnabled}
-                        className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
-                        style={{ fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: showMineruLanguageDropdown ? "var(--color-primary-foreground)" : "var(--color-primary)" }}
-                      >
-                        <span className="relative z-10 whitespace-nowrap">
-                          {MINERU_LANGUAGE_OPTIONS.find(o => o.value === mineruLanguage)?.label || mineruLanguage}
-                        </span>
-                        <span
-                          className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-                          style={{ transform: showMineruLanguageDropdown ? "scaleX(1)" : "scaleX(0)", transformOrigin: showMineruLanguageDropdown ? "right" : "left" }}
-                        />
-                      </button>
-                      <div
-                        className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${
-                          showMineruLanguageDropdown ? "opacity-100 visible translate-y-0 pointer-events-auto" : "opacity-0 invisible -translate-y-3 pointer-events-none"
-                        }`}
-                        style={{ width: mineruLangPos.width, top: mineruLangPos.top, left: mineruLangPos.left }}
-                      >
-                        {MINERU_LANGUAGE_OPTIONS.map((opt) => (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => { setMineruLanguage(opt.value); setShowMineruLanguageDropdown(false) }}
-                            className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
-                            style={{ background: "none", border: "none" }}
-                          >
-                            <span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{ letterSpacing: "0.05em" }}>
-                              {mineruLanguage === opt.value ? (
-                                <span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700" />
-                              ) : (
-                                <span className="w-1.5 h-1.5 shrink-0" />
-                              )}
-                              {opt.label}
-                            </span>
-                            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <label className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground">Parsing Options</label>
-                  <div className="space-y-2">
-                    <label className={`flex items-start gap-2 text-sm ${!mineruEnabled ? "cursor-default" : "cursor-pointer"}`}>
-                      <input type="checkbox" checked={mineruOcr} onChange={(e) => setMineruOcr(e.target.checked)} disabled={!mineruEnabled} className="rounded mt-0.5" />
-                      <div>
-                        <span className="text-[12px] font-normal uppercase tracking-[0.08em] text-muted-foreground">Force OCR</span>
-                        <p className="font-normal text-[11px] text-muted-foreground/80 mt-0.5 leading-relaxed">Force OCR on all pages. When off, MinerU auto-detects whether pages need OCR (scanned/image pages will still be OCR'd automatically).</p>
-                      </div>
-                    </label>
-                    <label className={`flex items-start gap-2 text-sm ${!mineruEnabled ? "cursor-default" : "cursor-pointer"}`}>
-                      <input type="checkbox" checked={mineruFormula} onChange={(e) => setMineruFormula(e.target.checked)} disabled={!mineruEnabled} className="rounded mt-0.5" />
-                      <div>
-                        <span className="text-[12px] font-normal uppercase tracking-[0.08em] text-muted-foreground">Formula Recognition</span>
-                        <p className="font-normal text-[11px] text-muted-foreground/80 mt-0.5 leading-relaxed">Recognize mathematical formulas and convert to LaTeX. Recommended for academic/technical documents.</p>
-                      </div>
-                    </label>
-                    <label className={`flex items-start gap-2 text-sm ${!mineruEnabled ? "cursor-default" : "cursor-pointer"}`}>
-                      <input type="checkbox" checked={mineruTable} onChange={(e) => setMineruTable(e.target.checked)} disabled={!mineruEnabled} className="rounded mt-0.5" />
-                      <div>
-                        <span className="text-[12px] font-normal uppercase tracking-[0.08em] text-muted-foreground">Table Recognition</span>
-                        <p className="font-normal text-[11px] text-muted-foreground/80 mt-0.5 leading-relaxed">Detect and extract tables as structured Markdown. Recommended for documents with tabular data.</p>
-                      </div>
-                    </label>
-                  </div>
-                </div>
+                    ))}
                   </div>
                 </div>
               </div>
-
+            </div>
           </div>
+        </div>
         </section>
 
         {/* Advanced */}
-        <div className="border-b border-border pb-6">
-          <h2 onClick={()=>{setShowAdvanced(!showAdvanced);if(!showAdvanced)setTimeout(()=>document.getElementById("advanced-content")?.scrollIntoView({behavior:"smooth",block:"start"}),100)}} className="text-[18px] font-[350] tracking-tight uppercase cursor-pointer hover:text-primary transition-colors">ADVANCED</h2>
-          <div id="advanced-content" className={`transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] overflow-hidden ${showAdvanced?"max-h-[4000px] opacity-100":"max-h-0 opacity-0"}`}>
-          <div className="space-y-8 pt-4">
+        <section className="pm-settings-section">
+          <div className="pm-settings-card pm-settings-fold-card">
+          <button
+            type="button"
+            className={cn("pm-settings-fold-trigger", showAdvanced && "is-open")}
+            onClick={() => {
+              setShowAdvanced(!showAdvanced)
+              if (!showAdvanced) {
+                setTimeout(
+                  () =>
+                    document
+                      .getElementById("pm-settings-advanced")
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+                  100,
+                )
+              }
+            }}
+            aria-expanded={showAdvanced}
+          >
+            <span className="pm-settings-card-kicker">Advanced</span>
+            <ChevronRight className="pm-settings-fold-chev" strokeWidth={1.75} />
+          </button>
 
-            {/* Enrichment */}
-            <div className="pb-6">
-              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">ENRICHMENT</h3>
-              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Context generation for each chunk during document ingestion.</p>
-              <div className="flex items-center gap-3 mb-4">
-                <span className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap">MODEL</span>
-                <div className="flex-1 max-w-md relative" ref={enrichModelMenuRef}>
-                  <button type="button" ref={enrichModelBtnRef} onClick={()=>{const r=enrichModelMenuRef.current?.getBoundingClientRect();if(r)setEnrichModelPos({top:r.bottom+4,left:r.left,width:enrichModelBtnRef.current?.getBoundingClientRect().width||r.width});setShowEnrichModelDropdown(!showEnrichModelDropdown)}} className="group relative flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] w-full" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",color:showEnrichModelDropdown?"var(--color-primary-foreground)":enrichModel?"var(--color-primary)":"var(--color-muted-foreground)"}}>
-                    <span className="relative z-10 whitespace-nowrap">{enrichModel?(()=>{const p=providers.find(x=>x.id===enrichModel);return p?p.name+" / "+p.model:enrichModel})():"DEFAULT"}</span>
-                    <span className="absolute inset-0 z-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary" style={{transform:showEnrichModelDropdown?"scaleX(1)":"scaleX(0)",transformOrigin:showEnrichModelDropdown?"right":"left"}}/>
-                  </button>
-                  <div className={`fixed z-[100] mt-1 flex-col overflow-hidden rounded border border-primary/40 bg-popover shadow-md transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] max-h-64 overflow-y-auto ${showEnrichModelDropdown?"opacity-100 visible translate-y-0 pointer-events-auto":"opacity-0 invisible -translate-y-3 pointer-events-none"}`} style={{width:enrichModelPos.width,top:enrichModelPos.top,left:enrichModelPos.left}}>
-                    {[{value:"",label:"DEFAULT"},...providers.map(p=>({value:p.id,label:`${p.name} / ${p.model}`}))].map(opt=>(<button key={opt.value} type="button" onClick={async()=>{setEnrichModel(opt.value);setShowEnrichModelDropdown(false);try{await updateConfig("enrichment",{enrichment_model:opt.value,max_parallel_context:enrichMaxParallel,batch_poll_interval:30});toast.success("Enrichment model updated")}catch{toast.error("Failed to update")}}} className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group" style={{background:"none",border:"none"}}><span className="relative z-10 flex items-center gap-2 px-3 py-2 w-full text-[10px]" style={{letterSpacing:"0.05em"}}>{enrichModel===opt.value||(!enrichModel&&opt.value==="")?<span className="w-1.5 h-1.5 bg-primary group-hover:bg-primary-foreground rotate-45 shrink-0 transition-colors duration-700"/>:<span className="w-1.5 h-1.5 shrink-0"/>}{opt.label}</span><span className="absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right"/></button>))}
+          <div
+            id="pm-settings-advanced"
+            className={cn("pm-config-fold", showAdvanced && "is-open")}
+          >
+            <div className="pm-config-fold-inner">
+              <div className="pm-settings-fold-body">
+                <div className="pm-settings-adv-stack">
+                  {/* Enrichment */}
+                  <div className="pm-settings-adv-block">
+                    <div className="pm-settings-adv-head">
+                      <h3 className="pm-settings-subhead">Enrichment</h3>
+                      <p className="pm-settings-adv-desc">
+                        Context generation for each chunk during document ingestion.
+                      </p>
+                    </div>
+                    <div className="pm-settings-adv-grid">
+                      <div className="pm-settings-adv-field pm-settings-adv-field--wide">
+                        <FieldLabel>Model</FieldLabel>
+                        <DropdownSelect
+                          value={enrichModel}
+                          onChange={async (v) => {
+                            setEnrichModel(v)
+                            try {
+                              await updateConfig("enrichment", {
+                                enrichment_model: v,
+                                max_parallel_context: parseInt(enrichMaxParallel) || 50,
+                                batch_poll_interval: 30,
+                              })
+                              toast.success("Enrichment model updated")
+                            } catch {
+                              toast.error("Failed to update")
+                            }
+                          }}
+                          options={enrichModelOptions}
+                        />
+                      </div>
+                      <div className="pm-settings-adv-field">
+                        <FieldLabel>Parallel</FieldLabel>
+                        <Input
+                          inputMode="numeric"
+                          value={enrichMaxParallel}
+                          onChange={(e) => setEnrichMaxParallel(e.target.value)}
+                          onBlur={() => {
+                            const v = parseInt(enrichMaxParallel) || 50
+                            setEnrichMaxParallel(String(Math.max(1, Math.min(100, v))))
+                            updateConfig("enrichment", {
+                              max_parallel_context: v,
+                              batch_poll_interval: 30,
+                              enrichment_model: enrichModel,
+                            }).catch(() => {})
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Agentic RAG */}
+                  <div className="pm-settings-adv-block">
+                    <div className="pm-settings-adv-head">
+                      <h3 className="pm-settings-subhead">Agentic RAG defaults</h3>
+                      <p className="pm-settings-adv-desc">
+                        Applies to decompose, rewrite loop, and aggregate.
+                      </p>
+                    </div>
+                    <div className="pm-settings-adv-toolbar">
+                      <button
+                        type="button"
+                        className={cn("pm-field-chip", ragSearchMode === "hybrid" && "is-on")}
+                        onClick={() => {
+                          const m = ragSearchMode === "hybrid" ? "dense" : "hybrid"
+                          setRagSearchMode(m)
+                          _saveRag(m)
+                        }}
+                      >
+                        {ragSearchMode === "hybrid" ? "Hybrid" : "Dense"}
+                      </button>
+                    </div>
+                    <div className="pm-settings-adv-fields-stack">
+                      <div className="pm-settings-adv-grid">
+                        {(
+                          [
+                            {
+                              label: "Top K",
+                              value: ragTopK,
+                              set: setRagTopK,
+                              min: 1,
+                              max: 100,
+                              fallback: 20,
+                            },
+                            {
+                              label: "Rerank Top K",
+                              value: ragRerankTopK,
+                              set: setRagRerankTopK,
+                              min: 1,
+                              max: 50,
+                              fallback: 5,
+                            },
+                            {
+                              label: "Parallel",
+                              value: ragMaxParallel,
+                              set: setRagMaxParallel,
+                              min: 1,
+                              max: 32,
+                              fallback: 10,
+                            },
+                            {
+                              label: "Iter",
+                              value: ragMaxIter,
+                              set: setRagMaxIter,
+                              min: 1,
+                              max: 20,
+                              fallback: 8,
+                            },
+                          ] as const
+                        ).map((field) => (
+                          <div key={field.label} className="pm-settings-adv-field">
+                            <FieldLabel>{field.label}</FieldLabel>
+                            <Input
+                              inputMode="numeric"
+                              value={field.value}
+                              onChange={(e) => field.set(e.target.value)}
+                              onBlur={() => {
+                                const v = parseInt(field.value) || field.fallback
+                                field.set(String(Math.max(field.min, Math.min(field.max, v))))
+                                _saveRag()
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      {/* Dense-only: Min score — silk fold, no hard cut */}
+                      <div
+                        className={cn(
+                          "pm-settings-adv-fold",
+                          ragSearchMode === "dense" && "is-open",
+                        )}
+                      >
+                        <div className="pm-settings-adv-fold-inner">
+                          <div className="pm-settings-adv-grid pm-settings-adv-fold-pad">
+                            <div className="pm-settings-adv-field">
+                              <FieldLabel>Min score</FieldLabel>
+                              <Input
+                                inputMode="numeric"
+                                value={ragMinScore}
+                                onChange={(e) => setRagMinScore(e.target.value)}
+                                onBlur={() => {
+                                  const v = parseInt(ragMinScore) || 25
+                                  setRagMinScore(String(Math.max(0, Math.min(100, v))))
+                                  _saveRag()
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Direct RAG */}
+                  <div className="pm-settings-adv-block">
+                    <div className="pm-settings-adv-head">
+                      <h3 className="pm-settings-subhead">Direct RAG defaults</h3>
+                      <p className="pm-settings-adv-desc">
+                        Used when Agentic mode is disabled. Direct retrieval with optional rerank.
+                      </p>
+                    </div>
+                    <div className="pm-settings-adv-toolbar">
+                      <button
+                        type="button"
+                        className={cn("pm-field-chip", dirRerankEnabled && "is-on")}
+                        onClick={() => {
+                          const n = !dirRerankEnabled
+                          setDirRerankEnabled(n)
+                          setDirTopK(n ? "20" : "10")
+                          updateConfig("direct_rag", { use_reranker: n }).catch(() => {})
+                        }}
+                      >
+                        Rerank {dirRerankEnabled ? "on" : "off"}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn("pm-field-chip", dirSearchMode === "hybrid" && "is-on")}
+                        onClick={() => {
+                          const m = dirSearchMode === "hybrid" ? "dense" : "hybrid"
+                          setDirSearchMode(m)
+                          _saveDir(m)
+                        }}
+                      >
+                        {dirSearchMode === "hybrid" ? "Hybrid" : "Dense"}
+                      </button>
+                    </div>
+                    <div className="pm-settings-adv-fields-stack">
+                      <div className="pm-settings-adv-grid">
+                        <div className="pm-settings-adv-field">
+                          <FieldLabel>Top K</FieldLabel>
+                          <Input
+                            inputMode="numeric"
+                            value={dirTopK}
+                            onChange={(e) => setDirTopK(e.target.value)}
+                            onBlur={() => {
+                              const v = parseInt(dirTopK) || (dirRerankEnabled ? 20 : 10)
+                              setDirTopK(String(Math.max(1, Math.min(100, v))))
+                              _saveDir()
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {/* Rerank on: Rerank Top K */}
+                      <div
+                        className={cn(
+                          "pm-settings-adv-fold",
+                          dirRerankEnabled && "is-open",
+                        )}
+                      >
+                        <div className="pm-settings-adv-fold-inner">
+                          <div className="pm-settings-adv-grid pm-settings-adv-fold-pad">
+                            <div className="pm-settings-adv-field">
+                              <FieldLabel>Rerank Top K</FieldLabel>
+                              <Input
+                                inputMode="numeric"
+                                value={dirRerankTopK}
+                                onChange={(e) => setDirRerankTopK(e.target.value)}
+                                onBlur={() => {
+                                  const v = parseInt(dirRerankTopK) || 5
+                                  setDirRerankTopK(String(Math.max(1, Math.min(50, v))))
+                                  _saveDir()
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      {/* Dense: Min score */}
+                      <div
+                        className={cn(
+                          "pm-settings-adv-fold",
+                          dirSearchMode === "dense" && "is-open",
+                        )}
+                      >
+                        <div className="pm-settings-adv-fold-inner">
+                          <div className="pm-settings-adv-grid pm-settings-adv-fold-pad">
+                            <div className="pm-settings-adv-field">
+                              <FieldLabel>Min score</FieldLabel>
+                              <Input
+                                inputMode="numeric"
+                                value={dirMinScore}
+                                onChange={(e) => setDirMinScore(e.target.value)}
+                                onBlur={() => {
+                                  const v = parseInt(dirMinScore) || 25
+                                  setDirMinScore(String(Math.max(0, Math.min(100, v))))
+                                  _saveDir()
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Local model download management */}
+                  <div className="pm-settings-adv-block">
+                    {(() => {
+                      const LOCAL_BUNDLES = [
+                        {
+                          id: "file",
+                          label: "File transcription pack",
+                          description: "SenseVoice + VAD + speaker + punctuation",
+                          modelIds: ["transcription", "vad", "speaker", "punc"] as const,
+                        },
+                        {
+                          id: "realtime",
+                          label: "Realtime transcription",
+                          description: "Paraformer streaming",
+                          modelIds: ["realtime"] as const,
+                        },
+                      ] as const
+                      const allIds = LOCAL_BUNDLES.flatMap((b) => [...b.modelIds])
+                      const allMembers = allIds
+                        .map((id) => localModelCatalog.find((m) => m.id === id))
+                        .filter(Boolean) as ModelStatus[]
+                      const catalogKnown = allMembers.length > 0
+                      const allDone =
+                        catalogKnown && allMembers.every((m) => m.downloaded)
+                      const anyDownloading = allMembers.some(
+                        (m) =>
+                          m.status === "downloading" ||
+                          m.status === "extracting"
+                      )
+                      const anyExtracting = allMembers.some(
+                        (m) => m.status === "extracting"
+                      )
+                      const downloadProgress = Math.max(
+                        0,
+                        ...allMembers
+                          .filter(
+                            (m) =>
+                              m.status === "downloading" ||
+                              m.status === "extracting"
+                          )
+                          .map((m) => Math.round(m.progress || 0)),
+                        0
+                      )
+                      const deletingAll = allIds.some((id) =>
+                        deletingModelIds.has(id)
+                      )
+                      const primaryActionLabel = anyExtracting
+                        ? "Extracting…"
+                        : anyDownloading
+                          ? `Downloading ${downloadProgress}%`
+                          : "Download"
+                      // Only crossfade on semantic phase change — not every % tick
+                      const primaryActionPhase = anyExtracting
+                        ? "extracting"
+                        : anyDownloading
+                          ? "downloading"
+                          : "idle"
+
+                      const handleDeleteAll = async () => {
+                        const ids = [...allIds]
+                        const hasFiles = ids.some((id) => {
+                          const m = localModelCatalog.find((x) => x.id === id)
+                          return m?.downloaded || m?.status === "error"
+                        })
+                        if (!hasFiles) {
+                          toast.message("Nothing to delete")
+                          return
+                        }
+                        if (
+                          !confirm(
+                            "Delete all local FunASR models from disk?\n\n" +
+                              "File and realtime packs will be removed. You can re-download later."
+                          )
+                        ) {
+                          return
+                        }
+                        setDeletingModelIds((prev) => new Set([...prev, ...ids]))
+                        try {
+                          const res = await deleteLocalModels(ids)
+                          if (!res.success) {
+                            toast.error(res.error || "Delete failed")
+                          } else {
+                            const freed = res.freed_mb
+                              ? ` (~${res.freed_mb} MB)`
+                              : ""
+                            toast.success(`Local models deleted${freed}`)
+                          }
+                          await refreshModelDownloaded()
+                          await refreshLoadStates()
+                          fetchFileTransProviders()
+                          fetchRtTransProviders()
+                        } catch (e) {
+                          toast.error(String(e))
+                        } finally {
+                          setDeletingModelIds((prev) => {
+                            const next = new Set(prev)
+                            ids.forEach((id) => next.delete(id))
+                            return next
+                          })
+                        }
+                      }
+
+                      return (
+                        <>
+                    <div className="pm-settings-adv-head">
+                      <div>
+                        <h3 className="pm-settings-subhead">Local model downloads</h3>
+                        <p className="pm-settings-adv-desc">
+                          Download FunASR models for offline file and realtime transcription (CPU).
+                        </p>
+                      </div>
+                      <div className="pm-settings-adv-toolbar">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            refreshModelDownloaded()
+                            toast.success("Status refreshed")
+                          }}
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Refresh
+                        </Button>
+                        {allDone ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleDeleteAll}
+                            disabled={deletingAll || anyDownloading}
+                          >
+                            {deletingAll ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                            Delete
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            className={cn(
+                              "pm-settings-dl-btn",
+                              anyDownloading && "is-busy"
+                            )}
+                            style={
+                              {
+                                ["--pm-dl-pct" as string]: `${
+                                  anyDownloading
+                                    ? Math.min(
+                                        100,
+                                        Math.max(0, downloadProgress)
+                                      )
+                                    : 0
+                                }%`,
+                              } as CSSProperties
+                            }
+                            onClick={() => {
+                              if (anyDownloading || deletingAll) return
+                              setModelDownloadOpen(true)
+                            }}
+                            disabled={deletingAll}
+                            aria-busy={anyDownloading || undefined}
+                            title={
+                              anyExtracting
+                                ? "Extracting ONNX packs…"
+                                : anyDownloading
+                                  ? `Downloading… ${downloadProgress}%`
+                                  : "Download local models"
+                            }
+                          >
+                            <span className="pm-settings-dl-btn-inner">
+                              {anyDownloading ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Download className="h-3.5 w-3.5" />
+                              )}
+                              <span
+                                className="pm-settings-dl-btn-text"
+                                key={primaryActionPhase}
+                              >
+                                {primaryActionLabel}
+                              </span>
+                            </span>
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="pm-settings-local-model-stack">
+                      {LOCAL_BUNDLES.map((bundle) => {
+                        const members = bundle.modelIds
+                          .map((id) => localModelCatalog.find((m) => m.id === id))
+                          .filter(Boolean) as ModelStatus[]
+                        const known = members.length > 0
+                        const packDone =
+                          known && members.every((m) => m.downloaded)
+                        const anyPackDownloaded = members.some((m) => m.downloaded)
+                        const anyPackDownloading = members.some(
+                          (m) =>
+                            m.status === "downloading" ||
+                            m.status === "extracting"
+                        )
+                        const anyError = members.some((m) => m.status === "error")
+                        const totalMb = members.reduce(
+                          (s, m) => s + (m.size_mb || 0),
+                          0
+                        )
+                        // Progress only on toolbar Download button — cards stay calm
+                        const statusLabel = !known
+                          ? "Unknown"
+                          : anyPackDownloading
+                            ? "In progress"
+                            : anyError
+                              ? "Error"
+                              : packDone
+                                ? "Ready"
+                                : anyPackDownloaded
+                                  ? "Partial"
+                                  : "Not downloaded"
+                        const badgeVariant = anyError
+                          ? "destructive"
+                          : packDone
+                            ? "default"
+                            : anyPackDownloading
+                              ? "secondary"
+                              : "outline"
+                        return (
+                          <div key={bundle.id} className="pm-settings-provider-card">
+                            <div className="pm-settings-provider-top">
+                              <div className="pm-settings-provider-name-row">
+                                <span className="pm-settings-provider-name">
+                                  {bundle.label}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <Badge
+                                  variant={
+                                    badgeVariant as
+                                      | "default"
+                                      | "secondary"
+                                      | "destructive"
+                                      | "outline"
+                                  }
+                                >
+                                  {statusLabel}
+                                </Badge>
+                              </div>
+                            </div>
+
+                            <p className="pm-settings-provider-meta">
+                              {bundle.description}
+                              {totalMb > 0 ? ` · ~${totalMb} MB` : ""}
+                            </p>
+
+                            {members.length > 0 && (
+                              <ul className="pm-settings-local-model-parts">
+                                {members.map((m) => (
+                                  <li key={m.id}>
+                                    <span>{m.display_name || m.id}</span>
+                                    <span className="pm-settings-local-model-part-status">
+                                      {m.downloaded
+                                        ? "Ready"
+                                        : m.status === "error"
+                                          ? "Error"
+                                          : anyPackDownloading
+                                            ? "…"
+                                            : "—"}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {localModelCatalog.length === 0 && (
+                        <p className="pm-settings-adv-desc" style={{ margin: 0 }}>
+                          Loading model status… click Refresh if this stays empty.
+                        </p>
+                      )}
+                    </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+
+                  {/* Developer mode */}
+                  <div className="pm-settings-adv-row">
+                    <div className="pm-settings-adv-row-text">
+                      <h3 className="pm-settings-subhead">Developer mode</h3>
+                      <p className="pm-settings-adv-desc">Enable developer tools in the shell.</p>
+                    </div>
+                    <div className="pm-settings-adv-row-actions">
+                      <SettingsSwitch
+                        id="pm-settings-dev"
+                        label="Developer mode"
+                        checked={developerMode}
+                        onCheckedChange={() => toggleDeveloperMode()}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
-              <div className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Parallel</label>
-                  <input
-                    type="text" inputMode="numeric"
-                    value={enrichMaxParallel}
-                    onChange={(e) => setEnrichMaxParallel(e.target.value)}
-                    onBlur={() => {
-                      const v = parseInt(enrichMaxParallel) || 50
-                      setEnrichMaxParallel(String(Math.max(1, Math.min(100, v))))
-                      updateConfig("enrichment", { max_parallel_context: v, batch_poll_interval: 30, enrichment_model: enrichModel }).catch(() => {})
-                    }}
-                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                  />
-                </div>
-              </div>
             </div>
-
-            {/* Agentic RAG */}
-            <div className="pb-6">
-              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">AGENTIC RAG DEFAULTS</h3>
-              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Applies to decompose, rewrite loop, and aggregate.</p>
-              <div className="flex items-center gap-4 mb-3">
-                <button type="button" onClick={()=>{const m=ragSearchMode==="hybrid"?"dense":"hybrid";setRagSearchMode(m);_saveRag(m)}} className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:ragSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{ragSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${ragSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Top K</label>
-                  <input type="text" inputMode="numeric" value={ragTopK}
-                    onChange={(e) => setRagTopK(e.target.value)}
-                    onBlur={() => { const v = parseInt(ragTopK) || 20; setRagTopK(String(Math.max(1, Math.min(100, v)))); _saveRag() }}
-                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                  />
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Rerank Top K</label>
-                  <input type="text" inputMode="numeric" value={ragRerankTopK}
-                    onChange={(e) => setRagRerankTopK(e.target.value)}
-                    onBlur={() => { const v = parseInt(ragRerankTopK) || 5; setRagRerankTopK(String(Math.max(1, Math.min(50, v)))); _saveRag() }}
-                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                  />
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Parallel</label>
-                  <input type="text" inputMode="numeric" value={ragMaxParallel}
-                    onChange={(e) => setRagMaxParallel(e.target.value)}
-                    onBlur={() => { const v = parseInt(ragMaxParallel) || 10; setRagMaxParallel(String(Math.max(1, Math.min(32, v)))); _saveRag() }}
-                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                  />
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Iter</label>
-                  <input type="text" inputMode="numeric" value={ragMaxIter}
-                    onChange={(e) => setRagMaxIter(e.target.value)}
-                    onBlur={() => { const v = parseInt(ragMaxIter) || 8; setRagMaxIter(String(Math.max(1, Math.min(20, v)))); _saveRag() }}
-                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                  />
-                </div>
-                {ragSearchMode === "dense" && (
-                  <div className="flex items-center gap-3">
-                    <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Min Score</label>
-                    <input type="text" inputMode="numeric" value={ragMinScore}
-                      onChange={(e) => setRagMinScore(e.target.value)}
-                      onBlur={() => { const v = parseInt(ragMinScore) || 25; setRagMinScore(String(Math.max(0, Math.min(100, v)))); _saveRag() }}
-                      className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Direct RAG */}
-            <div className="pb-6">
-              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">DIRECT RAG DEFAULTS</h3>
-              <p className="font-normal text-[11px] text-muted-foreground/80 leading-relaxed mb-4">Used when Agentic mode is disabled. Direct retrieval with optional rerank.</p>
-              <div className="flex items-center gap-4 mb-3">
-                <button type="button" onClick={()=>{const n=!dirRerankEnabled;setDirRerankEnabled(n);setDirTopK(n?"20":"10");updateConfig("direct_rag",{use_reranker:n}).catch(()=>{})}} className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirRerankEnabled?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirRerankEnabled?"RERANK ON":"RERANK OFF"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirRerankEnabled?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
-                <button type="button" onClick={()=>{const m=dirSearchMode==="hybrid"?"dense":"hybrid";setDirSearchMode(m);_saveDir(m)}} className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]" style={{fontSize:"10px",fontWeight:500,letterSpacing:"0.1em",textTransform:"uppercase",padding:"3px 8px",borderRadius:"2px",color:dirSearchMode==="hybrid"?"var(--color-primary-foreground)":"var(--color-muted-foreground)"}}><span className="relative z-10">{dirSearchMode==="hybrid"?"HYBRID":"DENSE"}</span><span className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${dirSearchMode==="hybrid"?"scale-x-100":"scale-x-0"}`} style={{transformOrigin:"left"}}/></button>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Top K</label>
-                  <input type="text" inputMode="numeric" value={dirTopK}
-                    onChange={(e) => setDirTopK(e.target.value)}
-                    onBlur={() => { const v = parseInt(dirTopK) || (dirRerankEnabled ? 20 : 10); setDirTopK(String(Math.max(1, Math.min(100, v)))); _saveDir() }}
-                    className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                  />
-                </div>
-                {dirRerankEnabled && (
-                  <div className="flex items-center gap-3">
-                    <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Rerank Top K</label>
-                    <input type="text" inputMode="numeric" value={dirRerankTopK}
-                      onChange={(e) => setDirRerankTopK(e.target.value)}
-                      onBlur={() => { const v = parseInt(dirRerankTopK) || 5; setDirRerankTopK(String(Math.max(1, Math.min(50, v)))); _saveDir() }}
-                      className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                    />
-                  </div>
-                )}
-                {dirSearchMode === "dense" && (
-                  <div className="flex items-center gap-3">
-                    <label className="text-[11px] uppercase tracking-wider text-muted-foreground w-24">Min Score</label>
-                    <input type="text" inputMode="numeric" value={dirMinScore}
-                      onChange={(e) => setDirMinScore(e.target.value)}
-                      onBlur={() => { const v = parseInt(dirMinScore) || 25; setDirMinScore(String(Math.max(0, Math.min(100, v)))); _saveDir() }}
-                      className="w-10 h-7 border-0 border-b border-primary/40 bg-transparent rounded-none px-0 text-xs text-center focus:border-primary"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Local Model Settings */}
-            <div className="pb-6">
-              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">LOCAL MODEL SETTINGS</h3>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-light uppercase tracking-wider">Device</span>
-                {(["cpu", "auto", "cuda", "mps"] as const).map((d) => (
-                  <Button key={d} variant={localDevice === d ? "default" : "outline"} size="sm" className="font-light uppercase"
-                    onClick={() => {
-                      updateConfig("transcription", { local_device: d })
-                        .then(() => { toast.success(`Device set to ${d}`); setLocalDevice(d) })
-                        .catch(() => toast.error("Failed to update device"))
-                    }}>
-                    {d.toUpperCase()}
-                  </Button>
-                ))}
-                <div className="flex-1" />
-                <Button variant="default" onClick={() => setModelDownloadOpen(true)} className="font-light uppercase">
-                  <Download className="h-4 w-4 mr-2" />Download Models
-                </Button>
-              </div>
-            </div>
-
-            {/* Developer Mode */}
-            <div className="pb-6">
-              <h3 className="text-[14px] font-[350] uppercase tracking-[0.08em] text-muted-foreground mb-3">DEVELOPER MODE</h3>
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Enable developer tools</span>
-                <div className="flex-1" />
-                <button
-                  type="button"
-                  onClick={toggleDeveloperMode}
-                  className="group relative flex items-center justify-center overflow-hidden rounded t-sans-family transition-all duration-700 ease-[cubic-bezier(0.23,1,0.32,1)]"
-                  style={{
-                    fontSize: "10px",
-                    fontWeight: 500,
-                    letterSpacing: "0.1em",
-                    textTransform: "uppercase",
-                    padding: "3px 8px",
-                    borderRadius: "2px",
-                    color: developerMode ? "var(--color-primary-foreground)" : "var(--color-muted-foreground)",
-                  }}
-                >
-                  <span className="relative z-10">{developerMode ? "ON" : "OFF"}</span>
-                  <span
-                    className={`absolute inset-0 z-0 bg-primary transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ${developerMode ? "scale-x-100" : "scale-x-0"}`}
-                    style={{ transformOrigin: "left" }}
-                  />
-                </button>
-              </div>
-            </div>
-
           </div>
           </div>
-        </div>
+        </section>
 
-
-        {/* ── Dialogs ── */}
-        <AddProviderDialog open={dialogOpen} provider={editingProvider} onOpenChange={setDialogOpen} onSaved={handleSaved} />
+        {/* Dialogs */}
+        <AddProviderDialog
+          open={dialogOpen}
+          provider={editingProvider}
+          onOpenChange={setDialogOpen}
+          onSaved={handleSaved}
+        />
 
         <SimpleProviderDialog
           open={embDialogOpen}
           provider={editingEmb}
           title="Embedding Provider"
+          kicker="Embedding"
           fields={embFields}
           defaults={{ provider: "openai_compatible", batch_size: "10", is_default: "false" }}
           onOpenChange={setEmbDialogOpen}
-          onSaved={() => { setEmbDialogOpen(false); setEditingEmb(null); fetchEmbProviders() }}
+          onSaved={() => {
+            setEmbDialogOpen(false)
+            setEditingEmb(null)
+            fetchEmbProviders()
+          }}
           onCreate={(data) => createEmbeddingProvider(data as Partial<EmbeddingProvider>)}
           onUpdate={(id, data) => updateEmbeddingProvider(id, data as Partial<EmbeddingProvider>)}
           modelFetchSection="embedding"
@@ -1644,10 +2371,15 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           open={rerankDialogOpen}
           provider={editingRerank}
           title="Rerank Provider"
+          kicker="Rerank"
           fields={rerankFields}
           defaults={{ provider: "openai_compatible", is_default: "false" }}
           onOpenChange={setRerankDialogOpen}
-          onSaved={() => { setRerankDialogOpen(false); setEditingRerank(null); fetchRerankProviders() }}
+          onSaved={() => {
+            setRerankDialogOpen(false)
+            setEditingRerank(null)
+            fetchRerankProviders()
+          }}
           onCreate={(data) => createRerankProvider(data as Partial<RerankProvider>)}
           onUpdate={(id, data) => updateRerankProvider(id, data as Partial<RerankProvider>)}
           modelFetchSection="rerank"
@@ -1657,11 +2389,20 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           open={fileTransDialogOpen}
           provider={editingFileTrans}
           title="File Transcription Provider"
+          kicker="File transcription"
           fields={fileTransFields}
           getTransFields={getFileTransFields}
           defaults={{ adapter: ftAdapterOpts[0]?.value ?? "", is_active: "false", device: "auto" }}
-          onOpenChange={(open) => { setFileTransDialogOpen(open); if (!open) setFileTransLangHints([]) }}
-          onSaved={() => { setFileTransDialogOpen(false); setEditingFileTrans(null); setFileTransLangHints([]); fetchFileTransProviders() }}
+          onOpenChange={(open) => {
+            setFileTransDialogOpen(open)
+            if (!open) setFileTransLangHints([])
+          }}
+          onSaved={() => {
+            setFileTransDialogOpen(false)
+            setEditingFileTrans(null)
+            setFileTransLangHints([])
+            fetchFileTransProviders()
+          }}
           onCreate={async (data) => {
             const payload = { ...data }
             if (fileTransLangHints.length > 0) payload.language_hints_config = fileTransLangHints
@@ -1678,23 +2419,31 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           renderExtra={(form) => {
             if (form.adapter !== "openai_compatible") return null
             const add = () => setFileTransLangHints((prev) => [...prev, { code: "", label: "" }])
-            const remove = (idx: number) => setFileTransLangHints((prev) => prev.filter((_, i) => i !== idx))
+            const remove = (idx: number) =>
+              setFileTransLangHints((prev) => prev.filter((_, i) => i !== idx))
             const update = (idx: number, field: string, value: string) =>
-              setFileTransLangHints((prev) => prev.map((item, i) => (i === idx ? { ...item, [field]: value } : item)))
+              setFileTransLangHints((prev) =>
+                prev.map((item, i) => (i === idx ? { ...item, [field]: value } : item)),
+              )
             return (
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium">Language Hints Config</label>
-                  <Button variant="ghost" size="sm" onClick={(e) => { e.preventDefault(); add() }}>
-                    <Plus className="h-3 w-3 mr-1" />Add
+                <div className="pm-settings-row-between">
+                  <FieldLabel className="mb-0">Language hints</FieldLabel>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      add()
+                    }}
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Configure which language codes this provider supports. These appear in the transcription language selector.
+                <p className="pm-meta">
+                  Codes appear in the transcription language selector. Leave empty for provider defaults.
                 </p>
-                {fileTransLangHints.length === 0 && (
-                  <p className="text-xs text-muted-foreground italic">No language hints configured. Provider default will be used.</p>
-                )}
                 {fileTransLangHints.map((hint, idx) => (
                   <div key={idx} className="flex gap-2 items-center">
                     <Input
@@ -1709,7 +2458,14 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                       value={hint.label}
                       onChange={(e) => update(idx, "label", e.target.value)}
                     />
-                    <Button variant="ghost" size="icon" onClick={(e) => { e.preventDefault(); remove(idx) }}>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        remove(idx)
+                      }}
+                    >
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -1723,27 +2479,44 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           open={rtTransDialogOpen}
           provider={editingRtTrans}
           title="Realtime Transcription Provider"
+          kicker="Realtime transcription"
           fields={rtTransFields}
           getTransFields={getRtTransFields}
           defaults={{ adapter: rtAdapterOpts[0]?.value ?? "", is_active: "false", device: "auto" }}
           onOpenChange={setRtTransDialogOpen}
-          onSaved={() => { setRtTransDialogOpen(false); setEditingRtTrans(null); fetchRtTransProviders() }}
-          onCreate={(data) => createRealtimeTranscriptionProvider(data as Partial<TranscriptionProvider>)}
-          onUpdate={(id, data) => updateRealtimeTranscriptionProvider(id, data as Partial<TranscriptionProvider>)}
+          onSaved={() => {
+            setRtTransDialogOpen(false)
+            setEditingRtTrans(null)
+            fetchRtTransProviders()
+          }}
+          onCreate={(data) =>
+            createRealtimeTranscriptionProvider(data as Partial<TranscriptionProvider>)
+          }
+          onUpdate={(id, data) =>
+            updateRealtimeTranscriptionProvider(id, data as Partial<TranscriptionProvider>)
+          }
           checkboxField="is_active"
           checkboxLabel="Set as active"
           modelFetchSection="transcription"
         />
       </div>
+
       <ModelDownloadDialog
         open={modelDownloadOpen}
         onOpenChange={setModelDownloadOpen}
-        onComplete={() => { fetchProviders(); fetchEmbProviders(); fetchRerankProviders(); refreshModelDownloaded(); startPolling() }}
+        onDownloadStart={() => {
+          startPolling(true)
+          void refreshModelDownloaded()
+        }}
+        onComplete={() => {
+          fetchProviders()
+          fetchEmbProviders()
+          fetchRerankProviders()
+          refreshModelDownloaded()
+          startPolling()
+        }}
       />
-      <HotWordsManager
-        open={hotWordsManagerOpen}
-        onOpenChange={setHotWordsManagerOpen}
-      />
+      <HotWordsManager open={hotWordsManagerOpen} onOpenChange={setHotWordsManagerOpen} />
       <OneShotDashscopeDialog
         open={oneshotDialogOpen}
         onOpenChange={setOneshotDialogOpen}
@@ -1753,13 +2526,16 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           fetchRerankProviders()
           fetchFileTransProviders()
           fetchRtTransProviders()
-          getConfig().then((c) => {
-            if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
-            if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
-          }).catch(() => {})
+          getConfig()
+            .then((c) => {
+              if (c.visual_model_id && typeof c.visual_model_id === "string")
+                setVisualModelId(c.visual_model_id)
+              if (c.default_chat_model && typeof c.default_chat_model === "string")
+                setChatModelId(c.default_chat_model)
+            })
+            .catch(() => {})
         }}
       />
-
       <OneShotOpenRouterDialog
         open={openrouterDialogOpen}
         onOpenChange={setOpenrouterDialogOpen}
@@ -1768,36 +2544,59 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           fetchEmbProviders()
           fetchRerankProviders()
           fetchFileTransProviders()
-          getConfig().then((c) => {
-            if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
-            if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
-          }).catch(() => {})
+          getConfig()
+            .then((c) => {
+              if (c.visual_model_id && typeof c.visual_model_id === "string")
+                setVisualModelId(c.visual_model_id)
+              if (c.default_chat_model && typeof c.default_chat_model === "string")
+                setChatModelId(c.default_chat_model)
+            })
+            .catch(() => {})
         }}
       />
 
       <Dialog open={meetingThinkingConfirmOpen} onOpenChange={setMeetingThinkingConfirmOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className={cn(
+            "pm-dialog pm-dialog--silk pm-dialog-confirm sm:max-w-sm",
+            "!animate-none data-open:!animate-none data-closed:!animate-none",
+          )}
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle>Turn off deep thinking for meetings?</DialogTitle>
+            <DialogKicker>Meeting</DialogKicker>
+            <DialogTitle>Turn off deep thinking?</DialogTitle>
+            <DialogDescription>
+              Disabling thinking will significantly reduce the accuracy of Section breakdown and
+              section allocation. Blueprint extraction and content routing may also degrade.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Disabling thinking will significantly reduce the accuracy of Section breakdown and section allocation. Blueprint extraction and content routing may also degrade.
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setMeetingThinkingConfirmOpen(false)}>Keep thinking on</Button>
-            <Button variant="destructive" onClick={async () => {
-              setMeetingThinkingConfirmOpen(false)
-              setMeetingThinking(false)
-              try {
-                await updateConfig("enrichment", { meeting_model: meetingModel, meeting_thinking: false })
-              } catch {
-                toast.error("Failed to update")
-                setMeetingThinking(true)
-              }
-            }}>Turn off anyway</Button>
-          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setMeetingThinkingConfirmOpen(false)}>
+              Keep thinking on
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                setMeetingThinkingConfirmOpen(false)
+                setMeetingThinking(false)
+                try {
+                  await updateConfig("enrichment", {
+                    meeting_model: meetingModel,
+                    meeting_thinking: false,
+                  })
+                } catch {
+                  toast.error("Failed to update")
+                  setMeetingThinking(true)
+                }
+              }}
+            >
+              Turn off anyway
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
   )
+
 }

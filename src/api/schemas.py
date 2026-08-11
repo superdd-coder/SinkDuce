@@ -149,6 +149,9 @@ class RecallResult(BaseModel):
     chunk_type: str  # normal / parent / child
     context: str | None = None
     parent_id: str | None = None
+    # Human-readable file name (current version / rename-aware); UI prefers this
+    display_name: str | None = None
+    source_label: str | None = None  # ingest-time snapshot (debug / fallback)
     children: list[RecallResult] | None = None  # for parent-child grouped display
 
 

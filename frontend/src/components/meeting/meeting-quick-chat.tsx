@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
-import { Send, Loader2, AlertTriangle } from "lucide-react"
+import { Send, Loader2, AlertTriangle, MessageCircle, BrushCleaning } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { createSession, getSession, deleteSession } from "@/api/client"
 
 // ── Types ──
@@ -19,7 +21,7 @@ const MEETING_SESSION_PREFIX = "meeting_"
 const WARN_THRESHOLD = 20
 const MAX_MESSAGES = 50 // align with backend _MEETING_MAX_MESSAGES
 const ANIM_DURATION = 350
-const SIDEBAR_W = 400
+const SIDEBAR_W = 360
 
 /** 1 user message = 1 round (request + reply). */
 function countTurns(msgs: { role: string; content: string }[]): number {
@@ -41,26 +43,368 @@ const HINT_INITIAL_DELAY = 1000
 const HINT_MIN_INTERVAL = 5000
 const HINT_MAX_INTERVAL = 15000
 
-// ── Diamond icon (split paths for independent hover rotation) ──
+// ── Diamond icon (Collection-aligned rounded version) ──
 
 function DiamondIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 48 48" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
       <path
         className="diamond-outer"
-        d="M12 2L22 12L12 22L2 12Z"
+        d="M24 5.2C24.9 5.2 25.75 5.55 26.4 6.2L41.8 21.6C42.45 22.25 42.8 23.1 42.8 24C42.8 24.9 42.45 25.75 41.8 26.4L26.4 41.8C25.75 42.45 24.9 42.8 24 42.8C23.1 42.8 22.25 42.45 21.6 41.8L6.2 26.4C5.55 25.75 5.2 24.9 5.2 24C5.2 23.1 5.55 22.25 6.2 21.6L21.6 6.2C22.25 5.55 23.1 5.2 24 5.2Z"
         stroke="currentColor"
-        strokeWidth="1.2"
+        strokeWidth="2.4"
+        strokeLinejoin="round"
         fill="none"
-        style={{ transformOrigin: "center", transition: "transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)" }}
       />
       <path
         className="diamond-inner"
-        d="M12 6L17 12L12 18L7 12Z"
+        d="M24 13.5C24.45 13.5 24.88 13.68 25.2 14L34 22.8C34.32 23.12 34.5 23.55 34.5 24C34.5 24.45 34.32 24.88 34 25.2L25.2 34C24.88 34.32 24.45 34.5 24 34.5C23.55 34.5 23.12 34.32 22.8 34L14 25.2C13.68 24.88 13.5 24.45 13.5 24C13.5 23.55 13.68 23.12 14 22.8L22.8 14C23.12 13.68 23.55 13.5 24 13.5Z"
         fill="currentColor"
-        style={{ transformOrigin: "center", transition: "transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)" }}
       />
     </svg>
+  )
+}
+
+/**
+ * Spin phases (parent timeline):
+ * idle → Collection CSS hover flip
+ * exiting → WAAPI accel (visible then fade)
+ * enter-hold → brief high-speed hold while fading in
+ * enter-decel-top → ease-out into cruise speed
+ * cruise → 6s linear infinite (same as Collection open spin)
+ * enter-decel-bottom → ease-out to rest
+ */
+export type MeetingQcSpinPhase =
+  | "idle"
+  | "exiting"
+  | "enter-hold"
+  | "enter-decel-top"
+  | "cruise"
+  | "enter-decel-bottom"
+
+/** Match Collection open spin (css qc-spin-cw 6s linear infinite) */
+const CRUISE_PERIOD_MS = 6000
+/** Exit accel window (opacity fade starts later — see parent) */
+const EXIT_ACCEL_MS = 250
+const ENTER_HOLD_MS = 160
+const ENTER_DECEL_TOP_MS = 420
+/** Longer taper so angular speed visibly shrinks toward stop */
+const ENTER_DECEL_BOTTOM_MS = 520
+
+function matrixRotationDeg(el: Element): number {
+  const t = getComputedStyle(el).transform
+  if (!t || t === "none") return 0
+  try {
+    const m = new DOMMatrixReadOnly(t)
+    return (Math.atan2(m.b, m.a) * 180) / Math.PI
+  } catch {
+    return 0
+  }
+}
+
+function unwrapAngle(prevContinuous: number, sampleDeg: number): number {
+  const prevN = ((prevContinuous % 360) + 360) % 360
+  const sampleN = ((sampleDeg % 360) + 360) % 360
+  let d = sampleN - prevN
+  if (d > 180) d -= 360
+  if (d < -180) d += 360
+  return prevContinuous + d
+}
+
+function cancelPathAnims(el: Element) {
+  const node = el as HTMLElement | SVGElement
+  node.getAnimations?.().forEach((a) => a.cancel())
+  node.style.animation = ""
+  node.style.transition = ""
+}
+
+/**
+ * QC diamond FAB — Collection look + hover when idle;
+ * WAAPI continuous spin for park teleport phases.
+ */
+export function MeetingQcFab({
+  open,
+  onOpen,
+  onClose,
+  spinPhase = "idle",
+  className,
+}: {
+  open: boolean
+  onOpen: () => void
+  onClose: () => void
+  spinPhase?: MeetingQcSpinPhase
+  className?: string
+}) {
+  const [hintVisible, setHintVisible] = useState(false)
+  const [hintExiting, setHintExiting] = useState(false)
+  const [hintMessage, setHintMessage] = useState(HINT_MESSAGES[0])
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const angleRef = useRef({ outer: 0, inner: 0 })
+  const phaseRef = useRef(spinPhase)
+  phaseRef.current = spinPhase
+  const idle = spinPhase === "idle"
+
+  useEffect(() => {
+    if (!idle) {
+      setHintVisible(false)
+      setHintExiting(false)
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+      return
+    }
+    const scheduleHint = () => {
+      const msg = HINT_MESSAGES[Math.floor(Math.random() * HINT_MESSAGES.length)]
+      setHintMessage(msg)
+      setHintVisible(true)
+      setHintExiting(false)
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+      hintTimerRef.current = setTimeout(() => {
+        setHintExiting(true)
+        hintTimerRef.current = setTimeout(() => {
+          setHintVisible(false)
+          setHintExiting(false)
+          const delay = HINT_MIN_INTERVAL + Math.random() * (HINT_MAX_INTERVAL - HINT_MIN_INTERVAL)
+          hintTimerRef.current = setTimeout(scheduleHint, delay)
+        }, 500)
+      }, HINT_SHOW_DURATION)
+    }
+    hintTimerRef.current = setTimeout(scheduleHint, HINT_INITIAL_DELAY)
+    return () => {
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+    }
+  }, [idle])
+
+  // WAAPI spin (continuous angles). Idle → CSS Collection hover owns transform.
+  useEffect(() => {
+    const btn = btnRef.current
+    const outer = btn?.querySelector(".diamond-outer") as SVGElement | null
+    const inner = btn?.querySelector(".diamond-inner") as SVGElement | null
+    if (!outer || !inner) return
+
+    const sample = (el: Element, key: "outer" | "inner") => {
+      const next = unwrapAngle(angleRef.current[key], matrixRotationDeg(el))
+      angleRef.current[key] = next
+      return next
+    }
+
+    const animatePath = (el: Element, key: "outer" | "inner", dir: 1 | -1) => {
+      const node = el as HTMLElement | SVGElement
+
+      // Cruise already chained from enter-decel-top — do not cancel/restart (was the hitch)
+      if (spinPhase === "cruise") {
+        const cruising = node.getAnimations().some((a) => {
+          try {
+            return a.playState === "running" && a.effect?.getTiming()?.iterations === Infinity
+          } catch {
+            return false
+          }
+        })
+        if (cruising) return
+      }
+
+      const from = sample(el, key)
+      cancelPathAnims(el)
+      // Pin visual at `from` so canceling fill:forwards never flashes to 0° before next WAAPI
+      node.style.transform = `rotate(${from}deg)`
+
+      if (spinPhase === "idle") {
+        // Rest only after enter-decel-bottom landed on 90° grid (same look as 0°).
+        // Never snap a random mid-angle → identity (that was the close-Chat hitch).
+        const mod = ((from % 90) + 90) % 90
+        if (mod < 1.5 || mod > 88.5) {
+          node.style.transform = ""
+          return
+        }
+        const rest =
+          dir === 1
+            ? Math.ceil((from + 1e-3) / 90) * 90
+            : Math.floor((from - 1e-3) / 90) * 90
+        const anim = node.animate(
+          [{ transform: `rotate(${from}deg)` }, { transform: `rotate(${rest}deg)` }],
+          { duration: 140, easing: "ease-out", fill: "forwards" },
+        )
+        anim.finished
+          .then(() => {
+            angleRef.current[key] = rest
+            cancelPathAnims(el)
+            // k×90° ≡ identity for this glyph
+            node.style.transform = ""
+          })
+          .catch(() => {})
+        return
+      }
+
+      const isInfiniteRunning = () =>
+        node.getAnimations().some((a) => {
+          try {
+            const t = a.effect?.getTiming()
+            return a.playState === "running" && t?.iterations === Infinity
+          } catch {
+            return false
+          }
+        })
+
+      const startCruiseFrom = (startDeg: number) => {
+        angleRef.current[key] = startDeg
+        cancelPathAnims(el)
+        node.style.transform = ""
+        node.animate(
+          [
+            { transform: `rotate(${startDeg}deg)` },
+            { transform: `rotate(${startDeg + dir * 360}deg)` },
+          ],
+          { duration: CRUISE_PERIOD_MS, iterations: Infinity, easing: "linear" },
+        )
+      }
+
+      const run = (to: number, duration: number, easing: string, infinite = false) => {
+        node.style.transform = ""
+        const anim = node.animate(
+          [{ transform: `rotate(${from}deg)` }, { transform: `rotate(${to}deg)` }],
+          infinite
+            ? { duration, iterations: Infinity, easing }
+            : { duration, easing, fill: "forwards" },
+        )
+        if (!infinite) {
+          anim.finished.then(() => { angleRef.current[key] = to }).catch(() => {})
+        }
+        return anim
+      }
+
+      /**
+       * Multi-keyframe decelerate: equal time slices, shrinking Δθ → ω steps down.
+       * Optional onDone chains without a frozen frame (used for → cruise).
+       */
+      const runTaperDecel = (
+        rest: number,
+        duration: number,
+        shares: number[],
+        onDone?: (restDeg: number) => void,
+      ) => {
+        const span = rest - from
+        const frames: Keyframe[] = [{ transform: `rotate(${from}deg)`, offset: 0 }]
+        let acc = 0
+        const n = shares.length
+        for (let i = 0; i < n; i++) {
+          acc += shares[i]!
+          frames.push({
+            transform: `rotate(${from + span * Math.min(1, acc)}deg)`,
+            offset: (i + 1) / n,
+          })
+        }
+        frames[frames.length - 1] = { transform: `rotate(${rest}deg)`, offset: 1 }
+        node.style.transform = ""
+        const anim = node.animate(frames, {
+          duration,
+          easing: "linear",
+          fill: "forwards",
+        })
+        anim.finished
+          .then(() => {
+            angleRef.current[key] = rest
+            onDone?.(rest)
+          })
+          .catch(() => {})
+        return anim
+      }
+
+      if (spinPhase === "exiting") {
+        run(from + dir * 90, EXIT_ACCEL_MS, "cubic-bezier(0.35, 0, 0.65, 0.25)")
+        return
+      }
+
+      if (spinPhase === "enter-hold") {
+        run(from + dir * 55, ENTER_HOLD_MS, "linear")
+        return
+      }
+
+      if (spinPhase === "enter-decel-top") {
+        // Taper into cruise speed, then chain cruise immediately (no dead frame)
+        // Last slice keeps a little motion so handoff isn't a full stop
+        const rest = from + dir * 85
+        runTaperDecel(rest, ENTER_DECEL_TOP_MS, [0.38, 0.28, 0.20, 0.14], (restDeg) => {
+          const ph = phaseRef.current
+          if (ph === "enter-decel-top" || ph === "cruise") {
+            startCruiseFrom(restDeg)
+          }
+        })
+        return
+      }
+
+      if (spinPhase === "cruise") {
+        // Already chained from enter-decel-top — don't cancel/restart (that was the hitch)
+        if (isInfiniteRunning()) return
+        startCruiseFrom(from)
+        return
+      }
+
+      if (spinPhase === "enter-decel-bottom") {
+        let rest =
+          dir === 1
+            ? Math.ceil((from + 1e-3) / 90) * 90
+            : Math.floor((from - 1e-3) / 90) * 90
+        if (Math.abs(rest - from) < 20) rest = rest + dir * 90
+        const anim = runTaperDecel(rest, ENTER_DECEL_BOTTOM_MS, [0.40, 0.28, 0.18, 0.10, 0.04])
+        anim.finished
+          .then(() => {
+            if (phaseRef.current !== "idle" && phaseRef.current !== "enter-decel-bottom") return
+            angleRef.current[key] = rest
+            cancelPathAnims(el)
+            node.style.transform = `rotate(${rest}deg)`
+            requestAnimationFrame(() => {
+              if (phaseRef.current === "idle" || phaseRef.current === "enter-decel-bottom") {
+                node.style.transform = ""
+              }
+            })
+          })
+          .catch(() => {})
+      }
+    }
+
+    animatePath(outer, "outer", 1)
+    animatePath(inner, "inner", -1)
+  }, [spinPhase])
+
+  return (
+    <div className={cn("pm-meeting-qc-fab relative shrink-0", className)}>
+      <div className={cn("qc-float-group relative", !idle && "qc-float-group--static")}>
+        {(hintVisible || hintExiting) && idle && (
+          <div
+            className={cn(
+              "absolute right-full mr-2 px-2.5 py-1.5",
+              "rounded-full whitespace-nowrap",
+              "border border-white/50 backdrop-blur-[8px]",
+              "-top-5",
+              hintExiting
+                ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]"
+                : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]",
+            )}
+            style={{
+              color: "var(--pm-green, #1A5E3D)",
+              pointerEvents: "none",
+              background: "color-mix(in srgb, #fff 72%, transparent)",
+            }}
+          >
+            <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">{hintMessage}</span>
+          </div>
+        )}
+        <button
+          ref={btnRef}
+          type="button"
+          onClick={open ? onClose : onOpen}
+          className={cn(
+            "relative ease-out quick-chat-btn pm-meeting-qc-fab-btn",
+            /* Idle: Collection hover flip. Driven: add spinning class only to block global :hover flip;
+               CSS keyframe spin is disabled — WAAPI owns rotation. */
+            idle ? "pm-meeting-qc-fab-btn--idle" : "pm-meeting-qc-fab-btn--driven quick-chat-btn-spinning",
+          )}
+          style={{ color: "var(--pm-green, #1A5E3D)", background: "transparent" }}
+          aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
+        >
+          <DiamondIcon className="w-10 h-10" />
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -74,9 +418,23 @@ interface MeetingQuickChatProps {
   onClose: () => void
   onRefClick?: (sentenceId: string) => void
   className?: string
+  /**
+   * dock — fills parent stage-right card (Collection QC width).
+   * rail — legacy flex-sibling that expands width when open (default).
+   */
+  layout?: "dock" | "rail"
 }
 
-export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClose, onRefClick, className }: MeetingQuickChatProps) {
+export function MeetingQuickChat({
+  meetingId,
+  meetingTitle,
+  open,
+  onOpen,
+  onClose,
+  onRefClick,
+  className,
+  layout = "rail",
+}: MeetingQuickChatProps) {
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -403,43 +761,86 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
   }
 
   const hasMessages = messages.length > 0
+  const threadEdgeFade = useScrollEdgeFade(messagesScrollRef, messages.length)
 
   // Note: meeting chat doesn't use file-level display names
 
-  // ── Panel content ──
+  // ── Panel content — same pm-qc chrome as Collection Quick Chat ──
 
   const panelContent = (
-    <div className="flex flex-col h-full relative" style={{ width: SIDEBAR_W }}>
-      {/* ── Header ── */}
-      <div className="flex items-center justify-end shrink-0 px-3 pt-3 pb-2">
-        <div className="flex items-center gap-2">
+    <div
+      className={cn(
+        "pm-qc-panel",
+        layout === "dock" && "pm-meeting-qc-dock-inner",
+      )}
+      style={layout === "rail" ? { width: SIDEBAR_W } : undefined}
+    >
+      {/*
+        Dock: side-head already shows Chat title + diamond close — no second title
+        bar / divider. Tools row (Clear) floats over thread with soft fade only.
+        Rail: full Collection-style identity header.
+      */}
+      <header
+        className={cn(
+          "pm-qc-header",
+          layout === "dock" && "pm-qc-header--dock",
+          layout === "dock" && "pm-qc-header--dock-tools-only",
+        )}
+      >
+        <div className="min-w-0 flex items-center gap-2.5">
+          {layout !== "dock" && (
+            <span className="pm-qc-header-icon" aria-hidden>
+              <MessageCircle className="size-3.5" strokeWidth={2} />
+            </span>
+          )}
+          <div className="min-w-0">
+            {layout !== "dock" && (
+              <p className="pm-qc-header-title">Quick Chat</p>
+            )}
+            {layout !== "dock" && (
+              <p className="pm-qc-header-sub truncate" title={meetingTitle}>
+                {meetingTitle}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
           {msgCount > 0 && (
             <span
               className={cn(
-                "flex items-center gap-1 text-[10px] tabular-nums",
-                msgCount >= WARN_THRESHOLD
-                  ? "text-amber-600 dark:text-amber-400"
-                  : "text-muted-foreground/70",
+                "pm-meta inline-flex items-center gap-1 tabular-nums",
+                msgCount >= WARN_THRESHOLD && "text-amber-600",
               )}
-              title={`${msgCount}/${MAX_MESSAGES} rounds (1 user + 1 reply = 1). Soft limit trims older rounds at ${MAX_MESSAGES}.`}
+              title={`${msgCount}/${MAX_MESSAGES} rounds. Soft limit trims older rounds.`}
             >
-              {msgCount >= WARN_THRESHOLD && <AlertTriangle className="w-3 h-3" />}
+              {msgCount >= WARN_THRESHOLD && <AlertTriangle className="size-3" />}
               {msgCount}/{MAX_MESSAGES}
             </span>
           )}
           <button
+            type="button"
+            className="pm-qc-clear-btn"
             onClick={clearContext}
-            className="text-[10px] font-medium uppercase tracking-[0.12em] transition-opacity duration-150"
-            style={{ color: "var(--ze-green, #1A5E3D)", opacity: 0.5 }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "0.5" }}
+            title="Clear conversation"
+            aria-label="Clear conversation"
           >
-            CLEAR
+            <BrushCleaning className="size-3.5" strokeWidth={1.75} />
           </button>
+          {layout !== "dock" && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={onClose}
+              aria-label="Close Quick Q&A"
+            >
+              Close
+            </Button>
+          )}
         </div>
-      </div>
+      </header>
 
-      {/* ── Messages area ── */}
+      <div className="pm-panel-scroll-shell pm-qc-thread-shell">
       <div
         ref={messagesScrollRef}
         onScroll={() => {
@@ -447,153 +848,173 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
           const el = messagesScrollRef.current
           if (!el) return
           const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-          // Leave bottom → unlock; return to bottom → re-stick
           if (dist > 60) stickToBottom.current = false
           else stickToBottom.current = true
         }}
         className={cn(
-        "flex-1 overflow-y-auto px-3 min-h-0 transition-all duration-500 ease-out",
-        hasMessages ? "pb-14" : "pb-24",
-        !hasMessages && "flex flex-col items-center justify-center",
-      )}>
+          "pm-qc-thread",
+          layout === "dock" && "pm-qc-thread--dock",
+          !hasMessages && !loadingHistory && "pm-qc-thread--empty",
+        )}
+      >
         {loadingHistory ? (
-          <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />
+          <div className="flex flex-1 items-center justify-center gap-2 py-10">
+            <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
+            <span className="pm-meta">Loading…</span>
           </div>
         ) : hasMessages ? (
-          <div className="space-y-3 pb-2">
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={cn(
-                  "rounded-lg px-3 py-2 max-w-full",
-                  msg.role === "user" ? "bg-primary/10 ml-6" : "bg-muted/50 mr-2",
-                  msg.isNew && "animate-slide-in-right",
-                )}
-              >
-                {msg.role === "assistant" && (msg.content || msg.thinkingContent) ? (
-                  <div>
+          <div className="pm-qc-thread-inner">
+            {messages.map((msg) =>
+              msg.role === "user" ? (
+                <div
+                  key={msg.id}
+                  className={cn(
+                    "pm-qc-msg pm-qc-msg--user",
+                    msg.isNew && "animate-slide-in-right",
+                  )}
+                >
+                  <span className="pm-qc-msg-role">You</span>
+                  <div className="pm-qc-bubble pm-qc-bubble--user">
+                    <p className="pm-qc-bubble-text">{msg.content}</p>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  key={msg.id}
+                  className={cn(
+                    "pm-qc-msg pm-qc-msg--assistant",
+                    msg.isNew && "animate-slide-in-right",
+                  )}
+                >
+                  <span className="pm-qc-msg-role pm-qc-msg-role--ai">Assistant</span>
+                  <div className="pm-qc-bubble pm-qc-bubble--assistant">
                     {msg.thinkingContent && (
-                      <details className="mb-2" open={msg.isStreaming ? true : undefined}>
-                        <summary className="text-[10px] text-muted-foreground/60 cursor-pointer hover:text-muted-foreground transition-colors">
-                          Thinking {msg.isStreaming && <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-[-1px]" />}
+                      <details
+                        className="pm-qc-thinking"
+                        open={msg.isStreaming && !msg.content ? true : undefined}
+                      >
+                        <summary>
+                          Thinking
+                          {msg.isStreaming && !msg.content && (
+                            <Loader2 className="size-2.5 animate-spin inline ml-1" />
+                          )}
                         </summary>
-                        <p className="mt-1 text-[10px] text-muted-foreground/50 whitespace-pre-wrap leading-relaxed italic">
-                          {msg.thinkingContent}
-                        </p>
+                        <p>{msg.thinkingContent}</p>
                       </details>
                     )}
                     {msg.content ? (
-                      <div className="max-w-none break-words">
-                        <TimeContent
-                          content={msg.content}
-                          onRefClick={onRefClick}
-                        />
+                      <div className="pm-qc-answer break-words">
+                        <TimeContent content={msg.content} onRefClick={onRefClick} />
                       </div>
-                    ) : msg.isStreaming && (
-                      <div className="flex items-center gap-1 text-muted-foreground">
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        <span className="text-xs">Generating answer...</span>
+                    ) : msg.isStreaming ? (
+                      <div className="pm-qc-typing">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        <span>Educing…</span>
                       </div>
+                    ) : (
+                      <p className="pm-qc-bubble-text">{msg.content}</p>
                     )}
-                  </div>
-                ) : msg.role === "assistant" && msg.isStreaming ? (
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    <span className="text-xs">Thinking...</span>
-                  </div>
-                ) : (
-                  <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">{msg.content}</p>
-                )}
-                {msg.role === "assistant" && !msg.isStreaming && msg.sources && msg.sources.length > 0 && (
-                  <div className="mt-3 pt-2 border-t border-dashed border-border">
-                    <button
-                      onClick={() => setExpandedSources((prev) => {
-                        const next = new Set(prev)
-                        next.has(msg.id) ? next.delete(msg.id) : next.add(msg.id)
-                        return next
-                      })}
-                      className="flex items-center justify-between w-full text-[10px] font-normal uppercase tracking-[0.12em] text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer mb-2"
-                    >
-                      <span>Sources · {msg.sources.length}</span>
-                      <svg
-                        className={cn("w-3 h-3 transition-transform duration-300", expandedSources.has(msg.id) && "rotate-180")}
-                        viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                      >
-                        <path d="M6 9l6 6 6-6" />
-                      </svg>
-                    </button>
-                    <div
-                      className={cn(
-                        "grid transition-all duration-500",
-                        "ease-[cubic-bezier(0.23,1,0.32,1)]",
-                        expandedSources.has(msg.id)
-                          ? "grid-rows-[1fr] opacity-100"
-                          : "grid-rows-[0fr] opacity-0",
-                      )}
-                    >
-                      <div className="overflow-hidden">
-                        <div className="space-y-1 max-h-32 overflow-y-auto">
-                          {msg.sources.slice(0, 5).map((s, i) => {
-                            const src = (s.metadata?.source || s.metadata?.filename) as string | undefined
-                            const chunkIdx = s.metadata?.chunk_index as number | undefined
-                            const displayName = src ? src : "Unknown"
-                            return (
-                              <div
-                                key={i}
-                                className={cn(
-                                  "text-[10px] text-muted-foreground bg-muted rounded p-1.5 border-b border-dashed border-border/50 last:border-0",
-                                  ""
-                                )}
-                                onClick={() => {
-                                  
-                                }}
-                              >
-                                <div className="truncate font-medium">{displayName}</div>
-                                {chunkIdx != null && (
-                                  <div className="text-[9px] opacity-50">Chunk #{chunkIdx}</div>
-                                )}
-                                <div className="line-clamp-2 mt-0.5 opacity-70">{s.text}</div>
+                    {msg.role === "assistant" &&
+                      !msg.isStreaming &&
+                      msg.sources &&
+                      msg.sources.length > 0 && (
+                        <div className="pm-qc-sources">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedSources((prev) => {
+                                const next = new Set(prev)
+                                next.has(msg.id) ? next.delete(msg.id) : next.add(msg.id)
+                                return next
+                              })
+                            }
+                            className="pm-qc-sources-toggle"
+                          >
+                            <span>Sources · {msg.sources.length}</span>
+                            <svg
+                              className={cn(
+                                "size-3 transition-transform duration-300",
+                                expandedSources.has(msg.id) && "rotate-180",
+                              )}
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                            >
+                              <path d="M6 9l6 6 6-6" />
+                            </svg>
+                          </button>
+                          <div
+                            className={cn(
+                              "grid transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+                              expandedSources.has(msg.id)
+                                ? "grid-rows-[1fr] opacity-100"
+                                : "grid-rows-[0fr] opacity-0",
+                            )}
+                          >
+                            <div className="overflow-hidden">
+                              <div className="pm-qc-sources-list">
+                                {msg.sources.slice(0, 8).map((s, i) => {
+                                  const src = (s.metadata?.source || s.metadata?.filename) as
+                                    | string
+                                    | undefined
+                                  const chunkIdx = s.metadata?.chunk_index as number | undefined
+                                  return (
+                                    <div key={i} className="pm-qc-source-item is-static">
+                                      <div className="flex items-center gap-1 min-w-0">
+                                        <span className="truncate font-medium">
+                                          {src || "Meeting"}
+                                        </span>
+                                      </div>
+                                      {chunkIdx != null && (
+                                        <div className="pm-qc-source-meta">Chunk #{chunkIdx}</div>
+                                      )}
+                                      <div className="line-clamp-2 opacity-70 mt-0.5">{s.text}</div>
+                                    </div>
+                                  )
+                                })}
                               </div>
-                            )
-                          })}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    </div>
+                      )}
                   </div>
-                )}
-              </div>
-            ))}
+                </div>
+              ),
+            )}
           </div>
         ) : (
-          // Empty state — centered, fades out when messages appear
-          <div
-            className="flex flex-col items-center gap-4"
-            style={{ transition: "opacity 0.5s ease-out, transform 0.5s ease-out" }}
-          >
-            <p
-              className="text-center leading-relaxed t-body-family"
-              style={{
-                fontSize: "14px",
-                fontWeight: 300,
-                color: "var(--ze-ink)",
-                lineHeight: 1.6,
-              }}
-            >
-              Ask a quick question about
-              <br />
-              <em style={{ fontStyle: "italic", fontWeight: 300, color: "var(--ze-green, #1A5E3D)" }}>
-                {meetingTitle}
-              </em>
+          <div className="pm-qc-empty">
+            <span className="pm-qc-empty-icon" aria-hidden>
+              <MessageCircle className="size-5" strokeWidth={1.75} />
+            </span>
+            <p className="pm-qc-empty-title">Ask this meeting</p>
+            <p className="pm-qc-empty-sub">
+              Chat with{" "}
+              <em className="not-italic text-[var(--pm-green)]">{meetingTitle || "this meeting"}</em>
+              . Answers use the transcript and summary.
             </p>
           </div>
         )}
-
+      </div>
+      <div
+        className={cn(
+          "pm-rail-edge-fade pm-rail-edge-fade--top",
+          threadEdgeFade.top && "is-visible",
+        )}
+        aria-hidden
+      />
+      <div
+        className={cn(
+          "pm-rail-edge-fade pm-rail-edge-fade--bottom",
+          threadEdgeFade.bottom && "is-visible",
+        )}
+        aria-hidden
+      />
       </div>
 
-      {/* Floating input */}
-      <div className="absolute bottom-6 left-0 right-0 z-10 pointer-events-none">
-        <div className="pointer-events-auto">
+      <div className="pm-qc-composer-float">
+        <div className="pm-qc-composer-float-inner">
           <ChatInputBar
             input={input}
             setInput={setInput}
@@ -607,81 +1028,89 @@ export function MeetingQuickChat({ meetingId, meetingTitle, open, onOpen, onClos
     </div>
   )
 
+  const fab = (
+    <div className="relative qc-float-group">
+      {(hintVisible || hintExiting) && !open && (
+        <div
+          className={cn(
+            "absolute right-full",
+            "mr-3 px-2.5 py-1.5",
+            "rounded-full whitespace-nowrap",
+            "bg-[var(--pm-float,#fdfbf7)]",
+            "shadow-[var(--pm-shadow-sm)]",
+            "-top-6",
+            hintExiting
+              ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]"
+              : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]",
+          )}
+          style={{
+            color: "var(--pm-green, #1A5E3D)",
+            pointerEvents: "none",
+          }}
+        >
+          <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">{hintMessage}</span>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={open ? onClose : onOpen}
+        className={cn(
+          "relative transition-all ease-out quick-chat-btn",
+          open && "quick-chat-btn-spinning",
+        )}
+        style={{ color: "var(--pm-green, #1A5E3D)" }}
+        aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
+      >
+        <DiamondIcon className="w-10 h-10" />
+      </button>
+    </div>
+  )
+
+  /* Docked: panel only. FAB lives in side-head via MeetingQcFab (scheme D). */
+  if (layout === "dock") {
+    if (!open) return null
+    return (
+      <div className={cn("pm-meeting-qc-dock is-open", className)}>
+        <div className="pm-meeting-qc-panel pm-meeting-qc-panel--dock">
+          {panelContent}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <>
-      {/* ── Sidebar panel — width transitions in flex layout ── */}
+      {/* ── Soft float rail (curtain width + panel fade · §3.6 / §4.5 language) ── */}
       <div
-        className={cn(
-          "h-full border-l border-border bg-background shrink-0 overflow-hidden",
-          "transition-all ease-out",
-          className,
-        )}
-        style={{
-          width: open ? SIDEBAR_W : 0,
-          transitionDuration: `${ANIM_DURATION}ms`,
-        }}
+        className={cn("pm-meeting-qc-rail", open && "is-open", className)}
+        style={{ width: open ? SIDEBAR_W : 0 }}
+        aria-hidden={!open}
       >
         <div
-          className="h-full"
+          className="pm-meeting-qc-panel"
           style={{
             transform: `translateX(${open ? 0 : 12}px)`,
             opacity: open ? 1 : 0,
+            pointerEvents: open ? "auto" : "none",
             transition: open
               ? `transform ${ANIM_DURATION}ms cubic-bezier(0.34,1.56,0.64,1), opacity ${ANIM_DURATION}ms ease-out`
               : `transform ${ANIM_DURATION}ms ease-out, opacity ${ANIM_DURATION}ms ease-out`,
           }}
         >
-          {panelContent}
+          {open ? panelContent : null}
         </div>
       </div>
 
       {/* ── Floating button + hint bubble ── */}
       <div
-        className={cn(
-              "fixed right-6 z-50",
-            )}
+        className="fixed right-6 z-50"
         style={{
           bottom: "24px",
           transform: open ? `translateX(-${SIDEBAR_W}px)` : "translateX(0)",
           transition: "transform 0.35s ease-out",
         }}
       >
-        <div className="relative qc-float-group">
-          {/* Hint bubble */}
-          {(hintVisible || hintExiting) && !open && (
-          <div
-            className={cn(
-              "absolute right-full",
-              "mr-3 px-2.5 py-1.5",
-              "rounded-full whitespace-nowrap",
-              "bg-background/70 backdrop-blur-md",
-              "border border-border/50",
-              "shadow-sm",
-              "-top-6",
-              hintExiting ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]" : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]",
-            )}
-            style={{
-              color: "var(--ze-green, #1A5E3D)",
-              pointerEvents: "none",
-            }}
-          >
-            <span className="text-[11px] font-medium whitespace-nowrap">{hintMessage}</span>
-          </div>
-          )}
-          <button
-            onClick={open ? onClose : onOpen}
-            className={cn(
-              "relative transition-all ease-out quick-chat-btn",
-              open && "quick-chat-btn-spinning",
-            )}
-            style={{
-              color: "var(--ze-green, #1A5E3D)",
-            }}
-            aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
-          >
-            <DiamondIcon className="w-10 h-10" />
-          </button>
-        </div>
+        {fab}
       </div>
     </>
   )
@@ -734,7 +1163,7 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
         parts.push(
           <button
             key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 text-[10px] rounded bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.20)] t-mono-family align-baseline cursor-pointer mr-1"
+            className="inline-flex items-center px-1 py-0 pm-meta rounded bg-[var(--pm-green-soft)] text-[var(--pm-green)] hover:bg-[var(--pm-green-wash)] t-mono-family align-baseline cursor-pointer mr-1"
             onClick={(e) => { e.stopPropagation(); onRefClick?.(sttIds[0]) }}
             title={`Sources: ${sttIds.join(", ")}`}
           >
@@ -809,63 +1238,38 @@ function ChatInputBar({
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
   return (
-    <div className="flex items-center gap-2 w-[88%] mx-auto transition-all duration-300 ease-out">
-      {/* Input pill */}
-      <div
-        className={cn(
-          "flex-1 flex items-center transition-all duration-300 ease-out",
-          "rounded-full border bg-background/70 backdrop-blur-lg sk-input-frame",
-          streaming && "sk-thinking-flow",
-        )}
-        style={{
-          borderRadius: "9999px",
-          borderColor: streaming ? "oklch(0.38 0.08 160 / 0.18)" : "var(--border)",
-          minHeight: "32px",
-        }}
-      >
+    <div
+      className={cn(
+        "pm-qc-input-row",
+        streaming && "pm-qc-input-row--thinking",
+      )}
+    >
+      <span className="pm-qc-stream-fx" aria-hidden />
+      <div className="pm-qc-input-frame">
         <textarea
           ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask about this meeting..."
+          placeholder="Message this meeting…"
           disabled={streaming}
           rows={1}
-          className={cn(
-            "flex-1 bg-transparent resize-none outline-none px-3 text-xs",
-            "placeholder:text-muted-foreground/60 disabled:opacity-60",
-            "transition-all duration-300 ease-out rounded-full",
-          )}
-          style={{
-            paddingTop: 0,
-            paddingBottom: 0,
-            maxHeight: "72px",
-            overflowY: "auto",
-          }}
+          className="pm-qc-textarea"
         />
       </div>
-
-      {/* Send button */}
-      <div
+      <button
+        type="button"
+        onClick={onSend}
+        disabled={!input.trim() || streaming}
         className={cn(
-          "shrink-0 flex items-center transition-all duration-300 ease-out",
-          streaming ? "w-0 opacity-0 scale-0 overflow-hidden" : "opacity-100 scale-100",
+          "pm-qc-send",
+          input.trim() && !streaming && "is-ready",
+          streaming && "is-hidden",
         )}
+        aria-label="Send"
       >
-        <button
-          onClick={onSend}
-          disabled={!input.trim() || streaming}
-          className={cn(
-            "w-7 h-7 rounded-full flex items-center justify-center transition-all duration-200",
-            input.trim() && !streaming ? "text-primary-foreground" : "text-muted-foreground/40",
-          )}
-          style={{
-            background: input.trim() && !streaming ? "var(--ze-green, #1A5E3D)" : "transparent",
-          }}
-        >
-          <Send className="w-3.5 h-3.5" />
-        </button>
-      </div>
+        <Send className="size-3.5" />
+      </button>
     </div>
   )
 }

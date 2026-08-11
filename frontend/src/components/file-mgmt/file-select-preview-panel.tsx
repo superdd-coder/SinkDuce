@@ -1,5 +1,6 @@
 /**
  * File preview for "select existing file" flows.
+ * Premium soft float card — light title chrome + document body (no tool strip).
  * - Inline: embed in dialog left column
  * - Floating: fixed portal left of an anchor (node detail), avoids overflow clip
  */
@@ -20,16 +21,36 @@ import {
   resolveRawFilename,
 } from "@/components/file-mgmt/raw-file-viewer"
 
+const DOC_FADE_OUT_MS = 140
+const DOC_FADE_IN_MS = 180
+
+function previewTitle(file: FileSummary | null): string {
+  if (!file) return "Preview"
+  return file.display_name || file.filename || "Preview"
+}
+
+function previewName(file: FileSummary | null): string {
+  if (!file) return "file.bin"
+  return resolveRawFilename(
+    file.filename,
+    file.display_name,
+    file.original_ext ? `file.${file.original_ext}` : null
+  )
+}
+
 export function FileSelectPreviewPanel({
   collectionId,
   file,
   onClose,
   className,
+  /** When true, parent drives open slide; body still crossfades on file switch. */
+  bodyPhase = "in",
 }: {
   collectionId: string
   file: FileSummary | null
   onClose?: () => void
   className?: string
+  bodyPhase?: "in" | "out"
 }) {
   const source =
     file?.source || (file ? `__file__:${file.file_id}` : null)
@@ -37,51 +58,48 @@ export function FileSelectPreviewPanel({
     source && collectionId
       ? getFilePreviewUrl(source, { collection: collectionId })
       : null
-  const name = file
-    ? resolveRawFilename(
-        file.filename,
-        file.display_name,
-        file.original_ext ? `file.${file.original_ext}` : null
-      )
-    : "file.bin"
+  const title = previewTitle(file)
+  const name = previewName(file)
 
   return (
-    <div
-      className={cn(
-        "flex flex-col min-h-0 min-w-0 overflow-hidden rounded-xl border border-border bg-background shadow-lg",
-        className
-      )}
-    >
-      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border">
-        <span
-          className="flex-1 min-w-0 text-[11px] font-medium truncate"
-          title={file ? file.display_name || file.filename : "Preview"}
-        >
-          {file ? file.display_name || file.filename : "Preview"}
+    <div className={cn("pm-select-preview", className)}>
+      {/* Soft title chrome — Geist label/title, no hard divider / no tool strip */}
+      <div className="pm-select-preview-head">
+        <span className="pm-select-preview-title" title={title}>
+          {title}
         </span>
         {onClose && (
           <button
             type="button"
-            className="text-muted-foreground hover:text-foreground shrink-0 p-0.5"
+            className="pm-select-preview-close"
             onClick={onClose}
             title="Close preview"
+            aria-label="Close preview"
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-3.5 w-3.5" strokeWidth={1.75} />
           </button>
         )}
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div
+        className={cn(
+          "pm-select-preview-body",
+          bodyPhase === "out" ? "is-out" : "is-in"
+        )}
+      >
         {file && url ? (
           <RawFileViewer
             key={file.file_id}
             url={url}
             filename={name}
             downloadUrl={url}
-            className="h-full border-0 rounded-none"
+            hideChrome
+            className="h-full border-0 rounded-none bg-transparent"
           />
         ) : (
-          <div className="h-full flex items-center justify-center p-4 text-[11px] text-muted-foreground/60 text-center">
-            Click a file to preview
+          <div className="h-full flex items-center justify-center p-6">
+            <p className="pm-meta text-[var(--pm-faint)] text-center">
+              Click a file to preview
+            </p>
           </div>
         )}
       </div>
@@ -91,7 +109,7 @@ export function FileSelectPreviewPanel({
 
 /** A4 portrait width/height (210mm / 297mm). */
 export const A4_PORTRAIT_RATIO = 210 / 297
-const PREVIEW_GAP = 8
+const PREVIEW_GAP = 10
 /** Above timeline chrome; high enough to clear overflow stacks. */
 const PREVIEW_Z = 80
 
@@ -112,7 +130,9 @@ export function a4PortraitWidth(
  * anchor, width ≈ A4 portrait ratio. Portaled to document.body so parent
  * overflow-hidden cannot clip it.
  *
- * Close: X button, or mousedown outside the panel (blank / other UI).
+ * Open: slide in from the right (toward the rail).
+ * File switch: sequential body fade (no hard remount of the shell).
+ * Close: X button, or mousedown outside the panel.
  */
 export function FileSelectPreviewFloating({
   collectionId,
@@ -135,6 +155,13 @@ export function FileSelectPreviewFloating({
   } | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
+  /** Keep shell mounted while open; crossfade document when file changes. */
+  const [displayFile, setDisplayFile] = useState<FileSummary | null>(file)
+  const [bodyPhase, setBodyPhase] = useState<"in" | "out">("in")
+  const [shellVisible, setShellVisible] = useState(false)
+  const switchGen = useRef(0)
+
+  // Measure anchor → place float
   useLayoutEffect(() => {
     if (!open || !anchorRef.current) {
       setBox(null)
@@ -160,7 +187,42 @@ export function FileSelectPreviewFloating({
       window.removeEventListener("resize", update)
       window.removeEventListener("scroll", update, true)
     }
-  }, [open, file?.file_id, anchorRef])
+  }, [open, displayFile?.file_id, anchorRef])
+
+  // Open shell → slide in; close → unmount after brief exit (parent sets open false)
+  useEffect(() => {
+    if (open) {
+      setShellVisible(true)
+      // Seed display file on open
+      if (file) setDisplayFile(file)
+      setBodyPhase("in")
+      return
+    }
+    setShellVisible(false)
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps -- only open gate
+
+  // Silk file switch while shell stays open
+  useEffect(() => {
+    if (!open || !file) return
+    if (file.file_id === displayFile?.file_id) {
+      setBodyPhase("in")
+      return
+    }
+    const gen = ++switchGen.current
+    setBodyPhase("out")
+    const t = window.setTimeout(() => {
+      if (gen !== switchGen.current) return
+      setDisplayFile(file)
+      // Next frame → fade in
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (gen !== switchGen.current) return
+          setBodyPhase("in")
+        })
+      })
+    }, DOC_FADE_OUT_MS)
+    return () => window.clearTimeout(t)
+  }, [file, file?.file_id, open, displayFile?.file_id])
 
   // Click outside panel → close entire floating window
   useEffect(() => {
@@ -168,9 +230,7 @@ export function FileSelectPreviewFloating({
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node | null
       if (!t) return
-      // Inside the floating panel (including X)
       if (panelRef.current?.contains(t)) return
-      // Inside the file tree / select zone — keep open so multi-select works
       if (
         t instanceof Element &&
         t.closest("[data-file-select-tree], [data-file-select-zone]")
@@ -179,8 +239,6 @@ export function FileSelectPreviewFloating({
       }
       onClose()
     }
-    // Capture so we run before other handlers; slight delay avoids the same
-    // click that opened the panel from immediately closing it.
     const id = window.setTimeout(() => {
       document.addEventListener("pointerdown", onPointerDown, true)
     }, 0)
@@ -190,25 +248,31 @@ export function FileSelectPreviewFloating({
     }
   }, [open, onClose])
 
-  if (!open || !box || typeof document === "undefined") return null
+  if (!open || !shellVisible || !box || typeof document === "undefined") {
+    return null
+  }
 
   return createPortal(
     <div
       ref={panelRef}
-      className="fixed animate-in slide-in-from-right-2 fade-in-0 duration-200"
+      className="fixed pm-select-preview-float is-open"
       style={{
         top: box.top,
         left: box.left,
         width: box.width,
         height: box.height,
         zIndex: PREVIEW_Z,
+        // Expose for CSS timing if needed
+        ["--pm-select-doc-in" as string]: `${DOC_FADE_IN_MS}ms`,
+        ["--pm-select-doc-out" as string]: `${DOC_FADE_OUT_MS}ms`,
       }}
       data-file-select-preview
     >
       <FileSelectPreviewPanel
         collectionId={collectionId}
-        file={file}
+        file={displayFile}
         onClose={onClose}
+        bodyPhase={bodyPhase}
         className="h-full w-full"
       />
     </div>,

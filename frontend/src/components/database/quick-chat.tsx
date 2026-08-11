@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from "react"
-import { Send, Loader2, AlertTriangle, Globe } from "lucide-react"
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react"
+import { createPortal } from "react-dom"
+import { Send, Loader2, AlertTriangle, Globe, MessageCircle, BrushCleaning } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { createSession, getSession, deleteSession } from "@/api/client"
@@ -27,8 +28,11 @@ interface QAMessage {
 const QUICK_SESSION_PREFIX = "quick_"
 const WARN_THRESHOLD = 20
 const MAX_MESSAGES = 30
-const ANIM_DURATION = 350
-const SIDEBAR_W = 400
+/** Slide duration — keep in sync with CSS --pm-qc-motion if added */
+const ANIM_DURATION = 320
+const RAIL_ANCHOR_SEL = "[data-pm-rail-anchor]"
+/** Stable diamond park on stage — same top-right for all content tabs */
+const FAB_ANCHOR_SEL = "[data-pm-qc-fab-anchor]"
 
 /** Count Q&A turns: 1 user message = 1 round (request + reply). */
 function countTurns(msgs: { role: string; content: string }[]): number {
@@ -50,24 +54,82 @@ const HINT_INITIAL_DELAY = 1000
 const HINT_MIN_INTERVAL = 5000
 const HINT_MAX_INTERVAL = 15000
 
-// ── Diamond icon (split paths for independent hover rotation) ──
+// ── Diamond icon (outer ring thicker, inner solid slightly narrower)
+// Split paths keep independent hover / open spin on .diamond-outer / .diamond-inner
+
+const DIAMOND_SETTLE_MS = 750
+const DIAMOND_SETTLE_EASE = "cubic-bezier(0.22, 1, 0.36, 1)"
+
+/** Current rotation in degrees from computed matrix (−180…180). */
+function getRotationDegrees(el: Element): number {
+  const t = getComputedStyle(el).transform
+  if (!t || t === "none") return 0
+  try {
+    const m = new DOMMatrixReadOnly(t)
+    return (Math.atan2(m.b, m.a) * 180) / Math.PI
+  } catch {
+    return 0
+  }
+}
+
+/** Drop any leftover WAAPI / CSS animations and inline transform so CSS hover can win. */
+function resetDiamondPath(el: Element) {
+  const node = el as HTMLElement | SVGElement
+  node.getAnimations?.().forEach((a) => a.cancel())
+  node.style.transition = ""
+  node.style.transform = ""
+  node.style.animation = ""
+}
+
+/**
+ * Ease from current angle → 0 via WAAPI, then cancel so no inline transform
+ * remains (otherwise :hover rotate(±180deg) is blocked by style.transform).
+ */
+function settleDiamondPath(el: Element, fromDeg: number): Animation | null {
+  const node = el as HTMLElement | SVGElement
+  node.getAnimations?.().forEach((a) => a.cancel())
+  node.style.transition = ""
+  node.style.transform = ""
+  node.style.animation = ""
+  if (Math.abs(fromDeg) < 0.5) return null
+  const anim = node.animate(
+    [
+      { transform: `rotate(${fromDeg}deg)` },
+      { transform: "rotate(0deg)" },
+    ],
+    {
+      duration: DIAMOND_SETTLE_MS,
+      easing: DIAMOND_SETTLE_EASE,
+      fill: "forwards",
+    }
+  )
+  anim.finished
+    .then(() => {
+      anim.cancel() // release transform back to stylesheet (hover works again)
+    })
+    .catch(() => {
+      /* cancelled */
+    })
+  return anim
+}
 
 function DiamondIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 48 48" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Hollow outer diamond — thicker stroke. Transform via CSS (hover / spin). */}
       <path
         className="diamond-outer"
-        d="M12 2L22 12L12 22L2 12Z"
+        d="M24 5.2C24.9 5.2 25.75 5.55 26.4 6.2L41.8 21.6C42.45 22.25 42.8 23.1 42.8 24C42.8 24.9 42.45 25.75 41.8 26.4L26.4 41.8C25.75 42.45 24.9 42.8 24 42.8C23.1 42.8 22.25 42.45 21.6 41.8L6.2 26.4C5.55 25.75 5.2 24.9 5.2 24C5.2 23.1 5.55 22.25 6.2 21.6L21.6 6.2C22.25 5.55 23.1 5.2 24 5.2Z"
         stroke="currentColor"
-        strokeWidth="1.2"
+        strokeWidth="2.4"
+        strokeLinejoin="round"
         fill="none"
-        style={{ transformOrigin: "center", transition: "transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)" }}
       />
+      {/* Solid inner diamond — slightly narrower than previous */}
       <path
         className="diamond-inner"
-        d="M12 6L17 12L12 18L7 12Z"
+        d="M24 13.5C24.45 13.5 24.88 13.68 25.2 14L34 22.8C34.32 23.12 34.5 23.55 34.5 24C34.5 24.45 34.32 24.88 34 25.2L25.2 34C24.88 34.32 24.45 34.5 24 34.5C23.55 34.5 23.12 34.32 22.8 34L14 25.2C13.68 24.88 13.5 24.45 13.5 24C13.5 23.55 13.68 23.12 14 22.8L22.8 14C23.12 13.68 23.55 13.5 24 13.5Z"
         fill="currentColor"
-        style={{ transformOrigin: "center", transition: "transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)" }}
       />
     </svg>
   )
@@ -84,9 +146,36 @@ interface QuickChatProps {
   onSourceClick?: (source: string, chunkIndex?: number) => void
   files?: { source: string; display_name?: string }[]
   className?: string
+  /**
+   * When true, size the float card to the active right rail
+   * (Overview To-do stack or Files Messages). When false, viewport fallback.
+   */
+  railActive?: boolean
+  /**
+   * Tab / surface key so we re-bind the float rail host when switching
+   * Overview ↔ Files.
+   */
+  railKey?: string
+  /**
+   * Show the diamond FAB. False on Config (Settings) — icon stays parked
+   * elsewhere; do not use fixed fallback that drifts.
+   */
+  fabVisible?: boolean
 }
 
-export function QuickChat({ collectionId, collectionName, open, onOpen, onClose, onSourceClick, files, className }: QuickChatProps) {
+export function QuickChat({
+  collectionId,
+  collectionName,
+  open,
+  onOpen,
+  onClose,
+  onSourceClick,
+  files,
+  className,
+  railActive = true,
+  railKey,
+  fabVisible = true,
+}: QuickChatProps) {
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -109,6 +198,71 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
   const [hintExiting, setHintExiting] = useState(false)
   const [hintMessage, setHintMessage] = useState(HINT_MESSAGES[0])
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Spin class lags `open` so we can freeze angle and ease to rest on close. */
+  const [diamondSpinning, setDiamondSpinning] = useState(false)
+  const diamondSpinningRef = useRef(false)
+  const diamondBtnRef = useRef<HTMLButtonElement>(null)
+  const diamondSettleRafRef = useRef<number | null>(null)
+  const diamondSettleAnimsRef = useRef<Animation[]>([])
+  /**
+   * Float host = active panel's right rail (cover To-do / Messages).
+   * Prefer `.pm-panel-fade.is-active` so idle keep-alive rails are ignored.
+   */
+  const [railHost, setRailHost] = useState<HTMLElement | null>(null)
+  /**
+   * FAB host = stage-level park — same coordinates on Overview / Files / Timeline.
+   * Never use fixed viewport fallback for the diamond (Timeline/Config looked wrong).
+   */
+  const [fabHost, setFabHost] = useState<HTMLElement | null>(null)
+
+  useLayoutEffect(() => {
+    const findFab = () => {
+      const el = document.querySelector(FAB_ANCHOR_SEL) as HTMLElement | null
+      setFabHost(el)
+    }
+    findFab()
+    const t = window.setTimeout(findFab, 0)
+    const t2 = window.setTimeout(findFab, 50)
+    return () => {
+      window.clearTimeout(t)
+      window.clearTimeout(t2)
+    }
+  }, [collectionId, railKey, fabVisible])
+
+  useLayoutEffect(() => {
+    if (!railActive) {
+      setRailHost(null)
+      return
+    }
+    /**
+     * Prefer active panel rail. Skip zero-width hosts (Files Messages collapsed
+     * — curtain clip track is 0px + pointer-events:none). FolderView expands
+     * the rail when QC opens; re-poll through the expand animation.
+     */
+    const find = () => {
+      const candidates = [
+        document.querySelector(
+          `.pm-panel-fade.is-active ${RAIL_ANCHOR_SEL}`
+        ) as HTMLElement | null,
+        document.querySelector(RAIL_ANCHOR_SEL) as HTMLElement | null,
+      ]
+      const usable = candidates.find((el) => {
+        if (!el) return false
+        const w = el.getBoundingClientRect().width
+        return w >= 48
+      })
+      setRailHost(usable ?? null)
+    }
+    find()
+    // Cover Files rail expand (~420ms) so float attaches after track has width
+    const delays = open
+      ? [0, 50, 120, 220, 360, 480, 600]
+      : [0, 50, 200]
+    const timers = delays.map((ms) => window.setTimeout(find, ms))
+    return () => {
+      timers.forEach((t) => window.clearTimeout(t))
+    }
+  }, [railActive, railKey, collectionId, open])
 
   // ── Init session ──
 
@@ -131,6 +285,68 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
         setWebSearchConfirmAnchor(null)
       }
     }
+  }, [open])
+
+  /*
+   * Diamond spin: infinite CSS while open; on close WAAPI ease to rest.
+   * Settle must not leave inline transform — that blocks CSS hover (±180°).
+   */
+  useLayoutEffect(() => {
+    const btn = diamondBtnRef.current
+    const outer = btn?.querySelector(".diamond-outer") as SVGElement | null
+    const inner = btn?.querySelector(".diamond-inner") as SVGElement | null
+
+    const cancelSettle = () => {
+      if (diamondSettleRafRef.current != null) {
+        cancelAnimationFrame(diamondSettleRafRef.current)
+        diamondSettleRafRef.current = null
+      }
+      diamondSettleAnimsRef.current.forEach((a) => {
+        try {
+          a.cancel()
+        } catch {
+          /* ignore */
+        }
+      })
+      diamondSettleAnimsRef.current = []
+    }
+
+    if (open) {
+      cancelSettle()
+      if (outer) resetDiamondPath(outer)
+      if (inner) resetDiamondPath(inner)
+      diamondSpinningRef.current = true
+      setDiamondSpinning(true)
+      return cancelSettle
+    }
+
+    // Closing: capture angle while spin class still on
+    if (!diamondSpinningRef.current || !outer || !inner) {
+      diamondSpinningRef.current = false
+      setDiamondSpinning(false)
+      return cancelSettle
+    }
+
+    const angleOuter = getRotationDegrees(outer)
+    const angleInner = getRotationDegrees(inner)
+
+    diamondSpinningRef.current = false
+    setDiamondSpinning(false)
+
+    // After spin class drops, run WAAPI settle (no permanent inline transform)
+    diamondSettleRafRef.current = requestAnimationFrame(() => {
+      diamondSettleRafRef.current = requestAnimationFrame(() => {
+        diamondSettleRafRef.current = null
+        const anims: Animation[] = []
+        const aO = settleDiamondPath(outer, angleOuter)
+        const aI = settleDiamondPath(inner, angleInner)
+        if (aO) anims.push(aO)
+        if (aI) anims.push(aI)
+        diamondSettleAnimsRef.current = anims
+      })
+    })
+
+    return cancelSettle
   }, [open])
 
   const initSession = async (sid: string) => {
@@ -492,40 +708,51 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     return f?.display_name || sourceId.split("/").pop() || sourceId
   }
 
-  // ── Panel content ──
+  // ── Panel content (Premium compact chat chrome) ──
 
   const panelContent = (
-    <div className="flex flex-col h-full relative" style={{ width: SIDEBAR_W }}>
-      {/* ── Header ── */}
-      <div className="flex items-center justify-end shrink-0 px-3 pt-3 pb-2">
-        <div className="flex items-center gap-2">
+    <div className="pm-qc-panel">
+      {/* Identity header — makes the surface read as Chat, not a doc pane */}
+      <header className="pm-qc-header">
+        <div className="min-w-0 flex items-center gap-2.5">
+          <span className="pm-qc-header-icon" aria-hidden>
+            <MessageCircle className="size-3.5" strokeWidth={2} />
+          </span>
+          <div className="min-w-0">
+            <p className="pm-qc-header-title">Quick Chat</p>
+            <p className="pm-qc-header-sub truncate" title={collectionName}>
+              {collectionName}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
           {msgCount > 0 && (
             <span
               className={cn(
-                "flex items-center gap-1 text-[10px] tabular-nums",
-                msgCount >= WARN_THRESHOLD
-                  ? "text-amber-600 dark:text-amber-400"
-                  : "text-muted-foreground/70",
+                "pm-meta inline-flex items-center gap-1 tabular-nums",
+                msgCount >= WARN_THRESHOLD && "text-amber-600"
               )}
-              title={`${msgCount}/${MAX_MESSAGES} rounds (1 user question + 1 assistant reply = 1). Soft limit: older rounds are trimmed at ${MAX_MESSAGES}.`}
+              title={`${msgCount}/${MAX_MESSAGES} rounds. Soft limit trims older rounds.`}
             >
-              {msgCount >= WARN_THRESHOLD && <AlertTriangle className="w-3 h-3" />}
+              {msgCount >= WARN_THRESHOLD && (
+                <AlertTriangle className="size-3" />
+              )}
               {msgCount}/{MAX_MESSAGES}
             </span>
           )}
           <button
+            type="button"
+            className="pm-qc-clear-btn"
             onClick={clearContext}
-            className="text-[10px] font-medium uppercase tracking-[0.12em] transition-opacity duration-150"
-            style={{ color: "var(--ze-green, #1A5E3D)", opacity: 0.5 }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "0.5" }}
+            title="Clear conversation"
+            aria-label="Clear conversation"
           >
-            CLEAR
+            <BrushCleaning className="size-3.5" strokeWidth={1.75} />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* ── Messages area ── */}
+      {/* Thread */}
       <div
         ref={messagesScrollRef}
         onScroll={() => {
@@ -533,192 +760,238 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
           const el = messagesScrollRef.current
           if (!el) return
           const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-          // Leave bottom → unlock; return to bottom → re-stick (same as main Chat)
           if (dist > 60) stickToBottom.current = false
           else stickToBottom.current = true
         }}
         className={cn(
-        "flex-1 overflow-y-auto px-3 min-h-0 transition-all duration-500 ease-out",
-        hasMessages ? "pb-14" : "pb-24",
-        !hasMessages && "flex flex-col items-center justify-center",
-      )}>
+          "pm-qc-thread",
+          !hasMessages && !loadingHistory && "pm-qc-thread--empty"
+        )}
+      >
         {loadingHistory ? (
-          <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />
+          <div className="flex flex-1 items-center justify-center gap-2 py-10">
+            <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
+            <span className="pm-meta">Loading…</span>
           </div>
         ) : hasMessages ? (
-          <div className="space-y-3 pb-2">
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={cn(
-                  "rounded-lg px-3 py-2 max-w-full",
-                  msg.role === "user" ? "bg-primary/10 ml-6" : "bg-muted/50 mr-2",
-                  msg.isNew && "animate-slide-in-right",
-                )}
-              >
-                {msg.role === "assistant" && (msg.content || msg.thinkingContent) ? (
-                  <div>
+          <div className="pm-qc-thread-inner">
+            {messages.map((msg) =>
+              msg.role === "user" ? (
+                <div
+                  key={msg.id}
+                  className={cn(
+                    "pm-qc-msg pm-qc-msg--user",
+                    msg.isNew && "animate-slide-in-right"
+                  )}
+                >
+                  {/* Match Chat message-bubble: You + underline text */}
+                  <span className="pm-qc-msg-role">You</span>
+                  <div className="pm-qc-bubble pm-qc-bubble--user">
+                    <p className="pm-qc-bubble-text">{msg.content}</p>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  key={msg.id}
+                  className={cn(
+                    "pm-qc-msg pm-qc-msg--assistant",
+                    msg.isNew && "animate-slide-in-right"
+                  )}
+                >
+                  {/* Match Chat: “Assistant” + left rail, prose answer */}
+                  <span className="pm-qc-msg-role pm-qc-msg-role--ai">
+                    Assistant
+                  </span>
+                  <div className="pm-qc-bubble pm-qc-bubble--assistant">
                     {msg.thinkingContent && (
                       <details
-                        className="mb-2"
-                        // Collapse when final answer starts (same idea as main Chat process trail)
-                        open={msg.isStreaming && !msg.content ? true : undefined}
+                        className="pm-qc-thinking"
+                        open={
+                          msg.isStreaming && !msg.content ? true : undefined
+                        }
                       >
-                        <summary className="text-[10px] text-muted-foreground/60 cursor-pointer hover:text-muted-foreground transition-colors">
-                          Thinking {msg.isStreaming && !msg.content && (
-                            <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-[-1px]" />
+                        <summary>
+                          Thinking
+                          {msg.isStreaming && !msg.content && (
+                            <Loader2 className="size-2.5 animate-spin inline ml-1" />
                           )}
                         </summary>
-                        <p className="mt-1 text-[10px] text-muted-foreground/50 whitespace-pre-wrap leading-relaxed italic">
-                          {msg.thinkingContent}
-                        </p>
+                        <p>{msg.thinkingContent}</p>
                       </details>
                     )}
                     {msg.content ? (
                       <StreamingAnswerBody
                         content={msg.content}
                         isStreaming={!!msg.isStreaming}
-                        className="break-words text-xs [&_table]:text-xs [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-xs"
+                        className="pm-qc-answer break-words [&_table]:text-[11px] [&_th]:px-1.5 [&_th]:py-0.5 [&_td]:px-1.5 [&_td]:py-0.5 [&_table]:block [&_table]:overflow-x-auto [&_pre]:text-[11px]"
                       />
-                    ) : msg.isStreaming && (
-                      <div className="flex items-center gap-1 text-muted-foreground">
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        <span className="text-xs">Generating answer...</span>
+                    ) : msg.isStreaming ? (
+                      <div className="pm-qc-typing">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        <span>Educing…</span>
                       </div>
+                    ) : (
+                      <p className="pm-qc-bubble-text">{msg.content}</p>
                     )}
-                  </div>
-                ) : msg.role === "assistant" && msg.isStreaming ? (
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    <span className="text-xs">Thinking...</span>
-                  </div>
-                ) : (
-                  <p className="whitespace-pre-wrap break-words text-xs leading-relaxed">{msg.content}</p>
-                )}
-                {msg.role === "assistant" && !msg.isStreaming && msg.sources && msg.sources.length > 0 && (() => {
-                  const webN = msg.sources!.filter((s) => s.metadata?.source_type === "web").length
-                  const kbN = msg.sources!.length - webN
-                  return (
-                  <div className="mt-3 pt-2 border-t border-dashed border-border">
-                    <button
-                      onClick={() => setExpandedSources((prev) => {
-                        const next = new Set(prev)
-                        next.has(msg.id) ? next.delete(msg.id) : next.add(msg.id)
-                        return next
-                      })}
-                      className="flex items-center justify-between w-full text-[10px] font-normal uppercase tracking-[0.12em] text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer mb-2"
-                    >
-                      <span>
-                        Sources · {msg.sources!.length}
-                        {webN > 0 ? ` · ${webN} web` : ""}
-                        {kbN > 0 && webN > 0 ? ` · ${kbN} kb` : ""}
-                      </span>
-                      <svg
-                        className={cn("w-3 h-3 transition-transform duration-300", expandedSources.has(msg.id) && "rotate-180")}
-                        viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                      >
-                        <path d="M6 9l6 6 6-6" />
-                      </svg>
-                    </button>
-                    <div
-                      className={cn(
-                        "grid transition-all duration-500",
-                        "ease-[cubic-bezier(0.23,1,0.32,1)]",
-                        expandedSources.has(msg.id)
-                          ? "grid-rows-[1fr] opacity-100"
-                          : "grid-rows-[0fr] opacity-0",
-                      )}
-                    >
-                      <div className="overflow-hidden">
-                        <div className="space-y-1 max-h-32 overflow-y-auto">
-                          {msg.sources!.slice(0, 8).map((s, i) => {
-                            const isWeb = s.metadata?.source_type === "web"
-                            const url = (s.metadata?.url as string) || ""
-                            const src = (s.metadata?.source || s.metadata?.filename) as string | undefined
-                            const chunkIdx = s.metadata?.chunk_index as number | undefined
-                            const label = isWeb
-                              ? String(s.metadata?.source_label || s.metadata?.source || url || "Web")
-                              : (src ? getDisplayName(src) : "Unknown")
-                            return (
-                              <div
-                                key={i}
+                    {msg.role === "assistant" &&
+                      !msg.isStreaming &&
+                      msg.sources &&
+                      msg.sources.length > 0 &&
+                      (() => {
+                        const webN = msg.sources!.filter(
+                          (s) => s.metadata?.source_type === "web"
+                        ).length
+                        const kbN = msg.sources!.length - webN
+                        return (
+                          <div className="pm-qc-sources">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedSources((prev) => {
+                                  const next = new Set(prev)
+                                  next.has(msg.id)
+                                    ? next.delete(msg.id)
+                                    : next.add(msg.id)
+                                  return next
+                                })
+                              }
+                              className="pm-qc-sources-toggle"
+                            >
+                              <span>
+                                Sources · {msg.sources!.length}
+                                {webN > 0 ? ` · ${webN} web` : ""}
+                                {kbN > 0 && webN > 0 ? ` · ${kbN} kb` : ""}
+                              </span>
+                              <svg
                                 className={cn(
-                                  "text-[10px] text-muted-foreground bg-muted rounded p-1.5 border-b border-dashed border-border/50 last:border-0",
-                                  (isWeb && url) || (src && onSourceClick)
-                                    ? "cursor-pointer hover:bg-primary/10 hover:text-foreground transition-colors"
-                                    : "",
-                                  isWeb && "border-l-2 border-l-amber-500/60",
+                                  "size-3 transition-transform duration-300",
+                                  expandedSources.has(msg.id) && "rotate-180"
                                 )}
-                                onClick={() => {
-                                  if (isWeb && url) {
-                                    window.open(url, "_blank", "noopener,noreferrer")
-                                    return
-                                  }
-                                  if (src && onSourceClick) onSourceClick(src, chunkIdx)
-                                }}
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
                               >
-                                <div className="flex items-center gap-1 min-w-0">
-                                  {isWeb && (
-                                    <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/40">
-                                      WEB
-                                    </span>
-                                  )}
-                                  <div className="truncate font-medium">{label}</div>
+                                <path d="M6 9l6 6 6-6" />
+                              </svg>
+                            </button>
+                            <div
+                              className={cn(
+                                "grid transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
+                                expandedSources.has(msg.id)
+                                  ? "grid-rows-[1fr] opacity-100"
+                                  : "grid-rows-[0fr] opacity-0"
+                              )}
+                            >
+                              <div className="overflow-hidden">
+                                <div className="pm-qc-sources-list">
+                                  {msg.sources!.slice(0, 8).map((s, i) => {
+                                    const isWeb =
+                                      s.metadata?.source_type === "web"
+                                    const url =
+                                      (s.metadata?.url as string) || ""
+                                    const src = (s.metadata?.source ||
+                                      s.metadata?.filename) as
+                                      | string
+                                      | undefined
+                                    const chunkIdx = s.metadata
+                                      ?.chunk_index as number | undefined
+                                    const label = isWeb
+                                      ? String(
+                                          s.metadata?.source_label ||
+                                            s.metadata?.source ||
+                                            url ||
+                                            "Web"
+                                        )
+                                      : src
+                                        ? getDisplayName(src)
+                                        : "Unknown"
+                                    return (
+                                      <button
+                                        type="button"
+                                        key={i}
+                                        className={cn(
+                                          "pm-qc-source-item",
+                                          isWeb && "is-web",
+                                          !((isWeb && url) ||
+                                            (src && onSourceClick)) &&
+                                            "is-static"
+                                        )}
+                                        onClick={() => {
+                                          if (isWeb && url) {
+                                            window.open(
+                                              url,
+                                              "_blank",
+                                              "noopener,noreferrer"
+                                            )
+                                            return
+                                          }
+                                          if (src && onSourceClick)
+                                            onSourceClick(src, chunkIdx)
+                                        }}
+                                      >
+                                        <div className="flex items-center gap-1 min-w-0">
+                                          {isWeb && (
+                                            <span className="pm-qc-web-badge">
+                                              WEB
+                                            </span>
+                                          )}
+                                          <span className="truncate font-medium">
+                                            {label}
+                                          </span>
+                                        </div>
+                                        {!isWeb && chunkIdx != null && (
+                                          <div className="pm-qc-source-meta">
+                                            Chunk #{chunkIdx}
+                                          </div>
+                                        )}
+                                        {isWeb && url && (
+                                          <div className="pm-qc-source-meta truncate">
+                                            {url}
+                                          </div>
+                                        )}
+                                        <div className="line-clamp-2 opacity-70 mt-0.5">
+                                          {s.text}
+                                        </div>
+                                      </button>
+                                    )
+                                  })}
                                 </div>
-                                {!isWeb && chunkIdx != null && (
-                                  <div className="text-[9px] opacity-50">Chunk #{chunkIdx}</div>
-                                )}
-                                {isWeb && url && (
-                                  <div className="text-[9px] truncate text-amber-700/80 dark:text-amber-400/80 mt-0.5">{url}</div>
-                                )}
-                                <div className="line-clamp-2 mt-0.5 opacity-70">{s.text}</div>
                               </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    </div>
+                            </div>
+                          </div>
+                        )
+                      })()}
                   </div>
-                  )
-                })()}
-              </div>
-            ))}
+                </div>
+              )
+            )}
             <div ref={messagesEndRef} />
           </div>
         ) : (
-          /* Empty state — centered, fades out when messages appear */
-          <div
-            className="flex flex-col items-center gap-4"
-            style={{ transition: "opacity 0.5s ease-out, transform 0.5s ease-out" }}
-          >
-            <p
-              className="text-center leading-relaxed t-body-family"
-              style={{
-                fontSize: "14px",
-                fontWeight: 300,
-                color: "var(--ze-ink)",
-                lineHeight: 1.6,
-              }}
-            >
-              Ask a quick question about
-              <br />
-              <em style={{ fontStyle: "italic", fontWeight: 300, color: "var(--ze-green, #1A5E3D)" }}>
+          <div className="pm-qc-empty">
+            <span className="pm-qc-empty-icon" aria-hidden>
+              <MessageCircle className="size-5" strokeWidth={1.75} />
+            </span>
+            <p className="pm-qc-empty-title">Ask this collection</p>
+            <p className="pm-qc-empty-sub">
+              Chat with{" "}
+              <em className="not-italic text-[var(--pm-green)]">
                 {collectionName}
               </em>
+              . Answers use your indexed sources.
             </p>
           </div>
         )}
-
       </div>
 
-      {/* Floating input + web-confirm slot (inside Quick panel, above composer) */}
-      <div className="absolute bottom-6 left-0 right-0 z-20 pointer-events-none px-0">
-        <div className="pointer-events-auto flex flex-col gap-2 w-full">
+      {/* Floating glass composer — suspended above card bottom (not a dock strip) */}
+      <div className="pm-qc-composer-float">
+        <div className="pm-qc-composer-float-inner">
           <div
             ref={webConfirmHostRef}
             data-web-confirm-host="inline"
-            className="px-3 w-full"
+            className="w-full"
           />
           <ChatInputBar
             input={input}
@@ -735,82 +1008,94 @@ export function QuickChat({ collectionId, collectionName, open, onOpen, onClose,
     </div>
   )
 
-  return (
-    <>
-      {/* ── Sidebar panel — width transitions in flex layout ── */}
-      <div
-        className={cn(
-          "h-full border-l border-border bg-background shrink-0 overflow-hidden",
-          "transition-all ease-out",
-          className,
-        )}
-        style={{
-          width: open ? SIDEBAR_W : 0,
-          transitionDuration: `${ANIM_DURATION}ms`,
-        }}
-      >
-        <div
-          className="h-full"
-          style={{
-            transform: `translateX(${open ? 0 : 12}px)`,
-            opacity: open ? 1 : 0,
-            transition: open
-              ? `transform ${ANIM_DURATION}ms cubic-bezier(0.34,1.56,0.64,1), opacity ${ANIM_DURATION}ms ease-out`
-              : `transform ${ANIM_DURATION}ms ease-out, opacity ${ANIM_DURATION}ms ease-out`,
-          }}
-        >
-          {panelContent}
-        </div>
-      </div>
+  const ease = "cubic-bezier(0.45, 0.05, 0.55, 0.95)"
 
-      {/* ── Floating button + hint bubble ── */}
+  const floatPanel = (
+    <div
+      className={cn(
+        "pm-qc-float",
+        /* In-rail: fill host exactly. Fallback: fixed right column. */
+        railHost ? "pm-qc-float--rail" : "pm-qc-float--fallback",
+        className
+      )}
+      style={{
+        transform: open ? "translateX(0)" : "translateX(calc(100% + 20px))",
+        opacity: open ? 1 : 0,
+        pointerEvents: open ? "auto" : "none",
+        transition: open
+          ? `transform ${ANIM_DURATION}ms ${ease}, opacity ${ANIM_DURATION * 0.85}ms ${ease}`
+          : `transform ${ANIM_DURATION}ms ${ease}, opacity ${ANIM_DURATION * 0.7}ms ${ease}`,
+      }}
+      aria-hidden={!open}
+    >
+      {panelContent}
+    </div>
+  )
+
+  const fabBlock = (
+    <div className="pm-qc-fab pm-qc-fab--park">
+      {/*
+        Row: bubble LEFT of diamond, nudged slightly UP (左边偏上).
+        Shared bob on the group.
+      */}
       <div
-        className={cn(
-              "fixed right-6 z-50",
-            )}
-        style={{
-          bottom: "24px",
-          transform: open ? `translateX(-${SIDEBAR_W}px)` : "translateX(0)",
-          transition: "transform 0.35s ease-out",
-        }}
+        className="qc-float-group flex flex-row items-center justify-end gap-2.5"
+        style={{ position: "relative" }}
       >
-        <div className="relative qc-float-group">
-          {/* Hint bubble */}
-          {(hintVisible || hintExiting) && !open && (
+        {(hintVisible || hintExiting) && !open && (
           <div
             className={cn(
-              "absolute right-full",
-              "mr-3 px-2.5 py-1.5",
-              "rounded-full whitespace-nowrap",
-              "bg-background/70 backdrop-blur-md",
-              "border border-border/50",
-              "shadow-sm",
-              "-top-6",
-              hintExiting ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]" : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]",
+              "inline-flex h-8 items-center rounded-full px-2.5",
+              "pointer-events-none whitespace-nowrap shrink-0",
+              "border border-white/55 text-[color:var(--ze-green,#1A5E3D)]",
+              "shadow-sm backdrop-blur-[10px]",
+              hintExiting
+                ? "animate-[hint-retract_0.4s_cubic-bezier(0.4,0,0.2,1)_both]"
+                : "animate-[hint-emerge_0.55s_cubic-bezier(0.34,1.56,0.64,1)_both]"
             )}
             style={{
-              color: "var(--ze-green, #1A5E3D)",
-              pointerEvents: "none",
+              background: "color-mix(in srgb, #fff 78%, transparent)",
+              lineHeight: 1,
+              boxSizing: "border-box",
+              /* 左边偏上：relative top 不与 emerge 动画的 transform 冲突 */
+              position: "relative",
+              top: -10,
             }}
           >
-            <span className="text-[11px] font-medium whitespace-nowrap">{hintMessage}</span>
+            <span className="block text-[11px] font-medium leading-none whitespace-nowrap">
+              {hintMessage}
+            </span>
           </div>
+        )}
+        <button
+          ref={diamondBtnRef}
+          type="button"
+          onClick={open ? onClose : onOpen}
+          className={cn(
+            "relative shrink-0 transition-all ease-out quick-chat-btn",
+            diamondSpinning && "quick-chat-btn-spinning"
           )}
-          <button
-            onClick={open ? onClose : onOpen}
-            className={cn(
-              "relative transition-all ease-out quick-chat-btn",
-              open && "quick-chat-btn-spinning",
-            )}
-            style={{
-              color: "var(--ze-green, #1A5E3D)",
-            }}
-            aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
-          >
-            <DiamondIcon className="w-10 h-10" />
-          </button>
-        </div>
+          style={{ color: "var(--ze-green, #1A5E3D)" }}
+          aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
+        >
+          <DiamondIcon className="w-10 h-10" />
+        </button>
       </div>
+    </div>
+  )
+
+  return (
+    <>
+      {/*
+        Float: portal into right rail when Overview/Files (covers To-do/Messages).
+        Fallback: fixed column when no rail (Timeline).
+        FAB: always stage park — same top-right for all content tabs.
+      */}
+      {railHost
+        ? createPortal(floatPanel, railHost)
+        : floatPanel}
+      {fabVisible &&
+        (fabHost ? createPortal(fabBlock, fabHost) : null)}
     </>
   )
 }
@@ -829,10 +1114,16 @@ function ChatInputBar({
   onKeyDown: (e: React.KeyboardEvent) => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
-  // Web confirm anchors to the panel slot (data-web-confirm-host=inline), not the bar
   return (
-    <div className="flex items-center gap-2 w-[88%] mx-auto transition-all duration-300 ease-out">
-      {/* Web search toggle */}
+    <div
+      className={cn(
+        "pm-qc-input-row",
+        /* Generating: flowing border + glow on whole pill (not textarea) */
+        streaming && "pm-qc-input-row--thinking"
+      )}
+    >
+      {/* Stream-only FX layer — opacity crossfades in/out with --thinking */}
+      <span className="pm-qc-stream-fx" aria-hidden />
       <button
         type="button"
         onClick={onToggleWebSearch}
@@ -843,74 +1134,41 @@ function ChatInputBar({
             : "Web search OFF — collection only (API key in Settings)"
         }
         className={cn(
-          "shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all",
-          webSearch ? "text-primary-foreground" : "text-muted-foreground/70 hover:text-primary",
-          streaming && "opacity-50",
+          "pm-qc-web-btn",
+          webSearch && "is-on",
+          streaming && "opacity-50"
         )}
-        style={{
-          background: webSearch ? "var(--ze-green, #1A5E3D)" : "transparent",
-          border: webSearch ? "none" : "1px solid var(--border)",
-        }}
       >
-        <Globe className="w-3.5 h-3.5" />
+        <Globe className="size-3.5" />
       </button>
 
-      {/* Input pill */}
-      <div
-        className={cn(
-          "flex-1 flex items-center transition-all duration-300 ease-out",
-          "rounded-full border bg-background/70 backdrop-blur-lg sk-input-frame",
-          streaming && "sk-thinking-flow",
-        )}
-        style={{
-          borderRadius: "9999px",
-          borderColor: streaming ? "oklch(0.38 0.08 160 / 0.18)" : "var(--border)",
-          minHeight: "32px",
-        }}
-      >
+      {/* No sk-input-frame — textarea is flush inside the pill; breath is on the row */}
+      <div className="pm-qc-input-frame">
         <textarea
           ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask about this collection..."
+          placeholder="Message this collection…"
           disabled={streaming}
           rows={1}
-          className={cn(
-            "flex-1 bg-transparent resize-none outline-none px-3 text-xs",
-            "placeholder:text-muted-foreground/60 disabled:opacity-60",
-            "transition-all duration-300 ease-out rounded-full",
-          )}
-          style={{
-            paddingTop: 0,
-            paddingBottom: 0,
-            maxHeight: "72px",
-            overflowY: "auto",
-          }}
+          className="pm-qc-textarea"
         />
       </div>
 
-      {/* Send button */}
-      <div
+      <button
+        type="button"
+        onClick={onSend}
+        disabled={!input.trim() || streaming}
         className={cn(
-          "shrink-0 flex items-center transition-all duration-300 ease-out",
-          streaming ? "w-0 opacity-0 scale-0 overflow-hidden" : "opacity-100 scale-100",
+          "pm-qc-send",
+          input.trim() && !streaming && "is-ready",
+          streaming && "is-hidden"
         )}
+        aria-label="Send"
       >
-        <button
-          onClick={onSend}
-          disabled={!input.trim() || streaming}
-          className={cn(
-            "w-7 h-7 rounded-full flex items-center justify-center transition-all duration-200",
-            input.trim() && !streaming ? "text-primary-foreground" : "text-muted-foreground/40",
-          )}
-          style={{
-            background: input.trim() && !streaming ? "var(--ze-green, #1A5E3D)" : "transparent",
-          }}
-        >
-          <Send className="w-3.5 h-3.5" />
-        </button>
-      </div>
+        <Send className="size-3.5" />
+      </button>
     </div>
   )
 }

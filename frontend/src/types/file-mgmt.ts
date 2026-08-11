@@ -317,6 +317,23 @@ export interface TodoCreateRequest {
   body?: string | null
   ddl?: string | null
   target_chain_id?: string | null
+  /** When set, server removes this smart-suggestion after create. */
+  suggestion_id?: string | null
+}
+
+export interface TodoSuggestionItem {
+  suggestion_id: string
+  title: string
+  body: string | null
+}
+
+export interface TodoSuggestionsResponse {
+  chain_id: string
+  status: "idle" | "pending" | "generating" | "ready" | "error" | string
+  suggestions: TodoSuggestionItem[]
+  error: string | null
+  updated_at: string | null
+  generated_at: string | null
 }
 
 export interface TodoUpdateRequest {

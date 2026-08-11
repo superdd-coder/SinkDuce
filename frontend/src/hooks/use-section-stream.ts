@@ -16,6 +16,10 @@ export interface SectionStreamState {
 export interface SectionStreamControls {
   start: () => void
   abort: () => void
+  /**
+   * Clear settled streaming buffer for the currently bound tab.
+   * Prefer {@link dismissSectionStream} with explicit ids from async handlers.
+   */
   dismiss: () => void
 }
 
@@ -59,6 +63,63 @@ function notify() {
   listeners.forEach((fn) => fn())
 }
 
+/** Snapshot stream state for any section (used by Section rail ready/streaming flags). */
+export function getSectionStreamState(
+  meetingId: string,
+  tabId: string,
+): SectionStreamState {
+  return getEntry(meetingId, tabId).state
+}
+
+/** Subscribe to all section stream updates (rail model re-render). */
+export function subscribeSectionStreams(onChange: () => void): () => void {
+  listeners.add(onChange)
+  return () => {
+    listeners.delete(onChange)
+  }
+}
+
+/** True once tokens are flowing (Streaming badge). */
+export function sectionStreamHasOutput(state: SectionStreamState): boolean {
+  return (
+    state.genState === "streaming" ||
+    (state.isStreaming && state.streamingMd.length > 0)
+  )
+}
+
+/**
+ * True while generation is in flight or partial stream buffer remains —
+ * section list item is openable (watch live or review partial).
+ */
+export function sectionStreamIsOpenable(state: SectionStreamState): boolean {
+  return (
+    state.isStreaming ||
+    state.genState !== "idle" ||
+    state.streamingMd.length > 0
+  )
+}
+
+/**
+ * Clear settled streaming UI buffer for a specific section.
+ * Never wipes an in-flight stream (keeps Streaming badge + tokens intact).
+ */
+export function dismissSectionStream(meetingId: string, tabId: string): void {
+  const key = streamKey(meetingId, tabId)
+  const entry = streams.get(key)
+  if (!entry) return
+  // Active SSE must keep genState / streamingMd — clearing them makes the rail
+  // drop Streaming + ready and blocks re-entry into the live section.
+  if (entry.state.isStreaming) return
+  if (entry.state.genState === "idle" && entry.state.streamingMd === "") return
+  entry.state = {
+    ...entry.state,
+    genState: "idle",
+    streamingMd: "",
+    thinkingText: "",
+  }
+  notify()
+}
+
 export function startSectionStream(meetingId: string, tabId: string) {
   const key = streamKey(meetingId, tabId)
   const entry = getEntry(meetingId, tabId)
@@ -98,7 +159,13 @@ export function startSectionStream(meetingId: string, tabId: string) {
     onToken: (text) => {
       const e = streams.get(key)
       if (!e) return
-      e.state = { ...e.state, streamingMd: e.state.streamingMd + text, thinkingText: "" }
+      e.state = {
+        ...e.state,
+        streamingMd: e.state.streamingMd + text,
+        thinkingText: "",
+        genState: "streaming",
+        isStreaming: true,
+      }
       notify()
     },
     onSectionDone: () => {
@@ -153,12 +220,12 @@ export function useSectionStream(
     return () => { listeners.delete(onStoreChange) }
   }, [])
 
+  // Key getSnapshot on meetingId/tabId so selection changes re-read the store
+  // without waiting for a notify() (refs alone can leave a stale IDLE snapshot).
   const getSnapshot = useCallback((): SectionStreamState => {
-    const mid = meetingIdRef.current
-    const tid = tabIdRef.current
-    if (!mid || !tid) return IDLE
-    return getEntry(mid, tid).state
-  }, [])
+    if (!meetingId || !tabId) return IDLE
+    return getEntry(meetingId, tabId).state
+  }, [meetingId, tabId])
 
   const state = useSyncExternalStore(subscribe, getSnapshot)
 
@@ -200,13 +267,7 @@ export function useSectionStream(
   const dismiss = useCallback(() => {
     const mid = meetingIdRef.current
     const tid = tabIdRef.current
-    if (!mid || !tid) return
-    const key = streamKey(mid, tid)
-    const entry = streams.get(key)
-    if (entry && (entry.state.genState !== "idle" || entry.state.streamingMd !== "")) {
-      entry.state = { ...entry.state, genState: "idle", streamingMd: "" }
-      notify()
-    }
+    if (mid && tid) dismissSectionStream(mid, tid)
   }, [])
 
   return [state, { start, abort, dismiss }]

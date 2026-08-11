@@ -33,23 +33,33 @@ export function CreateNoteDialog({ open, onOpenChange, onCreate }: CreateNoteDia
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
           <DialogTitle>Create New Note</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 pt-2">
-          <Input
-            placeholder="Note title..."
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-            autoFocus
-          />
+        <div className="space-y-3 pt-1">
+          <div>
+            <label className="pm-field-label">Title</label>
+            <Input
+              placeholder="Note title..."
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+              autoFocus
+              className="h-8"
+            />
+          </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              variant="ghost"
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={!title.trim() || creating}>
+            <Button
+              onClick={handleCreate}
+              disabled={!title.trim() || creating}
+            >
               {creating ? "Creating..." : "Create"}
             </Button>
           </div>

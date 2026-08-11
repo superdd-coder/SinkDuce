@@ -36,26 +36,39 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
 
   return (
     <Dialog open={!!collectionId} onOpenChange={(v) => { if (!v) { setConfirmName(""); onOpenChange(false) } }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="pm-dialog max-w-sm">
         <DialogHeader>
           <DialogTitle>Delete Collection</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          <p className="text-sm text-muted-foreground">
-            Type <span className="t-mono-family font-medium text-foreground">{collectionName}</span> to confirm deletion.
+        <div className="space-y-3 py-1">
+          <p className="pm-dialog-body">
+            Type{" "}
+            <span className="t-mono-family font-medium text-[var(--pm-ink)]">
+              {collectionName}
+            </span>{" "}
+            to confirm deletion.
           </p>
           <Input
             value={confirmName}
             onChange={(e) => setConfirmName(e.target.value)}
             placeholder="Type collection name"
+            className="h-8"
           />
         </div>
 
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={() => { setConfirmName(""); onOpenChange(false) }}>Cancel</Button>
+        <div className="flex justify-end gap-2 pt-1">
           <Button
-            variant="destructive"
+            variant="ghost"
+            onClick={() => {
+              setConfirmName("")
+              onOpenChange(false)
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive-solid"
             onClick={handleDelete}
             disabled={confirmName !== collectionName || deleting}
           >

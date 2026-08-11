@@ -1,23 +1,35 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { BookOpen, AlertTriangle } from "lucide-react"
+import { BookOpen, AlertTriangle, Ban, Settings2 } from "lucide-react"
+import { cn } from "@/lib/utils"
 import {
   getHotWordsLibraries,
   type HotWordsLibrarySummary,
 } from "@/api/client"
 import { toast } from "sonner"
+import { HotWordsManager } from "@/components/llm-provider/hot-words-manager"
 
 interface Props {
   meetingId: string
+  /** Persisted library on the meeting (server). */
   currentLibraryId: string | null | undefined
+  /**
+   * When true, selection is a local draft only until re-transcribe.
+   * Refresh / switch meeting clears the draft and shows currentLibraryId again.
+   */
   hasTranscript: boolean
   providerSupportsHotWords: boolean
+  /** Persist library on the meeting (immediate when no transcript). */
   onSelectLibrary: (libraryId: string | null) => void
-  onRetranscribe: () => void
+  /** Optional: parent tracks draft so Re-transcribe can commit it first. */
+  onDraftChange?: (draftLibraryId: string | null | undefined) => void
+  /** @deprecated no longer forced; kept optional for call-site compatibility */
+  onRetranscribe?: () => void
+  disabled?: boolean
+  compact?: boolean
 }
 
 export function HotWordsSelector({
@@ -26,13 +38,36 @@ export function HotWordsSelector({
   hasTranscript,
   providerSupportsHotWords,
   onSelectLibrary,
-  onRetranscribe,
+  onDraftChange,
+  disabled = false,
+  compact = false,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [libraries, setLibraries] = useState<HotWordsLibrarySummary[]>([])
-  const [pendingLibraryId, setPendingLibraryId] = useState<string | null>(null)
-  const [retranscribeConfirmOpen, setRetranscribeConfirmOpen] = useState(false)
-  const [pendingChangeId, setPendingChangeId] = useState<string | null>(null)
+  /**
+   * Local draft when a transcript already exists.
+   * `undefined` = no draft (show server value).
+   * `string | null` = user picked a library (or None) without re-transcribing yet.
+   */
+  const [draftId, setDraftId] = useState<string | null | undefined>(undefined)
+  const [managerOpen, setManagerOpen] = useState(false)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** Apply selection, show selected row briefly, then silk-fade the dialog closed. */
+  const closeAfterSelect = useCallback(() => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    // Let is-on state paint, then setOpen(false) so Base UI can run data-ending-style (280ms silk)
+    closeTimerRef.current = setTimeout(() => {
+      setOpen(false)
+      closeTimerRef.current = null
+    }, 140)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    }
+  }, [])
 
   const fetchLibraries = useCallback(async () => {
     try {
@@ -41,150 +76,243 @@ export function HotWordsSelector({
   }, [])
 
   useEffect(() => {
-    if (open) fetchLibraries()
+    if (open) void fetchLibraries()
   }, [open, fetchLibraries])
 
-  // Reset pending state when meeting changes
+  // Prefetch so the pill can show the library name without opening the dialog
   useEffect(() => {
-    setPendingLibraryId(null)
+    void fetchLibraries()
+  }, [fetchLibraries, meetingId])
+
+  // Leaving the meeting drops any uncommitted draft
+  useEffect(() => {
+    setDraftId(undefined)
   }, [meetingId])
 
-  const currentLib = libraries.find((l) => l.id === currentLibraryId)
-  const pendingLib = libraries.find((l) => l.id === pendingLibraryId)
-  const displayLib = pendingLib || currentLib
-  const isPending = pendingLibraryId !== null && pendingLibraryId !== currentLibraryId
+  // Server caught up (e.g. after re-transcribe saved the library) → clear draft
+  useEffect(() => {
+    if (draftId === undefined) return
+    // Keep forced "None" draft while ASR has no hot-word support — clearing to
+    // undefined would fight the unsupported effect (null ⇄ undefined loop).
+    if (!providerSupportsHotWords && draftId === null) return
+    if (draftId === (currentLibraryId ?? null)) {
+      setDraftId(undefined)
+    }
+  }, [currentLibraryId, draftId, providerSupportsHotWords])
+
+  useEffect(() => {
+    onDraftChange?.(draftId)
+  }, [draftId, onDraftChange])
+
+  useEffect(() => {
+    if (disabled || !providerSupportsHotWords) setOpen(false)
+  }, [disabled, providerSupportsHotWords])
+
+  const serverId = currentLibraryId ?? null
+  const activeId = draftId !== undefined ? draftId : serverId
+  const isPending = draftId !== undefined && draftId !== serverId
+
+  /**
+   * Active ASR path does not support hot words → force None (label + selection).
+   * - With transcript: draft = None (commit on re-tx if needed)
+   * - Without: clear server library immediately
+   * Functional setState so we do not depend on draftId (avoids update loops).
+   */
+  useEffect(() => {
+    if (providerSupportsHotWords) return
+    setOpen(false)
+    const server = currentLibraryId ?? null
+    if (hasTranscript) {
+      setDraftId((d) => (d === null ? d : null))
+      return
+    }
+    setDraftId((d) => (d === undefined ? d : undefined))
+    if (server != null) {
+      onSelectLibrary(null)
+    }
+  }, [
+    providerSupportsHotWords,
+    currentLibraryId,
+    hasTranscript,
+    onSelectLibrary,
+  ])
+
+  const displayLib =
+    libraries.find((l) => l.id === activeId) ||
+    // Prefer name from list; if draft/server id not loaded yet, still show active styling
+    undefined
+  const hasSelection =
+    providerSupportsHotWords && activeId != null && activeId !== ""
+  const noneSelected = !hasSelection
+  // Unsupported model: always show None (even if server still has a stale id briefly)
+  const displayName = !providerSupportsHotWords
+    ? "None"
+    : hasSelection && displayLib
+      ? displayLib.name
+      : hasSelection
+        ? "Hot Words"
+        : "None"
 
   const handleSelect = (libraryId: string | null) => {
-    if (!providerSupportsHotWords && libraryId !== null) {
-      toast.warning(
-        "Current transcription model does not support hot words. Hot words will NOT be applied. Consider switching to None or changing the transcription model.",
-        { duration: 6000 }
-      )
-    }
-
-    if (hasTranscript && libraryId !== currentLibraryId) {
-      // Need re-transcription
-      setPendingChangeId(libraryId)
-      setRetranscribeConfirmOpen(true)
+    if (!providerSupportsHotWords) {
+      if (libraryId !== null) {
+        toast.warning(
+          "Current transcription model does not support hot words.",
+          { duration: 5000 },
+        )
+      }
       return
     }
 
-    // No transcript yet, just select
-    setPendingLibraryId(libraryId)
-    onSelectLibrary(libraryId)
-    setOpen(false)
-  }
-
-  const handleConfirmRetranscribe = () => {
-    const libraryId = pendingChangeId
-    setRetranscribeConfirmOpen(false)
-    setPendingChangeId(null)
-    if (libraryId !== null && libraryId !== undefined) {
-      onSelectLibrary(libraryId)
-    } else if (libraryId === null) {
-      onSelectLibrary(null)
+    if (hasTranscript) {
+      // Local draft only — do not persist; do not force re-transcribe
+      if (libraryId === serverId) {
+        setDraftId(undefined)
+      } else {
+        setDraftId(libraryId)
+      }
+      closeAfterSelect()
+      return
     }
-    onRetranscribe()
-    setOpen(false)
+
+    // No transcript yet — persist immediately
+    setDraftId(undefined)
+    onSelectLibrary(libraryId)
+    closeAfterSelect()
   }
 
-  const handleCancelRetranscribe = () => {
-    setRetranscribeConfirmOpen(false)
-    setPendingChangeId(null)
-  }
+  const isDisabled = disabled || !providerSupportsHotWords
 
   return (
     <>
       <Button
+        type="button"
         variant="outline"
         size="sm"
-        className="flex items-center gap-1.5"
-        onClick={() => setOpen(true)}
-      >
-        <BookOpen className="h-3.5 w-3.5" />
-        <span className="max-w-[120px] truncate">
-          {displayLib ? displayLib.name : "Hot Words"}
-        </span>
-        {!providerSupportsHotWords && displayLib && (
-          <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+        disabled={isDisabled}
+        title={
+          !providerSupportsHotWords
+            ? "Active transcription model does not support hot words"
+            : disabled
+              ? "Unavailable while transcribing"
+              : "Choose hot words library"
+        }
+        className={cn(
+          "pm-meeting-pill",
+          compact && "is-compact",
+          hasSelection && providerSupportsHotWords && "is-active",
         )}
-        {isPending && (
-          <span className="text-[10px] text-amber-700 dark:text-amber-300 px-1 rounded">
-            pending
+        onClick={() => {
+          if (isDisabled) return
+          setOpen(true)
+        }}
+      >
+        <BookOpen className="size-3.5 shrink-0 opacity-80" />
+        <span className="pm-meeting-pill-label">
+          {displayName}
+        </span>
+        {isPending && providerSupportsHotWords && (
+          <span className="text-[10px] text-amber-700 px-1.5 py-0.5 rounded-full bg-amber-50">
+            draft
           </span>
         )}
       </Button>
 
-      {/* Library selector dialog */}
+      <HotWordsManager
+        nested
+        open={managerOpen}
+        onOpenChange={(next) => {
+          setManagerOpen(next)
+          if (!next) void fetchLibraries()
+        }}
+      />
+
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-[360px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <BookOpen className="h-4 w-4" />
-              Select Hot Words Library
+              <BookOpen className="h-4 w-4 text-[var(--pm-green)]" />
+              Hot Words Library
             </DialogTitle>
           </DialogHeader>
+          <p className="pm-meta -mt-1">
+            Boost domain terms during transcription. Pick one library or None.
+            {hasTranscript && (
+              <>
+                {" "}
+                Changes apply on the next re-transcribe; leave without re-transcribing
+                to keep the previous library.
+              </>
+            )}
+          </p>
 
           {!providerSupportsHotWords && (
-            <div className="flex items-start gap-2 px-3 py-2 text-sm border border-amber-200 dark:border-amber-800 rounded-lg text-amber-700 dark:text-amber-300">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>Current transcription model does not support hot words. Hot words will NOT be applied.</span>
+            <div className="pm-hw-warn" role="status">
+              <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+              <span>
+                Active model does not support hot words — selection will not be applied.
+              </span>
             </div>
           )}
 
-          <ScrollArea className="max-h-64">
-            <div className="space-y-1">
-              <div
-                className={`flex items-center gap-2 px-3 py-2 rounded cursor-pointer text-sm ${
-                  !currentLibraryId && !pendingLibraryId
-                    ? "text-primary font-light"
-                    : "hover:bg-muted"
-                }`}
-                onClick={() => handleSelect(null)}
-              >
-                <span>None</span>
-              </div>
-              {libraries.map((lib) => {
-                const isSelected = lib.id === currentLibraryId || lib.id === pendingLibraryId
-                return (
-                  <div
-                    key={lib.id}
-                    className={`flex items-center justify-between px-3 py-2 rounded cursor-pointer text-sm ${
-                      isSelected
-                        ? "text-primary font-light"
-                        : "hover:bg-muted"
-                    }`}
-                    onClick={() => handleSelect(lib.id)}
-                  >
-                    <span className="truncate">{lib.name}</span>
-                    <span className="text-xs text-muted-foreground shrink-0 ml-2">
-                      {lib.word_count} words
-                    </span>
-                  </div>
-                )
-              })}
-              {libraries.length === 0 && (
-                <p className="text-xs text-muted-foreground p-3 text-center">
-                  No hot word libraries. Create one in Settings → Hot Words.
-                </p>
-              )}
-            </div>
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
+          <div className="pm-hw-list" role="listbox" aria-label="Hot word libraries">
+            <button
+              type="button"
+              role="option"
+              aria-selected={noneSelected}
+              className={cn("pm-hw-option", noneSelected ? "is-on" : "is-off")}
+              onClick={() => handleSelect(null)}
+            >
+              <span className="pm-hw-option-icon" aria-hidden>
+                <Ban className="size-3.5" />
+              </span>
+              <span className="pm-hw-option-body">
+                <span className="pm-hw-option-name">None</span>
+                <span className="pm-hw-option-meta">No vocabulary boost</span>
+              </span>
+            </button>
 
-      {/* Retranscribe confirmation */}
-      <Dialog open={retranscribeConfirmOpen} onOpenChange={setRetranscribeConfirmOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Re-transcribe Required</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This meeting has already been transcribed. Changing hot words requires re-transcription. Re-transcribe now?
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={handleCancelRetranscribe}>Cancel</Button>
-            <Button onClick={handleConfirmRetranscribe}>Re-transcribe</Button>
+            {libraries.map((lib) => {
+              const isSelected = lib.id === activeId
+              return (
+                <button
+                  key={lib.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className={cn("pm-hw-option", isSelected ? "is-on" : "is-off")}
+                  onClick={() => handleSelect(lib.id)}
+                >
+                  <span className="pm-hw-option-icon" aria-hidden>
+                    <BookOpen className="size-3.5" />
+                  </span>
+                  <span className="pm-hw-option-body">
+                    <span className="pm-hw-option-name">{lib.name}</span>
+                    <span className="pm-hw-option-meta">
+                      {lib.word_count} word{lib.word_count === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                </button>
+              )
+            })}
+
+            {libraries.length === 0 && (
+              <p className="pm-hw-empty">
+                No libraries yet. Create one below or in Settings.
+              </p>
+            )}
+          </div>
+
+          {/* Footer action — secondary path, not competing with the title/close */}
+          <div className="pm-hw-dialog-footer">
+            <button
+              type="button"
+              className="pm-hw-manage-btn"
+              onClick={() => setManagerOpen(true)}
+            >
+              <Settings2 className="size-3.5 opacity-80" />
+              Manage libraries
+            </button>
           </div>
         </DialogContent>
       </Dialog>

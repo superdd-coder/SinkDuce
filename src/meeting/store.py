@@ -140,7 +140,8 @@ def list_meetings() -> list[Meeting]:
             continue
         if data is not None:
             meetings.append(_dict_to_meeting(data))
-    meetings.sort(key=lambda m: m.updated_at, reverse=True)
+    # Newest first by creation time (not last activity)
+    meetings.sort(key=lambda m: m.created_at or m.updated_at, reverse=True)
     return meetings
 
 

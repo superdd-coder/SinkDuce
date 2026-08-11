@@ -356,6 +356,7 @@ class DirectQueryModule:
                 "text": r["payload"].get("text", ""),
                 "score": r["score"],
                 "source": r["payload"].get("source", ""),
+                "source_label": r["payload"].get("source_label"),
                 "collection": collection,
                 "chunk_index": r["payload"].get("chunk_index", 0),
                 "chunk_type": "child",

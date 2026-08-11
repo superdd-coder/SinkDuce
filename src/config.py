@@ -154,22 +154,25 @@ class TranscriptionConfig(BaseModel):
         return next((p for p in self.realtime_providers if p.is_active), None)
 
     def get_local_file_provider(self) -> TranscriptionProviderConfig:
-        """Return a built-in local file transcription provider."""
+        """Return a built-in local file transcription provider (ONNX runtime)."""
         return TranscriptionProviderConfig(
             id="builtin-local-file",
             name="default-Local-Transcription",
-            adapter="funasr_local",
+            adapter="funasr_onnx",
             model="FunAudioLLM/SenseVoiceSmall",
+            vad_model="funasr/fsmn-vad",
+            punc_model="funasr/ct-punc",
+            spk_model="funasr/campplus",
             is_active=False,
             device=self.local_device,
         )
 
     def get_local_realtime_provider(self) -> TranscriptionProviderConfig:
-        """Return a built-in local realtime transcription provider."""
+        """Return a built-in local realtime transcription provider (ONNX)."""
         return TranscriptionProviderConfig(
             id="builtin-local-rt",
             name="default-Local-Realtime",
-            adapter="funasr_local_realtime",
+            adapter="funasr_onnx_realtime",
             model="funasr/paraformer-zh-streaming",
             is_active=False,
             device=self.local_device,
@@ -273,6 +276,31 @@ def _migrate_rerank(raw: dict) -> dict:
     return {"providers": [provider.model_dump()]}
 
 
+def _migrate_transcription(raw: dict) -> dict:
+    """Map removed pytorch FunASR adapter names to ONNX in config.yaml.
+
+    Local ASR is ONNX-only. Old configs may still say ``funasr_local`` /
+    ``funasr_local_realtime``; rewrite so registry lookups and language hints work.
+    """
+    if not raw:
+        return raw
+    mapping = {
+        "funasr_local": "funasr_onnx",
+        "funasr_local_realtime": "funasr_onnx_realtime",
+    }
+    for key in ("file_providers", "realtime_providers"):
+        providers = raw.get(key)
+        if not isinstance(providers, list):
+            continue
+        for p in providers:
+            if not isinstance(p, dict):
+                continue
+            adapter = p.get("adapter")
+            if adapter in mapping:
+                p["adapter"] = mapping[adapter]
+    return raw
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     config_path = _resolve_config_path(path)
     try:
@@ -304,6 +332,11 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     rerank_raw = raw.get("rerank", {})
     if rerank_raw:
         raw["rerank"] = _migrate_rerank(rerank_raw)
+
+    # Legacy FunASR pytorch adapter names → ONNX
+    tx_raw = raw.get("transcription")
+    if isinstance(tx_raw, dict):
+        raw["transcription"] = _migrate_transcription(tx_raw)
 
     # Filter unknown keys to prevent ValidationError
     valid_keys = set(AppConfig.model_fields.keys())

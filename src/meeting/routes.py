@@ -36,12 +36,69 @@ _AUDIO_MIME_TYPES = {
 # ── Meeting CRUD ─────────────────────────────────────────────
 
 
+def _active_transcription_supports_hot_words() -> bool:
+    """True if file or realtime active adapter declares supports_hot_words."""
+    try:
+        from src.config import get_config
+        from src.meeting.transcription import resolve_file_adapter, resolve_realtime_adapter
+        from src.meeting.transcription.registry import (
+            cls_supports_hot_words,
+            file_transcription_registry,
+            realtime_transcription_registry,
+        )
+
+        config = get_config()
+        file_cfg = config.transcription.active_file_provider
+        if file_cfg is None:
+            file_cfg = config.transcription.get_local_file_provider()
+        rt_cfg = config.transcription.active_realtime_provider
+        if rt_cfg is None:
+            rt_cfg = config.transcription.get_local_realtime_provider()
+
+        def _supports(provider_cfg, registry, resolve_adapter) -> bool:
+            if not provider_cfg:
+                return False
+            adapter_name = resolve_adapter(provider_cfg.adapter or "")
+            entry = registry.get(adapter_name)
+            if not entry:
+                return False
+            return cls_supports_hot_words(entry.cls)
+
+        return _supports(
+            file_cfg, file_transcription_registry, resolve_file_adapter
+        ) or _supports(
+            rt_cfg, realtime_transcription_registry, resolve_realtime_adapter
+        )
+    except Exception as exc:
+        logger.debug("Hot-words support probe failed: %s", exc)
+        return False
+
+
 @router.post("/meetings")
 async def create_meeting(body: dict = Body()):
     title = body.get("title") or datetime.now().strftime("%Y-%m-%d %H:%M")
     mode = body.get("mode")  # "upload" or "record"
     meeting_mode = MeetingMode(mode) if mode else None
     meeting = store.create_meeting(title=title, mode=meeting_mode)
+
+    # Auto-select default hot-words library when active ASR supports hot words
+    try:
+        if _active_transcription_supports_hot_words():
+            from src.hot_words import store as hw_store
+
+            default_hw = hw_store.get_default_library_id()
+            if default_hw:
+                meeting = store.update_meeting(
+                    meeting.id, hot_words_library_id=default_hw
+                )
+                logger.info(
+                    "[CREATE] Applied default hot-words library id=%s to meeting %s",
+                    default_hw,
+                    meeting.id,
+                )
+    except Exception as exc:
+        logger.warning("[CREATE] Failed to apply default hot-words: %s", exc)
+
     logger.info("[CREATE] Meeting '%s' id=%s mode=%s", title, meeting.id, meeting_mode)
     return meeting.model_dump()
 
@@ -260,20 +317,40 @@ async def get_active_provider_info():
     which would trigger ML model downloads for local providers.
     """
     from src.config import get_config
-    from src.meeting.transcription.registry import file_transcription_registry, realtime_transcription_registry
+    from src.meeting.transcription import resolve_file_adapter, resolve_realtime_adapter
+    from src.meeting.transcription.registry import (
+        cls_supports_hot_words,
+        file_transcription_registry,
+        realtime_transcription_registry,
+    )
 
     config = get_config()
 
-    def _info(provider_cfg, registry):
+    def _info(provider_cfg, registry, *, resolve_adapter):
+        empty = {
+            "supports_hot_words": False,
+            "supported_language_hints": [],
+            "adapter": None,
+            "id": None,
+            "name": None,
+            "display_name": None,
+        }
         if not provider_cfg:
-            return {"supports_hot_words": False, "supported_language_hints": []}
+            return empty
+        adapter_name = resolve_adapter(provider_cfg.adapter or "")
+        meta = {
+            "adapter": adapter_name or provider_cfg.adapter or None,
+            "id": provider_cfg.id or None,
+            "name": provider_cfg.name or None,
+            "display_name": None,
+        }
         # If provider has custom language_hints_config, use it (openai_compatible etc.)
         custom = getattr(provider_cfg, "language_hints_config", None)
         if custom:
-            entry = registry.get(provider_cfg.adapter)
+            entry = registry.get(adapter_name)
             if entry:
-                raw = getattr(entry.cls, "supports_hot_words", False)
-                supports = raw if not isinstance(raw, property) else False
+                supports = cls_supports_hot_words(entry.cls)
+                meta["display_name"] = entry.display_name or entry.name
             else:
                 supports = False
             # Build hint list from custom config, ensuring "auto" is always first
@@ -283,21 +360,42 @@ async def get_active_provider_info():
             return {
                 "supports_hot_words": supports,
                 "supported_language_hints": hints,
+                **meta,
             }
-        entry = registry.get(provider_cfg.adapter)
+        entry = registry.get(adapter_name)
         if not entry:
-            return {"supports_hot_words": False, "supported_language_hints": []}
+            return {**empty, **meta}
         adapter_cls = entry.cls
-        raw = getattr(adapter_cls, "supports_hot_words", False)
-        supports = raw if not isinstance(raw, property) else False
+        supports = cls_supports_hot_words(adapter_cls)
+        meta["display_name"] = entry.display_name or entry.name
         return {
             "supports_hot_words": supports,
-            "supported_language_hints": list(getattr(adapter_cls, "SUPPORTED_LANGUAGE_HINTS", [])),
+            "supported_language_hints": list(
+                getattr(adapter_cls, "SUPPORTED_LANGUAGE_HINTS", [])
+            ),
+            **meta,
         }
 
+    # Prefer configured active providers; fall back to built-in local ONNX factories
+    # so the Meeting language UI still has options before user sets Default.
+    file_cfg = config.transcription.active_file_provider
+    if file_cfg is None:
+        file_cfg = config.transcription.get_local_file_provider()
+    rt_cfg = config.transcription.active_realtime_provider
+    if rt_cfg is None:
+        rt_cfg = config.transcription.get_local_realtime_provider()
+
     return {
-        "file": _info(config.transcription.active_file_provider, file_transcription_registry),
-        "realtime": _info(config.transcription.active_realtime_provider, realtime_transcription_registry),
+        "file": _info(
+            file_cfg,
+            file_transcription_registry,
+            resolve_adapter=resolve_file_adapter,
+        ),
+        "realtime": _info(
+            rt_cfg,
+            realtime_transcription_registry,
+            resolve_adapter=resolve_realtime_adapter,
+        ),
     }
 
 
@@ -328,13 +426,13 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
     text = body.get("text") or " ".join(s.text for s in segments)
     result = TranscriptionResult(text=text, segments=segments)
     store.save_transcript(meeting_id, result)
-    store.update_meeting(meeting_id, status=MeetingStatus.completed)
     logger.info(
         "[SAVE-TRANSCRIPT] Saved %d segments (%d chars) for meeting %s",
         len(segments), len(text), meeting_id,
     )
 
-    # Phase 0: clean old pipeline data, normalize sentences and auto-trigger summary
+    # Phase 0: clean old pipeline data + normalize. Speakers gate next (or file-tx);
+    # do not leave stale tabs/blueprint that would auto-unlock Studio.
     try:
         from src.meeting.pipeline import normalize_sentences
 
@@ -347,33 +445,25 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
             "[SAVE-TRANSCRIPT] Normalized %d sentences for meeting %s",
             len(sentences), meeting_id,
         )
-
-        # Auto-trigger summary generation — only if there's no file transcription
-        # provider configured. When a file provider exists, the upload-audio →
-        # transcribe → transcribe_handler path will trigger summary #2 with
-        # higher-quality segments (punctuation, diarization), making summary #1
-        # a wasted LLM call.
-        from src.config import get_config
-        cfg = get_config()
-        has_file_provider = (
-            cfg.transcription.active_file_provider is not None
-            or cfg.transcription.get_local_file_provider() is not None
-        )
-        if not has_file_provider:
-            task_manager.create_task(
-                filename=f"meeting_summary:{meeting_id}",
-                task_type="meeting_summary",
-                meeting_id=meeting_id,
-            )
-            logger.info("[SAVE-TRANSCRIPT] Auto-triggered meeting_summary for %s (no file provider)", meeting_id)
-        else:
-            logger.info(
-                "[SAVE-TRANSCRIPT] Skipping summary #1 for %s — file provider configured, "
-                "summary #2 will run after file transcription",
-                meeting_id,
-            )
     except Exception as e:
-        logger.warning("[SAVE-TRANSCRIPT] Failed to auto-trigger summary (non-fatal): %s", e)
+        logger.warning("[SAVE-TRANSCRIPT] Post-save hook failed (non-fatal): %s", e)
+
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.completed,
+        processing_state=ProcessingState.idle.value,
+        summary_gen_state=GenerationState.idle.value,
+        blueprint_gen_state=GenerationState.idle.value,
+        summary=None,
+        detail=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        tabs=None,
+    )
+    logger.info(
+        "[SAVE-TRANSCRIPT] Transcript saved for %s — Speakers gate (or file-tx), then Summary",
+        meeting_id,
+    )
 
     return {"message": "Transcript saved", "segments": len(segments)}
 
@@ -431,7 +521,26 @@ async def start_transcription(meeting_id: str, body: dict | None = Body(None)):
         return {"error": "No active file transcription provider configured"}
 
     logger.info("[TRANSCRIBE] Provider found: %s, updating status to transcribing", type(provider).__name__)
-    store.update_meeting(meeting_id, status=MeetingStatus.transcribing)
+    # Drop previous Studio/summary work so the client always re-enters the
+    # speaker gate after file transcription (re-tx must not skip Speakers).
+    try:
+        store.delete_pipeline_data(meeting_id)
+    except Exception as exc:
+        logger.warning("[TRANSCRIBE] delete_pipeline_data failed (non-fatal): %s", exc)
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.transcribing,
+        transcription_error=None,
+        processing_state=ProcessingState.idle.value,
+        summary_gen_state=GenerationState.idle.value,
+        blueprint_gen_state=GenerationState.idle.value,
+        summary=None,
+        detail=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        tabs=None,
+        speaker_names=None,
+    )
 
     language_hints = body.get("language_hints") if isinstance(body, dict) else None
 
@@ -489,6 +598,24 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
     # and cannot use asyncio.get_event_loop() there.
     main_loop = asyncio.get_running_loop()
 
+    meta = meeting_service.get_active_realtime_provider_meta()
+    logger.info(
+        "[REALTIME-WS] Config active realtime: id=%s adapter=%s model=%s",
+        meta.get("id"),
+        meta.get("adapter"),
+        meta.get("model"),
+    )
+    # Tell client which engine will be used (before possibly slow local load)
+    await websocket.send_json(
+        {
+            "type": "provider",
+            "provider_id": meta.get("id"),
+            "adapter": meta.get("adapter"),
+            "name": meta.get("name"),
+            "model": meta.get("model"),
+        }
+    )
+
     provider = meeting_service.get_active_realtime_provider()
     if not provider:
         print("[REALTIME-WS] >>> NO PROVIDER CONFIGURED", flush=True)
@@ -499,8 +626,15 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         await websocket.close()
         return
 
-    print(f"[REALTIME-WS] >>> provider: {type(provider).__name__}", flush=True)
-    logger.info("[REALTIME-WS] Provider found: %s, starting transcription", type(provider).__name__)
+    print(
+        f"[REALTIME-WS] >>> provider: {type(provider).__name__} adapter={meta.get('adapter')}",
+        flush=True,
+    )
+    logger.info(
+        "[REALTIME-WS] Provider instance: %s (adapter=%s)",
+        type(provider).__name__,
+        meta.get("adapter"),
+    )
 
     async def _safe_send(payload):
         try:
@@ -553,8 +687,11 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         print(f"[REALTIME-WS] >>> calling provider.start()", flush=True)
         await provider.start(on_segment, hot_words=hot_words, language_hints=language_hints)
         print(f"[REALTIME-WS] >>> provider.start() returned, entering receive loop", flush=True)
+        await websocket.send_json({"type": "ready", "message": "realtime session ready"})
 
         client_requested_stop = False
+        pcm_frames = 0
+        pcm_bytes = 0
         while True:
             # receive() returns a dict with "type" plus either "text" or "bytes".
             # We use this to support a JSON stop signal from the client (so
@@ -574,7 +711,20 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
                 # Unknown text message — ignore.
                 continue
             if "bytes" in message:
-                await provider.send_frame(message["bytes"])
+                data = message["bytes"] or b""
+                pcm_frames += 1
+                pcm_bytes += len(data)
+                if pcm_frames <= 3 or pcm_frames % 50 == 0:
+                    logger.info(
+                        "[REALTIME-WS] pcm frame#%d +%dB total=%dB adapter=%s",
+                        pcm_frames,
+                        len(data),
+                        pcm_bytes,
+                        meta.get("adapter"),
+                    )
+                # send_frame only enqueues for local FunASR; must stay fast
+                # so the WS receive loop does not stall behind generate().
+                await provider.send_frame(data)
 
         # Client asked for a graceful stop. Order matters:
         #   1. Tell the SDK to finalize first (otherwise it doesn't know

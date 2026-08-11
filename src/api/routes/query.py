@@ -158,7 +158,6 @@ def _run_agentic(query_text: str, target_collections: list[str], params: dict,
         rerank_top_k=params["rerank_top_k"],
         search_mode=params["search_mode"],
         min_score=params["min_score"],
-        max_iterations=params["max_iterations"],
         sparse_llm_tokenize=params["sparse_llm_tokenize"],
     )
     sources = [

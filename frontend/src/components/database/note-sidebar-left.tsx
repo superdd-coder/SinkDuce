@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Button } from "@/components/ui/button"
 import { ChevronRight, FileText, GripVertical, Plus, Video } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type NoteListItem, type Meeting, type MeetingTab } from "@/api/client"
@@ -15,28 +14,21 @@ export type ActiveMeetingSelection = {
 interface NoteSidebarLeftProps {
   notes: NoteListItem[]
   meetings: Meeting[]
-  /** All note ids open in panes (dual-pane: both highlighted) */
   activeNoteIds: string[]
-  /** Note id of the currently focused pane (stronger highlight) */
   focusedNoteId?: string | null
-  /** All meeting tabs open in panes (dual-pane: both highlighted) */
   activeMeetings: ActiveMeetingSelection[]
-  /** Meeting tab of the currently focused pane (stronger highlight) */
   focusedMeeting?: ActiveMeetingSelection | null
   sidebarTab: SidebarTab
   onSidebarTabChange: (tab: SidebarTab) => void
   onSwitchNote: (id: string) => void
-  /** Open a meeting tab (general or section) in the focused pane */
   onOpenMeetingTab: (meetingId: string, tabId: string) => void
   onCreateNote?: () => void
 }
 
-/** Meetings that already have a General Summary (or legacy detail). */
 export function meetingsWithSummary(meetings: Meeting[]): Meeting[] {
   return meetings.filter((m) => {
     if (m.detail && String(m.detail).trim()) return true
     const tabs = m.tabs ?? []
-    // General summary written to disk (or legacy detail above)
     if (
       tabs.some(
         (t) =>
@@ -46,8 +38,14 @@ export function meetingsWithSummary(meetings: Meeting[]): Meeting[] {
     ) {
       return true
     }
-    // Section summaries only if pipeline wrote md files
-    if (tabs.some((t) => (t.type === "section" || t.tab_id) && !!t.md_file_path && t.tab_id !== "tab_general")) {
+    if (
+      tabs.some(
+        (t) =>
+          (t.type === "section" || t.tab_id) &&
+          !!t.md_file_path &&
+          t.tab_id !== "tab_general"
+      )
+    ) {
       return true
     }
     return false
@@ -56,7 +54,7 @@ export function meetingsWithSummary(meetings: Meeting[]): Meeting[] {
 
 function sectionTabsOf(meeting: Meeting): MeetingTab[] {
   return (meeting.tabs ?? []).filter(
-    (t) => t.tab_id !== "tab_general" && t.type !== "general",
+    (t) => t.tab_id !== "tab_general" && t.type !== "general"
   )
 }
 
@@ -76,8 +74,11 @@ export function NoteSidebarLeft({
   const summarized = useMemo(() => meetingsWithSummary(meetings), [meetings])
   const openNoteSet = useMemo(() => new Set(activeNoteIds), [activeNoteIds])
 
-  // Expand tree for every meeting that has an open tab (dual-pane: both)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const trackRef = useRef<HTMLDivElement>(null)
+  const notesBtnRef = useRef<HTMLButtonElement>(null)
+  const meetingsBtnRef = useRef<HTMLButtonElement>(null)
+  const [pill, setPill] = useState({ left: 0, width: 0 })
 
   const effectiveExpanded = useMemo(() => {
     const next = new Set(expandedIds)
@@ -86,6 +87,26 @@ export function NoteSidebarLeft({
     }
     return next
   }, [expandedIds, activeMeetings])
+
+  const measurePill = () => {
+    const track = trackRef.current
+    const btn =
+      sidebarTab === "notes" ? notesBtnRef.current : meetingsBtnRef.current
+    if (!track || !btn) return
+    const tr = track.getBoundingClientRect()
+    const br = btn.getBoundingClientRect()
+    setPill({ left: br.left - tr.left, width: br.width })
+  }
+
+  useLayoutEffect(() => {
+    measurePill()
+  }, [sidebarTab, onCreateNote])
+
+  useEffect(() => {
+    const onResize = () => measurePill()
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [sidebarTab, onCreateNote])
 
   const isMeetingTabOpen = (meetingId: string, tabId: string) =>
     activeMeetings.some(
@@ -111,50 +132,77 @@ export function NoteSidebarLeft({
   }
 
   return (
-    <div className="w-72 border-r border-border flex flex-col shrink-0">
-      {/* NOTES | MEETINGS switch */}
-      <div className="px-2 h-9 border-b border-border flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          className={cn(
-            "flex-1 h-7 text-[11px] font-semibold uppercase tracking-[0.18em] rounded-sm transition-colors",
-            sidebarTab === "notes"
-              ? "text-primary bg-primary/10"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => onSidebarTabChange("notes")}
-        >
-          Notes
-        </button>
-        <button
-          type="button"
-          className={cn(
-            "flex-1 h-7 text-[11px] font-semibold uppercase tracking-[0.18em] rounded-sm transition-colors",
-            sidebarTab === "meetings"
-              ? "text-primary bg-primary/10"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => onSidebarTabChange("meetings")}
-        >
-          Meetings
-        </button>
-        {sidebarTab === "notes" && onCreateNote && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0 shrink-0"
-            onClick={onCreateNote}
-            title="New Note"
+    <div className="pm-ws-rail">
+      {/* Segmented track: sliding pill; + lives inside Notes segment */}
+      <div className="pm-ws-seg">
+        <div ref={trackRef} className="pm-ws-seg-track">
+          <span
+            className="pm-ws-seg-indicator"
+            style={{
+              transform: `translateX(${pill.left}px)`,
+              width: pill.width || undefined,
+            }}
+            aria-hidden
+          />
+          <button
+            ref={notesBtnRef}
+            type="button"
+            className={cn(
+              "pm-ws-seg-btn pm-ws-seg-btn--notes",
+              sidebarTab === "notes" && "is-on"
+            )}
+            onClick={() => onSidebarTabChange("notes")}
           >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-        )}
+            <span>Notes</span>
+            {/* + only when Notes tab is active */}
+            {onCreateNote && sidebarTab === "notes" && (
+              <span
+                role="button"
+                tabIndex={0}
+                className="pm-ws-seg-add"
+                title="New Note"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  onCreateNote()
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.stopPropagation()
+                    e.preventDefault()
+                    onCreateNote()
+                  }
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+              </span>
+            )}
+          </button>
+          <button
+            ref={meetingsBtnRef}
+            type="button"
+            className={cn(
+              "pm-ws-seg-btn",
+              sidebarTab === "meetings" && "is-on"
+            )}
+            onClick={() => onSidebarTabChange("meetings")}
+          >
+            Meetings
+          </button>
+        </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="p-1.5 space-y-0.5">
-          {sidebarTab === "notes" ? (
-            <>
+      {/* Dual-mounted panels — opacity crossfade, no hard cut */}
+      <div className="pm-ws-list-host">
+        <div
+          className={cn(
+            "pm-ws-list-panel",
+            sidebarTab === "notes" && "is-active"
+          )}
+          aria-hidden={sidebarTab !== "notes"}
+        >
+          <ScrollArea className="h-full">
+            <div className="p-2 space-y-0.5">
               {notes.map((note) => (
                 <NoteDraggableItem
                   key={note.id}
@@ -165,20 +213,31 @@ export function NoteSidebarLeft({
                 />
               ))}
               {notes.length === 0 && (
-                <p className="text-xs text-muted-foreground px-2 py-4 text-center">
-                  No notes in this collection
-                </p>
+                <p className="pm-ws-empty">No notes in this collection</p>
               )}
-            </>
-          ) : (
-            <>
+            </div>
+          </ScrollArea>
+        </div>
+
+        <div
+          className={cn(
+            "pm-ws-list-panel",
+            sidebarTab === "meetings" && "is-active"
+          )}
+          aria-hidden={sidebarTab !== "meetings"}
+        >
+          <ScrollArea className="h-full">
+            <div className="p-2 space-y-0.5">
               {summarized.map((meeting) => {
                 const sections = sectionTabsOf(meeting)
                 const expanded = effectiveExpanded.has(meeting.id)
-                const isGeneralActive = isMeetingTabOpen(meeting.id, "tab_general")
+                const isGeneralActive = isMeetingTabOpen(
+                  meeting.id,
+                  "tab_general"
+                )
 
                 return (
-                  <div key={meeting.id} className="space-y-0">
+                  <div key={meeting.id}>
                     <MeetingTreeRow
                       meeting={meeting}
                       isActive={isGeneralActive}
@@ -198,27 +257,28 @@ export function NoteSidebarLeft({
                           meeting={meeting}
                           tab={sec}
                           isActive={isMeetingTabOpen(meeting.id, sec.tab_id)}
-                          isFocused={isMeetingTabFocused(meeting.id, sec.tab_id)}
-                          onClick={() => onOpenMeetingTab(meeting.id, sec.tab_id)}
+                          isFocused={isMeetingTabFocused(
+                            meeting.id,
+                            sec.tab_id
+                          )}
+                          onClick={() =>
+                            onOpenMeetingTab(meeting.id, sec.tab_id)
+                          }
                         />
                       ))}
                   </div>
                 )
               })}
               {summarized.length === 0 && (
-                <p className="text-xs text-muted-foreground px-2 py-4 text-center">
-                  No meetings with summary yet
-                </p>
+                <p className="pm-ws-empty">No meetings with summary yet</p>
               )}
-            </>
-          )}
+            </div>
+          </ScrollArea>
         </div>
-      </ScrollArea>
+      </div>
     </div>
   )
 }
-
-// ── Notes ─────────────────────────────────────────────────────────
 
 function NoteDraggableItem({
   note,
@@ -235,13 +295,11 @@ function NoteDraggableItem({
 
   return (
     <button
+      type="button"
       className={cn(
-        "w-full text-left flex items-center gap-2 px-2 py-1.5 text-[12px] transition-colors group border-b border-dashed border-border",
-        isFocused
-          ? "text-primary font-semibold bg-primary/18"
-          : isActive
-            ? "text-primary/90 font-medium bg-primary/8"
-            : "hover:text-primary text-foreground cursor-grab active:cursor-grabbing",
+        "pm-ws-item group",
+        isFocused && "is-focus",
+        isActive && !isFocused && "is-active",
         dragging && "opacity-50"
       )}
       draggable
@@ -254,22 +312,15 @@ function NoteDraggableItem({
       onDragEnd={() => setDragging(false)}
       onClick={onClick}
     >
-      <GripVertical className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-      <FileText
-        className={cn(
-          "h-3.5 w-3.5 shrink-0",
-          isFocused ? "text-primary" : "text-muted-foreground"
-        )}
-      />
+      <GripVertical className="h-3 w-3 text-[var(--pm-faint)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+      <FileText className="pm-ws-item-icon h-3.5 w-3.5" />
       <span className="flex-1 truncate">{note.title}</span>
       {note.is_extracted && (
-        <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" title="Has been extracted" />
+        <span className="pm-ws-item-dot" title="Has been extracted" />
       )}
     </button>
   )
 }
-
-// ── Meetings tree ─────────────────────────────────────────────────
 
 function MeetingTreeRow({
   meeting,
@@ -293,34 +344,33 @@ function MeetingTreeRow({
   return (
     <div
       className={cn(
-        "w-full flex items-center gap-0.5 px-1 py-1 text-[12px] transition-colors group border-b border-dashed border-border",
-        isFocused
-          ? "text-primary font-semibold bg-primary/18"
-          : isActive
-            ? "text-primary/90 font-medium bg-primary/8"
-            : "hover:text-primary text-foreground",
+        "pm-ws-item group !cursor-default",
+        isFocused && "is-focus",
+        isActive && !isFocused && "is-active",
         dragging && "opacity-50"
       )}
     >
       <button
         type="button"
         className={cn(
-          "h-5 w-5 flex items-center justify-center shrink-0 rounded-sm",
-          hasChildren ? "hover:bg-accent/60" : "opacity-0 pointer-events-none"
+          "h-5 w-5 flex items-center justify-center shrink-0 rounded-[var(--pm-r-sm)]",
+          hasChildren
+            ? "hover:bg-[color-mix(in_srgb,var(--pm-ink)_6%,transparent)]"
+            : "opacity-0 pointer-events-none"
         )}
         onClick={onToggleExpand}
         tabIndex={hasChildren ? 0 : -1}
       >
         <ChevronRight
           className={cn(
-            "h-3 w-3 text-muted-foreground transition-transform",
+            "h-3 w-3 text-[var(--pm-faint)] transition-transform duration-200",
             expanded && "rotate-90"
           )}
         />
       </button>
       <button
         type="button"
-        className="flex-1 min-w-0 text-left flex items-center gap-1.5 py-0.5 cursor-grab active:cursor-grabbing"
+        className="flex-1 min-w-0 text-left flex items-center gap-1.5 py-0.5 cursor-grab active:cursor-grabbing bg-transparent border-0 p-0"
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData("application/meeting-id", meeting.id)
@@ -336,13 +386,10 @@ function MeetingTreeRow({
         onClick={onClick}
         title="Open General Summary · drag onto a note to distill"
       >
-        <Video
-          className={cn(
-            "h-3.5 w-3.5 shrink-0",
-            isFocused ? "text-primary" : "text-muted-foreground"
-          )}
-        />
-        <span className="flex-1 truncate">{meeting.title || "Untitled meeting"}</span>
+        <Video className="pm-ws-item-icon h-3.5 w-3.5" />
+        <span className="flex-1 truncate">
+          {meeting.title || "Untitled meeting"}
+        </span>
       </button>
     </div>
   )
@@ -368,12 +415,9 @@ function MeetingSectionRow({
     <button
       type="button"
       className={cn(
-        "w-full text-left flex items-center gap-1.5 pl-8 pr-2 py-1.5 text-[12px] transition-colors group border-b border-dashed border-border/70",
-        isFocused
-          ? "text-primary font-semibold bg-primary/18"
-          : isActive
-            ? "text-primary/90 font-medium bg-primary/8"
-            : "hover:text-primary text-muted-foreground cursor-grab active:cursor-grabbing",
+        "pm-ws-item group !pl-8",
+        isFocused && "is-focus",
+        isActive && !isFocused && "is-active",
         dragging && "opacity-50"
       )}
       draggable
@@ -391,12 +435,7 @@ function MeetingSectionRow({
       onClick={onClick}
       title="Open section · drag onto a note to distill"
     >
-      <FileText
-        className={cn(
-          "h-3 w-3 shrink-0",
-          isFocused ? "text-primary" : "text-muted-foreground"
-        )}
-      />
+      <FileText className="pm-ws-item-icon h-3 w-3" />
       <span className="flex-1 truncate">{label}</span>
     </button>
   )

@@ -407,8 +407,9 @@ class ChatboxAgent:
         **Meeting** (``meeting_*``)::
 
             [0] fixed system prompt
-                DB system (transcript) — never dropped by dialogue window
-                recent dialogue history (no tools in practice)
+                live transcript (ephemeral — from meeting store each turn;
+                    NOT persisted in the session)
+                recent dialogue history only (DB system rows ignored)
                 speaker mapping (ephemeral — NOT persisted / not history)
                 current user (+ time if re-appended)
 
@@ -428,9 +429,10 @@ class ChatboxAgent:
                 current user
 
         History is windowed by **dialogue turns** (user + final assistant) via
-        ``get_messages(limit=N)`` / ``get_context_messages``. System/transcript
-        rows are always kept. Catalog and speaker mapping are injected only here
-        and are never written to the session store.
+        ``get_messages(limit=N)`` / ``get_context_messages``. Meeting transcript,
+        catalog, and speaker mapping are injected only here and never written
+        to the session store. (Legacy DB system rows on meeting sessions are
+        ignored so stale appends cannot pollute context.)
         """
         is_meeting = session_id.startswith("meeting_")
         is_quick = session_id.startswith("quick_")
@@ -441,9 +443,24 @@ class ChatboxAgent:
         sp = system_prompt if system_prompt is not None else self._system_prompt
         messages.append({"role": "system", "content": sp})
 
-        # ── History only: system (transcript) + last N dialogue turns ──
+        # ── Meeting: live transcript (or explicit unavailable) after fixed system ──
+        # Always inject one message so the model never assumes a hidden transcript.
+        if is_meeting:
+            meeting_id = session_id[len("meeting_"):]
+            try:
+                from src.chatbox.meeting_context import meeting_transcript_context_message
+                live_tx = meeting_transcript_context_message(meeting_id)
+            except Exception:
+                logger.exception(
+                    "Failed to load live transcript for session %s", session_id
+                )
+                from src.chatbox.meeting_context import MEETING_TRANSCRIPT_UNAVAILABLE
+                live_tx = MEETING_TRANSCRIPT_UNAVAILABLE
+            messages.append({"role": "system", "content": live_tx})
+
+        # ── History: last N dialogue turns ──
         # Declined web searches stay in history so the model knows what was refused.
-        # Catalog / speaker mapping are NOT part of hist (never stored).
+        # Catalog / speaker mapping / meeting transcript are NOT part of hist.
         max_dialogue = self._history_dialogue_budget(session_id)
         get_ctx = getattr(self._store, "get_context_messages", None)
         if callable(get_ctx):
@@ -451,10 +468,11 @@ class ChatboxAgent:
         else:
             hist = self._store.get_messages(session_id, limit=max_dialogue)
 
-        system_hist = [m for m in hist if m.role == "system"]
+        # Meeting: ignore any legacy system rows (old transcript appends).
+        # Non-meeting: keep system_hist for rare stored system context.
+        system_hist = [] if is_meeting else [m for m in hist if m.role == "system"]
         dialogue_hist = [m for m in hist if m.role != "system"]
 
-        # Meeting: pin transcript immediately after fixed system for KV cache.
         for m in system_hist:
             messages.append(self._store_message_to_llm_dict(m))
 

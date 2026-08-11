@@ -1,7 +1,10 @@
-import { useState, useMemo, useEffect, useRef } from "react"
+import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { ChevronRight, ChevronLeft, Clock, Pencil, Check, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger, TabsIndicator, TabsContent } from "@/components/ui/tabs"
+import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import type { TranscriptSegment } from "@/api/client"
 
 interface TranscriptPanelProps {
@@ -9,7 +12,7 @@ interface TranscriptPanelProps {
   onToggle: () => void
   segments: TranscriptSegment[]
   partialText?: string
-  onSegmentClick?: (startTime: number) => void
+  onSegmentClick?: (startTime: number, endTime?: number) => void
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
   speakerNames?: Record<string, string>
@@ -36,62 +39,61 @@ export function TranscriptPanel({
   return (
     <div
       className={cn(
-        "border-l border-border flex flex-col shrink-0 transition-all duration-200",
-        open ? "w-72" : "w-10"
+        "flex flex-col shrink-0 transition-[width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+        open ? "w-72" : "w-10",
       )}
     >
-      <button
-        className="flex items-center justify-center h-8 hover:bg-accent transition-colors shrink-0"
+      <Button
+        type="button"
+        variant="ghost"
+        className="h-8 w-full justify-center shrink-0 rounded-none"
         onClick={onToggle}
       >
         {open ? (
-          <div className="flex items-center gap-2 text-sm font-light uppercase tracking-wider w-full px-3">
-            <span className="flex-1 text-left">Transcript</span>
+          <div className="flex items-center gap-2 w-full px-1">
+            <span className="pm-label flex-1 text-left normal-case tracking-[0.08em]">Transcript</span>
             {isRealtime && (
-              <span className="flex items-center gap-1 text-xs text-red-500">
-                <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+              <span className="pm-meta flex items-center gap-1 text-[var(--pm-danger)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--pm-danger)] animate-pulse" />
                 live
               </span>
             )}
-            <span className="text-xs text-muted-foreground">{segments.length}</span>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            <span className="pm-meta">{segments.length}</span>
+            <ChevronRight className="size-3.5 text-[var(--pm-faint)]" />
           </div>
         ) : (
-          <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+          <ChevronLeft className="size-3.5 text-[var(--pm-faint)]" />
         )}
-      </button>
+      </Button>
       {open && (
-        <>
-          {/* Tab bar */}
-          <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
-            <TabsList className="relative w-full px-1" variant="line">
-              <TabsIndicator renderBeforeHydration />
-              <TabsTrigger value="transcript" className="flex-1 font-light uppercase tracking-wider after:!opacity-0">TRANSCRIPT</TabsTrigger>
-              <TabsTrigger value="speakers" className="flex-1 font-light uppercase tracking-wider after:!opacity-0">SPEAKER</TabsTrigger>
-            </TabsList>
+        <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
+          <TabsList className="relative w-full px-2">
+            <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
+            <TabsTrigger value="transcript" className="flex-1">Transcript</TabsTrigger>
+            <TabsTrigger value="speakers" className="flex-1">Speaker</TabsTrigger>
+          </TabsList>
 
-            <TabsContent key={`transcript-${tab}`} value="transcript" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
-              <TranscriptTab
-                segments={segments}
-                partialText={partialText}
-                onSegmentClick={onSegmentClick}
-                focusRef={focusRef}
-                activeSectionTag={activeSectionTag}
-                speakerNames={speakerNames}
-                tabs={tabs}
-              />
-            </TabsContent>
-            <TabsContent key={`speakers-${tab}`} value="speakers" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
-              <SpeakersTab
-                segments={segments}
-                speakerNames={speakerNames}
-                onUpdateSpeakerName={onUpdateSpeakerName}
-                onSegmentClick={onSegmentClick}
-                activeSectionTag={activeSectionTag}
-              />
-            </TabsContent>
-          </Tabs>
-        </>
+          <TabsContent key={`transcript-${tab}`} value="transcript" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
+            <TranscriptTab
+              segments={segments}
+              partialText={partialText}
+              onSegmentClick={onSegmentClick}
+              focusRef={focusRef}
+              activeSectionTag={activeSectionTag}
+              speakerNames={speakerNames}
+              tabs={tabs}
+            />
+          </TabsContent>
+          <TabsContent key={`speakers-${tab}`} value="speakers" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
+            <SpeakersTab
+              segments={segments}
+              speakerNames={speakerNames}
+              onUpdateSpeakerName={onUpdateSpeakerName}
+              onSegmentClick={onSegmentClick}
+              activeSectionTag={activeSectionTag}
+            />
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   )
@@ -111,21 +113,27 @@ export function TranscriptTab({
   tabs,
   showSearch = true,
   playbackTime = 0,
+  /** Live capture: keep latest final/partial segment centered as captions stream in. */
+  followLive = false,
 }: {
   segments: TranscriptSegment[]
   partialText?: string
-  onSegmentClick?: (startTime: number) => void
+  onSegmentClick?: (startTime: number, endTime?: number) => void
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
   speakerNames: Record<string, string>
   tabs?: { tab_id: string; type?: string; md_file_path?: string }[]
   showSearch?: boolean
   playbackTime?: number
+  followLive?: boolean
 }) {
   const [search, setSearch] = useState("")
   const [focusedIdx, setFocusedIdx] = useState(-1)
   const [playingIdx, setPlayingIdx] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
+  /** Live follow: stick until user scrolls away; re-stick when near bottom. */
+  const stickToLatestRef = useRef(true)
+  const ignoreLiveScrollRef = useRef(false)
   const query = search.toLowerCase().trim()
 
   const filtered = useMemo(() => {
@@ -136,6 +144,11 @@ export function TranscriptTab({
         (seg.speaker_id && (speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`).toLowerCase().includes(query))
     )
   }, [segments, query, speakerNames])
+
+  const edgeFade = useScrollEdgeFade(
+    containerRef,
+    `${filtered.length}:${partialText ? 1 : 0}`,
+  )
 
   // Scroll to focused sentence when ref is clicked
   useEffect(() => {
@@ -173,28 +186,147 @@ export function TranscriptTab({
     return () => { cancelAnimationFrame(raf); clearTimeout(timer) }
   }, [focusRef?.ts, focusRef?.id, segments])
 
-  // Auto-scroll to current segment during playback
-  const lastAutoScrollRef = useRef(0)
-  useEffect(() => {
-    if (!playbackTime || !containerRef.current) return
-    // Throttle: only auto-scroll at most once per second
-    const now = Date.now()
-    if (now - lastAutoScrollRef.current < 800) return
-    // Find the segment at current playback time
-    const idx = segments.findIndex((seg) => seg.start <= playbackTime && seg.end >= playbackTime)
-    if (idx === -1) { setPlayingIdx(-1); return }
-    lastAutoScrollRef.current = now
-    setPlayingIdx(idx)
+  const LIVE_BOTTOM_PX = 96
+  const ignoreClearTimerRef = useRef(0)
+
+  const centerLiveLatest = useCallback(() => {
+    if (!followLive || !stickToLatestRef.current) return
     const container = containerRef.current
+    if (!container) return
+    const target =
+      (container.querySelector("[data-seg-live]") as HTMLElement | null) ??
+      ([...container.querySelectorAll("[data-seg-idx]")].at(-1) as
+        | HTMLElement
+        | undefined) ??
+      null
+    if (!target) return
+    if (container.scrollHeight <= container.clientHeight + 2) return
+    const containerTop = container.getBoundingClientRect().top
+    const elTop = target.getBoundingClientRect().top
+    // Center latest content (instant — partials update often)
+    const offset =
+      elTop -
+      containerTop +
+      container.scrollTop -
+      container.clientHeight / 2 +
+      target.offsetHeight / 2
+    ignoreLiveScrollRef.current = true
+    container.scrollTo({ top: Math.max(0, offset), behavior: "auto" })
+    if (ignoreClearTimerRef.current) window.clearTimeout(ignoreClearTimerRef.current)
+    ignoreClearTimerRef.current = window.setTimeout(() => {
+      ignoreLiveScrollRef.current = false
+      ignoreClearTimerRef.current = 0
+    }, 80)
+  }, [followLive])
+
+  const unlockLiveStick = useCallback(() => {
+    if (!followLive) return
+    if (ignoreLiveScrollRef.current) return
+    stickToLatestRef.current = false
+  }, [followLive])
+
+  // User intent: wheel / touch detaches; scroll-near-bottom re-attaches
+  useEffect(() => {
+    if (!followLive) return
+    const el = containerRef.current
+    if (!el) return
+
+    const onWheel = () => unlockLiveStick()
+    const onTouch = () => unlockLiveStick()
+    const onScroll = () => {
+      if (ignoreLiveScrollRef.current) return
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+      if (dist <= LIVE_BOTTOM_PX) {
+        const wasStuck = stickToLatestRef.current
+        stickToLatestRef.current = true
+        // Re-attach: snap latest to center immediately (don't wait for next caption)
+        if (!wasStuck) {
+          requestAnimationFrame(() => centerLiveLatest())
+        }
+      } else {
+        stickToLatestRef.current = false
+      }
+    }
+
+    el.addEventListener("wheel", onWheel, { passive: true })
+    el.addEventListener("touchmove", onTouch, { passive: true })
+    el.addEventListener("scroll", onScroll, { passive: true })
+    return () => {
+      el.removeEventListener("wheel", onWheel)
+      el.removeEventListener("touchmove", onTouch)
+      el.removeEventListener("scroll", onScroll)
+    }
+  }, [followLive, unlockLiveStick, centerLiveLatest])
+
+  // Reset stick when entering live follow mode
+  useEffect(() => {
+    if (followLive) stickToLatestRef.current = true
+  }, [followLive])
+
+  // Live transcript: keep newest final / partial centered while stuck
+  useEffect(() => {
+    if (!followLive) return
+    if (!stickToLatestRef.current) return
+    if (filtered.length === 0 && !partialText) return
+
+    let raf = 0
+    let raf2 = 0
+    // Double rAF: wait for segment/partial DOM paint before measuring
+    raf = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(centerLiveLatest)
+    })
+    return () => {
+      cancelAnimationFrame(raf)
+      cancelAnimationFrame(raf2)
+    }
+  }, [followLive, filtered.length, partialText, segments, centerLiveLatest])
+
+  // Highlight + auto-scroll current segment during continuous playback
+  const lastAutoScrollRef = useRef(0)
+  const lastPlayingIdxRef = useRef(-1)
+  useEffect(() => {
+    if (followLive) return
+    if (playbackTime == null || playbackTime <= 0) {
+      setPlayingIdx(-1)
+      lastPlayingIdxRef.current = -1
+      return
+    }
+    // Find segment at current time (prefer containing; fallback last started)
+    let idx = segments.findIndex(
+      (seg) => seg.start <= playbackTime && playbackTime < seg.end,
+    )
+    if (idx === -1) {
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (segments[i].start <= playbackTime) {
+          idx = i
+          break
+        }
+      }
+    }
+    if (idx === -1) {
+      setPlayingIdx(-1)
+      lastPlayingIdxRef.current = -1
+      return
+    }
+    setPlayingIdx(idx)
+
+    // Auto-scroll only when the active sentence changes (throttled)
+    if (idx === lastPlayingIdxRef.current) return
+    lastPlayingIdxRef.current = idx
+    const now = Date.now()
+    if (now - lastAutoScrollRef.current < 400) return
+    lastAutoScrollRef.current = now
+    const container = containerRef.current
+    if (!container) return
     const items = container.querySelectorAll("[data-seg-idx]")
     const el = items[idx] as HTMLElement | undefined
     if (!el) return
     const containerTop = container.getBoundingClientRect().top
     const elTop = el.getBoundingClientRect().top
-    const offset = elTop - containerTop + container.scrollTop
-      - container.clientHeight / 3
+    const offset =
+      elTop - containerTop + container.scrollTop - container.clientHeight / 3
     container.scrollTo({ top: offset, behavior: "smooth" })
-  }, [playbackTime, segments])
+  }, [playbackTime, segments, followLive])
 
   const highlight = (text: string) => {
     if (!query) return text
@@ -210,108 +342,124 @@ export function TranscriptTab({
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Search bar */}
+    <div className="flex flex-col h-full min-h-0">
       {showSearch && (
-        <div className="px-2 pt-2 pb-1">
+        <div className="px-2 pt-2 pb-1 shrink-0">
           <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <input
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-[var(--pm-faint)] pointer-events-none" />
+            <Input
               type="text"
-              placeholder="Search transcript..."
+              placeholder="Search transcript…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full h-7 pl-7 pr-3 text-xs rounded-full border border-input bg-background"
+              className="h-8 pl-8 rounded-full"
             />
           </div>
           {query && (
-            <p className="text-[10px] text-muted-foreground mt-1">{filtered.length} of {segments.length} segments</p>
+            <p className="pm-meta mt-1">{filtered.length} of {segments.length} segments</p>
           )}
         </div>
       )}
 
-      <div ref={containerRef} className="flex-1 overflow-auto p-2 space-y-2.5">
-        {filtered.length === 0 && !partialText && (
-          <p className="text-xs text-muted-foreground text-center py-8">
-            {query ? "No matching segments" : "No transcript yet"}
-          </p>
-        )}
-        {filtered.map((seg, i) => {
-          const displayName = seg.speaker_id
-            ? speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`
-            : null
-          // Extract sentence number from sentence_id (e.g. "abc_stt_0007" -> 7)
-          const sentNum: number | null = (() => {
-            const id = seg.sentence_id
-            if (!id) return null
-            const m = id.match(/stt_0*(\d+)/)
-            return m ? parseInt(m[1], 10) : null
-          })()
-          // Find original index in full segments array for highlight matching
-          const origIdx = segments.indexOf(seg)
-          return (
-            <div
-              key={`${seg.start}-${i}`}
-              data-seg-idx={origIdx}
-              className={cn(
-                "rounded-md px-2 py-1.5 -mx-1 transition-colors",
-                onSegmentClick && "cursor-pointer hover:bg-accent",
-                query && seg.text.toLowerCase().includes(query) && "ring-1 ring-primary/30",
-                origIdx === focusedIdx && "ring-2 ring-primary bg-primary/5",
-                origIdx === playingIdx && focusedIdx !== origIdx && "border-l-[3px] border-emerald-500 bg-emerald-500/5"
-              )}
-              onClick={() => onSegmentClick?.(seg.start)}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                {sentNum != null && (
-                  <span className="inline-flex items-center justify-center w-7 shrink-0 text-[10px] t-mono-family text-muted-foreground/60">
-                    {sentNum}
-                  </span>
+      <div className="pm-panel-scroll-shell">
+        <div ref={containerRef} className="flex-1 min-h-0 overflow-auto p-2 space-y-2">
+          {filtered.length === 0 && !partialText && (
+            <p className="pm-meta text-center py-8">
+              {query ? "No matching segments" : "No transcript yet"}
+            </p>
+          )}
+          {filtered.map((seg, i) => {
+            const displayName = seg.speaker_id
+              ? speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`
+              : null
+            const sentNum: number | null = (() => {
+              const id = seg.sentence_id
+              if (!id) return null
+              const m = id.match(/stt_0*(\d+)/)
+              return m ? parseInt(m[1], 10) : null
+            })()
+            const origIdx = segments.indexOf(seg)
+            return (
+              <div
+                key={`${seg.start}-${i}`}
+                data-seg-idx={origIdx}
+                className={cn(
+                  "pm-meeting-seg",
+                  onSegmentClick && "is-clickable",
+                  query && seg.text.toLowerCase().includes(query) && "is-focused",
+                  origIdx === focusedIdx && "is-focused",
+                  origIdx === playingIdx && focusedIdx !== origIdx && "is-playing",
                 )}
-                {displayName && (
-                  <span className="text-xs font-light text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                    {highlight(displayName)}
+                onClick={() => onSegmentClick?.(seg.start, seg.end)}
+              >
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  {sentNum != null && (
+                    <span className="pm-meta t-mono-family w-7 shrink-0 text-center">
+                      {sentNum}
+                    </span>
+                  )}
+                  {displayName && (
+                    <span className="pm-meeting-seg-speaker">
+                      {highlight(displayName)}
+                    </span>
+                  )}
+                  {seg.section_tags && seg.section_tags.length > 0 && (
+                    <span className="flex items-center gap-1">
+                      {seg.section_tags.map((tag) => {
+                        const label = sectionTagLabel(tag, tabs)
+                        if (!label) return null
+                        const isActive = activeSectionTag === tag
+                        return (
+                          <span
+                            key={tag}
+                            className={cn("pm-meeting-seg-tag", isActive && "is-active")}
+                            title={tag}
+                          >
+                            {label}
+                          </span>
+                        )
+                      })}
+                    </span>
+                  )}
+                  <span className="pm-meta flex items-center gap-1">
+                    <Clock className="size-3" />
+                    {formatTime(seg.start)} – {formatTime(seg.end)}
                   </span>
-                )}
-                {seg.section_tags && seg.section_tags.length > 0 && (
-                  <span className="flex items-center gap-1">
-                    {seg.section_tags.map((tag) => {
-                      const label = sectionTagLabel(tag, tabs)
-                      if (!label) return null
-                      const isActive = activeSectionTag === tag
-                      return (
-                        <span
-                          key={tag}
-                          className={cn(
-                            "text-[10px] font-light px-1 py-0.5 rounded border",
-                            isActive
-                              ? "border-green-500/40 text-green-600 bg-green-500/10"
-                              : "border-border text-muted-foreground bg-muted/50"
-                          )}
-                          title={tag}
-                        >
-                          {label}
-                        </span>
-                      )
-                    })}
-                  </span>
-                )}
-                <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Clock className="h-3 w-3" />
-                  {formatTime(seg.start)} – {formatTime(seg.end)}
-                </span>
+                </div>
+                <p className="pm-meeting-seg-body">
+                  {highlight(seg.text)}
+                </p>
               </div>
-              <p className="text-xs text-foreground leading-relaxed pl-0">
-                {highlight(seg.text)}
-              </p>
+            )
+          })}
+          {partialText && (
+            <div
+              className="pm-meeting-seg pm-meeting-seg--partial"
+              data-seg-live
+              aria-live="polite"
+            >
+              <div className="pm-meeting-seg-partial-label">
+                <span className="pm-meeting-seg-partial-dot" aria-hidden />
+                Live
+              </div>
+              <p className="pm-meeting-seg-partial-text">{partialText}</p>
             </div>
-          )
-        })}
-        {partialText && (
-          <div className="rounded-md px-2 py-1.5 -mx-1 border border-primary/20">
-            <p className="text-xs text-foreground/80 italic">{partialText}</p>
-          </div>
-        )}
+          )}
+        </div>
+        <div
+          className={cn(
+            "pm-rail-edge-fade pm-rail-edge-fade--top",
+            edgeFade.top && "is-visible",
+          )}
+          aria-hidden
+        />
+        <div
+          className={cn(
+            "pm-rail-edge-fade pm-rail-edge-fade--bottom",
+            edgeFade.bottom && "is-visible",
+          )}
+          aria-hidden
+        />
       </div>
     </div>
   )
@@ -331,10 +479,12 @@ export function SpeakersTab({
   segments: TranscriptSegment[]
   speakerNames: Record<string, string>
   onUpdateSpeakerName?: (speakerId: string, name: string) => void
-  onSegmentClick?: (startTime: number) => void
+  onSegmentClick?: (startTime: number, endTime?: number) => void
   activeSectionTag?: string
 }) {
-  // Extract unique speakers and pick 5 random samples each
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Unique speakers + up to 5 sample sentences each (stable order — never Math.random)
   const speakers = useMemo(() => {
     const grouped: Record<string, TranscriptSegment[]> = {}
     for (const seg of segments) {
@@ -345,36 +495,65 @@ export function SpeakersTab({
     return Object.entries(grouped)
       .sort(([a], [b]) => Number(a) - Number(b))
       .map(([id, segs]) => {
-        // Pick 5 random samples that are at least 3 seconds long
-        const longEnough = segs.filter((s) => s.end - s.start >= 3)
-        const pool = longEnough.length >= 5 ? longEnough : segs
-        const shuffled = [...pool].sort(() => Math.random() - 0.5)
-        return { id, segments: segs, samples: shuffled.slice(0, 5) }
+        // Prefer longer utterances; keep chronological order for stable UI
+        const byStart = [...segs].sort((a, b) => a.start - b.start)
+        const longEnough = byStart.filter((s) => s.end - s.start >= 3)
+        const pool = longEnough.length >= 1 ? longEnough : byStart
+        // Evenly sample up to 5 from the pool (deterministic, no shuffle)
+        const n = Math.min(5, pool.length)
+        const samples =
+          n <= 0
+            ? []
+            : n === pool.length
+              ? pool
+              : Array.from({ length: n }, (_, i) => {
+                  const idx = Math.round((i * (pool.length - 1)) / Math.max(1, n - 1))
+                  return pool[idx]
+                })
+        return { id, segments: segs, samples }
       })
   }, [segments])
 
+  const edgeFade = useScrollEdgeFade(scrollRef, speakers.length)
+
   if (speakers.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground text-center py-8">
+      <p className="pm-meta text-center py-8">
         No speakers identified
       </p>
     )
   }
 
   return (
-    <div className="p-2 space-y-4 pt-6">
-      {speakers.map((speaker) => (
-        <SpeakerCard
-          key={speaker.id}
-          speakerId={speaker.id}
-          displayName={speakerNames[speaker.id]}
-          segmentCount={speaker.segments.length}
-          samples={speaker.samples}
-          onUpdateName={(name) => onUpdateSpeakerName?.(speaker.id, name)}
-          onSegmentClick={onSegmentClick}
-          activeSectionTag={activeSectionTag}
-        />
-      ))}
+    <div className="pm-panel-scroll-shell h-full min-h-0">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-2 space-y-3 pt-4">
+        {speakers.map((speaker) => (
+          <SpeakerCard
+            key={speaker.id}
+            speakerId={speaker.id}
+            displayName={speakerNames[speaker.id]}
+            segmentCount={speaker.segments.length}
+            samples={speaker.samples}
+            onUpdateName={(name) => onUpdateSpeakerName?.(speaker.id, name)}
+            onSegmentClick={onSegmentClick}
+            activeSectionTag={activeSectionTag}
+          />
+        ))}
+      </div>
+      <div
+        className={cn(
+          "pm-rail-edge-fade pm-rail-edge-fade--top",
+          edgeFade.top && "is-visible",
+        )}
+        aria-hidden
+      />
+      <div
+        className={cn(
+          "pm-rail-edge-fade pm-rail-edge-fade--bottom",
+          edgeFade.bottom && "is-visible",
+        )}
+        aria-hidden
+      />
     </div>
   )
 }
@@ -398,7 +577,7 @@ function SpeakerCard({
   samples: TranscriptSegment[]
   activeSectionTag?: string
   onUpdateName: (name: string) => void
-  onSegmentClick?: (startTime: number) => void
+  onSegmentClick?: (startTime: number, endTime?: number) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(displayName ?? `Speaker ${speakerId}`)
@@ -413,16 +592,13 @@ function SpeakerCard({
   }
 
   return (
-    <div className="border border-primary/35 rounded-xl p-3 space-y-2" style={{ boxShadow: '0 0 12px color-mix(in srgb, var(--ze-green) 12%, transparent)' }}>
-      {/* Speaker header */}
+    <div className="pm-meeting-nested space-y-2">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-light text-primary bg-primary/10 px-2 py-1 rounded">
-          {speakerId}
-        </span>
+        <span className="pm-meeting-seg-speaker">{speakerId}</span>
         {editing ? (
           <div className="flex items-center gap-1 flex-1 min-w-0">
             <input
-              className="flex-1 text-sm font-medium bg-transparent border-b border-primary outline-none px-0 py-0.5 min-w-0"
+              className="flex-1 pm-title bg-transparent border-none border-b border-[var(--pm-green)] outline-none px-0 py-0.5 min-w-0"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -431,54 +607,50 @@ function SpeakerCard({
               }}
               autoFocus
             />
-            <button
-              className="p-1 rounded hover:bg-accent text-primary"
-              onClick={handleSave}
-            >
-              <Check className="h-3.5 w-3.5" />
-            </button>
+            <Button type="button" variant="ghost" size="icon-xs" onClick={handleSave} aria-label="Save name">
+              <Check className="size-3.5" />
+            </Button>
           </div>
         ) : (
           <div className="flex items-center gap-1 flex-1 min-w-0">
-            <span className="text-sm font-medium truncate">{label}</span>
-            <button
-              className="p-1 rounded hover:bg-accent text-muted-foreground opacity-0 group-hover:opacity-100"
-              style={{ opacity: 1 }}
+            <span className="pm-title truncate">{label}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
               onClick={() => { setDraft(label); setEditing(true) }}
+              aria-label="Edit speaker name"
             >
-              <Pencil className="h-3 w-3" />
-            </button>
+              <Pencil className="size-3" />
+            </Button>
           </div>
         )}
-        <span className="text-xs text-muted-foreground shrink-0">
+        <span className="pm-meta shrink-0">
           {segmentCount} segments
         </span>
       </div>
 
-      {/* Sample segments */}
       <div className="space-y-1">
         {samples.map((seg, i) => (
           <div
             key={i}
             className={cn(
-              "text-xs px-2 py-1.5 rounded transition-colors flex items-start gap-1.5",
-              onSegmentClick && "cursor-pointer hover:bg-accent"
+              "pm-meeting-seg pm-meeting-seg--sample flex items-center gap-1.5 min-w-0",
+              onSegmentClick && "is-clickable",
             )}
-            onClick={() => onSegmentClick?.(seg.start)}
+            onClick={() => onSegmentClick?.(seg.start, seg.end)}
+            title={seg.text}
           >
-            <span className="text-muted-foreground shrink-0">{formatTime(seg.start)}</span>
-            <span className="text-foreground flex-1">{seg.text.length > 80 ? seg.text.slice(0, 80) + "..." : seg.text}</span>
+            <span className="pm-meta shrink-0 tabular-nums">{formatTime(seg.start)}</span>
+            <span className="pm-meeting-seg-body pm-meeting-seg-text flex-1 min-w-0">
+              {seg.text}
+            </span>
             {seg.section_tags && seg.section_tags.length > 0 && (
               <span className="flex items-center gap-0.5 shrink-0">
                 {seg.section_tags.map((tag) => {
                   const isActive = activeSectionTag === tag
                   return (
-                    <span key={tag} className={cn(
-                      "text-[10px] font-light px-1 py-0.5 rounded border",
-                      isActive
-                        ? "border-green-500/40 text-green-600 bg-green-500/10"
-                        : "border-border text-muted-foreground bg-muted/50"
-                    )}>
+                    <span key={tag} className={cn("pm-meeting-seg-tag", isActive && "is-active")}>
                       {sectionTagLabel(tag)}
                     </span>
                   )

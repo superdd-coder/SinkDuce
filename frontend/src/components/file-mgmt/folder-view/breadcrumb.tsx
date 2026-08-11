@@ -69,10 +69,10 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
   }, [currentFolderId, collectionId, folderTree])
 
   return (
-    <div className="flex items-center gap-0.5 text-xs py-1.5 px-2.5 min-h-[32px] overflow-x-auto overscroll-x-contain">
+    <div className="pm-files-breadcrumb">
       <button
         type="button"
-        className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors shrink-0 px-1 rounded hover:bg-muted/50"
+        className="pm-files-crumb shrink-0"
         onClick={() => navigateToRoot(collectionId)}
         title="Root"
       >
@@ -80,14 +80,12 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
       </button>
       {path.map((folder, i) => (
         <div key={folder.folder_id} className="flex items-center gap-0.5 shrink-0">
-          <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
+          <ChevronRight className="pm-files-crumb-sep" />
           <button
             type="button"
             className={cn(
-              "px-1.5 py-0.5 rounded transition-colors truncate max-w-[160px]",
-              i === path.length - 1
-                ? "text-foreground font-medium cursor-default"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              "pm-files-crumb truncate",
+              i === path.length - 1 && "is-current"
             )}
             onClick={() => {
               if (i < path.length - 1) selectFolder(collectionId, folder.folder_id)
@@ -100,6 +98,3 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
     </div>
   )
 }
-
-// cn helper import
-// (cn imported above)

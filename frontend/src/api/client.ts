@@ -305,24 +305,67 @@ export interface ModelStatus {
 export const getModelStatus = () =>
   request<ModelStatus[]>("/models/status")
 
-export const downloadModels = (hf_token?: string, model_ids?: string[]) =>
+/** Download ONNX ASR packs from the official GitHub Release (no HuggingFace). */
+export const downloadModels = (model_ids?: string[]) =>
   request<{ success: boolean; message?: string }>("/models/download", {
     method: "POST",
-    body: JSON.stringify({ hf_token, model_ids }),
+    body: JSON.stringify({ model_ids }),
   })
 
-export const toggleModelLoad = (model_id: string) =>
-  request<{ success: boolean; model_id: string; loaded: boolean; error?: string }>(
-    `/models/${model_id}/toggle-load`,
-    { method: "POST" }
-  )
+export const deleteLocalModel = (model_id: string) =>
+  request<{
+    success: boolean
+    model_id?: string
+    display_name?: string
+    removed?: boolean
+    freed_mb?: number
+    unloaded_providers?: string[]
+    error?: string
+  }>(`/models/${encodeURIComponent(model_id)}`, { method: "DELETE" })
+
+export const deleteLocalModels = (model_ids: string[]) =>
+  request<{
+    success: boolean
+    freed_mb?: number
+    unloaded_providers?: string[]
+    results?: Array<{ model_id: string; success: boolean; freed_mb?: number; error?: string }>
+    error?: string
+  }>("/models/delete", {
+    method: "POST",
+    body: JSON.stringify({ model_ids }),
+  })
+
+export const toggleModelLoad = (
+  model_id: string,
+  action?: "load" | "unload",
+) =>
+  request<{
+    success: boolean
+    model_id: string
+    loaded: boolean
+    status?: string
+    message?: string
+    error?: string
+  }>(`/models/${model_id}/toggle-load`, {
+    method: "POST",
+    body: JSON.stringify(action ? { action } : {}),
+  })
+
+export interface ModelLoadDetail {
+  state?: string
+  message?: string
+  error?: string
+  started_at?: number
+  load_s?: number
+}
 
 export interface ModelState {
   llm_loaded: boolean
   embedding_loaded: boolean
   reranker_loaded: boolean
-  config_unloaded: string[]
+  config_unloaded?: string[]
   load_states: Record<string, string>
+  load_details?: Record<string, ModelLoadDetail>
 }
 
 export const getModelState = () =>
@@ -356,6 +399,8 @@ export const getAvailableModels = (section: string, data?: Record<string, unknow
 export interface ProviderTypeInfo {
   name: string
   display_name: string
+  /** Present on file/realtime transcription adapters */
+  supports_hot_words?: boolean
 }
 
 export interface ProviderTypesResponse {
@@ -618,6 +663,10 @@ export interface RecallResult {
   chunk_type: string
   context?: string
   parent_id?: string
+  /** Current human-readable name (rename / multi-version aware) */
+  display_name?: string
+  /** Ingest-time label snapshot (fallback only) */
+  source_label?: string
   children?: RecallResult[]
 }
 
@@ -1277,14 +1326,21 @@ export const deleteFileTranscriptionProvider = (id: string) =>
   })
 
 export const setActiveFileTranscriptionProvider = (id: string) =>
-  request<{ message?: string; error?: string }>(`/transcription/file-providers/${id}/set-active`, {
+  request<{
+    message?: string
+    error?: string
+    provider_id?: string
+    adapter?: string
+    name?: string
+  }>(`/transcription/file-providers/${id}/set-active`, {
     method: "POST",
   })
 
 export const testFileTranscriptionProvider = (id: string) =>
-  request<{ success: boolean; message?: string; error?: string }>(`/transcription/file-providers/${id}/test`, {
-    method: "POST",
-  })
+  request<{ success: boolean; message?: string; error?: string; code?: string }>(
+    `/transcription/file-providers/${id}/test`,
+    { method: "POST" },
+  )
 
 
 // Realtime transcription providers
@@ -1309,14 +1365,21 @@ export const deleteRealtimeTranscriptionProvider = (id: string) =>
   })
 
 export const setActiveRealtimeTranscriptionProvider = (id: string) =>
-  request<{ message?: string; error?: string }>(`/transcription/realtime-providers/${id}/set-active`, {
+  request<{
+    message?: string
+    error?: string
+    provider_id?: string
+    adapter?: string
+    name?: string
+  }>(`/transcription/realtime-providers/${id}/set-active`, {
     method: "POST",
   })
 
 export const testRealtimeTranscriptionProvider = (id: string) =>
-  request<{ success: boolean; message?: string; error?: string }>(`/transcription/realtime-providers/${id}/test`, {
-    method: "POST",
-  })
+  request<{ success: boolean; message?: string; error?: string; code?: string }>(
+    `/transcription/realtime-providers/${id}/test`,
+    { method: "POST" },
+  )
 
 
 // ── Notes ──
@@ -1502,6 +1565,7 @@ export interface HotWordsLibrary {
   name: string
   description: string
   words: HotWordItem[]
+  is_default?: boolean
   created_at: string
   updated_at: string
 }
@@ -1511,6 +1575,7 @@ export interface HotWordsLibrarySummary {
   name: string
   description: string
   word_count: number
+  is_default?: boolean
   created_at: string
   updated_at: string
 }
@@ -1538,14 +1603,79 @@ export const deleteHotWordsLibrary = (id: string) =>
     method: "DELETE",
   })
 
+/** Set or clear the default hot-words library (auto-selected on new meetings). */
+export const setDefaultHotWordsLibrary = (libraryId: string | null) =>
+  request<{ default_library_id: string | null; error?: string }>("/hot-words/default", {
+    method: "PUT",
+    body: JSON.stringify({ library_id: libraryId }),
+  })
+
+/** Download CSV / Excel hot-words import template (attachment). */
+export function downloadHotWordsTemplate(format: "csv" | "xlsx" = "csv") {
+  const a = document.createElement("a")
+  a.href = `${BASE}/hot-words/template.${format}`
+  a.download = `hot-words-template.${format}`
+  a.rel = "noopener"
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+/** Export a library as Excel (.xlsx). */
+export function exportHotWordsLibrary(id: string, nameHint?: string) {
+  const a = document.createElement("a")
+  a.href = `${BASE}/hot-words/${encodeURIComponent(id)}/export.xlsx`
+  a.download = `${(nameHint || "hot-words").replace(/[^\w\-]+/g, "_").slice(0, 60)}.xlsx`
+  a.rel = "noopener"
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+/** Import a CSV or Excel file as a new hot-words library. */
+export async function importHotWordsLibrary(
+  file: File,
+  opts?: { name?: string; description?: string },
+): Promise<HotWordsLibrary> {
+  const fd = new FormData()
+  fd.append("file", file)
+  if (opts?.name?.trim()) fd.append("name", opts.name.trim())
+  if (opts?.description?.trim()) fd.append("description", opts.description.trim())
+  const res = await fetch(`${BASE}/hot-words/import`, {
+    method: "POST",
+    body: fd,
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(
+      typeof body?.error === "string"
+        ? body.error
+        : `API ${res.status}: import failed`,
+    )
+  }
+  if (body?.error) throw new Error(String(body.error))
+  return body as HotWordsLibrary
+}
+
 export interface LanguageHintOption {
   code: string
   label: string
 }
 
+export interface ActiveProviderSideInfo {
+  supports_hot_words: boolean
+  supported_language_hints: LanguageHintOption[]
+  /** Resolved adapter name, e.g. funasr_onnx / dashscope_funasr */
+  adapter?: string | null
+  id?: string | null
+  name?: string | null
+  /** Registry display name for UI captions */
+  display_name?: string | null
+}
+
 export interface ActiveProviderInfo {
-  file: { supports_hot_words: boolean; supported_language_hints: LanguageHintOption[] }
-  realtime: { supports_hot_words: boolean; supported_language_hints: LanguageHintOption[] }
+  file: ActiveProviderSideInfo
+  realtime: ActiveProviderSideInfo
 }
 
 export const getActiveProviderInfo = () =>

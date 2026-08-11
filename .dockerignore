@@ -5,19 +5,46 @@
 .gitattributes
 *.md
 !README.md
+
+# Runtime data & local model caches (mounted at run via docker-compose)
 data/
-frontend/node_modules
-frontend/.vite
-.ruff_cache
-.pytest_cache
+
+# Local ONNX packaging output (~700MB zip) — publish via GitHub Release only;
+# never COPY into the image. Users unzip into data/models/ at runtime.
+model_release/
+
+# Host venv MUST NOT land in the image (was ~1.4GB of the image bloat)
+.venv/
+venv/
+env/
+
+# Frontend deps/cache only — keep frontend/src for the multi-stage build
+frontend/node_modules/
+frontend/.vite/
+frontend/dist/
+frontend/preview.html
+frontend/vite.preview.config.ts
+frontend/src/main-preview.tsx
+frontend/src/components/editorial/
+frontend/data/
+
+.ruff_cache/
+.pytest_cache/
 *.egg-info
 dist/
 build/
 tests/
+coverage/
+htmlcov/
+.coverage
+*.log
+prototype/
+design-demos/
+.planning/
 
-# Secrets
+# Secrets / local env (not needed in image)
 .env
-.env.template
+.env.*
 
 # macOS junk
 **/.DS_Store
@@ -25,11 +52,24 @@ tests/
 # Dev tooling (not needed at runtime)
 .agents/
 .claude/
+.qoder/
+.superpowers/
 .playwright-mcp/
+.playwright-cli/
 .github/
+.githooks/
 DEVELOPMENT_DOC/
+development_doc/
 skills-lock.json
+videos/
+docs/
+.mcp.json
+AGENTS.md
+CLAUDE.md
+DESIGN_SYSTEM.html
 
+# Host packaging / test scripts (image uses root entrypoint.sh only)
+scripts/
 
 # Docker / CI files
 Dockerfile

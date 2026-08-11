@@ -152,6 +152,16 @@ _CREATE_TABLES = [
       updated_at        TEXT NOT NULL,
       completed_at      TEXT
     )''',
+    # Smart to-do suggestions cache (one row per chain)
+    '''CREATE TABLE todo_suggestion_state (
+      chain_id            TEXT PRIMARY KEY REFERENCES chains(chain_id) ON DELETE CASCADE,
+      status              TEXT NOT NULL,
+      suggestions_json    TEXT NOT NULL DEFAULT '[]',
+      error               TEXT,
+      context_fingerprint TEXT,
+      updated_at          TEXT NOT NULL,
+      generated_at        TEXT
+    )''',
 ]
 
 _CREATE_INDEXES = [
@@ -177,7 +187,7 @@ _CREATE_INDEXES = [
 EXPECTED_TABLES = {
     "folders", "node_groups", "chains", "nodes",
     "files", "file_versions", "file_paths", "file_nodes", "messages",
-    "todos",
+    "todos", "todo_suggestion_state",
 }
 
 EXPECTED_INDEXES = {
@@ -404,6 +414,29 @@ def _ensure_todos_table(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_todos_chain ON todos(target_chain_id)"
         )
+
+
+def _ensure_todo_suggestion_state_table(conn: sqlite3.Connection) -> None:
+    """Create todo_suggestion_state table if missing (existing collection DBs)."""
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "todo_suggestion_state" not in tables:
+        conn.execute(
+            """CREATE TABLE todo_suggestion_state (
+              chain_id            TEXT PRIMARY KEY REFERENCES chains(chain_id) ON DELETE CASCADE,
+              status              TEXT NOT NULL,
+              suggestions_json    TEXT NOT NULL DEFAULT '[]',
+              error               TEXT,
+              context_fingerprint TEXT,
+              updated_at          TEXT NOT NULL,
+              generated_at        TEXT
+            )"""
+        )
+        logger.info("Created todo_suggestion_state table")
 
 
 def _ensure_file_paths_archived(conn: sqlite3.Connection) -> None:
@@ -770,6 +803,7 @@ def init_collection_db(collection_id: str) -> None:
                 _ensure_file_paths_archived(conn_backfill)
                 _ensure_nodes_external_ref(conn_backfill)
                 _ensure_todos_table(conn_backfill)
+                _ensure_todo_suggestion_state_table(conn_backfill)
                 _backfill_system_folders(conn_backfill)
                 _cleanup_uncategorized_folder(conn_backfill)
             _backfill_done.add(collection_id)

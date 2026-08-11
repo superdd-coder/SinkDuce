@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { Loader2, Eye, EyeOff, ChevronDown, RefreshCw } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogKicker, DialogTitle } from "@/components/ui/dialog"
+import { FieldLabel } from "@/components/ui/field-label"
+import { DropdownSelect } from "@/components/ui/dropdown-select"
+import { Loader2, Eye, EyeOff, RefreshCw } from "lucide-react"
 import {
   getLLMProviders, updateLLMProvider, createLLMProvider,
   getEmbeddingProviders, updateEmbeddingProvider, createEmbeddingProvider,
@@ -10,6 +12,7 @@ import {
   updateConfig,
 } from "@/api/client"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 
 interface OneShotOpenRouterDialogProps {
   open: boolean
@@ -58,29 +61,6 @@ function hasToolCalling(m: ORModel): boolean {
   return m.supported_parameters?.includes("tools") ?? false
 }
 
-function ModelDropdown({ value, setValue, options, placeholder, show, setShow }: {
-  value: string; setValue: (v: string) => void; options: ORModel[]; placeholder: string; show: boolean; setShow: (v: boolean) => void
-}) {
-  return (
-    <div className="relative">
-      <button type="button" onClick={() => setShow(!show)} className="w-full flex items-center justify-between rounded border border-input bg-transparent px-3 py-2 text-sm text-left hover:bg-muted/50 transition-colors">
-        <span className={value ? "" : "text-muted-foreground"}>{value || placeholder}</span>
-        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform duration-200 ${show ? "rotate-180" : ""}`} />
-      </button>
-      {show && (
-        <div className="absolute z-50 mt-1 w-full rounded border bg-popover shadow-md max-h-56 overflow-y-auto">
-          {options.map(m => (
-            <button key={m.id} type="button" onClick={() => { setValue(m.id); setShow(false) }} className={`w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between gap-2 ${value === m.id ? "bg-accent" : ""}`}>
-              <span className="truncate text-xs">{m.id}</span>
-              {isFree(m) && <span className="shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400">free</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShotOpenRouterDialogProps) {
   const [apiKey, setApiKey] = useState("")
   const [llmModel, setLlmModel] = useState("deepseek/deepseek-v4-flash")
@@ -95,7 +75,6 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
   const [fetching, setFetching] = useState(false)
   const [fetchError, setFetchError] = useState("")
 
-  const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
   const fetchModels = async () => {
     setFetching(true); setFetchError("")
@@ -190,42 +169,142 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
     finally { setSaving(false) }
   }
 
+  const toOpts = (models: ORModel[], emptyLabel?: string) => {
+    const opts = models.map((m) => ({
+      value: m.id,
+      label: isFree(m) ? `${m.id} · free` : m.id,
+    }))
+    return emptyLabel ? [{ value: "", label: emptyLabel }, ...opts] : opts
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-settings-dlg",
+          "sm:max-w-lg",
+          "!animate-none data-open:!animate-none data-closed:!animate-none",
+        )}
+        overlayClassName="pm-dialog-overlay--silk"
+      >
         <DialogHeader>
+          <DialogKicker>Settings</DialogKicker>
           <DialogTitle>OneShot OpenRouter</DialogTitle>
-          <DialogDescription>Enter your API Key, then select models from the fetched list.</DialogDescription>
+          <DialogDescription>
+            Fetch the model catalog, then pick LLM, chat, vision, embedding, and rerank.
+          </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">OpenRouter API Key</label>
-            <div className="relative">
-              <Input type={showApiKey ? "text" : "password"} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-or-v1-..." />
-              <Button variant="ghost" size="icon" className="absolute right-0 top-0 h-full px-3" onClick={() => setShowApiKey(!showApiKey)}>
-                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
-            </div>
+
+        <div className="pm-settings-dlg-scroll">
+          <div className="pm-dialog-body pm-settings-dlg-body">
+            <section className="pm-settings-dlg-card">
+              <span className="pm-settings-dlg-card-kicker">API key</span>
+              <div className="pm-settings-dlg-field">
+                <FieldLabel>OpenRouter key</FieldLabel>
+                <div className="pm-settings-dlg-secret">
+                  <Input
+                    type={showApiKey ? "text" : "password"}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="sk-or-v1-..."
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="pm-settings-dlg-secret-btn"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                  >
+                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+              {fetching && (
+                <div className="flex items-center gap-2 pm-meta">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Fetching models…
+                </div>
+              )}
+              {fetchError && (
+                <div className="pm-settings-row-between gap-2">
+                  <span className="pm-meta text-[var(--pm-danger)] min-w-0 truncate">
+                    Failed: {fetchError}
+                  </span>
+                  <Button variant="ghost" size="xs" onClick={fetchModels}>
+                    <RefreshCw className="w-3 h-3" />
+                    Retry
+                  </Button>
+                </div>
+              )}
+            </section>
+
+            {!fetching && !fetchError && models.length > 0 && (
+              <section className="pm-settings-dlg-card">
+                <span className="pm-settings-dlg-card-kicker">Models</span>
+                <div className="pm-settings-dlg-fields">
+                  <div className="pm-settings-dlg-field">
+                    <FieldLabel>LLM</FieldLabel>
+                    <DropdownSelect
+                      value={llmModel}
+                      onChange={setLlmModel}
+                      options={toOpts(classifiedModels.llm)}
+                      placeholder="Select LLM model…"
+                    />
+                  </div>
+                  <div className="pm-settings-dlg-field">
+                    <FieldLabel>Chat (tools)</FieldLabel>
+                    <DropdownSelect
+                      value={chatModel}
+                      onChange={setChatModel}
+                      options={toOpts(chatModels)}
+                      placeholder="Select chat model…"
+                    />
+                    <p className="pm-settings-dlg-card-hint mt-1.5">
+                      Only models that support tool / function calling.
+                    </p>
+                  </div>
+                  <div className="pm-settings-dlg-field">
+                    <FieldLabel>Visual</FieldLabel>
+                    <DropdownSelect
+                      value={visualModel}
+                      onChange={setVisualModel}
+                      options={toOpts(classifiedModels.vision, "None (skip)")}
+                      placeholder="None (skip)"
+                    />
+                  </div>
+                  <div className="pm-settings-dlg-grid">
+                    <div className="pm-settings-dlg-field">
+                      <FieldLabel>Embedding</FieldLabel>
+                      <DropdownSelect
+                        value={embModel}
+                        onChange={setEmbModel}
+                        options={toOpts(classifiedModels.embedding)}
+                        placeholder="Select embedding…"
+                      />
+                    </div>
+                    <div className="pm-settings-dlg-field">
+                      <FieldLabel>Reranker</FieldLabel>
+                      <DropdownSelect
+                        value={rerankerModel}
+                        onChange={setRerankerModel}
+                        options={toOpts(classifiedModels.rerank)}
+                        placeholder="Select reranker…"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
           </div>
-
-          {fetching && <div className="flex items-center gap-2 text-sm text-muted-foreground py-2"><Loader2 className="w-4 h-4 animate-spin" />Fetching models...</div>}
-          {fetchError && <div className="flex items-center justify-between text-sm text-red-500 py-2"><span>Failed: {fetchError}</span><Button variant="outline" size="sm" onClick={fetchModels}><RefreshCw className="w-3 h-3 mr-1" />Retry</Button></div>}
-
-          {!fetching && !fetchError && models.length > 0 && (
-            <>
-              <div className="space-y-1.5"><label className="text-sm font-medium">LLM Model</label><ModelDropdown value={llmModel} setValue={setLlmModel} options={classifiedModels.llm} placeholder="Select LLM model..." show={openDropdown === "llm"} setShow={(v) => setOpenDropdown(v ? "llm" : null)} /></div>
-              <div className="space-y-1.5"><label className="text-sm font-medium">Chat Model <span className="text-muted-foreground">(tools required)</span></label><ModelDropdown value={chatModel} setValue={setChatModel} options={chatModels} placeholder="Select chat model..." show={openDropdown === "chat"} setShow={(v) => setOpenDropdown(v ? "chat" : null)} /><p className="text-xs text-muted-foreground">Only models that support tool/function calling.</p></div>
-              <div className="space-y-1.5"><label className="text-sm font-medium">Visual Model <span className="text-muted-foreground">(optional)</span></label><ModelDropdown value={visualModel} setValue={setVisualModel} options={classifiedModels.vision} placeholder="None (skip)" show={openDropdown === "vis"} setShow={(v) => setOpenDropdown(v ? "vis" : null)} /></div>
-              <div className="space-y-1.5"><label className="text-sm font-medium">Embedding Model</label><ModelDropdown value={embModel} setValue={setEmbModel} options={classifiedModels.embedding} placeholder="Select embedding model..." show={openDropdown === "emb"} setShow={(v) => setOpenDropdown(v ? "emb" : null)} /></div>
-              <div className="space-y-1.5"><label className="text-sm font-medium">Reranker Model</label><ModelDropdown value={rerankerModel} setValue={setRerankerModel} options={classifiedModels.rerank} placeholder="Select reranker model..." show={openDropdown === "rerank"} setShow={(v) => setOpenDropdown(v ? "rerank" : null)} /></div>
-            </>
-          )}
         </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving || fetching}>{saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Setting up...</> : "Apply"}</Button>
-        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="default" onClick={handleSave} disabled={saving || fetching}>
+            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Setting up…</> : "Apply"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
+
 }

@@ -35,26 +35,34 @@ export function PropagationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="pm-dialog max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            <AlertTriangle className="h-4 w-4 text-[var(--pm-green)]" />
             Propagate Changes?
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 pt-2">
-          <p className="text-sm text-muted-foreground">
+        <div className="space-y-4 pt-1">
+          <p className="pm-dialog-body">
             This note has been distilled into other notes. Content changes will trigger
             re-distillation for the following chain:
           </p>
 
           {/* Chain visualization */}
-          <div className="bg-muted/50 rounded-lg p-3">
-            <div className="flex items-center flex-wrap gap-1.5 text-sm">
+          <div className="pm-nested-pane p-3">
+            <div className="flex items-center flex-wrap gap-1.5">
               {chain.map((item, i) => (
                 <span key={item.id} className="flex items-center gap-1.5">
-                  {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
-                  <span className={i === 0 ? "font-medium text-primary" : "font-medium"}>
+                  {i > 0 && (
+                    <ArrowRight className="h-3 w-3 text-[var(--pm-faint)]" />
+                  )}
+                  <span
+                    className={
+                      i === 0
+                        ? "pm-title text-[var(--pm-green)]"
+                        : "pm-title"
+                    }
+                  >
                     {item.title}
                   </span>
                 </span>
@@ -67,29 +75,36 @@ export function PropagationDialog({
             {uniqueLinks.map((link) => (
               <div
                 key={link.target_id}
-                className="flex items-center gap-2 text-xs text-muted-foreground px-2"
+                className="flex items-center gap-2 pm-meta px-2"
               >
-                <span className="font-medium text-foreground">{link.source_title}</span>
-                <ArrowRight className="h-3 w-3" />
-                <span className="font-medium text-foreground">{link.target_title}</span>
+                <span className="font-medium text-[var(--pm-ink)]">
+                  {link.source_title}
+                </span>
+                <ArrowRight className="h-3 w-3 text-[var(--pm-faint)]" />
+                <span className="font-medium text-[var(--pm-ink)]">
+                  {link.target_title}
+                </span>
               </div>
             ))}
           </div>
 
-          <p className="text-xs text-muted-foreground">
+          <p className="pm-meta">
             Downstream propagations (indirect dependencies) will run automatically
             without additional prompts.
           </p>
 
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-1">
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() => onOpenChange(false)}
               disabled={propagating}
             >
               Skip
             </Button>
-            <Button onClick={onConfirm} disabled={propagating}>
+            <Button
+              onClick={onConfirm}
+              disabled={propagating}
+            >
               {propagating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-1.5" />

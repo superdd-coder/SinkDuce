@@ -36,7 +36,7 @@ EVENT_TYPES = frozenset({
     "chain.created", "chain.renamed", "chain.deleted", "chain.reopened",
     "node.created", "node.updated", "node.deleted", "node.reordered",
     "file.uploaded", "file.updated", "file.archived", "file.unarchived", "file.deleted",
-    "file.version_deleted",
+    "file.version_deleted", "file.version_rolled_back",
     "file_path.added", "file_path.removed", "file_path.promoted",
     "message.created", "message.updated", "message.deleted",
     "archive.toggled",

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
@@ -20,8 +27,8 @@ import {
 } from "@/api/file-mgmt"
 import {
   MessageBody,
-  MessageCard,
   enrichMessageSourceNames,
+  formatMessageSourceTag,
   resolveMessageHighlightNodeIds,
 } from "../message-card"
 import { MessageEditorDialog } from "../folder-view/message-editor-dialog"
@@ -144,6 +151,33 @@ function formatMsgTime(iso: string | null | undefined): string {
   })
 }
 
+/** Compact list time — same as MessageEditorDialog node rail. */
+function formatMsgListTime(iso: string | null | undefined): string {
+  if (!iso) return ""
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+/** Plain excerpt for stream rows (matches message-editor-dialog). */
+function messagePlainExcerpt(body: string): string {
+  return (body || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/!\[.*?\]\(.*?\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[*_~>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 function ownerLabel(msg: Message): string {
   switch (msg.owner_type) {
     case "node":
@@ -188,6 +222,21 @@ export function MessageStreamSidebar({
   detailDraftRef.current = detailDraft
   /** Latest load() for post-save list refresh (avoids TDZ with closeDetail). */
   const loadRef = useRef<() => void>(() => {})
+
+  /**
+   * Sliding focus wash (same as node-message dialog Messages card).
+   * listFocusId moves immediately on click; detailMsg may lag after openDetail.
+   */
+  const [listFocusId, setListFocusId] = useState<string | null>(null)
+  const msgListRef = useRef<HTMLDivElement>(null)
+  const msgItemRefs = useRef(new Map<string, HTMLDivElement>())
+  const focusIndRef = useRef({ top: 0, height: 0, ready: false })
+  const [focusInd, setFocusInd] = useState({
+    top: 0,
+    height: 0,
+    ready: false,
+  })
+  const focusCanTweenRef = useRef(false)
 
   const mainChain = useMemo(
     () => chains.find((c) => c.is_main) ?? chains.find((c) => !c.parent_chain_id),
@@ -239,12 +288,16 @@ export function MessageStreamSidebar({
     setDetailMsg(null)
     setDetailEditing(false)
     setDetailDraft("")
+    setListFocusId(null)
     onDetailChange?.({ open: false, sourceNodeIds: [], messageId: null })
     if (wasEditing) loadRef.current()
   }, [onDetailChange, persistEditIfNeeded])
 
   const openDetail = useCallback(
     async (msg: Message, editing: boolean) => {
+      // Focus wash slides immediately (do not wait for async open)
+      setListFocusId(msg.message_id)
+
       // Auto-save current edit before switching to another message
       if (
         detailMsgRef.current &&
@@ -286,6 +339,75 @@ export function MessageStreamSidebar({
     [collectionId, onDetailChange, persistEditIfNeeded]
   )
 
+  // ── Sliding focus indicator — same algorithm as MessageEditorDialog ──
+  const measureFocusInd = useCallback(() => {
+    const id = listFocusId
+    const list = msgListRef.current
+    const el = id ? msgItemRefs.current.get(id) : null
+    if (!list || !el) {
+      if (focusIndRef.current.ready) {
+        const next = { top: 0, height: 0, ready: false }
+        focusIndRef.current = next
+        setFocusInd(next)
+      }
+      return
+    }
+
+    // Prefer geometry relative to list (scroll-safe); fall back to offsetTop
+    const listRect = list.getBoundingClientRect()
+    const elRect = el.getBoundingClientRect()
+    const top = elRect.top - listRect.top + list.scrollTop
+    const height = elRect.height
+    if (height < 1) return
+
+    const prev = focusIndRef.current
+    if (
+      prev.ready &&
+      Math.abs(prev.top - top) < 0.5 &&
+      Math.abs(prev.height - height) < 0.5
+    ) {
+      return
+    }
+    const next = { top, height, ready: true }
+    focusIndRef.current = next
+    setFocusInd(next)
+    // First place is hard; subsequent moves slide (is-focus-tween)
+    if (!focusCanTweenRef.current) {
+      requestAnimationFrame(() => {
+        focusCanTweenRef.current = true
+        list.classList.add("is-focus-tween")
+      })
+    }
+  }, [listFocusId])
+
+  useLayoutEffect(() => {
+    measureFocusInd()
+  }, [measureFocusInd, messages.length, loading, listFocusId])
+
+  useEffect(() => {
+    const list = msgListRef.current
+    if (!list) return
+    const onScroll = () => measureFocusInd()
+    list.addEventListener("scroll", onScroll, { passive: true })
+    const ro = new ResizeObserver(() => measureFocusInd())
+    ro.observe(list)
+    for (const el of msgItemRefs.current.values()) ro.observe(el)
+    return () => {
+      list.removeEventListener("scroll", onScroll)
+      ro.disconnect()
+    }
+  }, [measureFocusInd, loading, messages.length])
+
+  // Reset tween lock when list reloads (new focus scope / filters)
+  useEffect(() => {
+    focusCanTweenRef.current = false
+    msgListRef.current?.classList.remove("is-focus-tween")
+    // Keep ready false until next measure — do not leave a stale pill
+    focusIndRef.current = { top: 0, height: 0, ready: false }
+    setFocusInd({ top: 0, height: 0, ready: false })
+    setListFocusId(null)
+  }, [focus, includeBranches, includeFiles])
+
   // Parent force-close (empty canvas click / focus change from timeline)
   useEffect(() => {
     if (externalDetailOpen !== false) return
@@ -298,6 +420,7 @@ export function MessageStreamSidebar({
       setDetailMsg(null)
       setDetailEditing(false)
       setDetailDraft("")
+      setListFocusId(null)
       if (wasEditing) loadRef.current()
     })()
     return () => {
@@ -529,35 +652,44 @@ export function MessageStreamSidebar({
       : focus.kind === "chain"
         ? "Add branch folder message"
         : "Add node message"
+  const addKicker =
+    focus.kind === "main"
+      ? "Main chain"
+      : focus.kind === "chain"
+        ? "Branch"
+        : "Node"
+  const addDescription =
+    focus.kind === "main"
+      ? "New message on the main chain (collection scope)."
+      : focus.kind === "chain"
+        ? "New message on this branch (folder scope)."
+        : "New message on this timeline node."
 
   const detailOpen = !!detailMsg
 
   return (
     <div
       data-message-stream-sidebar
-      className={cn(
-        "h-full w-full min-h-0 flex gap-3",
-        detailOpen ? "" : ""
-      )}
+      className="h-full w-full min-h-0 flex gap-3"
     >
       {/* Detail panel — equal width, left of stream, squeezes canvas via parent shell */}
       {detailMsg && (
         <div
           data-message-detail-panel
-          className="h-full min-w-0 flex-1 border border-border rounded-xl bg-background shadow-lg flex flex-col overflow-hidden"
+          className="pm-timeline-panel pm-timeline-msg-detail h-full min-w-0 flex-1"
         >
-          <div className="flex items-center justify-between gap-2 px-3 py-3 border-b border-border shrink-0">
+          <div className="pm-timeline-panel-head justify-between gap-2">
             <div className="min-w-0">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              <h3 className="pm-timeline-panel-title">
                 {detailEditing ? "Edit message" : "Message"}
               </h3>
               <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
                 {detailMsg.author_type === "system" ? (
-                  <Bot className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                  <Bot className="h-3 w-3 text-[var(--pm-faint)] shrink-0" />
                 ) : (
-                  <Clock className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+                  <Clock className="h-3 w-3 text-[var(--pm-faint)] shrink-0" />
                 )}
-                <span className="text-[10px] text-muted-foreground/60 truncate">
+                <span className="pm-timeline-panel-meta truncate">
                   {formatMsgTime(detailMsg.created_at)}
                   {detailMsg.edited_at ? " · edited" : ""}
                   {" · "}
@@ -569,7 +701,7 @@ export function MessageStreamSidebar({
               {!detailEditing && detailMsg.author_type !== "system" && (
                 <button
                   type="button"
-                  className="p-1 text-muted-foreground hover:text-foreground rounded"
+                  className="p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] rounded-[var(--pm-r-sm)] transition-colors"
                   title="Edit"
                   onClick={() => {
                     setDetailEditing(true)
@@ -581,7 +713,7 @@ export function MessageStreamSidebar({
               )}
               <button
                 type="button"
-                className="p-1 text-muted-foreground hover:text-foreground rounded"
+                className="p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] rounded-[var(--pm-r-sm)] transition-colors"
                 title={detailEditing ? "Save & close" : "Close"}
                 onClick={() => void closeDetail()}
               >
@@ -593,7 +725,7 @@ export function MessageStreamSidebar({
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
             {detailEditing ? (
               <>
-                <div className="flex-1 min-h-0 overflow-auto">
+                <div className="flex-1 min-h-0 overflow-auto px-2">
                   <MarkdownEditor
                     value={detailDraft}
                     onChange={setDetailDraft}
@@ -602,10 +734,11 @@ export function MessageStreamSidebar({
                     showToolbar={false}
                   />
                 </div>
-                <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-border shrink-0">
+                <div className="pm-timeline-panel-foot flex items-center justify-end gap-2">
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="xs"
+                    className="pm-btn-ghost"
                     onClick={() => {
                       // Discard local edits, stay on message in view mode
                       setDetailEditing(false)
@@ -616,6 +749,7 @@ export function MessageStreamSidebar({
                   </Button>
                   <Button
                     size="xs"
+                    className="pm-btn-pri"
                     disabled={!detailDraft.trim()}
                     onClick={() => void finishEditing()}
                   >
@@ -625,10 +759,10 @@ export function MessageStreamSidebar({
               </>
             ) : (
               <ScrollArea className="flex-1 min-h-0">
-                <div className="p-4">
+                <div className="px-4 pb-4">
                   <MessageBody
                     body={detailMsg.body || ""}
-                    className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed break-words [&_p]:my-2"
+                    className="pm-prose max-w-none break-words [&_p]:my-2"
                   />
                 </div>
               </ScrollArea>
@@ -640,115 +774,205 @@ export function MessageStreamSidebar({
       {/* Message list stream */}
       <div
         className={cn(
-          "h-full min-h-0 border border-border rounded-xl bg-background shadow-lg flex flex-col overflow-hidden",
+          "pm-timeline-panel h-full min-h-0",
           detailOpen ? "flex-1 min-w-0" : "w-full"
         )}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div className="pm-timeline-panel-head justify-between">
           <div className="min-w-0">
-            <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-              Message stream
-            </h3>
-            <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
+            <h3 className="pm-timeline-panel-title">Message stream</h3>
+            <p className="pm-timeline-panel-meta truncate mt-0.5">
               Focus: {focusLabel}
             </p>
           </div>
           <button
             type="button"
-            className="text-muted-foreground hover:text-foreground"
+            className="text-[var(--pm-faint)] hover:text-[var(--pm-ink)] transition-colors p-1 rounded-[var(--pm-r-sm)]"
             onClick={onClose}
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Toggles */}
-        <div className="px-3 py-2 border-b border-border/40 space-y-1.5 shrink-0">
-          {focus.kind === "main" && (
-            <label className="flex items-center gap-2 text-[10px] text-muted-foreground cursor-pointer">
-              <input
-                type="checkbox"
-                className="rounded border-border"
-                checked={includeBranches}
-                onChange={(e) => setIncludeBranches(e.target.checked)}
-              />
-              Include branches
-            </label>
-          )}
-          <label className="flex items-center gap-2 text-[10px] text-muted-foreground cursor-pointer">
-            <input
-              type="checkbox"
-              className="rounded border-border"
-              checked={includeFiles}
-              onChange={(e) => setIncludeFiles(e.target.checked)}
-            />
-            Include file messages
-          </label>
-        </div>
-
-        <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border/40 shrink-0">
-          <span className="text-[10px] text-muted-foreground/50">{messages.length}</span>
-          <div className="ml-auto">
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              title={addHint}
-              onClick={() => setAddDialogOpen(true)}
+        {/* Scope chips + add — one row: short filters left, + pinned right */}
+        <div className="pm-timeline-scope-row">
+          <div className="pm-timeline-scope-filters">
+            {focus.kind === "main" && (
+              <button
+                type="button"
+                className={cn(
+                  "pm-timeline-scope-btn",
+                  includeBranches && "is-on"
+                )}
+                onClick={() => setIncludeBranches(!includeBranches)}
+                title="Include branch messages"
+              >
+                Branches
+              </button>
+            )}
+            <button
+              type="button"
+              className={cn(
+                "pm-timeline-scope-btn",
+                includeFiles && "is-on"
+              )}
+              onClick={() => setIncludeFiles(!includeFiles)}
+              title="Include file messages"
             >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
+              Files
+            </button>
           </div>
+          <button
+            type="button"
+            className="pm-timeline-scope-add"
+            title={addHint}
+            onClick={() => {
+              setAddDialogOpen(false)
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  setAddDialogOpen(true)
+                })
+              })
+            }}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
         </div>
 
-        <ScrollArea className="flex-1 min-h-0">
-          {loading ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          ) : messages.length === 0 ? (
-            <p className="text-center text-xs text-muted-foreground/50 py-8 px-3">
-              No messages in this scope. Click + to add at focus layer.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-1 p-2">
-              {messages.map((msg) => (
-                <MessageCard
+        {loading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
+          </div>
+        ) : messages.length === 0 ? (
+          <p className="text-center pm-meta text-[var(--pm-faint)] py-8 px-3">
+            No messages in this scope. Click + to add at focus layer.
+          </p>
+        ) : (
+          /*
+           * Sliding focus wash — identical structure to MessageEditorDialog
+           * node Messages card: row IS the measured element (no wrapper).
+           */
+          <div
+            ref={msgListRef}
+            className="pm-node-msg-list flex-1 min-h-0 overflow-y-auto"
+          >
+            <div
+              className={cn(
+                "pm-node-msg-focus",
+                focusInd.ready && !!listFocusId && "is-ready"
+              )}
+              style={{
+                top: focusInd.top,
+                height: focusInd.height,
+              }}
+              aria-hidden
+            />
+            {messages.map((msg) => {
+              const focused = msg.message_id === listFocusId
+              const excerpt = messagePlainExcerpt(msg.body || "")
+              const time = formatMsgListTime(msg.created_at)
+              const sourceTag = formatMessageSourceTag(msg)
+              return (
+                <div
                   key={msg.message_id}
-                  msg={msg}
-                  previewSide="left"
-                  isActive={detailMsg?.message_id === msg.message_id}
-                  onView={(m) => {
-                    // Toggle close if same message already open in view mode
+                  ref={(el) => {
+                    if (el) msgItemRefs.current.set(msg.message_id, el)
+                    else msgItemRefs.current.delete(msg.message_id)
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  className={cn(
+                    "pm-msg-card pm-node-msg-row group",
+                    focused && "is-focused"
+                  )}
+                  onClick={() => {
                     if (
-                      detailMsg?.message_id === m.message_id &&
+                      detailMsg?.message_id === msg.message_id &&
                       !detailEditing
                     ) {
-                      closeDetail()
+                      void closeDetail()
                       return
                     }
-                    void openDetail(m, false)
+                    void openDetail(msg, false)
                   }}
-                  onEdit={(m) => void openDetail(m, true)}
-                  onDelete={() => void handleDelete(msg.message_id)}
-                  onSourceTagClick={(m) => {
-                    // Same as view: detail panel + canvas highlight
-                    void openDetail(m, false)
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      if (
+                        detailMsg?.message_id === msg.message_id &&
+                        !detailEditing
+                      ) {
+                        void closeDetail()
+                        return
+                      }
+                      void openDetail(msg, false)
+                    }
                   }}
-                />
-              ))}
-            </div>
-          )}
-        </ScrollArea>
+                >
+                  <div className="flex items-center gap-1.5 mb-0.5 min-w-0">
+                    <Clock
+                      className="h-3 w-3 shrink-0 text-[var(--pm-faint)]"
+                      strokeWidth={1.75}
+                    />
+                    {time ? (
+                      <span className="pm-meta shrink-0 tabular-nums">
+                        {time}
+                      </span>
+                    ) : null}
+                    {msg.edited_at ? (
+                      <span className="pm-meta italic shrink-0">edited</span>
+                    ) : null}
+                    {sourceTag ? (
+                      <span
+                        className={cn(
+                          "pm-meta shrink-0 truncate max-w-[8rem] px-1.5 py-0.5 rounded",
+                          sourceTag.kind === "Node" ||
+                            (msg.owner_type || "").toLowerCase() === "node"
+                            ? "text-[var(--pm-green)] bg-[var(--pm-green-wash)]"
+                            : "text-[var(--pm-muted)] bg-[rgba(18,20,16,0.05)]"
+                        )}
+                        title={sourceTag.full}
+                      >
+                        {sourceTag.label}
+                      </span>
+                    ) : null}
+                    {msg.author_type !== "system" ? (
+                      <button
+                        type="button"
+                        className="ml-auto shrink-0 pm-meta text-[var(--pm-faint)] hover:text-[var(--pm-danger)] opacity-0 group-hover:opacity-100 transition-opacity px-1"
+                        title="Delete message"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleDelete(msg.message_id)
+                        }}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="pm-node-msg-excerpt">
+                    {excerpt || "Empty message"}
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
-      {/* Add-only dialog (new message has no detail to show) */}
+      {/* Add-only dialog — silk enter/exit via stable mount + open flip */}
       <MessageEditorDialog
-        key="new-stream-msg"
+        key="stream-message-editor"
         open={addDialogOpen}
-        onOpenChange={setAddDialogOpen}
-        title={addHint}
+        onOpenChange={(next) => {
+          setAddDialogOpen(next)
+        }}
+        title="Add message"
+        kicker={addKicker}
+        description={addDescription}
         initialContent=""
         onSave={handleAdd}
+        readonly={false}
       />
     </div>
   )

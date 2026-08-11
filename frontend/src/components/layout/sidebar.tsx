@@ -1,234 +1,281 @@
-import { useState, useRef, useEffect } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { cn } from "@/lib/utils"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
-import { Button } from "@/components/ui/button"
 import { X, ArrowUpRight } from "lucide-react"
 import { useUpdateCheck } from "@/hooks/use-update-check"
 import { UpdateDialog } from "./update-dialog"
 
-/* Small diamond bullet */
-const DiamondDot = () => (
-  <svg style={{ width: "7px", height: "7px" }} viewBox="0 0 4 4" fill="currentColor" stroke="none">
-    <polygon points="2,0 4,2 2,4 0,2" />
-  </svg>
-)
-
+/**
+ * Premium shell nav:
+ * Slim rail · system label type · one shared diamond plate that
+ * slides + quarter-turns when switching views.
+ */
 const navItems: Array<{ view: SidebarView; label: string }> = [
   { view: "chat", label: "Chat" },
-  { view: "database", label: "Collection" },
+  { view: "database", label: "Library" },
   { view: "recall", label: "Recall" },
   { view: "meeting", label: "Meeting" },
   { view: "llm_provider", label: "Settings" },
 ]
 
-const COLLAPSE_DELAY_MS = 1000
+type PlateState = {
+  /** Center Y of active item relative to list (px) */
+  y: number
+  /** Accumulated rotation — +90° each switch so diamond “rolls” to next */
+  rot: number
+  ready: boolean
+}
+
+/** Float update card fade duration — keep in sync with --pm-update-card-ms in CSS */
+const UPDATE_CARD_MS = 280
 
 export function Sidebar() {
-  const { sidebarView, setSidebarView, sidebarOpen, setSidebarOpen } = useAppStore(
+  const { sidebarView, setSidebarView } = useAppStore(
     useShallow((s) => ({
       sidebarView: s.sidebarView,
       setSidebarView: s.setSidebarView,
-      sidebarOpen: s.sidebarOpen,
-      setSidebarOpen: s.setSidebarOpen,
     }))
   )
   const { update, ignored, ignoreVersion, currentVersion } = useUpdateCheck()
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [leaving, setLeaving] = useState(false)
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** After Ignore or closing Details — hide float card; version becomes update pill */
+  const [cardDismissed, setCardDismissed] = useState(false)
+  /** Soft enter/leave for float card (keep mounted while fading out) */
+  const [cardMounted, setCardMounted] = useState(false)
+  const [cardIn, setCardIn] = useState(false)
+  /** Soft enter for the flowing-green version pill (avoid hard cut) */
+  const [pillIn, setPillIn] = useState(false)
 
-  const showCard = update && !ignored && !leaving
-  const showDot = update !== null
+  const listRef = useRef<HTMLElement>(null)
+  const itemRefs = useRef<Map<SidebarView, HTMLButtonElement>>(new Map())
+  const rotRef = useRef(45)
+  const prevViewRef = useRef<SidebarView | null>(null)
+  const [plate, setPlate] = useState<PlateState>({ y: 0, rot: 45, ready: false })
+
+  const measurePlate = useCallback(() => {
+    const btn = itemRefs.current.get(sidebarView)
+    const list = listRef.current
+    if (!btn || !list) return
+
+    const y = btn.offsetTop + btn.offsetHeight / 2
+
+    // First paint: place without spin. Later: +90° quarter-turn while sliding.
+    if (prevViewRef.current === null) {
+      prevViewRef.current = sidebarView
+      rotRef.current = 45
+      setPlate({ y, rot: 45, ready: false })
+      requestAnimationFrame(() =>
+        setPlate((p) => ({ ...p, y, rot: 45, ready: true }))
+      )
+      return
+    }
+
+    if (prevViewRef.current !== sidebarView) {
+      rotRef.current += 90
+      prevViewRef.current = sidebarView
+    }
+
+    setPlate({ y, rot: rotRef.current, ready: true })
+  }, [sidebarView])
+
+  useLayoutEffect(() => {
+    measurePlate()
+  }, [measurePlate])
+
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    const ro = new ResizeObserver(() => measurePlate())
+    ro.observe(list)
+    window.addEventListener("resize", measurePlate)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener("resize", measurePlate)
+    }
+  }, [measurePlate])
+
+  const setItemRef = useCallback((view: SidebarView, el: HTMLButtonElement | null) => {
+    if (el) itemRefs.current.set(view, el)
+    else itemRefs.current.delete(view)
+  }, [])
+
+  /** Logical visibility — fade keep-alive is cardMounted / cardIn */
+  const shouldShowCard = !!update && !ignored && !cardDismissed
+  /**
+   * Keep the version as the green pill whenever an update exists (even while
+   * the float card is open). That way card `left: 0` and the pill share one
+   * left edge in the same stack — no shift when the card is dismissed.
+   */
+  const showUpdatePill = !!update
+
+  /* Float card: mount → double-rAF is-in; hide → is-in off then unmount after UPDATE_CARD_MS */
+  useEffect(() => {
+    if (shouldShowCard) {
+      setCardMounted(true)
+      setCardIn(false)
+      let raf2 = 0
+      const raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => setCardIn(true))
+      })
+      return () => {
+        cancelAnimationFrame(raf1)
+        if (raf2) cancelAnimationFrame(raf2)
+      }
+    }
+    setCardIn(false)
+    const t = window.setTimeout(() => setCardMounted(false), UPDATE_CARD_MS)
+    return () => window.clearTimeout(t)
+  }, [shouldShowCard])
+
+  /* Mount pill closed → next frames is-in for soft scale/fade (not a hard cut) */
+  useEffect(() => {
+    if (!showUpdatePill) {
+      setPillIn(false)
+      return
+    }
+    setPillIn(false)
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPillIn(true))
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      if (raf2) cancelAnimationFrame(raf2)
+    }
+  }, [showUpdatePill])
 
   const handleIgnore = () => {
-    setLeaving(true)
-    setTimeout(() => {
-      ignoreVersion()
-      setLeaving(false)
-    }, 250)
+    /* Flag dismiss first so leave animation runs; ignore persists after */
+    setCardDismissed(true)
+    ignoreVersion()
   }
 
-  /* Hover-driven expand: enter → expand immediately, leave → wait then collapse.
-     Header watches the same `sidebarOpen` so the logo block tracks the width. */
-  const clearCollapseTimer = () => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current)
-      collapseTimerRef.current = null
+  const handleDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open)
+    if (!open && update) {
+      /* Close Details → fade float card into version pill */
+      setCardDismissed(true)
     }
   }
-  const handleMouseEnter = () => {
-    clearCollapseTimer()
-    if (!sidebarOpen) setSidebarOpen(true)
+
+  const openUpdateDetails = () => {
+    if (!update) return
+    setDialogOpen(true)
   }
-  const handleMouseLeave = () => {
-    clearCollapseTimer()
-    collapseTimerRef.current = setTimeout(() => {
-      setSidebarOpen(false)
-      collapseTimerRef.current = null
-    }, COLLAPSE_DELAY_MS)
-  }
-  /* Clean up pending timer on unmount */
-  useEffect(() => () => clearCollapseTimer(), [])
 
   return (
     <>
-      <aside
-        className={cn(
-          "border-r border-border flex flex-col shrink-0 bg-background overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
-          sidebarOpen ? "w-[172px] py-6 px-4" : "w-[28px] py-6"
-        )}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        {sidebarOpen ? (
-        <nav className="flex flex-col flex-1">
-          <div
-            className="text-[14px] font-[300] uppercase tracking-[0.25em] text-muted-foreground mb-4 select-none"
-            title="Navigation"
-          >
-            Navigate
-          </div>
-
-          {navItems.map(({ view, label }) => (
-            <div key={view} className="mb-0.5">
-              <Button
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start gap-2.5 py-2 px-0 h-auto text-xs uppercase tracking-wider relative rounded-none",
-                  "hover:bg-transparent hover:text-primary",
-                  sidebarView === view ? "font-[400] text-primary" : "font-[300] text-muted-foreground",
-                )}
-                onClick={() => setSidebarView(view)}
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "8px", height: "8px", flexShrink: 0, opacity: sidebarView === view ? 1 : 0.4, lineHeight: 0 }}>
-                  <DiamondDot />
-                </span>
-                {label}
-                {sidebarView === view && (
-                  <span
-                    className="absolute bottom-0 left-0 h-[1.5px] w-5"
-                    style={{ background: "var(--ze-green)" }}
-                  />
-                )}
-              </Button>
-            </div>
-          ))}
-
-          {/* ── Bottom group: update card + version line ── */}
-          <div className="mt-auto">
-          <div
+      <aside className="pm-shell-nav" aria-label="Main navigation">
+        <nav ref={listRef} className="pm-shell-nav-list">
+          {/* Shared diamond — slides + rotates to active item */}
+          <span
             className={cn(
-              "overflow-hidden transition-all duration-300 ease-out",
-              showCard ? "translate-x-0 opacity-100 max-h-32 mb-3" : "-translate-x-full opacity-0 max-h-0 mb-0"
+              "pm-shell-nav-plate",
+              plate.ready && "is-ready"
             )}
-          >
-          {update && !ignored && (
-            <div
-              className="rounded-sm p-3"
-              style={{
-                border: "1px solid #1a3a2a",
-                backgroundColor: "#faf7f2",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-              }}
-            >
-              {/* Header row */}
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1.5">
-                  <span style={{ color: "#1a3a2a", lineHeight: 0 }}>
-                    <DiamondDot />
-                  </span>
-                  <span
-                    className="text-[10px] uppercase tracking-[0.12em] t-body-family"
-                    style={{ color: "#1a3a2a" }}
-                  >
-                    New Version
-                  </span>
-                </div>
-                <button
-                  onClick={handleIgnore}
-                  className="text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-                  title="Ignore this version"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
+            style={{
+              /* top = item center; transform only centers + spins the diamond */
+              top: plate.y,
+              transform: `translate(-50%, -50%) rotate(${plate.rot}deg)`,
+            }}
+            aria-hidden
+          />
 
-              {/* Version number */}
-              <p
-                className="text-sm font-light mb-3 t-body-family"
-                style={{ color: "var(--ze-ink)" }}
+          {navItems.map(({ view, label }) => {
+            const active = sidebarView === view
+            return (
+              <button
+                key={view}
+                ref={(el) => setItemRef(view, el)}
+                type="button"
+                className={cn("pm-shell-nav-item", active && "is-active")}
+                onClick={() => setSidebarView(view)}
+                aria-current={active ? "page" : undefined}
               >
-                {update.latestVersion}
-              </p>
-
-              {/* Buttons */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleIgnore}
-                  className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-muted-foreground transition-colors t-body-family"
-                >
-                  Ignore
-                </button>
-                <button
-                  onClick={() => setDialogOpen(true)}
-                  className="text-[10px] uppercase tracking-[0.08em] font-medium transition-colors flex items-center gap-1 t-body-family"
-                  style={{ color: "#1a3a2a" }}
-                >
-                  Update <ArrowUpRight className="h-2.5 w-2.5" />
-                </button>
-              </div>
-            </div>
-          )}
-          </div>
-
-          {/* ── Version line ── */}
-          <div className="pt-5 border-t border-dashed border-border">
-            <div className="flex items-center justify-between">
-              <span
-                className="text-[10px] font-[300] tracking-[0.1em] text-muted-foreground/60 t-body-family"
-              >
-                v{currentVersion}
-              </span>
-              {showDot && (
-                <button
-                  onClick={() => setDialogOpen(true)}
-                  className="flex items-center gap-1 text-[10px] font-[300] tracking-[0.08em] hover:opacity-80 transition-opacity t-body-family"
-                  style={{ color: "#dc2626" }}
-                  title={`Update ${update.latestVersion} available`}
-                >
-                  <span className="w-1 h-1 rounded-full" style={{ backgroundColor: "#dc2626" }} />
-                  {update.latestVersion.replace(/^v/, "")}
-                </button>
-              )}
-            </div>
-          </div>
-          </div>
+                <span className="pm-shell-nav-text">{label}</span>
+              </button>
+            )
+          })}
         </nav>
-        ) : (
-          /* Collapsed: vertical "Navigate" hint — hover the bar to expand */
-          <div
-            className="flex-1 flex items-center justify-center group"
-            title="Hover to open navigation"
-          >
-            <span
-              className="text-[10px] font-[300] uppercase tracking-[0.25em] text-muted-foreground group-hover:text-primary transition-colors select-none whitespace-nowrap t-body-family"
-              style={{
-                writingMode: "vertical-rl",
-                transform: "rotate(180deg)",
-              }}
-            >
-              Navigate
-            </span>
+
+        <div className="pm-shell-nav-bottom">
+          {/* Shared stack so float card + version pill share the same left edge */}
+          <div className="pm-shell-update-stack">
+            {cardMounted && update && (
+              <div
+                className={cn(
+                  "pm-shell-update-card",
+                  cardIn && "is-in",
+                )}
+                role="status"
+              >
+                <div className="pm-shell-update-card-head">
+                  <span className="pm-shell-update-label">Update</span>
+                  <button
+                    type="button"
+                    onClick={handleIgnore}
+                    className="pm-shell-update-dismiss"
+                    title="Ignore this version"
+                    aria-label="Ignore this version"
+                  >
+                    <X className="h-3 w-3" strokeWidth={2} />
+                  </button>
+                </div>
+                <p className="pm-shell-update-ver">
+                  {update.latestVersion.startsWith("v")
+                    ? update.latestVersion
+                    : `v${update.latestVersion}`}
+                </p>
+                <p className="pm-shell-update-from">
+                  from v{update.currentVersion.replace(/^v/, "")}
+                </p>
+                <div className="pm-shell-update-actions">
+                  <button
+                    type="button"
+                    onClick={openUpdateDetails}
+                    className="pm-shell-update-link"
+                  >
+                    Details
+                    <ArrowUpRight className="h-3 w-3" strokeWidth={2} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleIgnore}
+                    className="pm-shell-update-ghost"
+                  >
+                    Ignore
+                  </button>
+                </div>
+              </div>
+            )}
+            {showUpdatePill ? (
+              <button
+                type="button"
+                className={cn(
+                  "pm-shell-version-pill is-update",
+                  pillIn && "is-in",
+                )}
+                onClick={openUpdateDetails}
+                title="Update available — view details"
+                aria-label={`Update available, current version v${currentVersion}. Open details.`}
+              >
+                <span className="pm-shell-version-pill-ring" aria-hidden />
+                <span className="pm-shell-version-pill-label">
+                  v{currentVersion}
+                </span>
+              </button>
+            ) : (
+              <span className="pm-shell-version">v{currentVersion}</span>
+            )}
           </div>
-        )}
+        </div>
       </aside>
 
-      {/* ── Update detail dialog ── */}
       {update && (
         <UpdateDialog
           open={dialogOpen}
-          onOpenChange={setDialogOpen}
+          onOpenChange={handleDialogOpenChange}
           update={update}
         />
       )}

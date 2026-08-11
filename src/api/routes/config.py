@@ -62,9 +62,11 @@ def list_provider_types():
         llm_registry,
     )
     from src.meeting.transcription.registry import (
+        entry_public_dict,
         file_transcription_registry,
         realtime_transcription_registry,
     )
+
     def _entries(registry):
         return [
             {"name": e.name, "display_name": e.display_name}
@@ -75,8 +77,13 @@ def list_provider_types():
         "embedding": _entries(embedding_registry),
         "reranker": _entries(reranker_registry),
         "llm": _entries(llm_registry),
-        "file_transcription": _entries(file_transcription_registry),
-        "realtime_transcription": _entries(realtime_transcription_registry),
+        # Transcription adapters also expose supports_hot_words for UI enable/disable
+        "file_transcription": [
+            entry_public_dict(e) for e in file_transcription_registry.list_primary()
+        ],
+        "realtime_transcription": [
+            entry_public_dict(e) for e in realtime_transcription_registry.list_primary()
+        ],
     }
 
 
@@ -422,13 +429,23 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
     return {"error": f"Provider '{provider_id}' not found"}
 
 
+def _provider_display_name(provider, fallback_id: str = "") -> str:
+    """Human-readable label for toasts (prefer name over uuid)."""
+    name = (getattr(provider, "name", None) or "").strip()
+    if name:
+        return name
+    pid = (getattr(provider, "id", None) or fallback_id or "").strip()
+    return pid or "Provider"
+
+
 @router.delete("/llm/providers/{provider_id}")
 async def delete_llm_provider(provider_id: str):
     config = get_config()
-    original_len = len(config.llm.providers)
-    config.llm.providers = [p for p in config.llm.providers if p.id != provider_id]
-    if len(config.llm.providers) == original_len:
+    target = next((p for p in config.llm.providers if p.id == provider_id), None)
+    if not target:
         return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
+    config.llm.providers = [p for p in config.llm.providers if p.id != provider_id]
     # Clean up stale visual_model_id / default_chat_model
     all_visual = {m for prov in config.llm.providers for m in (prov.visual_model_ids or [])}
     if config.visual_model_id and config.visual_model_id not in all_visual:
@@ -438,7 +455,7 @@ async def delete_llm_provider(provider_id: str):
         config.default_chat_model = None
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/llm/providers/{provider_id}/test")
@@ -477,10 +494,12 @@ async def set_default_llm_provider(provider_id: str):
     _log.info("Set default LLM: %s", provider_id)
     config = get_config()
     found = False
+    display_name = provider_id
     for p in config.llm.providers:
         if p.id == provider_id:
             p.is_default = True
             found = True
+            display_name = (p.name or "").strip() or provider_id
         else:
             p.is_default = False
     if not found:
@@ -489,7 +508,7 @@ async def set_default_llm_provider(provider_id: str):
     save_config(config)
     reload_config()
     await async_reload_services()
-    return {"message": f"Provider '{provider_id}' set as default"}
+    return {"message": f"Provider '{display_name}' set as default"}
 
 
 # ── Embedding Provider CRUD ────────────────────────────────
@@ -556,13 +575,14 @@ async def delete_embedding_provider(provider_id: str):
     target = next((p for p in config.embedding.providers if p.id == provider_id), None)
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     config.embedding.providers = [p for p in config.embedding.providers if p.id != provider_id]
     # If we deleted the default, auto-promote the first remaining
     if target.is_default and config.embedding.providers:
         config.embedding.providers[0].is_default = True
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/embedding/providers/{provider_id}/test")
@@ -597,10 +617,12 @@ async def set_default_embedding_provider(provider_id: str):
     _log.info("Set default embedding: %s", provider_id)
     config = get_config()
     found = False
+    display_name = provider_id
     for p in config.embedding.providers:
         if p.id == provider_id:
             p.is_default = True
             found = True
+            display_name = (p.name or "").strip() or provider_id
         else:
             p.is_default = False
     if not found:
@@ -609,7 +631,7 @@ async def set_default_embedding_provider(provider_id: str):
     save_config(config)
     reload_config()
     await async_reload_services()
-    return {"message": f"Provider '{provider_id}' set as default"}
+    return {"message": f"Provider '{display_name}' set as default"}
 
 
 # ── Rerank Provider CRUD ───────────────────────────────────
@@ -677,13 +699,14 @@ async def delete_rerank_provider(provider_id: str):
     target = next((p for p in config.rerank.providers if p.id == provider_id), None)
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     config.rerank.providers = [p for p in config.rerank.providers if p.id != provider_id]
     # If we deleted the default, auto-promote the first remaining
     if target.is_default and config.rerank.providers:
         config.rerank.providers[0].is_default = True
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/rerank/providers/{provider_id}/test")
@@ -721,10 +744,12 @@ async def set_default_rerank_provider(provider_id: str):
     _log.info("Set default reranker: %s", provider_id)
     config = get_config()
     found = False
+    display_name = provider_id
     for p in config.rerank.providers:
         if p.id == provider_id:
             p.is_default = True
             found = True
+            display_name = (p.name or "").strip() or provider_id
         else:
             p.is_default = False
     if not found:
@@ -733,19 +758,27 @@ async def set_default_rerank_provider(provider_id: str):
     save_config(config)
     reload_config()
     await async_reload_services()
-    return {"message": f"Provider '{provider_id}' set as default"}
+    return {"message": f"Provider '{display_name}' set as default"}
 
 
 # ── File Transcription Provider CRUD ─────────────────────────
 
 
 def _check_models_downloaded(adapter: str, model: str | None) -> bool:
-    """Check if the model files for a local adapter exist on disk."""
-    from src.models.download import LOCAL_MODELS, _is_downloaded
+    """Check if the model files for a local ONNX adapter exist on disk.
 
-    if adapter == "funasr_local":
+    Readiness is determined by ``_is_downloaded`` (prefers ONNX packs under
+    ``data/models/onnx/``).
+    """
+    from src.models.download import LOCAL_MODELS, _is_downloaded
+    from src.meeting.transcription import (
+        is_local_file_adapter,
+        is_local_realtime_adapter,
+    )
+
+    if is_local_file_adapter(adapter):
         required_ids = ["transcription", "vad", "speaker", "punc"]
-    elif adapter == "funasr_local_realtime":
+    elif is_local_realtime_adapter(adapter):
         required_ids = ["realtime"]
     else:
         return False
@@ -759,6 +792,8 @@ def _check_models_downloaded(adapter: str, model: str | None) -> bool:
 
 @router.get("/transcription/file-providers")
 def list_file_transcription_providers():
+    from src.providers.load_state import get_state
+
     config = get_config()
     result = []
     # Built-in local provider
@@ -766,19 +801,27 @@ def list_file_transcription_providers():
     d = local.model_dump()
     downloaded = _check_models_downloaded(local.adapter, local.model)
     d["models_downloaded"] = downloaded
-    d["is_loaded"] = downloaded
-    d["is_active"] = downloaded and any(p.id == "builtin-local-file" and p.is_active for p in config.transcription.file_providers)
+    # Memory load state (not the same as downloaded-on-disk)
+    d["is_loaded"] = get_state("builtin-local-file") == "loaded"
+    d["load_state"] = get_state("builtin-local-file")
+    d["is_active"] = any(
+        p.id == "builtin-local-file" and p.is_active for p in config.transcription.file_providers
+    )
     result.append(d)
     # User-configured cloud providers
     for p in config.transcription.file_providers:
         if p.id.startswith("builtin-"):
             continue
         d = p.model_dump()
-        if p.adapter.startswith("funasr_local"):
+        from src.meeting.transcription import is_local_file_adapter
+
+        if is_local_file_adapter(p.adapter):
             d["models_downloaded"] = _check_models_downloaded(p.adapter, p.model)
-            d["is_loaded"] = d["models_downloaded"]
+            d["is_loaded"] = get_state(p.id) == "loaded"
+            d["load_state"] = get_state(p.id)
         else:
             d["is_loaded"] = True
+            d["load_state"] = "loaded"
         result.append(d)
     return result
 
@@ -828,16 +871,19 @@ async def update_file_transcription_provider(provider_id: str, update: dict = Bo
 @router.delete("/transcription/file-providers/{provider_id}")
 async def delete_file_transcription_provider(provider_id: str):
     config = get_config()
+    target = next(
+        (p for p in config.transcription.file_providers if p.id == provider_id), None
+    )
+    if not target:
+        return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     invalidate_provider(f"file_trans:{provider_id}")
-    original_len = len(config.transcription.file_providers)
     config.transcription.file_providers = [
         p for p in config.transcription.file_providers if p.id != provider_id
     ]
-    if len(config.transcription.file_providers) == original_len:
-        return {"error": f"Provider '{provider_id}' not found"}
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/transcription/file-providers/{provider_id}/test")
@@ -857,8 +903,50 @@ async def test_file_transcription_provider(provider_id: str):
         return {"error": "Provider not found"}
     try:
         from src.meeting.transcription import create_file_transcription_provider
+        from src.providers.cache import peek
+        from src.providers.load_state import get_state
+
+        from src.meeting.transcription import is_local_file_adapter
 
         cache_key = f"file_trans:{provider_id}"
+        is_local = is_local_file_adapter(provider.adapter)
+
+        # Local ONNX FunASR: never re-load on Test — require Load first (instant feedback).
+        if is_local:
+            cached = peek(cache_key)
+            state = get_state(provider_id)
+            if cached is None and state != "loaded":
+                return {
+                    "success": False,
+                    "code": "not_loaded",
+                    "error": (
+                        "Model is not loaded in memory. "
+                        "Click Load first (CPU may take 10–60s), then Test."
+                    ),
+                }
+            instance = cached
+            if instance is None:
+                # State says loaded but cache empty — recover via cache create
+                loop = asyncio.get_running_loop()
+                instance = await loop.run_in_executor(
+                    None,
+                    lambda: cached_provider(
+                        cache_key, lambda: create_file_transcription_provider(provider)
+                    ),
+                )
+            effective_model = (
+                getattr(instance, "_model_name", None)
+                or getattr(instance, "_model", None)
+                or provider.model
+                or "(default)"
+            )
+            return {
+                "success": True,
+                "message": (
+                    f"OK — {provider.adapter} ready in memory "
+                    f"(model={effective_model}). No ASR call."
+                ),
+            }
 
         def _test():
             return cached_provider(cache_key, lambda: create_file_transcription_provider(provider))
@@ -880,7 +968,6 @@ async def test_file_transcription_provider(provider_id: str):
             except Exception as e:
                 return {"success": False, "error": f"Connectivity check failed: {e}"}
 
-        # Prefer the model the adapter will actually use (may differ from config.model).
         effective_model = getattr(instance, "_model", None) or provider.model or "(default)"
         _log.info(
             "Test file transcription passed: %s (adapter=%s model=%s)",
@@ -890,12 +977,41 @@ async def test_file_transcription_provider(provider_id: str):
             "success": True,
             "message": (
                 f"OK — adapter '{provider.adapter}', model '{effective_model}' "
-                f"(load check only; does not call ASR)"
+                f"(connectivity/load check only)"
             ),
         }
     except Exception as e:
         _log.warning("Test file transcription failed: %s (%s) - %s", provider.name, provider.adapter, e)
         return {"success": False, "error": _clean_error(e)}
+
+
+def _invalidate_transcription_caches(*, kind: str) -> None:
+    """Drop cached file/realtime provider instances so the next use matches config."""
+    from src.providers.cache import invalidate as cache_invalidate
+    from src.providers.cache import keys as cache_keys
+
+    prefix = "file_trans:" if kind == "file" else "rt_trans:"
+    for key in cache_keys():
+        if key.startswith(prefix):
+            cache_invalidate(key)
+
+
+def _maybe_autoload_local(provider_id: str, adapter: str) -> None:
+    """If activating a local ONNX FunASR provider, kick off memory load when files exist."""
+    from src.meeting.transcription import is_local_asr_adapter
+
+    if not is_local_asr_adapter(adapter):
+        return
+    if provider_id not in ("builtin-local-file", "builtin-local-rt"):
+        return
+    from src.providers.load_state import get_state
+    from src.services import reload_provider, _is_builtin_model_downloaded
+
+    if get_state(provider_id) in ("loaded", "loading"):
+        return
+    if not _is_builtin_model_downloaded(provider_id):
+        return
+    reload_provider(provider_id, loading=True)
 
 
 @router.post("/transcription/file-providers/{provider_id}/set-active")
@@ -905,28 +1021,44 @@ async def set_active_file_transcription_provider(provider_id: str):
     _log.info("Set active file transcription: %s", provider_id)
     config = get_config()
     found = False
+    display_name = provider_id
+    adapter = ""
     for p in config.transcription.file_providers:
         if p.id == provider_id:
             p.is_active = True
             found = True
+            display_name = (p.name or "").strip() or provider_id
+            adapter = p.adapter
             _log.info("Activated file transcription provider: %s (%s)", p.name, p.adapter)
         else:
             p.is_active = False
     if not found:
         if provider_id.startswith("builtin-"):
-            # Builtin provider: deactivate all, then persist active state
             for p in config.transcription.file_providers:
                 p.is_active = False
+            # Replace any stale builtin entry, then append active one
+            config.transcription.file_providers = [
+                p for p in config.transcription.file_providers if p.id != provider_id
+            ]
             builtin = config.transcription.get_local_file_provider()
             builtin.is_active = True
             config.transcription.file_providers.append(builtin)
-            _log.info("Activated builtin file transcription provider")
+            display_name = (builtin.name or "").strip() or provider_id
+            adapter = builtin.adapter
+            _log.info("Activated builtin file transcription provider: %s", adapter)
         else:
             _log.warning("Set active file transcription failed: provider '%s' not found", provider_id)
             return {"error": f"Provider '{provider_id}' not found"}
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' set as active"}
+    _invalidate_transcription_caches(kind="file")
+    _maybe_autoload_local(provider_id, adapter)
+    return {
+        "message": f"Provider '{display_name}' set as active",
+        "provider_id": provider_id,
+        "adapter": adapter,
+        "name": display_name,
+    }
 
 
 # ── Realtime Transcription Provider CRUD ─────────────────────
@@ -934,6 +1066,8 @@ async def set_active_file_transcription_provider(provider_id: str):
 
 @router.get("/transcription/realtime-providers")
 def list_realtime_transcription_providers():
+    from src.providers.load_state import get_state
+
     config = get_config()
     result = []
     # Built-in local provider
@@ -941,19 +1075,26 @@ def list_realtime_transcription_providers():
     d = local.model_dump()
     downloaded = _check_models_downloaded(local.adapter, local.model)
     d["models_downloaded"] = downloaded
-    d["is_loaded"] = downloaded
-    d["is_active"] = downloaded and any(p.id == "builtin-local-rt" and p.is_active for p in config.transcription.realtime_providers)
+    d["is_loaded"] = get_state("builtin-local-rt") == "loaded"
+    d["load_state"] = get_state("builtin-local-rt")
+    d["is_active"] = any(
+        p.id == "builtin-local-rt" and p.is_active for p in config.transcription.realtime_providers
+    )
     result.append(d)
     # User-configured cloud providers
     for p in config.transcription.realtime_providers:
         if p.id.startswith("builtin-"):
             continue
         d = p.model_dump()
-        if p.adapter.startswith("funasr_local"):
+        from src.meeting.transcription import is_local_realtime_adapter
+
+        if is_local_realtime_adapter(p.adapter):
             d["models_downloaded"] = _check_models_downloaded(p.adapter, p.model)
-            d["is_loaded"] = d["models_downloaded"]
+            d["is_loaded"] = get_state(p.id) == "loaded"
+            d["load_state"] = get_state(p.id)
         else:
             d["is_loaded"] = True
+            d["load_state"] = "loaded"
         result.append(d)
     return result
 
@@ -1003,23 +1144,27 @@ async def update_realtime_transcription_provider(provider_id: str, update: dict 
 @router.delete("/transcription/realtime-providers/{provider_id}")
 async def delete_realtime_transcription_provider(provider_id: str):
     config = get_config()
+    target = next(
+        (p for p in config.transcription.realtime_providers if p.id == provider_id),
+        None,
+    )
+    if not target:
+        return {"error": f"Provider '{provider_id}' not found"}
+    label = _provider_display_name(target, provider_id)
     invalidate_provider(f"rt_trans:{provider_id}")
-    original_len = len(config.transcription.realtime_providers)
     config.transcription.realtime_providers = [
         p for p in config.transcription.realtime_providers if p.id != provider_id
     ]
-    if len(config.transcription.realtime_providers) == original_len:
-        return {"error": f"Provider '{provider_id}' not found"}
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' deleted"}
+    return {"message": f"Provider '{label}' deleted"}
 
 
 @router.post("/transcription/realtime-providers/{provider_id}/test")
 async def test_realtime_transcription_provider(provider_id: str):
     import logging
     _log = logging.getLogger("api.test_realtime_transcription")
-    _log.info("Testing realtime transcription provider (direct): %s", provider_id)
+    _log.info("Testing realtime transcription provider: %s", provider_id)
     config = get_config()
     provider = next(
         (p for p in config.transcription.realtime_providers if p.id == provider_id),
@@ -1032,25 +1177,75 @@ async def test_realtime_transcription_provider(provider_id: str):
         return {"error": "Provider not found"}
     try:
         from src.meeting.transcription import create_realtime_transcription_provider
+        from src.providers.cache import peek
+        from src.providers.load_state import get_state
+
+        from src.meeting.transcription import is_local_realtime_adapter
+
+        cache_key = f"rt_trans:{provider_id}"
+        is_local = is_local_realtime_adapter(provider.adapter)
+
+        if is_local:
+            # CRITICAL: do not create a second model instance on Test — that was multi-10s lag.
+            cached = peek(cache_key)
+            state = get_state(provider_id)
+            if cached is None and state != "loaded":
+                return {
+                    "success": False,
+                    "code": "not_loaded",
+                    "error": (
+                        "Model is not loaded in memory. "
+                        "Click Load first (CPU may take 10–60s), then Test."
+                    ),
+                }
+            instance = cached
+            if instance is None:
+                loop = asyncio.get_running_loop()
+                instance = await loop.run_in_executor(
+                    None,
+                    lambda: cached_provider(
+                        cache_key,
+                        lambda: create_realtime_transcription_provider(provider),
+                    ),
+                )
+            effective_model = (
+                getattr(instance, "_model_name", None)
+                or provider.model
+                or "(default)"
+            )
+            _log.info(
+                "Test realtime transcription (cached): %s adapter=%s model=%s",
+                provider.name, provider.adapter, effective_model,
+            )
+            return {
+                "success": True,
+                "message": (
+                    f"OK — {provider.adapter} ready in memory "
+                    f"(model={effective_model}). No ASR call."
+                ),
+            }
 
         loop = asyncio.get_running_loop()
         instance = await loop.run_in_executor(
-            None, create_realtime_transcription_provider, provider
+            None,
+            lambda: cached_provider(
+                cache_key,
+                lambda: create_realtime_transcription_provider(provider),
+            ),
         )
         effective_model = getattr(instance, "_model", None) or provider.model or "(default)"
-        _log.info(
-            "Test realtime transcription passed (direct): %s (adapter=%s model=%s)",
-            provider.name, provider.adapter, effective_model,
-        )
         return {
             "success": True,
             "message": (
                 f"OK — adapter '{provider.adapter}', model '{effective_model}' "
-                f"(load check only; does not call ASR)"
+                f"(connectivity/load check only)"
             ),
         }
     except Exception as e:
-        _log.warning("Test realtime transcription failed (direct): %s (%s) - %s", provider.name, provider.adapter, e)
+        _log.warning(
+            "Test realtime transcription failed: %s (%s) - %s",
+            provider.name, provider.adapter, e,
+        )
         return {"success": False, "error": _clean_error(e)}
 
 
@@ -1061,29 +1256,43 @@ async def set_active_realtime_transcription_provider(provider_id: str):
     _log.info("Set active realtime transcription: %s", provider_id)
     config = get_config()
     found = False
+    display_name = provider_id
+    adapter = ""
     for p in config.transcription.realtime_providers:
         if p.id == provider_id:
             p.is_active = True
             found = True
+            display_name = (p.name or "").strip() or provider_id
+            adapter = p.adapter
             _log.info("Activated realtime transcription provider: %s (%s)", p.name, p.adapter)
         else:
             p.is_active = False
     if not found:
         if provider_id.startswith("builtin-"):
-            # Builtin provider: deactivate all, then persist active state
             for p in config.transcription.realtime_providers:
                 p.is_active = False
+            config.transcription.realtime_providers = [
+                p for p in config.transcription.realtime_providers if p.id != provider_id
+            ]
             builtin = config.transcription.get_local_realtime_provider()
             builtin.is_active = True
             config.transcription.realtime_providers.append(builtin)
-            _log.info("Activated builtin realtime transcription provider")
+            display_name = (builtin.name or "").strip() or provider_id
+            adapter = builtin.adapter
+            _log.info("Activated builtin realtime transcription provider: %s", adapter)
         else:
             _log.warning("Set active realtime transcription failed: provider '%s' not found", provider_id)
             return {"error": f"Provider '{provider_id}' not found"}
     save_config(config)
     reload_config()
-    return {"message": f"Provider '{provider_id}' set as active"}
-
+    _invalidate_transcription_caches(kind="realtime")
+    _maybe_autoload_local(provider_id, adapter)
+    return {
+        "message": f"Provider '{display_name}' set as active",
+        "provider_id": provider_id,
+        "adapter": adapter,
+        "name": display_name,
+    }
 
 # ---------------------------------------------------------------------------
 # Local model management
@@ -1100,72 +1309,220 @@ def get_models_status():
 def get_models_state():
     """Check which models are actually loaded in memory."""
     from src.services import services
-    from src.providers.load_state import get_all_states
+    from src.providers.load_state import get_all_details, get_all_states
     return {
         "llm_loaded": services.llm is not None,
         "embedding_loaded": services.embedding is not None,
         "reranker_loaded": services.reranker_provider is not None,
         "load_states": get_all_states(),
+        # Per-provider status for Settings UI (message / error / load_s)
+        "load_details": get_all_details(),
     }
 
 
 @router.post("/models/download")
 def start_model_download(body: dict = Body(default={})):
-    """Start downloading models in the background.
+    """Start downloading local ONNX ASR packs from the GitHub Release (background).
 
-    Body: {"hf_token": "hf_xxx", "model_ids": ["llm", "embedding"]} or {} for all
+    Body: ``{"model_ids": ["transcription", "realtime"]}`` or ``{}`` for full pack.
+    ``hf_token`` is accepted for backward compatibility and ignored — there is no
+    HuggingFace fallback; only the official release zip is used.
     """
     from src.models.download import download_model, start_download_all
 
-    hf_token = body.get("hf_token")
     model_ids = body.get("model_ids")
+    # hf_token intentionally ignored (API compat only)
 
     if model_ids:
-        for mid in model_ids:
-            t = threading.Thread(target=download_model, args=(mid, hf_token), daemon=True)
-            t.start()
+        # One background job is enough — package download is serialized internally
+        first = model_ids[0]
+        t = threading.Thread(target=download_model, args=(first, None), daemon=True)
+        t.start()
     else:
-        start_download_all(hf_token)
+        start_download_all(None)
 
-    return {"success": True, "message": "Download started"}
+    return {
+        "success": True,
+        "message": "Download started (GitHub Release ONNX pack)",
+    }
+
+
+# Map download-registry model ids → built-in provider that must be unloaded
+_MODEL_ID_TO_PROVIDER: dict[str, str] = {
+    "transcription": "builtin-local-file",
+    "vad": "builtin-local-file",
+    "speaker": "builtin-local-file",
+    "punc": "builtin-local-file",
+    "realtime": "builtin-local-rt",
+}
+
+
+def _unload_providers_for_models(model_ids: list[str]) -> list[str]:
+    """Unload in-memory FunASR providers that depend on deleted model files."""
+    from src.providers.load_state import get_state, set_state
+    from src.services import reload_provider
+
+    unloaded: list[str] = []
+    providers = { _MODEL_ID_TO_PROVIDER[mid] for mid in model_ids if mid in _MODEL_ID_TO_PROVIDER }
+    for provider_id in providers:
+        state = get_state(provider_id)
+        if state in ("loaded", "loading", "error"):
+            reload_provider(provider_id, loading=False)
+            set_state(provider_id, "unloaded")
+            unloaded.append(provider_id)
+    return unloaded
+
+
+@router.delete("/models/{model_id}")
+def delete_local_model(model_id: str):
+    """Delete a single local model's files from HF cache and unload dependents."""
+    from src.models.download import delete_model
+
+    unloaded = _unload_providers_for_models([model_id])
+    result = delete_model(model_id)
+    if not result.get("success"):
+        return result
+    result["unloaded_providers"] = unloaded
+    return result
+
+
+@router.post("/models/delete")
+def delete_local_models(body: dict = Body(default={})):
+    """Delete one or more local model packs from disk.
+
+    Body: ``{"model_ids": ["transcription", "vad", ...]}``
+    """
+    from src.models.download import delete_models
+
+    model_ids = body.get("model_ids") or []
+    if not isinstance(model_ids, list) or not model_ids:
+        return {"success": False, "error": "model_ids required"}
+    ids = [str(x) for x in model_ids]
+    unloaded = _unload_providers_for_models(ids)
+    result = delete_models(ids)
+    result["unloaded_providers"] = unloaded
+    return result
 
 
 @router.post("/models/{model_id}/toggle-load")
-async def toggle_model_load(model_id: str):
-    """Toggle a built-in model between loaded and unloaded."""
+async def toggle_model_load(model_id: str, body: dict = Body(default={})):
+    """Load or unload a built-in local model.
+
+    Body (optional)::
+
+        {"action": "load"} | {"action": "unload"}
+
+    If ``action`` is omitted, toggles: unloaded/error → load, loaded → unload.
+    While a load is in progress, ``status`` is always ``"loading"`` (never
+    pretends to be loaded). Poll ``GET /models/state`` until ``loaded``/``error``.
+    """
     import logging
     _log = logging.getLogger("api.models")
-    from src.providers.load_state import set_state
+    from src.providers.load_state import get_detail, get_state, set_state
     from src.services import reload_provider, _is_builtin_model_downloaded
 
-    # Check current load state
-    from src.providers.load_state import get_state
+    action = (body or {}).get("action")
+    if action is not None:
+        action = str(action).strip().lower()
+        if action not in ("load", "unload"):
+            return {
+                "success": False,
+                "model_id": model_id,
+                "status": get_state(model_id),
+                "loaded": get_state(model_id) == "loaded",
+                "error": "action must be 'load' or 'unload'",
+            }
+
     current = get_state(model_id)
-    if current in ("unloaded", "error"):
-        # Verify model files exist before attempting load
+
+    # Explicit or implicit intent
+    if action == "load":
+        want_load = True
+    elif action == "unload":
+        want_load = False
+    else:
+        # toggle
+        want_load = current in ("unloaded", "error")
+
+    if want_load:
+        if current == "loaded":
+            detail = get_detail(model_id)
+            return {
+                "success": True,
+                "model_id": model_id,
+                "status": "loaded",
+                "loaded": True,
+                "message": detail.get("message") or "Already loaded in memory",
+            }
+        if current == "loading":
+            detail = get_detail(model_id)
+            return {
+                "success": True,
+                "model_id": model_id,
+                "status": "loading",
+                "loaded": False,
+                "message": detail.get("message")
+                or "Already loading into memory…",
+            }
         if not _is_builtin_model_downloaded(model_id):
             _log.warning("Load denied: %s — model not downloaded", model_id)
             return {
                 "success": False,
                 "model_id": model_id,
+                "status": "error",
                 "loaded": False,
                 "error": (
                     "Model files are not fully downloaded. "
-                    "Please download them first via Settings → Local Models → Download."
+                    "Download them first, then click Load."
                 ),
             }
-        loading = True
         _log.info("Load requested: %s", model_id)
-    else:
-        set_state(model_id, "unloaded")
-        loading = False
-        _log.info("Unload requested: %s", model_id)
+        reload_provider(model_id, loading=True)
+        # Clamp: while background thread runs, clients must see loading —
+        # never report loaded unless state is actually loaded.
+        status = get_state(model_id)
+        if status not in ("loaded", "error"):
+            status = "loading"
+            # ensure detail exists even if reload returned early
+            if get_state(model_id) != "loading":
+                set_state(
+                    model_id,
+                    "loading",
+                    message="Loading into memory on CPU…",
+                )
+        detail = get_detail(model_id)
+        return {
+            "success": True,
+            "model_id": model_id,
+            "status": status,
+            "loaded": status == "loaded",
+            "message": detail.get("message")
+            or (
+                "Loading into memory on CPU — typically 10–60s. "
+                "Status updates automatically."
+                if status == "loading"
+                else "Ready in memory"
+            ),
+        }
 
-    reload_provider(model_id, loading=loading)
-
-    loaded = loading
-    _log.info("Toggle complete: %s loaded=%s", model_id, loaded)
-    return {"success": True, "model_id": model_id, "loaded": loaded}
+    # unload
+    if current == "unloaded":
+        return {
+            "success": True,
+            "model_id": model_id,
+            "status": "unloaded",
+            "loaded": False,
+            "message": "Already unloaded",
+        }
+    _log.info("Unload requested: %s", model_id)
+    reload_provider(model_id, loading=False)
+    return {
+        "success": True,
+        "model_id": model_id,
+        "status": "unloaded",
+        "loaded": False,
+        "message": "Unloaded from memory. Disk files kept.",
+    }
 
 
 @router.get("/models/setup-status")

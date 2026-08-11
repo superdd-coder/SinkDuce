@@ -1,16 +1,16 @@
 import { memo, useEffect, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { trimEmphasisInteriorSpaces } from "@/lib/md-emphasis"
 import { cn } from "@/lib/utils"
 
+/** Fallback when no premium host class is passed (e.g. Quick Chat sizing). */
 const MD_PROSE =
   "prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0"
 
 /** Light cleanup + close open fences so remark does not thrash on partial streams. */
 function stabilizeStreamingMarkdown(md: string): string {
-  let s = md
-    .replace(/\*\*\s+([^*]+?)\s*\*\*/g, "**$1**")
-    .replace(/(?<!\*)\*(?!\*)\s+([^*]+?)\s*(?<!\*)\*(?!\*)/g, "*$1*")
+  let s = trimEmphasisInteriorSpaces(md)
   const fences = s.match(/^```/gm)
   if (fences && fences.length % 2 === 1) s += "\n```"
   return s
@@ -56,7 +56,10 @@ export const StreamingAnswerBody = memo(function StreamingAnswerBody({
     return () => clearInterval(id)
   }, [isStreaming])
 
-  const proseClass = cn(MD_PROSE, className)
+  // Prefer premium host (pm-chat-prose); fall back to generic prose utilities.
+  const proseClass = cn(
+    className?.includes("pm-chat-prose") ? className : cn(MD_PROSE, className),
+  )
 
   if (!isStreaming) {
     return (
@@ -78,7 +81,7 @@ export const StreamingAnswerBody = memo(function StreamingAnswerBody({
           {stabilizeStreamingMarkdown(head)}
         </ReactMarkdown>
       ) : null}
-      <span className="whitespace-pre-wrap break-words text-foreground">
+      <span className="whitespace-pre-wrap break-words text-[var(--pm-ink,#121410)]">
         {tail}
       </span>
     </div>

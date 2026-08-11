@@ -639,5 +639,98 @@ def test_recalled_definition():
     assert is_recalled(0, 0) == 0
 
 
+# ── Eval case generation: searchable (non-archived) only ───
+
+
+def test_is_searchable_eval_payload_filters_archived_and_non_current():
+    """Eval sampling must match Retriever: no archived / non-current targets."""
+    from src.api.routes.recall import _is_searchable_eval_payload
+
+    assert _is_searchable_eval_payload({"text": "ok", "source": "a"}) is True
+    assert _is_searchable_eval_payload({
+        "text": "ok", "archived": False, "is_current": True,
+    }) is True
+    assert _is_searchable_eval_payload({"text": "ok", "archived": True}) is False
+    assert _is_searchable_eval_payload({"text": "ok", "is_current": False}) is False
+    assert _is_searchable_eval_payload({"text": "   ", "archived": False}) is False
+    assert _is_searchable_eval_payload({
+        "text": "cfg", "chunk_type": "__config__",
+    }) is False
+
+
+def test_generate_eval_cases_skips_archived_points():
+    """POST generate only feeds non-archived current chunks to the LLM sampler."""
+    from src.main import app
+
+    client = TestClient(app)
+
+    points = [
+        {
+            "id": "arch-1",
+            "payload": {
+                "source": "__file__:old",
+                "text": "Power electricity 246498 TOTAL OPEX",
+                "archived": True,
+                "is_current": False,
+                "chunk_type": "normal",
+            },
+        },
+        {
+            "id": "cur-1",
+            "payload": {
+                "source": "__file__:new",
+                "text": "Screening table water tariff current version content",
+                "archived": False,
+                "is_current": True,
+                "chunk_type": "normal",
+                "summary": "quick filter",
+            },
+        },
+    ]
+
+    # Filter at scroll (as production does) + leftover post-filter safety
+    def fake_scroll(**kwargs):
+        fl = kwargs.get("scroll_filter")
+        if fl is not None:
+            kept = []
+            for p in points:
+                pl = p["payload"]
+                if pl.get("archived") is True:
+                    continue
+                if pl.get("is_current") is False:
+                    continue
+                kept.append(p)
+            return kept, None
+        return points, None
+
+    llm_out = (
+        '[{"query": "What is the water tariff in the screening table?", '
+        '"target_chunk_index": 1}]'
+    )
+
+    with patch("src.api.routes.recall.services") as mock_svc, \
+         patch("src.api.routes.recall._save_cases") as mock_save, \
+         patch("src.api.routes.recall._load_cases", return_value=[]), \
+         patch("src.api.routes.recall._is_specific_query", return_value=True):
+        mock_svc.db.collection_exists.return_value = True
+        mock_svc.db.scroll_points.side_effect = fake_scroll
+        mock_svc.llm.generate.return_value = llm_out
+
+        resp = client.post("/api/recall/eval/col_test/cases/generate")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        mock_save.assert_called_once()
+        saved = mock_save.call_args[0][1]
+        assert len(saved) == 1
+        assert saved[0]["target_chunk_id"] == "cur-1"
+        assert saved[0]["target_source"] == "__file__:new"
+        # LLM prompt must not include archived OPEX text
+        prompt = mock_svc.llm.generate.call_args[0][0]
+        assert "246498" not in prompt
+        assert "Screening table" in prompt or "water tariff" in prompt.lower() or "current version" in prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

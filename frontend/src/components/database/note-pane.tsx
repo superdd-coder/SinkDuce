@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
-  Loader2, ArrowDownToLine, Pencil, Check, X, Trash2, FileUp,
-  FolderOpen, Database, RefreshCw, Upload, Columns2,
+  Loader2, ArrowDownToLine, Pencil, X, Trash2, Download,
+  PanelRight, Database, RefreshCw, Share2, Columns2, ChevronDown,
+  MoreVertical,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -27,8 +28,15 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
 } from "@/components/ui/dialog"
+import { SoftMenu, MenuItem } from "@/components/ui/menu"
 import { _triggerFilesRefresh } from "@/components/database/database-view"
 import { triggerInfoRefresh } from "@/lib/info-refresh"
 import { cn } from "@/lib/utils"
@@ -109,6 +117,11 @@ interface NotePaneProps {
   noteId: string
   focused: boolean
   onFocus: () => void
+  /**
+   * Visual focus chrome (header tint / hairline). Off for single-pane —
+   * selection emphasis only matters in dual-pane.
+   */
+  showFocusChrome?: boolean
   onNoteMeta?: (note: NoteDetail) => void
   onNavigateSource: (sourceId: string) => void
   /** Title changed — parent updates notes list */
@@ -124,6 +137,8 @@ interface NotePaneProps {
   /** Close whole dialog (e.g. go to folder) */
   onCloseDialog?: () => void
   className?: string
+  /** Changes when document identity switches — drives soft content enter */
+  docSwapKey?: string
 }
 
 /**
@@ -135,6 +150,7 @@ export function NotePane({
   noteId,
   focused,
   onFocus,
+  showFocusChrome = true,
   onNoteMeta,
   onNavigateSource,
   onTitleChange,
@@ -147,6 +163,8 @@ export function NotePane({
   className,
 }: NotePaneProps) {
   const [loading, setLoading] = useState(true)
+  /** After first note loads, further switches keep chrome and soft-fade body */
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   const [content, setContent] = useState("")
   const [dropOver, setDropOver] = useState(false)
   const [distilling, setDistilling] = useState(false)
@@ -164,12 +182,16 @@ export function NotePane({
   const [managedFileId, setManagedFileId] = useState<string | null>(null)
   const [propagating, setPropagating] = useState(false)
   const [propagateDismissed, setPropagateDismissed] = useState(false)
+  const [updateMenuOpen, setUpdateMenuOpen] = useState(false)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
 
   const contentRef = useRef("")
   const baselineRef = useRef("")
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const editorRef = useRef<any>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const updateMenuRef = useRef<HTMLDivElement>(null)
+  const moreMenuRef = useRef<HTMLDivElement>(null)
   const noteIdRef = useRef(noteId)
   noteIdRef.current = noteId
   const distillCountRef = useRef(0)
@@ -198,9 +220,36 @@ export function NotePane({
     [onNoteMeta, sha256Hex]
   )
 
-  // Load note
+  // Re-emit meta when this pane gains focus so distill rail matches focused note.
+  // Depend only on focused + note.id — not full note identity — to avoid parent
+  // re-renders thrashing the editor mid-interaction.
+  useEffect(() => {
+    if (focused && note) onNoteMeta?.(note)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only on focus / note switch
+  }, [focused, note?.id])
+
+  /**
+   * Soft doc swap (no remount):
+   * idle → out (fade old) → in (swap content at opacity 0, fade up) → idle
+   */
+  type DocSwapPhase = "idle" | "out" | "in"
+  const [docSwapPhase, setDocSwapPhase] = useState<DocSwapPhase>("idle")
+  const prevNoteIdRef = useRef<string | null>(null)
+  const swapGenRef = useRef(0)
+  /** Fade timings — keep in sync with CSS --pm-ws-doc-swap-* */
+  const SWAP_OUT_MS = 280
+  const SWAP_IN_MS = 420
+
+  // Load note — chrome stays; soft crossfade between docs
   useEffect(() => {
     let cancelled = false
+    const gen = ++swapGenRef.current
+    const timers: ReturnType<typeof setTimeout>[] = []
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timers.push(setTimeout(resolve, ms))
+      })
+
     setEditingTitle(false)
     setPropagateDismissed(false)
     if (!noteId || !collection) {
@@ -208,28 +257,109 @@ export function NotePane({
       setContent("")
       contentRef.current = ""
       setNote(null)
+      setDocSwapPhase("idle")
       return
     }
+
+    const prevId = prevNoteIdRef.current
+    prevNoteIdRef.current = noteId
+    const isSoftSwitch = hasLoadedOnce && !!prevId && prevId !== noteId
+
+    // Flush pending save for the note we're leaving
+    if (prevId && prevId !== noteId && saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+      const leavingMd = contentRef.current
+      if (leavingMd && baselineRef.current) {
+        void updateNote(collection, prevId, { content: leavingMd }).catch(
+          () => {}
+        )
+      }
+    }
+
     setLoading(true)
-    baselineRef.current = ""
+    const outStartedAt = performance.now()
+    // First paint only: blank. Soft switches keep body mounted for crossfade.
+    if (!hasLoadedOnce) {
+      baselineRef.current = ""
+      setContent("")
+      contentRef.current = ""
+      setEditorInstance(null)
+      editorRef.current = null
+      setDocSwapPhase("idle")
+    } else if (isSoftSwitch) {
+      // Start fade-out immediately (old body still showing)
+      setDocSwapPhase("out")
+    }
+
     ;(async () => {
       try {
         const n = await getNote(collection, noteId)
-        if (cancelled) return
+        if (cancelled || swapGenRef.current !== gen) return
+
         const c = n.content || ""
-        setContent(c)
-        contentRef.current = c
-        await applyMeta(n)
-        setLoading(false)
+
+        if (isSoftSwitch) {
+          // Let fade-out finish (don't cut mid-fade if network was fast)
+          const elapsed = performance.now() - outStartedAt
+          if (elapsed < SWAP_OUT_MS) {
+            await wait(SWAP_OUT_MS - elapsed)
+          }
+          // Brief hold at fully transparent so setContent isn't visible
+          await wait(40)
+          if (cancelled || swapGenRef.current !== gen) return
+
+          setContent(c)
+          contentRef.current = c
+          baselineRef.current = c
+          await applyMeta(n)
+          if (cancelled || swapGenRef.current !== gen) return
+          setLoading(false)
+          setHasLoadedOnce(true)
+          // Scroll to top while still transparent — avoid inheriting previous note scroll
+          const scroller = containerRef.current?.querySelector(
+            ".pm-ws-editor"
+          ) as HTMLElement | null
+          if (scroller) scroller.scrollTop = 0
+          // Double rAF so browser paints opacity:0 with new doc before fade-in
+          await new Promise<void>((r) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => r())
+            })
+          })
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("in")
+          await wait(SWAP_IN_MS)
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("idle")
+        } else {
+          setContent(c)
+          contentRef.current = c
+          baselineRef.current = c
+          await applyMeta(n)
+          if (cancelled || swapGenRef.current !== gen) return
+          setLoading(false)
+          setHasLoadedOnce(true)
+          const scroller = containerRef.current?.querySelector(
+            ".pm-ws-editor"
+          ) as HTMLElement | null
+          if (scroller) scroller.scrollTop = 0
+          setDocSwapPhase("in")
+          await wait(SWAP_IN_MS)
+          if (cancelled || swapGenRef.current !== gen) return
+          setDocSwapPhase("idle")
+        }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && swapGenRef.current === gen) {
           toast.error("Failed to load note")
           setLoading(false)
+          setDocSwapPhase("idle")
         }
       }
     })()
     return () => {
       cancelled = true
+      for (const t of timers) clearTimeout(t)
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
@@ -270,6 +400,8 @@ export function NotePane({
 
   const handleChange = useCallback(
     (value: string) => {
+      // Block edits while soft-loading another note (old body still on screen)
+      if (loading) return
       setContent(value)
       contentRef.current = value
       if (!baselineRef.current) {
@@ -281,7 +413,7 @@ export function NotePane({
       }
       scheduleSave(value)
     },
-    [scheduleSave]
+    [scheduleSave, loading]
   )
 
   const handleImageUpload = useCallback(
@@ -294,17 +426,37 @@ export function NotePane({
 
   // ── Title ─────────────────────────────────────────────
 
+  /** Commit title on blur / Enter; empty draft restores previous title. */
   const handleTitleSave = async () => {
-    if (!titleDraft.trim() || !note) return
+    if (!note) {
+      setEditingTitle(false)
+      return
+    }
+    const nextTitle = titleDraft.trim()
+    if (!nextTitle || nextTitle === note.title) {
+      setEditingTitle(false)
+      setTitleDraft(note.title || "")
+      return
+    }
     try {
-      await updateNote(collection, note.id, { title: titleDraft.trim() })
-      const next = { ...note, title: titleDraft.trim() }
+      await updateNote(collection, note.id, { title: nextTitle })
+      const next = { ...note, title: nextTitle }
       setNote(next)
-      onTitleChange?.(note.id, titleDraft.trim())
+      onTitleChange?.(note.id, nextTitle)
       onNoteMeta?.(next)
     } catch {
       toast.error("Failed to update title")
+      setTitleDraft(note.title || "")
     }
+    setEditingTitle(false)
+  }
+
+  /** Skip blur-save when Escape cancels (blur still fires on unmount). */
+  const titleCancelRef = useRef(false)
+
+  const handleTitleCancel = () => {
+    titleCancelRef.current = true
+    setTitleDraft(note?.title || "")
     setEditingTitle(false)
   }
 
@@ -473,11 +625,42 @@ export function NotePane({
 
   // ── Propagate ─────────────────────────────────────────
 
-  const showPropagateButton = !!note?.is_extracted && !propagateDismissed
+  const canSyncChanges = !!note?.is_extracted && !propagateDismissed
+
+  // Close action menus on outside click / Escape
+  useEffect(() => {
+    if (!updateMenuOpen && !moreMenuOpen) return
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (updateMenuRef.current?.contains(t)) return
+      if (moreMenuRef.current?.contains(t)) return
+      setUpdateMenuOpen(false)
+      setMoreMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setUpdateMenuOpen(false)
+        setMoreMenuOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", onPointer)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onPointer)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [updateMenuOpen, moreMenuOpen])
+
+  // Close menus when switching notes
+  useEffect(() => {
+    setUpdateMenuOpen(false)
+    setMoreMenuOpen(false)
+  }, [noteId])
 
   const handlePropagate = async () => {
     if (!note) return
     setPropagating(true)
+    setUpdateMenuOpen(false)
     try {
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current)
@@ -485,10 +668,10 @@ export function NotePane({
       }
       await updateNote(collection, note.id, { content: contentRef.current })
       await triggerPropagation(collection, note.id)
-      toast.success("Propagation started")
+      toast.success("Sync Changes started")
       setPropagateDismissed(true)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Propagation failed")
+      toast.error(err instanceof Error ? err.message : "Sync Changes failed")
     } finally {
       setPropagating(false)
     }
@@ -712,17 +895,81 @@ export function NotePane({
 
   // ── Render ────────────────────────────────────────────
 
-  const actionBtn =
-    "h-7 px-1.5 text-[10px] gap-0.5 shrink-0 font-light uppercase tracking-[0.08em] text-muted-foreground"
+  const softLoading = loading && hasLoadedOnce
+  const hardLoading = loading && !hasLoadedOnce
+  const swapBusy = docSwapPhase === "out" || docSwapPhase === "in" || softLoading
+
+  /**
+   * Mark this pane as focused (for distill rail / chrome highlight).
+   * Actions always run against this pane's own noteId/state — never the
+   * sibling pane — even if we were not focused when the user clicked.
+   */
+  const claimFocus = useCallback(() => {
+    if (!focused) onFocus()
+  }, [focused, onFocus])
+
+  /**
+   * After pane focus / distill rail layout thrash, PM sometimes leaves a
+   * full-document selection. Collapse it to a caret so "click to focus"
+   * never looks like select-all.
+   */
+  useLayoutEffect(() => {
+    if (!focused) return
+    const collapseAccidentalAll = () => {
+      const editor = editorRef.current
+      if (!editor || editor.isDestroyed) return
+      try {
+        const { from, to, empty } = editor.state.selection
+        if (empty) return
+        const size = editor.state.doc.content.size
+        // Entire (or near-entire) doc selected → treat as bug, keep caret
+        if (size > 4 && to - from >= size - 2) {
+          const pos = Math.min(Math.max(from, 1), size)
+          editor.commands.setTextSelection(pos)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    collapseAccidentalAll()
+    const t0 = window.setTimeout(collapseAccidentalAll, 0)
+    // Rail open eases ~360ms; catch selection reset mid-layout
+    const t1 = window.setTimeout(collapseAccidentalAll, 40)
+    const t2 = window.setTimeout(collapseAccidentalAll, 120)
+    return () => {
+      window.clearTimeout(t0)
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+    }
+  }, [focused])
+
+  /**
+   * Non-editor chrome padding only — ProseMirror uses onEditorFocus instead
+   * so we never intercept mousedown/mouseup of a text click.
+   */
+  const handleShellMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (focused) return
+      if (e.button !== 0) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest?.(".pm-ws-pane-h, [data-slot='menu'], .ProseMirror, .tiptap-editor")) {
+        return
+      }
+      // Clicked empty shell around editor
+      claimFocus()
+    },
+    [focused, claimFocus]
+  )
 
   return (
     <div
       ref={containerRef}
       className={cn(
         "flex-1 flex flex-col min-w-0 min-h-0 relative",
-        className
+        className,
+        softLoading && "is-doc-loading"
       )}
-      onMouseDown={onFocus}
+      onMouseDown={handleShellMouseDown}
       onDragOver={(e) => {
         e.preventDefault()
         e.dataTransfer.dropEffect = "copy"
@@ -737,51 +984,60 @@ export function NotePane({
       }}
       onDrop={handleDrop}
     >
-      {/* Per-pane chrome: focus = deeper tab color only (no side border) */}
+      {/*
+        Chrome is always interactive — even when this pane is not focused.
+        stopPropagation so editor-area focus deferral never races tool clicks.
+        claimFocus() runs in the same click handler as the action (React batches),
+        so the action still binds to THIS pane's noteId.
+      */}
       <div
-        className={cn(
-          "border-b shrink-0 transition-colors",
-          focused
-            ? "border-primary/30 bg-primary/10"
-            : "border-border bg-muted/10"
-        )}
+        className={cn("pm-ws-pane-h", showFocusChrome && "is-focus")}
+        onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* Row 1: title + close */}
-        <div className="flex items-center gap-1 px-2 pt-1.5 pb-0.5 min-h-8">
+        {/* Row 1: title + close — fixed height (see .pm-ws-pane-h > div:first-child) */}
+        <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 min-h-9 h-9 shrink-0 overflow-hidden">
           {editingTitle ? (
-            <div className="flex items-center gap-1 flex-1 min-w-0">
-              <Input
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void handleTitleSave()
-                  if (e.key === "Escape") setEditingTitle(false)
-                }}
-                className="h-7 text-sm font-semibold"
-                autoFocus
-              />
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => void handleTitleSave()}>
-                <Check className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => setEditingTitle(false)}>
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+            <Input
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={() => {
+                if (titleCancelRef.current) {
+                  titleCancelRef.current = false
+                  return
+                }
+                void handleTitleSave()
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault()
+                  handleTitleCancel()
+                }
+              }}
+              className="h-7 pm-ws-pane-title flex-1 min-w-0"
+              autoFocus
+            />
           ) : (
-            <>
+            <div className="pm-ws-title-cluster flex-1 min-w-0">
               <span
                 className={cn(
-                  "font-light text-sm truncate flex-1 min-w-0",
-                  focused ? "text-foreground font-medium" : "text-muted-foreground"
+                  "pm-ws-pane-title",
+                  docSwapPhase === "out" && "is-title-out",
+                  docSwapPhase === "in" && "is-title-in"
                 )}
+                onClick={claimFocus}
               >
                 {note?.title || "Note"}
               </span>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 w-6 p-0 shrink-0"
+                className="pm-ws-icon-btn pm-ws-title-edit !h-6 !w-6"
                 onClick={() => {
+                  claimFocus()
                   setTitleDraft(note?.title || "")
                   setEditingTitle(true)
                 }}
@@ -789,26 +1045,31 @@ export function NotePane({
               >
                 <Pencil className="h-3 w-3" />
               </Button>
-            </>
+            </div>
           )}
           {showSplit && onSplit && (
             <Button
               variant="ghost"
               size="sm"
-              className={cn(actionBtn, "hover:text-primary")}
-              onClick={onSplit}
+              className="pm-ws-icon-btn !h-6 !w-6"
+              onClick={() => {
+                claimFocus()
+                onSplit()
+              }}
               title="Split into second page"
             >
               <Columns2 className="h-3.5 w-3.5" />
-              Split
             </Button>
           )}
           {showClose && onClosePane && (
             <Button
               variant="ghost"
               size="sm"
-              className="h-6 w-6 p-0 shrink-0"
-              onClick={onClosePane}
+              className="pm-ws-icon-btn !h-6 !w-6"
+              onClick={() => {
+                // Close this pane only — do not claim focus first (would steal from sibling)
+                onClosePane()
+              }}
               title="Close page"
             >
               <X className="h-3.5 w-3.5" />
@@ -816,110 +1077,219 @@ export function NotePane({
           )}
         </div>
 
-        {/* Row 2: left actions · right ingest cluster */}
-        <div className="flex flex-wrap items-center gap-x-0.5 gap-y-0.5 px-2 pb-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(actionBtn, "hover:text-destructive")}
-            onClick={() => setDeleteOpen(true)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(actionBtn, "hover:text-primary")}
-            onClick={handleDownload}
-          >
-            <FileUp className="h-3.5 w-3.5" />
-            Export
-          </Button>
-          {managedFileId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={cn(actionBtn, "hover:text-primary")}
-              onClick={handleGoToFolder}
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-              Go to folder
-            </Button>
-          )}
-          {showPropagateButton && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={cn(actionBtn, "hover:text-primary")}
-              onClick={() => void handlePropagate()}
-              disabled={propagating}
-            >
-              {propagating ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-              ) : (
-                <Upload className="h-3.5 w-3.5 mr-1" />
-              )}
-              Propagate
-            </Button>
-          )}
-
-          {/* Ingested tag + Ingest/Reingest — right aligned */}
-          <div className="flex items-center gap-1 ml-auto shrink-0">
+        {/*
+          Row 2 toolbar:
+          left  — Ingested status tag
+          right — Detail · Ingest | Update▾ · ⋮ (Download / Delete)
+          overflow must stay visible — SoftMenus are absolute under the triggers.
+        */}
+        <div className="flex flex-nowrap items-center gap-1 px-4 pb-2.5 min-h-8 shrink-0 overflow-visible min-w-0">
+          <div className="flex items-center min-w-0 flex-1 overflow-hidden">
             {ingested && (
-              <span
-                className="text-[10px] font-medium uppercase tracking-[0.1em] px-1.5 py-0.5 text-primary whitespace-nowrap"
-                style={{
-                  background: "rgba(26,94,61,0.08)",
-                  borderRadius: "2px",
-                }}
-              >
+              <span className="pm-ws-status truncate max-w-full">
                 {needsReingest ? "Ingested · edited" : "Ingested"}
               </span>
             )}
-            {(!ingested || needsReingest) && (
+          </div>
+
+          <div className="relative z-30 flex items-center gap-0.5 shrink-0">
+            {managedFileId && (
               <Button
                 variant="ghost"
                 size="sm"
-                className={cn(actionBtn, "hover:text-primary")}
-                onClick={() => void handleIngestClick()}
-                disabled={ingesting || loading}
+                className="pm-ws-action"
+                onClick={() => {
+                  claimFocus()
+                  handleGoToFolder()
+                }}
+                title="Open file detail"
               >
-                {ingesting ? (
-                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                ) : needsReingest ? (
-                  <RefreshCw className="h-3.5 w-3.5 mr-1" />
-                ) : (
-                  <Database className="h-3.5 w-3.5 mr-1" />
-                )}
-                {ingesting
-                  ? needsReingest
-                    ? "REINGESTING..."
-                    : "INGESTING..."
-                  : needsReingest
-                    ? "REINGEST"
-                    : "INGEST"}
+                <PanelRight className="h-3.5 w-3.5" />
+                Detail
               </Button>
             )}
+
+            {/* Not ingested → Ingest; ingested → Update menu */}
+            {!ingested ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pm-ws-action"
+                onClick={() => {
+                  claimFocus()
+                  void handleIngestClick()
+                }}
+                disabled={ingesting || loading}
+                title="Ingest note into the collection"
+              >
+                {ingesting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Database className="h-3.5 w-3.5" />
+                )}
+                {ingesting ? "Ingesting…" : "Ingest"}
+              </Button>
+            ) : (
+              <div ref={updateMenuRef} className="relative">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "pm-ws-action",
+                    updateMenuOpen && "is-on"
+                  )}
+                  onClick={() => {
+                    claimFocus()
+                    setMoreMenuOpen(false)
+                    setUpdateMenuOpen((v) => !v)
+                  }}
+                  disabled={ingesting || propagating || loading}
+                  title="Update ingested note"
+                  aria-haspopup="menu"
+                  aria-expanded={updateMenuOpen}
+                >
+                  {ingesting || propagating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  {ingesting ? "Updating…" : "Update"}
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 opacity-70 transition-transform duration-[180ms] ease-[cubic-bezier(0.32,0.72,0,1)]",
+                      updateMenuOpen && "rotate-180"
+                    )}
+                  />
+                </Button>
+                <SoftMenu
+                  open={updateMenuOpen}
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[11.5rem]"
+                >
+                  {canSyncChanges && (
+                    <MenuItem
+                      onClick={() => {
+                        claimFocus()
+                        void handlePropagate()
+                      }}
+                      disabled={propagating}
+                    >
+                      <Share2 className="h-3.5 w-3.5 shrink-0" />
+                      Sync Changes
+                    </MenuItem>
+                  )}
+                  <MenuItem
+                    onClick={() => {
+                      claimFocus()
+                      setUpdateMenuOpen(false)
+                      void handleIngestClick()
+                    }}
+                    disabled={ingesting}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                    Reingest
+                  </MenuItem>
+                </SoftMenu>
+              </div>
+            )}
+
+            {/* ⋮ more: Download + Delete */}
+            <div ref={moreMenuRef} className="relative">
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "pm-ws-icon-btn",
+                  moreMenuOpen && "is-on"
+                )}
+                onClick={() => {
+                  claimFocus()
+                  setUpdateMenuOpen(false)
+                  setMoreMenuOpen((v) => !v)
+                }}
+                title="More actions"
+                aria-label="More actions"
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </Button>
+              <SoftMenu
+                open={moreMenuOpen}
+                className="absolute right-0 top-full mt-1 z-50 min-w-[10rem]"
+              >
+                <MenuItem
+                  onClick={() => {
+                    claimFocus()
+                    setMoreMenuOpen(false)
+                    handleDownload()
+                  }}
+                >
+                  <Download className="h-3.5 w-3.5 shrink-0" />
+                  Download
+                </MenuItem>
+                <MenuItem
+                  destructive
+                  onClick={() => {
+                    claimFocus()
+                    setMoreMenuOpen(false)
+                    setDeleteOpen(true)
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                  Delete
+                </MenuItem>
+              </SoftMenu>
+            </div>
           </div>
         </div>
       </div>
 
-      {loading ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin mr-2" />
-          Loading...
+      {hardLoading ? (
+        <div className="pm-ws-loading flex-1 is-doc-in">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Loading…
         </div>
       ) : (
-        <>
-          {editorInstance && <EditorToolbar editor={editorInstance} />}
+        <div
+          className={cn(
+            "pm-ws-doc-body relative flex-1 flex flex-col min-h-0 min-w-0",
+            docSwapPhase === "out" && "is-doc-out",
+            docSwapPhase === "in" && "is-doc-in",
+            docSwapPhase === "idle" && "is-doc-idle"
+          )}
+        >
+          {/*
+            Keep toolbar mounted during soft swap. Unmounting on swapBusy
+            collapsed the strip (~28px) and made prose jump down when it returned.
+            Opacity-only hide while busy is fine — parent is already fading.
+          */}
+          {editorInstance ? (
+            <div
+              className={cn(
+                "pm-ws-fmt-slot shrink-0",
+                swapBusy && "pointer-events-none"
+              )}
+              aria-hidden={swapBusy}
+            >
+              <EditorToolbar editor={editorInstance} />
+            </div>
+          ) : (
+            /* Reserve same chrome height before editor ready (first load) */
+            <div className="pm-ws-fmt-slot pm-ws-fmt-slot--placeholder shrink-0" aria-hidden />
+          )}
           {distilling && (
-            <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 border-b border-border">
+            <div className="pm-ws-status-bar">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Distilling...
+              Distilling…
             </div>
           )}
-          <div className="flex-1 overflow-y-auto min-h-0">
+          {/* Stable editor shell — content swaps only while opacity is 0 */}
+          <div
+            className={cn(
+              "pm-ws-editor",
+              swapBusy && "pointer-events-none select-none"
+            )}
+          >
             <MarkdownEditor
               value={content}
               showToolbar={false}
@@ -927,64 +1297,62 @@ export function NotePane({
                 editorRef.current = editor
                 setEditorInstance(editor)
               }}
+              onEditorFocus={claimFocus}
               onChange={handleChange}
               onImageUpload={handleImageUpload}
               onNoteLinkClick={(id) => onNavigateSource(id)}
-              className="px-6 py-4"
+              className="px-6 pt-1 pb-5"
+              flush
               placeholder="Start writing your note..."
             />
           </div>
-        </>
+        </div>
       )}
 
       {dropOver && (
-        <div className="absolute inset-0 z-50 bg-primary/5 border-2 border-dashed border-primary/40 rounded-md flex flex-col items-center justify-center gap-2 pointer-events-none">
-          <ArrowDownToLine className="h-8 w-8 text-primary" />
-          <span className="text-sm font-medium text-primary">Drop to distill</span>
+        <div className="pm-ws-drop">
+          <ArrowDownToLine className="h-8 w-8" />
+          <span>Drop to distill</span>
         </div>
       )}
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="max-w-sm !gap-3">
-          <DialogHeader className="!gap-1">
-            <DialogTitle className="text-sm font-light uppercase tracking-[0.15em]">
-              {managedFileId ? "Delete File Globally" : "Delete Note"}
+        <DialogContent
+          className="pm-dialog pm-dialog-confirm sm:max-w-[320px]"
+          showCloseButton={false}
+        >
+          <DialogHeader>
+            <DialogKicker>{managedFileId ? "File" : "Note"}</DialogKicker>
+            <DialogTitle>
+              {managedFileId ? "Delete file globally?" : "Delete note?"}
             </DialogTitle>
+            {note?.title ? (
+              <p className="pm-dialog-confirm-target" title={note.title}>
+                {note.title}
+              </p>
+            ) : null}
+            <DialogDescription>
+              {managedFileId
+                ? "Permanently removes this note and its managed file, including every version. This cannot be undone."
+                : "This note will be permanently removed. This cannot be undone."}
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
-            {managedFileId ? (
-              <>
-                Permanently delete{" "}
-                <span className="font-medium text-foreground">
-                  &quot;{note?.title}&quot;
-                </span>{" "}
-                and its managed file, including all versions. This cannot be undone.
-              </>
-            ) : (
-              <>
-                Delete{" "}
-                <span className="font-medium text-foreground">
-                  &quot;{note?.title}&quot;
-                </span>
-                ? This cannot be undone.
-              </>
-            )}
-          </p>
-          <DialogFooter className="!border-t-0 !bg-transparent !-mx-0 !-mb-0 !p-0 !rounded-none gap-2">
+          <DialogFooter>
             <Button
-              variant="outline"
+              type="button"
+              variant="ghost"
               size="sm"
-              className="text-[11px] font-light uppercase tracking-[0.1em] text-destructive"
-              onClick={() => void handleDeleteConfirm()}
-            >
-              {managedFileId ? "Delete all versions" : "Delete"}
-            </Button>
-            <Button
-              size="sm"
-              className="text-[11px] font-light uppercase tracking-[0.1em]"
               onClick={() => setDeleteOpen(false)}
             >
               Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive-solid"
+              size="sm"
+              onClick={() => void handleDeleteConfirm()}
+            >
+              {managedFileId ? "Delete all versions" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>

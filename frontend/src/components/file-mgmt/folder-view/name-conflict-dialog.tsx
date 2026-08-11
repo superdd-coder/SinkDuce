@@ -88,27 +88,25 @@ export function NameConflictDialog() {
         if (!v) cancelNameConflict()
       }}
     >
-      <DialogContent className="w-[min(32rem,calc(100vw-2rem))] max-w-[min(32rem,calc(100vw-2rem))] overflow-hidden">
+      <DialogContent className="pm-dialog w-[min(32rem,calc(100vw-2rem))] max-w-[min(32rem,calc(100vw-2rem))] overflow-hidden">
         <DialogHeader>
-          <DialogTitle className="text-sm">Name already used</DialogTitle>
+          <DialogTitle>Name already used</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 min-w-0">
-          <p className="text-xs text-muted-foreground leading-relaxed break-words [overflow-wrap:anywhere]">
+          <p className="pm-dialog-body break-words [overflow-wrap:anywhere]">
             {nameConflict?.message ||
               `A ${resourceLabel} with this name already exists in this location. Choose another name.`}
           </p>
           {nameConflict?.name && (
             <p
-              className="text-[11px] font-mono text-foreground/80 bg-muted/40 rounded-md px-2 py-1.5 break-all [overflow-wrap:anywhere]"
+              className="pm-meta font-mono text-[var(--pm-text)] bg-[var(--pm-green-wash)] rounded-[var(--pm-r-sm)] px-2 py-1.5 break-all [overflow-wrap:anywhere]"
               title={nameConflict.name}
             >
               {nameConflict.name}
             </p>
           )}
           <div className="min-w-0">
-            <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-              New name
-            </label>
+            <label className="pm-field-label">New name</label>
             {isFile && lockedExt ? (
               <>
                 <div className="flex items-center gap-1.5 min-w-0">
@@ -119,17 +117,17 @@ export function NameConflictDialog() {
                       if (e.key === "Enter") void handleConfirm()
                     }}
                     autoFocus
-                    className="h-8 text-xs flex-1 min-w-0 font-mono"
+                    className="h-8 flex-1 min-w-0 font-mono"
                     title={value}
                   />
                   <span
-                    className="shrink-0 text-xs font-mono text-muted-foreground bg-muted/50 border border-border/50 rounded-md px-2 h-8 inline-flex items-center"
+                    className="shrink-0 pm-meta font-mono bg-[var(--pm-green-wash)] rounded-[var(--pm-r-sm)] px-2 h-8 inline-flex items-center"
                     title="Extension cannot be changed"
                   >
                     {lockedExt}
                   </span>
                 </div>
-                <p className="text-[10px] text-muted-foreground mt-1.5">
+                <p className="pm-meta mt-1.5">
                   Extension is fixed and cannot be changed.
                 </p>
               </>
@@ -141,7 +139,7 @@ export function NameConflictDialog() {
                   if (e.key === "Enter") void handleConfirm()
                 }}
                 autoFocus
-                className="h-8 text-xs w-full min-w-0 font-mono"
+                className="h-8 w-full min-w-0 font-mono"
                 title={value}
               />
             )}
@@ -150,14 +148,12 @@ export function NameConflictDialog() {
         <DialogFooter className="gap-2 pt-1 flex-wrap">
           <Button
             variant="ghost"
-            size="sm"
             onClick={() => cancelNameConflict()}
             disabled={submitting}
           >
             Cancel
           </Button>
           <Button
-            size="sm"
             onClick={() => void handleConfirm()}
             disabled={!value.trim() || submitting}
           >

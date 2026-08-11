@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type RefObject } from "react"
 import { Languages, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import { SoftMenu, MenuItem } from "@/components/ui/menu"
 import { TRANSLATE_LANGUAGES } from "@/api/client"
 
 interface SummaryTranslateControlProps {
@@ -24,8 +26,8 @@ function GlowDot() {
       aria-hidden
       className="ml-auto w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
       style={{
-        background: "var(--ze-green)",
-        boxShadow: "0 0 6px 1px var(--ze-green)",
+        background: "var(--pm-green, var(--ze-green))",
+        boxShadow: "0 0 6px 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 55%, transparent)",
       }}
     />
   )
@@ -40,91 +42,69 @@ export function SummaryTranslateControl({
   onOpen,
 }: SummaryTranslateControlProps) {
   const [open, setOpen] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const t = e.target as Node
+      if (btnRef.current?.contains(t)) return
+      if ((e.target as Element)?.closest?.("[data-slot='menu']")) return
+      setOpen(false)
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
   }, [open])
 
   const handleToggle = () => {
+    if (disabled || translating) return
     const next = !open
     setOpen(next)
     if (next) onOpen?.()
   }
 
   return (
-    <div ref={containerRef} className="relative">
-      <button
+    <div className="relative" ref={btnRef as RefObject<HTMLDivElement>}>
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-sm"
         disabled={disabled || translating}
         onClick={handleToggle}
         title="Translate summary"
-        className={cn(
-          "h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground",
-          "hover:text-foreground hover:bg-accent transition-colors",
-          (disabled || translating) && "opacity-50 cursor-not-allowed",
-          activeLang && "text-[var(--ze-green)]",
-        )}
+        aria-label="Translate summary"
+        className={cn(activeLang && "text-[var(--pm-green)]")}
       >
         {translating ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Loader2 className="size-3.5 animate-spin" />
         ) : (
-          <Languages className="h-3.5 w-3.5" />
+          <Languages className="size-3.5" />
         )}
-      </button>
+      </Button>
 
-      {open && (
-        <div className="absolute right-0 z-50 mt-1 w-44 rounded-md border bg-popover shadow-md py-1">
-          {/* Original (source) option */}
-          <button
-            type="button"
-            onClick={() => { onSelect(null); setOpen(false) }}
-            className={cn(
-              "w-full flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent transition-colors",
-              activeLang === null && "bg-accent/50 font-medium",
-            )}
-          >
-            <span className={cn(
-              "w-1.5 h-1.5 shrink-0 rotate-45 transition-all",
-              activeLang === null ? "bg-primary" : "border border-muted-foreground/30",
-            )} />
-            Original
-          </button>
-
-          <div className="my-1 h-px bg-border/60" />
-
-          {TRANSLATE_LANGUAGES.map(({ code, label }) => {
-            const generated = generatedLangs.includes(code)
-            const active = activeLang === code
-            return (
-              <button
-                key={code}
-                type="button"
-                onClick={() => { onSelect(code); setOpen(false) }}
-                className={cn(
-                  "w-full flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent transition-colors",
-                  active && "bg-accent/50 font-medium",
-                )}
-              >
-                <span className={cn(
-                  "w-1.5 h-1.5 shrink-0 rotate-45 transition-all",
-                  active ? "bg-primary" : "border border-muted-foreground/30",
-                )} />
-                <span>{label}</span>
-                <span className="text-[10px] text-muted-foreground/70">{code}</span>
-                {generated && <GlowDot />}
-              </button>
-            )
-          })}
-        </div>
-      )}
+      <SoftMenu open={open} portal anchorRef={btnRef} align="end" className="min-w-[176px]">
+        <MenuItem
+          active={activeLang === null}
+          onClick={() => { onSelect(null); setOpen(false) }}
+        >
+          Original
+        </MenuItem>
+        {TRANSLATE_LANGUAGES.map(({ code, label }) => {
+          const generated = generatedLangs.includes(code)
+          const active = activeLang === code
+          return (
+            <MenuItem
+              key={code}
+              active={active}
+              onClick={() => { onSelect(code); setOpen(false) }}
+            >
+              <span className="flex-1 min-w-0 truncate">{label}</span>
+              <span className="pm-meta shrink-0 ml-1">{code}</span>
+              {generated && <GlowDot />}
+            </MenuItem>
+          )
+        })}
+      </SoftMenu>
     </div>
   )
 }

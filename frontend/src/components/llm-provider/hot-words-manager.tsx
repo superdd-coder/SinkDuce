@@ -1,191 +1,887 @@
-import { useState, useEffect, useCallback } from "react"
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useRef,
+} from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { FieldLabel } from "@/components/ui/field-label"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Plus, Trash2, BookOpen, Save } from "lucide-react"
+import { DropdownSelect, type DropdownSelectOption } from "@/components/ui/dropdown-select"
+import {
+  Plus,
+  Trash2,
+  BookOpen,
+  FileDown,
+  FileUp,
+  FileSpreadsheet,
+  FileText,
+  Star,
+} from "lucide-react"
 import {
   getHotWordsLibraries, getHotWordsLibrary, createHotWordsLibrary,
   updateHotWordsLibrary, deleteHotWordsLibrary,
+  downloadHotWordsTemplate, importHotWordsLibrary,
+  setDefaultHotWordsLibrary, exportHotWordsLibrary,
   type HotWordsLibrary, type HotWordsLibrarySummary, type HotWordItem,
 } from "@/api/client"
+import {
+  SoftMenu,
+  MenuItem,
+  MenuItemTitle,
+  MenuItemDescription,
+  MENU_SILK_MS,
+} from "@/components/ui/menu"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
+
+/** Client-only row key for stable list animation (not sent to API). */
+type WordRow = HotWordItem & { uid: string }
+
+let wordUidSeq = 0
+function newWordUid() {
+  wordUidSeq += 1
+  return `hw-${Date.now().toString(36)}-${wordUidSeq}`
+}
+
+function toWordRows(words: HotWordItem[]): WordRow[] {
+  return words.map((w) => ({
+    uid: newWordUid(),
+    text: w.text,
+    weight: w.weight,
+    lang: w.lang ?? "",
+  }))
+}
+
+function toHotWordItems(rows: WordRow[]): HotWordItem[] {
+  return rows.map(({ text, weight, lang }) => ({
+    text,
+    weight,
+    lang: lang || undefined,
+  }))
+}
+
+const WORD_LIST_EASE = "cubic-bezier(0.32, 0.72, 0, 1)"
+const WORD_LIST_MS = 300
+/** Keep in sync with `.pm-settings-hw-main-body` opacity transition */
+const MAIN_FADE_MS = 220
+
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  )
+}
+
+function waitMs(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+/**
+ * Two-step delete (× → Delete) — same anti-mis-tap pattern as message cards
+ * (message-card.tsx · .pm-msg-delete).
+ */
+function SlideConfirmDeleteButton({
+  onConfirm,
+  title = "Delete",
+  className,
+}: {
+  onConfirm: () => void
+  title?: string
+  className?: string
+}) {
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const deleteBtnRef = useRef<HTMLButtonElement>(null)
+
+  const disarmDelete = useCallback(() => {
+    setDeleteArmed(false)
+    if (deleteArmTimerRef.current) {
+      clearTimeout(deleteArmTimerRef.current)
+      deleteArmTimerRef.current = null
+    }
+  }, [])
+
+  const armDelete = useCallback(() => {
+    setDeleteArmed(true)
+    if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    deleteArmTimerRef.current = setTimeout(() => disarmDelete(), 4000)
+  }, [disarmDelete])
+
+  useEffect(() => {
+    if (!deleteArmed) return
+    const onPointerDown = (ev: Event) => {
+      const t = ev.target as Node | null
+      if (t && deleteBtnRef.current?.contains(t)) return
+      disarmDelete()
+    }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") disarmDelete()
+    }
+    const t = window.setTimeout(() => {
+      document.addEventListener("pointerdown", onPointerDown, true)
+      document.addEventListener("keydown", onKey, true)
+    }, 0)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [deleteArmed, disarmDelete])
+
+  useEffect(() => {
+    return () => {
+      if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    }
+  }, [])
+
+  return (
+    <button
+      ref={deleteBtnRef}
+      type="button"
+      className={cn(
+        "pm-msg-delete",
+        deleteArmed ? "is-confirm opacity-100" : "opacity-40 group-hover:opacity-100",
+        className,
+      )}
+      title={deleteArmed ? "Click again to delete" : title}
+      aria-label={deleteArmed ? `Confirm ${title.toLowerCase()}` : title}
+      aria-expanded={deleteArmed}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!deleteArmed) {
+          armDelete()
+          return
+        }
+        disarmDelete()
+        onConfirm()
+      }}
+    >
+      {/* Idle: × only. Armed: Delete text only (no × icon). */}
+      {!deleteArmed ? (
+        <span className="pm-msg-delete-x" aria-hidden>
+          ×
+        </span>
+      ) : (
+        <span className="pm-msg-delete-label is-solo">Delete</span>
+      )}
+    </button>
+  )
+}
+
+/**
+ * DashScope cloud transcription languages (file adapter SUPPORTED_LANGUAGE_HINTS).
+ * Keep in sync with `DashScopeFileTranscriptionProvider` — exclude `auto`.
+ * Empty = no language limit (recommended when unsure).
+ */
+const HOT_WORD_LANG_OPTIONS: DropdownSelectOption[] = [
+  { value: "", label: "Any" },
+  { value: "zh", label: "zh · Chinese" },
+  { value: "en", label: "en · English" },
+  { value: "ja", label: "ja · Japanese" },
+  { value: "ko", label: "ko · Korean" },
+  { value: "ms", label: "ms · Malay" },
+  { value: "th", label: "th · Thai" },
+  { value: "id", label: "id · Indonesian" },
+]
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * When opened from another dialog (e.g. meeting hot-words picker),
+   * stack above the parent dialog (higher z-index overlay + popup).
+   */
+  nested?: boolean
 }
 
-export function HotWordsManager({ open, onOpenChange }: Props) {
+export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
   const [libraries, setLibraries] = useState<HotWordsLibrarySummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedLib, setSelectedLib] = useState<HotWordsLibrary | null>(null)
+  /** Editable word list with stable UIDs for FLIP animation */
+  const [wordRows, setWordRows] = useState<WordRow[]>([])
   const [isDirty, setIsDirty] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  /** Main pane opacity — fade out on switch, fade in when library is ready */
+  const [mainIn, setMainIn] = useState(true)
+  /** Row currently collapsing out (kept in DOM until anim ends) */
+  const [leavingUid, setLeavingUid] = useState<string | null>(null)
+
+  /* Sliding mint indicator under the active library row */
+  const listRef = useRef<HTMLDivElement>(null)
+  const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const [indicator, setIndicator] = useState({ top: 0, height: 0 })
+  const [indicatorReady, setIndicatorReady] = useState(false)
+
+  /* Word list FLIP: previous tops + entering uid */
+  const wordListRef = useRef<HTMLDivElement>(null)
+  const wordTopsRef = useRef<Map<string, number>>(new Map())
+  const pendingEnterUidRef = useRef<string | null>(null)
+  const skipWordFlipRef = useRef(true)
+
+  /* Autosave — latest snapshot + debounce */
+  const selectedIdRef = useRef(selectedId)
+  const selectedLibRef = useRef(selectedLib)
+  const wordRowsRef = useRef(wordRows)
+  const isDirtyRef = useRef(isDirty)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveInFlightRef = useRef(false)
+  selectedIdRef.current = selectedId
+  selectedLibRef.current = selectedLib
+  wordRowsRef.current = wordRows
+  isDirtyRef.current = isDirty
+
+  const captureWordTops = useCallback(() => {
+    const map = new Map<string, number>()
+    const root = wordListRef.current
+    if (!root) {
+      wordTopsRef.current = map
+      return
+    }
+    root.querySelectorAll<HTMLElement>("[data-word-uid]").forEach((el) => {
+      const uid = el.dataset.wordUid
+      if (uid) map.set(uid, el.getBoundingClientRect().top)
+    })
+    wordTopsRef.current = map
+  }, [])
 
   const fetchList = useCallback(async () => {
     try {
-      setLibraries(await getHotWordsLibraries())
+      const list = await getHotWordsLibraries()
+      setLibraries(list)
+      const def = list.find((l) => l.is_default)
+      setDefaultLibraryId(def?.id ?? null)
     } catch { /* ignore */ }
   }, [])
 
-  const fetchLibrary = useCallback(async (id: string) => {
-    try {
-      const lib = await getHotWordsLibrary(id)
-      setSelectedLib(lib)
-      setIsDirty(false)
-    } catch { toast.error("Failed to load library") }
+  const clearSaveTimer = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
   }, [])
+
+  /** Persist current draft. Does not remount word rows (keeps focus / FLIP keys). */
+  const flushSave = useCallback(async () => {
+    clearSaveTimer()
+    const id = selectedIdRef.current
+    const lib = selectedLibRef.current
+    const rows = wordRowsRef.current
+    if (!id || !lib || !isDirtyRef.current) return
+    if (saveInFlightRef.current) {
+      saveTimerRef.current = setTimeout(() => {
+        void flushSave()
+      }, 120)
+      return
+    }
+
+    saveInFlightRef.current = true
+    setIsSaving(true)
+    const payload = {
+      name: lib.name,
+      description: lib.description,
+      words: toHotWordItems(rows),
+    }
+    try {
+      const updated = await updateHotWordsLibrary(id, payload)
+      if (selectedIdRef.current === id) {
+        setSelectedLib((prev) =>
+          prev && prev.id === id
+            ? {
+                ...prev,
+                name: updated.name,
+                description: updated.description,
+                updated_at: updated.updated_at,
+              }
+            : prev,
+        )
+        const stillSame =
+          selectedLibRef.current?.name === payload.name &&
+          selectedLibRef.current?.description === payload.description &&
+          JSON.stringify(toHotWordItems(wordRowsRef.current)) ===
+            JSON.stringify(payload.words)
+        if (stillSame) {
+          setIsDirty(false)
+          isDirtyRef.current = false
+        }
+      }
+      await fetchList()
+    } catch {
+      toast.error("Auto-save failed")
+    } finally {
+      saveInFlightRef.current = false
+      setIsSaving(false)
+    }
+  }, [clearSaveTimer, fetchList])
+
+  const scheduleSave = useCallback(() => {
+    setIsDirty(true)
+    isDirtyRef.current = true
+    clearSaveTimer()
+    saveTimerRef.current = setTimeout(() => {
+      void flushSave()
+    }, 450)
+  }, [clearSaveTimer, flushSave])
+
+  useEffect(() => {
+    return () => clearSaveTimer()
+  }, [clearSaveTimer])
 
   useEffect(() => {
     if (open) fetchList()
   }, [open, fetchList])
 
+  /*
+   * Load library on selection with a real out → swap → in fade.
+   * Must wait for fade-out to paint + finish; otherwise a fast fetch
+   * batches mainIn false/true and the transition never shows.
+   * Switch path flushes autosave first so we can clear the debounce timer here.
+   */
   useEffect(() => {
-    if (selectedId) fetchLibrary(selectedId)
-    else setSelectedLib(null)
-  }, [selectedId, fetchLibrary])
+    let cancelled = false
+    let fadeInRaf1 = 0
+    let fadeInRaf2 = 0
+    clearSaveTimer()
+
+    if (!selectedId) {
+      setMainIn(false)
+      skipWordFlipRef.current = true
+      ;(async () => {
+        if (!prefersReducedMotion()) await waitMs(MAIN_FADE_MS)
+        if (cancelled) return
+        setSelectedLib(null)
+        setWordRows([])
+        setLeavingUid(null)
+        setIsDirty(false)
+        isDirtyRef.current = false
+        fadeInRaf1 = requestAnimationFrame(() => {
+          fadeInRaf2 = requestAnimationFrame(() => {
+            if (!cancelled) setMainIn(true)
+          })
+        })
+      })()
+      return () => {
+        cancelled = true
+        if (fadeInRaf1) cancelAnimationFrame(fadeInRaf1)
+        if (fadeInRaf2) cancelAnimationFrame(fadeInRaf2)
+      }
+    }
+
+    setMainIn(false)
+    skipWordFlipRef.current = true
+
+    ;(async () => {
+      /* Let opacity:0 paint, then wait for CSS fade-out */
+      await new Promise<void>((r) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => r()))
+      })
+      if (cancelled) return
+      if (!prefersReducedMotion()) await waitMs(MAIN_FADE_MS)
+      if (cancelled) return
+
+      try {
+        const lib = await getHotWordsLibrary(selectedId)
+        if (cancelled) return
+        setSelectedLib(lib)
+        setWordRows(toWordRows(lib.words))
+        setLeavingUid(null)
+        setIsDirty(false)
+        isDirtyRef.current = false
+        if (typeof lib.is_default === "boolean" && lib.is_default) {
+          setDefaultLibraryId(lib.id)
+        }
+
+        /* Content at opacity 0 → next frames fade in */
+        fadeInRaf1 = requestAnimationFrame(() => {
+          fadeInRaf2 = requestAnimationFrame(() => {
+            if (cancelled) return
+            setMainIn(true)
+            requestAnimationFrame(() => {
+              if (cancelled) return
+              captureWordTops()
+              skipWordFlipRef.current = false
+            })
+          })
+        })
+      } catch {
+        if (!cancelled) {
+          toast.error("Failed to load library")
+          setMainIn(true)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      if (fadeInRaf1) cancelAnimationFrame(fadeInRaf1)
+      if (fadeInRaf2) cancelAnimationFrame(fadeInRaf2)
+    }
+  }, [selectedId, captureWordTops, clearSaveTimer])
+
+  /* FLIP: existing rows slide when list order/length changes */
+  useLayoutEffect(() => {
+    const root = wordListRef.current
+    if (!root) return
+
+    const enterUid = pendingEnterUidRef.current
+    pendingEnterUidRef.current = null
+
+    if (skipWordFlipRef.current || prefersReducedMotion()) {
+      captureWordTops()
+      return
+    }
+
+    const prev = wordTopsRef.current
+    const next = new Map<string, number>()
+
+    root.querySelectorAll<HTMLElement>("[data-word-uid]").forEach((el) => {
+      const uid = el.dataset.wordUid
+      if (!uid || el.dataset.wordLeaving === "1") return
+      const top = el.getBoundingClientRect().top
+      next.set(uid, top)
+
+      if (uid === enterUid) {
+        el.animate(
+          [
+            { opacity: 0, transform: "translateY(-10px) scale(0.98)" },
+            { opacity: 1, transform: "translateY(0) scale(1)" },
+          ],
+          { duration: WORD_LIST_MS, easing: WORD_LIST_EASE, fill: "both" },
+        )
+        return
+      }
+
+      const oldTop = prev.get(uid)
+      if (oldTop == null) return
+      const dy = oldTop - top
+      if (Math.abs(dy) < 0.5) return
+      el.animate(
+        [
+          { transform: `translateY(${dy}px)` },
+          { transform: "translateY(0)" },
+        ],
+        { duration: WORD_LIST_MS, easing: WORD_LIST_EASE },
+      )
+    })
+
+    wordTopsRef.current = next
+  }, [wordRows, leavingUid, captureWordTops])
+
+  /* Place / slide the focus pill under the active row */
+  useEffect(() => {
+    if (!selectedId) {
+      setIndicatorReady(false)
+      return
+    }
+    const activeEl = itemRefs.current.get(selectedId)
+    if (!activeEl) return
+    setIndicator({
+      top: activeEl.offsetTop,
+      height: activeEl.offsetHeight,
+    })
+    requestAnimationFrame(() => setIndicatorReady(true))
+  }, [selectedId, libraries])
+
+  const [importMenuOpen, setImportMenuOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [defaultLibraryId, setDefaultLibraryId] = useState<string | null>(null)
+  const [settingDefault, setSettingDefault] = useState(false)
+  const importAnchorRef = useRef<HTMLDivElement>(null)
+  const importFileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!importMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (importAnchorRef.current?.contains(t)) return
+      const el = t instanceof Element ? t : t.parentElement
+      if (el?.closest?.(".pm-settings-hw-import-menu, .pm-settings-hw-import-anchor")) return
+      setImportMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setImportMenuOpen(false)
+    }
+    document.addEventListener("mousedown", onDown)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", onDown)
+      document.removeEventListener("keydown", onKey)
+    }
+  }, [importMenuOpen])
 
   const handleNew = async () => {
     try {
+      await flushSave()
       const lib = await createHotWordsLibrary({ name: "New Library" })
       await fetchList()
       setSelectedId(lib.id)
     } catch { toast.error("Failed to create library") }
   }
 
+  const handleDownloadTemplate = (format: "csv" | "xlsx") => {
+    downloadHotWordsTemplate(format)
+    setImportMenuOpen(false)
+    toast.success(
+      format === "csv" ? "CSV template downloading" : "Excel template downloading",
+    )
+  }
+
+  const handleImportFile = async (file: File | null | undefined) => {
+    if (!file) return
+    setImportMenuOpen(false)
+    setImporting(true)
+    try {
+      await flushSave()
+      const lib = await importHotWordsLibrary(file)
+      await fetchList()
+      setSelectedId(lib.id)
+      toast.success(
+        `Imported “${lib.name}” · ${lib.words?.length ?? 0} words`,
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Import failed")
+    } finally {
+      setImporting(false)
+      if (importFileRef.current) importFileRef.current.value = ""
+    }
+  }
+
+  const handleSetDefault = async () => {
+    if (!selectedId) return
+    const next = defaultLibraryId === selectedId ? null : selectedId
+    setSettingDefault(true)
+    try {
+      await flushSave()
+      const res = await setDefaultHotWordsLibrary(next)
+      if (res.error) throw new Error(res.error)
+      setDefaultLibraryId(res.default_library_id)
+      await fetchList()
+      toast.success(
+        next
+          ? "Default library set — applied on new meetings when ASR supports hot words"
+          : "Default library cleared",
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set default")
+    } finally {
+      setSettingDefault(false)
+    }
+  }
+
+  const handleExport = () => {
+    if (!selectedId) return
+    exportHotWordsLibrary(selectedId, selectedLib?.name)
+    toast.success("Excel export started")
+  }
+
   const handleDelete = async (id: string) => {
     try {
+      if (selectedId === id) clearSaveTimer()
       await deleteHotWordsLibrary(id)
-      if (selectedId === id) { setSelectedId(null); setSelectedLib(null) }
-      setDeleteConfirmId(null)
+      if (selectedId === id) {
+        setSelectedId(null)
+        setSelectedLib(null)
+        setWordRows([])
+        setIsDirty(false)
+        isDirtyRef.current = false
+      }
       await fetchList()
       toast.success("Library deleted")
     } catch { toast.error("Failed to delete") }
   }
 
-  const handleSave = async () => {
-    if (!selectedId || !selectedLib) return
-    setIsSaving(true)
-    try {
-      const updated = await updateHotWordsLibrary(selectedId, {
-        name: selectedLib.name,
-        description: selectedLib.description,
-        words: selectedLib.words,
-      })
-      setSelectedLib(updated)
-      setIsDirty(false)
-      toast.success("Saved")
-      await fetchList()
-    } catch { toast.error("Failed to save") }
-    finally { setIsSaving(false) }
-  }
-
   const updateField = (field: "name" | "description", value: string) => {
     if (!selectedLib) return
     setSelectedLib({ ...selectedLib, [field]: value })
-    setIsDirty(true)
+    scheduleSave()
   }
 
-  const updateWord = (index: number, field: keyof HotWordItem, value: string | number) => {
-    if (!selectedLib) return
-    const words = [...selectedLib.words]
-    words[index] = { ...words[index], [field]: value }
-    setSelectedLib({ ...selectedLib, words })
-    setIsDirty(true)
+  const updateWord = (uid: string, field: keyof HotWordItem, value: string | number) => {
+    setWordRows((rows) =>
+      rows.map((r) => (r.uid === uid ? { ...r, [field]: value } : r)),
+    )
+    scheduleSave()
   }
 
+  /** Prepend empty row at top; peers FLIP-slide down */
   const addWord = () => {
     if (!selectedLib) return
-    setSelectedLib({
-      ...selectedLib,
-      words: [...selectedLib.words, { text: "", weight: 4, lang: "" }],
+    captureWordTops()
+    const uid = newWordUid()
+    pendingEnterUidRef.current = uid
+    setWordRows((rows) => [
+      { uid, text: "", weight: 4, lang: "" },
+      ...rows,
+    ])
+    scheduleSave()
+    /* Keep new empty field in view */
+    requestAnimationFrame(() => {
+      const el = wordListRef.current?.querySelector<HTMLElement>(
+        `[data-word-uid="${uid}"]`,
+      )
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+      el?.querySelector<HTMLInputElement>("input")?.focus()
     })
-    setIsDirty(true)
   }
 
-  const removeWord = (index: number) => {
-    if (!selectedLib) return
-    const words = selectedLib.words.filter((_, i) => i !== index)
-    setSelectedLib({ ...selectedLib, words })
-    setIsDirty(true)
+  /** Collapse row out, then remove so peers slide up into the gap */
+  const removeWord = async (uid: string) => {
+    if (leavingUid) return
+    const slot = wordListRef.current?.querySelector<HTMLElement>(
+      `[data-word-uid="${uid}"]`,
+    )
+
+    captureWordTops()
+
+    if (slot && !prefersReducedMotion()) {
+      setLeavingUid(uid)
+      const h = slot.getBoundingClientRect().height
+      const mb = getComputedStyle(slot).marginBottom || "6px"
+      slot.dataset.wordLeaving = "1"
+      slot.style.overflow = "hidden"
+      slot.style.pointerEvents = "none"
+      try {
+        /* Height + margin collapse → rows below ease upward in layout */
+        await slot.animate(
+          [
+            {
+              opacity: 1,
+              height: `${h}px`,
+              marginBottom: mb,
+              transform: "scale(1)",
+            },
+            {
+              opacity: 0,
+              height: "0px",
+              marginBottom: "0px",
+              transform: "scale(0.98)",
+            },
+          ],
+          {
+            duration: WORD_LIST_MS - 40,
+            easing: WORD_LIST_EASE,
+            fill: "forwards",
+          },
+        ).finished
+      } catch {
+        /* animation cancelled */
+      }
+      /* Layout already final after collapse — seed tops, then unmount (no jump) */
+      wordTopsRef.current.delete(uid)
+      captureWordTops()
+      wordTopsRef.current.delete(uid)
+    }
+
+    setWordRows((rows) => rows.filter((r) => r.uid !== uid))
+    setLeavingUid(null)
+    scheduleSave()
   }
 
   const handleSwitchLibrary = (id: string) => {
-    if (isDirty && selectedId && selectedId !== id) {
-      if (!confirm("You have unsaved changes. Discard them?")) return
+    if (id === selectedId) return
+    void (async () => {
+      await flushSave()
+      setSelectedId(id)
+    })()
+  }
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      void (async () => {
+        await flushSave()
+        onOpenChange(false)
+      })()
+      return
     }
-    setSelectedId(id)
+    onOpenChange(true)
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-6xl h-[80vh] flex flex-col p-0">
-        <DialogHeader className="px-6 pt-6 pb-0 shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5" />
-            Hot Words Management
-          </DialogTitle>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-settings-hw-dialog",
+          "sm:max-w-6xl h-[80vh]",
+          "!animate-none data-open:!animate-none data-closed:!animate-none",
+          nested && "pm-dialog-layer-nested",
+        )}
+        overlayClassName={cn(
+          "pm-dialog-overlay--silk",
+          nested && "pm-dialog-layer-nested-overlay",
+        )}
+      >
+        <DialogHeader className="shrink-0">
+          <DialogKicker>Settings</DialogKicker>
+          <DialogTitle>Hot words</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-1 min-h-0 px-6 pb-6 pt-4 gap-4">
-          {/* Left panel: library list */}
-          <div className="w-56 shrink-0 flex flex-col border border-border rounded-lg overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/50">
-              <span className="text-sm font-medium">Libraries</span>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleNew} title="New library">
-                <Plus className="h-4 w-4" />
-              </Button>
+        <div className="pm-settings-hw">
+          {/* Left rail */}
+          <div className="pm-settings-hw-rail">
+            <div className="pm-settings-hw-rail-head">
+              <span className="pm-label text-[var(--pm-ink)]">Libraries</span>
+              <div
+                ref={importAnchorRef}
+                className="pm-settings-hw-rail-actions pm-settings-hw-import-anchor"
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  title="Import library"
+                  aria-label="Import library"
+                  aria-expanded={importMenuOpen}
+                  aria-haspopup="menu"
+                  disabled={importing}
+                  onClick={() => setImportMenuOpen((v) => !v)}
+                >
+                  <FileDown className="h-4 w-4" strokeWidth={2} />
+                </Button>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept=".csv,.xlsx,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="sr-only"
+                  tabIndex={-1}
+                  onChange={(e) => {
+                    void handleImportFile(e.target.files?.[0])
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleNew}
+                  title="New library"
+                  aria-label="New library"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+                {/* Right edge flush with rail actions / sidebar padding */}
+                <SoftMenu
+                  open={importMenuOpen}
+                  exitMs={MENU_SILK_MS}
+                  className="pm-settings-hw-import-menu"
+                >
+                  <div className="pm-settings-hw-import-menu-label" aria-hidden>
+                    Import
+                  </div>
+                  <MenuItem
+                    type="button"
+                    className="pm-settings-hw-import-item"
+                    onClick={() => handleDownloadTemplate("csv")}
+                  >
+                    <span className="pm-settings-hw-import-icon" aria-hidden>
+                      <FileText className="size-3.5" strokeWidth={2} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <MenuItemTitle>CSV template</MenuItemTitle>
+                      <MenuItemDescription>.csv</MenuItemDescription>
+                    </span>
+                  </MenuItem>
+                  <MenuItem
+                    type="button"
+                    className="pm-settings-hw-import-item"
+                    onClick={() => handleDownloadTemplate("xlsx")}
+                  >
+                    <span className="pm-settings-hw-import-icon" aria-hidden>
+                      <FileSpreadsheet className="size-3.5" strokeWidth={2} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <MenuItemTitle>Excel template</MenuItemTitle>
+                      <MenuItemDescription>.xlsx</MenuItemDescription>
+                    </span>
+                  </MenuItem>
+                  <div className="pm-settings-hw-import-divider" role="separator" />
+                  <MenuItem
+                    type="button"
+                    className="pm-settings-hw-import-item"
+                    disabled={importing}
+                    onClick={() => importFileRef.current?.click()}
+                  >
+                    <span className="pm-settings-hw-import-icon is-accent" aria-hidden>
+                      <FileDown className="size-3.5" strokeWidth={2} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <MenuItemTitle>
+                        {importing ? "Importing…" : "Import file"}
+                      </MenuItemTitle>
+                      <MenuItemDescription>CSV · Excel</MenuItemDescription>
+                    </span>
+                  </MenuItem>
+                </SoftMenu>
+              </div>
             </div>
-            <ScrollArea className="flex-1">
-              <div className="p-1">
+            <ScrollArea className="flex-1 min-h-0">
+              <div ref={listRef} className="pm-settings-hw-lib-list">
+                {selectedId ? (
+                  <div
+                    className={cn(
+                      "pm-settings-hw-indicator",
+                      indicatorReady && "is-ready",
+                    )}
+                    style={{
+                      transform: `translateY(${indicator.top}px)`,
+                      height: indicator.height,
+                    }}
+                    aria-hidden
+                  />
+                ) : null}
                 {libraries.map((lib) => (
                   <div
                     key={lib.id}
-                    className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer text-sm ${
-                      selectedId === lib.id
-                        ? "bg-primary/10 text-primary font-medium"
-                        : "hover:bg-muted"
-                    }`}
+                    ref={(el) => {
+                      if (el) itemRefs.current.set(lib.id, el)
+                      else itemRefs.current.delete(lib.id)
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    className={cn(
+                      "group pm-settings-hw-lib",
+                      selectedId === lib.id && "is-active",
+                    )}
                     onClick={() => handleSwitchLibrary(lib.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        handleSwitchLibrary(lib.id)
+                      }
+                    }}
                   >
                     <div className="truncate flex-1 min-w-0">
-                      <div className="truncate">{lib.name}</div>
-                      <div className="text-xs text-muted-foreground">{lib.word_count} words</div>
-                    </div>
-                    {deleteConfirmId === lib.id ? (
-                      <div className="flex items-center gap-1 shrink-0 ml-1">
-                        <Button
-                          variant="ghost" size="icon"
-                          className="h-5 w-5 text-destructive"
-                          onClick={(e) => { e.stopPropagation(); handleDelete(lib.id) }}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          variant="ghost" size="icon"
-                          className="h-5 w-5"
-                          onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null) }}
-                        >
-                          ×
-                        </Button>
+                      <div className="pm-title truncate flex items-center gap-1.5">
+                        <span className="truncate">{lib.name}</span>
+                        {(lib.is_default || lib.id === defaultLibraryId) && (
+                          <span className="pm-settings-hw-default-pill" title="Default library">
+                            Default
+                          </span>
+                        )}
                       </div>
-                    ) : (
-                      <Button
-                        variant="ghost" size="icon"
-                        className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0 ml-1"
-                        style={{ opacity: undefined }}
-                        onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(lib.id) }}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    )}
+                      <div className="pm-meta">{lib.word_count} words</div>
+                    </div>
+                    <SlideConfirmDeleteButton
+                      className="shrink-0 ml-1"
+                      title="Delete library"
+                      onConfirm={() => { void handleDelete(lib.id) }}
+                    />
                   </div>
                 ))}
                 {libraries.length === 0 && (
-                  <p className="text-xs text-muted-foreground p-2 text-center">
+                  <p className="pm-meta p-2 text-center">
                     No libraries yet. Click + to create one.
                   </p>
                 )}
@@ -193,110 +889,208 @@ export function HotWordsManager({ open, onOpenChange }: Props) {
             </ScrollArea>
           </div>
 
-          {/* Right panel: library details */}
-          <div className="flex-1 min-w-0 flex flex-col border border-border rounded-lg overflow-hidden">
-            {selectedLib ? (
-              <>
-                <div className="px-4 py-3 border-b border-border space-y-3 shrink-0">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Name</label>
-                    <Input
-                      value={selectedLib.name}
-                      onChange={(e) => updateField("name", e.target.value)}
-                      className="h-8 mt-1"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Description</label>
-                    <Textarea
-                      value={selectedLib.description}
-                      onChange={(e) => updateField("description", e.target.value)}
-                      className="h-16 mt-1 resize-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Word list */}
-                <div className="flex-1 min-h-0 flex flex-col">
-                  <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30 shrink-0">
-                    <span className="text-sm font-medium">
-                      Words ({selectedLib.words.length})
-                    </span>
-                    <Button variant="outline" size="sm" onClick={addWord}>
-                      <Plus className="h-3 w-3 mr-1" /> Add Word
-                    </Button>
-                  </div>
-                  <ScrollArea className="flex-1">
-                    <div className="divide-y divide-border">
-                      {selectedLib.words.map((word, i) => (
-                        <div key={i} className="flex items-center gap-2 px-4 py-2">
-                          <Input
-                            value={word.text}
-                            onChange={(e) => updateWord(i, "text", e.target.value)}
-                            placeholder="Hot word"
-                            className="h-8 flex-1 min-w-0"
+          {/* Main pane — soft fade on library switch */}
+          <div className="pm-settings-hw-main">
+            <div
+              className={cn(
+                "pm-settings-hw-main-body",
+                mainIn && "is-in",
+              )}
+            >
+              {selectedLib ? (
+                <>
+                  {/* Library meta — soft inset card */}
+                  <section className="pm-settings-hw-meta" aria-label="Library details">
+                    <div className="pm-settings-hw-meta-top">
+                      <div className="pm-settings-hw-field pm-settings-hw-field--name">
+                        <FieldLabel className="pm-settings-hw-field-label">Name</FieldLabel>
+                        <Input
+                          value={selectedLib.name}
+                          onChange={(e) => updateField("name", e.target.value)}
+                          className="pm-settings-hw-input"
+                          placeholder="Library name"
+                        />
+                      </div>
+                      <div className="pm-settings-hw-meta-actions">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "pm-settings-hw-action-btn",
+                            defaultLibraryId === selectedId && "is-default",
+                          )}
+                          disabled={settingDefault || !selectedId}
+                          title={
+                            defaultLibraryId === selectedId
+                              ? "Clear default (new meetings will not auto-select)"
+                              : "Set as default for new meetings (when ASR supports hot words)"
+                          }
+                          onClick={() => { void handleSetDefault() }}
+                        >
+                          <Star
+                            className="h-3.5 w-3.5"
+                            strokeWidth={1.75}
+                            fill={defaultLibraryId === selectedId ? "currentColor" : "none"}
                           />
-                          <div className="flex items-center gap-1 shrink-0">
-                            <label className="text-xs text-muted-foreground">W:</label>
-                            <Input
-                              type="number"
-                              min={1} max={10}
-                              value={isNaN(word.weight) ? "" : word.weight}
-                              onChange={(e) => {
-                                const v = e.target.value
-                                if (v === "") { updateWord(i, "weight", NaN); return }
-                                const n = parseInt(v)
-                                if (!isNaN(n)) updateWord(i, "weight", Math.max(1, Math.min(10, n)))
-                              }}
-                              onBlur={() => {
-                                if (isNaN(word.weight)) updateWord(i, "weight", 4)
-                              }}
-                              className="h-8 w-14 text-center"
-                            />
-                          </div>
-                          <Input
-                            value={word.lang || ""}
-                            onChange={(e) => updateWord(i, "lang", e.target.value)}
-                            placeholder="lang"
-                            className="h-8 w-16"
-                          />
-                          <Button
-                            variant="ghost" size="icon"
-                            className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
-                            onClick={() => removeWord(i)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      ))}
-                      {selectedLib.words.length === 0 && (
-                        <p className="text-xs text-muted-foreground p-4 text-center">
-                          No words. Click "Add Word" to add one.
-                        </p>
-                      )}
+                          {defaultLibraryId === selectedId ? "Default" : "Set default"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="pm-settings-hw-action-btn"
+                          disabled={!selectedId}
+                          title="Export as Excel"
+                          onClick={handleExport}
+                        >
+                          <FileUp className="h-3.5 w-3.5" strokeWidth={2} />
+                          Export
+                        </Button>
+                      </div>
                     </div>
-                  </ScrollArea>
-                </div>
+                    <div className="pm-settings-hw-field">
+                      <FieldLabel className="pm-settings-hw-field-label">Description</FieldLabel>
+                      <Textarea
+                        value={selectedLib.description}
+                        onChange={(e) => updateField("description", e.target.value)}
+                        className="pm-settings-hw-textarea"
+                        placeholder="Optional note for this library"
+                      />
+                    </div>
+                  </section>
 
-                {/* Save bar */}
-                <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-muted/30 shrink-0">
-                  <span className="text-xs text-muted-foreground">
-                    {isDirty ? "Unsaved changes" : "Saved"}
-                  </span>
-                  <Button size="sm" onClick={handleSave} disabled={!isDirty || isSaving}>
-                    <Save className="h-3.5 w-3.5 mr-1" />
-                    {isSaving ? "Saving..." : "Save"}
-                  </Button>
+                  {/* Word list — dense soft tray */}
+                  <section className="pm-settings-hw-words" aria-label="Hot words">
+                    <div className="pm-settings-hw-words-head">
+                      <div className="pm-settings-hw-words-title">
+                        <span className="pm-settings-hw-words-label">Words</span>
+                        <span className="pm-settings-hw-count">
+                          {wordRows.length}
+                        </span>
+                        <span
+                          className={cn(
+                            "pm-settings-hw-autosave",
+                            isSaving && "is-saving",
+                            isDirty && !isSaving && "is-pending",
+                          )}
+                          aria-live="polite"
+                        >
+                          {isSaving
+                            ? "Saving…"
+                            : isDirty
+                              ? "Editing"
+                              : "Saved"}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        className="pm-settings-hw-add"
+                        onClick={addWord}
+                      >
+                        <Plus className="h-3 w-3" strokeWidth={1.75} />
+                        Add
+                      </Button>
+                    </div>
+                    <ScrollArea className="pm-settings-hw-words-scroll">
+                      <div ref={wordListRef} className="pm-settings-hw-words-list">
+                        {wordRows.map((word) => (
+                          <div
+                            key={word.uid}
+                            data-word-uid={word.uid}
+                            className={cn(
+                              "pm-settings-hw-word-slot",
+                              leavingUid === word.uid && "is-leaving",
+                            )}
+                          >
+                            <div className="pm-settings-hw-word-row">
+                              <Input
+                                value={word.text}
+                                onChange={(e) => updateWord(word.uid, "text", e.target.value)}
+                                placeholder="Hot word"
+                                className="pm-settings-hw-word-text"
+                              />
+                              <div className="pm-settings-hw-weight" title="Weight 1–10">
+                                <span className="pm-settings-hw-weight-label">W</span>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  value={isNaN(word.weight) ? "" : word.weight}
+                                  onChange={(e) => {
+                                    const v = e.target.value
+                                    if (v === "") {
+                                      updateWord(word.uid, "weight", NaN)
+                                      return
+                                    }
+                                    const n = parseInt(v)
+                                    if (!isNaN(n)) {
+                                      updateWord(word.uid, "weight", Math.max(1, Math.min(10, n)))
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    if (isNaN(word.weight)) updateWord(word.uid, "weight", 4)
+                                  }}
+                                  className="pm-settings-hw-weight-input"
+                                />
+                              </div>
+                              <DropdownSelect
+                                size="sm"
+                                value={word.lang || ""}
+                                onChange={(v) => updateWord(word.uid, "lang", v)}
+                                options={
+                                  HOT_WORD_LANG_OPTIONS.some((o) => o.value === (word.lang || ""))
+                                    ? HOT_WORD_LANG_OPTIONS
+                                    : [
+                                        {
+                                          value: word.lang || "",
+                                          label: word.lang || "Any",
+                                        },
+                                        ...HOT_WORD_LANG_OPTIONS,
+                                      ]
+                                }
+                                placeholder="Lang"
+                                className="pm-settings-hw-lang"
+                              />
+                              <button
+                                type="button"
+                                className="pm-settings-hw-word-del"
+                                title="Remove word"
+                                aria-label="Remove word"
+                                disabled={leavingUid === word.uid}
+                                onClick={() => { void removeWord(word.uid) }}
+                              >
+                                <Trash2 className="h-3 w-3" strokeWidth={1.75} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        {wordRows.length === 0 && (
+                          <div className="pm-settings-hw-words-empty">
+                            <p className="pm-settings-hw-words-empty-title">No words yet</p>
+                            <p className="pm-settings-hw-words-empty-hint">
+                              Add terms to boost recognition accuracy.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </ScrollArea>
+                  </section>
+                </>
+              ) : (
+                <div className="pm-settings-hw-empty">
+                  <div className="pm-settings-hw-empty-icon" aria-hidden>
+                    <BookOpen className="h-6 w-6" strokeWidth={1.5} />
+                  </div>
+                  <p className="pm-settings-hw-empty-title">Pick a library</p>
+                  <p className="pm-settings-hw-empty-hint">
+                    Select one from the left, or create a new library.
+                  </p>
                 </div>
-              </>
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground">
-                <div className="text-center">
-                  <BookOpen className="h-10 w-10 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">Select a library or create one</p>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </DialogContent>

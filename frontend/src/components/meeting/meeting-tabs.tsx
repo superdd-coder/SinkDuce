@@ -1,14 +1,33 @@
-import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle, type ReactNode } from "react"
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, forwardRef, useImperativeHandle, type ReactNode, type RefObject } from "react"
 import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  SoftMenu,
+  MenuItem,
+  MenuItemTitle,
+  MenuItemDescription,
+  MENU_SILK_MS,
+} from "@/components/ui/menu"
+import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
+import { EditorToolbar } from "@/components/ui/tiptap-editor"
+import type { Editor } from "@tiptap/react"
 import { cn } from "@/lib/utils"
 import {
-  Loader2, X, RefreshCw, Plus, Pencil, Sparkles, ChevronDown,
-  FileText, FolderOpen, GitBranch, Trash2,
+  Loader2, RefreshCw, Plus, Pencil, Sparkles, ChevronDown,
+  FileText, FolderOpen, GitBranch, Trash2, Download, FileType2,
 } from "lucide-react"
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -17,18 +36,37 @@ import {
   saveSectionMd, updateMeeting, getMeeting,
   allocateSection, deleteSectionAllocation, createCollection,
   generateSectionDescription, getSummaryTranslations, getActiveTranslations,
+  getTask,
   type Meeting, type MeetingTab, type ExtractReceipt,
   type TranscriptSegment,
 } from "@/api/client"
 import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
 import { useBlueprintStream } from "@/hooks/use-blueprint-stream"
-import { useSectionStream, startSectionStream } from "@/hooks/use-section-stream"
+import {
+  useSectionStream,
+  startSectionStream,
+  dismissSectionStream,
+  getSectionStreamState,
+  subscribeSectionStreams,
+  sectionStreamHasOutput,
+  sectionStreamIsOpenable,
+} from "@/hooks/use-section-stream"
 import { useTranslationStream, startTranslationStream } from "@/hooks/use-translation-stream"
 import { toast } from "sonner"
+import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 import { SummaryTranslateControl } from "./summary-translate-control"
-import { SummaryMarkdownViewer, normalizeMd } from "./summary-markdown-viewer"
+import {
+  SummaryMarkdownViewer,
+  normalizeMd,
+  unescapeMarkdownOverEscapes,
+} from "./summary-markdown-viewer"
+import {
+  exportSummaryAsPdf,
+  exportSummaryMarkdown,
+  safeExportBasename,
+} from "@/lib/meeting-summary-export"
 
 const SAVE_DELAY = 800
 
@@ -50,6 +88,72 @@ interface Props {
   canShift?: boolean
   playbackTime?: number
   className?: string
+  /** Controlled Summary section id (e.g. tab_general / section tab). */
+  selectedSummaryId?: string
+  onSelectedSummaryIdChange?: (tabId: string) => void
+  /** Parent binds open-handler for Add Section (section rail header button). */
+  onBindOpenAddSection?: (open: () => void) => void
+  /** Parent can disable Add Section while meeting is busy. */
+  onBusyChange?: (busy: boolean) => void
+  /**
+   * Full section-rail model for the right side-panel Sections tab.
+   * Parent renders the list; actions stay in this module.
+   */
+  onSectionRailModelChange?: (model: SectionRailModel) => void
+  onBindSectionRailActions?: (actions: SectionRailActions) => void
+  /** Parent tracks Summary vs Notes (content main tabs only). */
+  onMainTabChange?: (tab: string) => void
+  /**
+   * When a sentence-ref needs Transcript focus, parent opens the side panel
+   * Transcript tab (main area no longer hosts Transcript / Speaker).
+   */
+  onRequestSideTab?: (tab: "sections" | "transcript" | "speaker") => void
+  /** Hide transcript/speaker panels here — parent hosts them in the side rail. */
+  hostTranscriptInParent?: boolean
+}
+
+/** Item shown in the top-right Sections rail */
+export type SectionRailItem = {
+  id: string
+  label: string
+  hint?: string
+  kind: "general" | "section" | "blueprint" | "custom" | "early" | "skeleton"
+  /** Multi-select (pre-extract blueprint / custom) */
+  selected?: boolean
+  /** Currently viewed summary section */
+  active?: boolean
+  shortLabel?: string
+  /**
+   * Generated content available (md on disk) or live stream tokens —
+   * can switch into Summary. Only for general / section.
+   */
+  ready?: boolean
+  /** Tokens flowing — show Streaming badge; still ready to open. */
+  streaming?: boolean
+  /**
+   * Work in flight before first token (server generating / SSE prefilling).
+   * Show Generating badge; still openable when ready is also true.
+   */
+  generating?: boolean
+  /** Section already ingested into a collection (allocated_file_id). */
+  ingested?: boolean
+}
+
+export type SectionRailModel = {
+  thinking: boolean
+  busy: boolean
+  hasBlueprint: boolean
+  hasSections: boolean
+  canBreakdown: boolean
+  items: SectionRailItem[]
+}
+
+export type SectionRailActions = {
+  openAddSection: () => void
+  selectSection: (id: string) => void
+  toggleBlueprint: (id: string) => void
+  removeCustom: (index: number) => void
+  breakdown: () => void
 }
 
 // MarkdownViewer lives in summary-markdown-viewer.tsx (shared with note editor)
@@ -58,22 +162,24 @@ interface Props {
 
 function ThinkingSkeleton() {
   return (
-    <div className="sk-thinking-flow rounded-lg p-6 pt-10 space-y-4">
-      {/* Title line */}
-      <div className="h-6 w-1/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.12)" }} />
-      {/* Content lines */}
-      <div className="space-y-3 pt-2">
-        <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.1s" }} />
-        <div className="h-3 w-5/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.3s" }} />
-        <div className="h-3 w-4/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.5s" }} />
-        <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.2s" }} />
-        <div className="h-3 w-3/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.6s" }} />
-      </div>
-      {/* Subtitle */}
-      <div className="h-4 w-1/4 rounded animate-pulse pt-2" style={{ background: "oklch(0.38 0.08 160 / 0.1)", animationDelay: "0.4s" }} />
-      <div className="space-y-3 pt-1">
-        <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.7s" }} />
-        <div className="h-3 w-2/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.9s" }} />
+    <div className="pm-meeting-fence-pad">
+      <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-6 pt-10 space-y-4">
+        {/* Title line */}
+        <div className="h-6 w-1/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.12)" }} />
+        {/* Content lines */}
+        <div className="space-y-3 pt-2">
+          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.1s" }} />
+          <div className="h-3 w-5/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.3s" }} />
+          <div className="h-3 w-4/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.5s" }} />
+          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.2s" }} />
+          <div className="h-3 w-3/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.6s" }} />
+        </div>
+        {/* Subtitle */}
+        <div className="h-4 w-1/4 rounded animate-pulse pt-2" style={{ background: "oklch(0.38 0.08 160 / 0.1)", animationDelay: "0.4s" }} />
+        <div className="space-y-3 pt-1">
+          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.7s" }} />
+          <div className="h-3 w-2/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.9s" }} />
+        </div>
       </div>
     </div>
   )
@@ -81,46 +187,113 @@ function ThinkingSkeleton() {
 
 // ── Editable section content (readonly view + edit mode) ──────────
 
-function EditableSectionContent({
-  content,
-  onSave,
-  onRefClick,
-  speakerNames,
-  actionButtons,
-  title,
-  metadata,
-  toolbar,
-  actionsDisabled,
-  editDisabled,
-  stickyOffset = 0,
-}: {
+const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
   content: string
   onSave: (updated: string) => Promise<void>
   onRefClick: (id: string) => void
   speakerNames: Record<string, string>
-  actionButtons?: ReactNode
+  /** Plain title (e.g. General) when not using section name editing */
   title?: ReactNode
+  /** Section name editing: prefix like "T1", name text, commit handler */
+  titlePrefix?: string
+  titleName?: string
+  onSaveTitle?: (name: string) => Promise<void>
   metadata?: ReactNode
   toolbar?: ReactNode
   actionsDisabled?: boolean
   editDisabled?: boolean
   stickyOffset?: number
-}) {
+  /** When true, hide inline edit affordance (edit lives in main pill toolbar). */
+  hideInlineEdit?: boolean
+  /** Host for collection pill on section title row (Choose sits on description row). */
+  ingestHostRef?: RefObject<HTMLDivElement | null>
+}>(function EditableSectionContent({
+  content,
+  onSave,
+  onRefClick,
+  speakerNames,
+  title,
+  titlePrefix,
+  titleName,
+  onSaveTitle,
+  metadata,
+  toolbar,
+  actionsDisabled,
+  editDisabled,
+  stickyOffset: _stickyOffset = 0,
+  hideInlineEdit = false,
+  ingestHostRef,
+}, ref) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(content)
   const [saving, setSaving] = useState(false)
+  /** Live Tiptap instance while editing — format strip is hosted above the title. */
+  const [editEditor, setEditEditor] = useState<Editor | null>(null)
+
+  // Section title (name only) — pencil next to title
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState(titleName ?? "")
+  const titleSavingRef = useRef(false)
+  const titleInputRef = useRef<HTMLInputElement>(null)
+  const canEditTitle = !!onSaveTitle && titleName !== undefined
 
   useEffect(() => {
     setDraft(content)
     setEditing(false)
+    setEditEditor(null)
   }, [content])
+
+  useEffect(() => {
+    setTitleDraft(titleName ?? "")
+    setEditingTitle(false)
+  }, [titleName])
+
+  useEffect(() => {
+    if (!editing) setEditEditor(null)
+  }, [editing])
+
+  useEffect(() => {
+    if (editingTitle) titleInputRef.current?.focus()
+  }, [editingTitle])
+
+  useImperativeHandle(ref, () => ({
+    startEditing: () => {
+      if (!actionsDisabled && !editDisabled) setEditing(true)
+    },
+  }), [actionsDisabled, editDisabled])
+
+  const commitTitle = async () => {
+    if (!editingTitle || !onSaveTitle) return
+    if (titleSavingRef.current) return
+    const next = titleDraft.trim()
+    if (!next) {
+      setTitleDraft(titleName ?? "")
+      setEditingTitle(false)
+      return
+    }
+    if (next === (titleName ?? "").trim()) {
+      setEditingTitle(false)
+      return
+    }
+    titleSavingRef.current = true
+    try {
+      await onSaveTitle(next)
+      setEditingTitle(false)
+    } catch (err) {
+      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      titleSavingRef.current = false
+    }
+  }
 
   const handleSave = async () => {
     setSaving(true)
     try {
-      const cleaned = draft.replace(/\\([\[\]])/g, "$1")
+      // Tiptap md export escapes ~ _ [ ] ; strip so ~1.5 stays ~1.5 on disk
+      const cleaned = unescapeMarkdownOverEscapes(draft)
       await onSave(cleaned)
       setEditing(false)
+      setEditEditor(null)
       toast.success("Saved")
     } catch (err) {
       toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -128,104 +301,157 @@ function EditableSectionContent({
     setSaving(false)
   }
 
+  const handleCancel = () => {
+    setDraft(content)
+    setEditing(false)
+    setEditEditor(null)
+  }
+
+  const editToolbarActions = (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={handleCancel}
+      >
+        Cancel
+      </Button>
+      <Button
+        type="button"
+        variant="default"
+        size="sm"
+        onClick={handleSave}
+        disabled={saving}
+      >
+        {saving ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+        Save
+      </Button>
+    </div>
+  )
+
+  const titleBlock = canEditTitle ? (
+    <div className="pm-meeting-section-title-row group/title min-w-0 flex-1">
+      {titlePrefix ? (
+        <span className="pm-meeting-section-title-prefix shrink-0">{titlePrefix}</span>
+      ) : null}
+      {editingTitle ? (
+        <input
+          ref={titleInputRef}
+          className="pm-meeting-section-title-input"
+          value={titleDraft}
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={() => { void commitTitle() }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault()
+              void commitTitle()
+            }
+            if (e.key === "Escape") {
+              e.preventDefault()
+              setTitleDraft(titleName ?? "")
+              setEditingTitle(false)
+            }
+          }}
+          aria-label="Section title"
+        />
+      ) : (
+        <>
+          <span className="pm-meeting-section-title-text min-w-0">
+            {titleName || "Untitled"}
+          </span>
+          {!actionsDisabled && !editDisabled && (
+            <button
+              type="button"
+              className="pm-meeting-section-title-edit-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditingTitle(true)
+              }}
+              title="Edit title"
+              aria-label="Edit title"
+            >
+              <Pencil className="size-3" />
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  ) : title ? (
+    <div className="pm-meeting-title pm-meeting-section-title min-w-0">{title}</div>
+  ) : (
+    <div className="pm-meeting-section-title min-w-0 flex-1" />
+  )
+
   return (
-    <div className="relative min-h-full">
-      {/* Sticky header with title (General only) */}
-      {(title || actionButtons) && (
-      <div className="sticky z-10 -mx-2 bg-background/80 backdrop-blur-sm" style={{ top: `${stickyOffset}px` }}>
-        <div className="flex items-center justify-between px-6 py-2">
-          <div
-            className="min-w-0 truncate t-body-family"
-            style={{
-              fontSize: "clamp(20px, 2vw, 24px)",
-              fontWeight: 400,
-              letterSpacing: "-0.01em",
-              lineHeight: 1.35,
-              color: "var(--ze-ink)",
-            }}
-          >
-            {title}
-          </div>
-          <div className={cn(
-            "flex items-center gap-1 shrink-0 ml-2 transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
-            actionsDisabled
-              ? "opacity-0 scale-90 pointer-events-none"
-              : "opacity-100 scale-100",
-          )}>
-            {actionButtons}
-          </div>
+    <div className="relative min-h-full flex flex-col">
+      {toolbar}
+
+      {/*
+        Format strip: sticky under tab bar, ABOVE section title.
+        Solid paper bg (not transparent whisper over prose).
+      */}
+      {editing && editEditor && !editEditor.isDestroyed ? (
+        <div className="pm-meeting-summary-fmt-bar">
+          <EditorToolbar
+            editor={editEditor}
+            stickyOffset={0}
+            actions={editToolbarActions}
+          />
         </div>
-        <div className="flex items-center justify-between px-6 pb-1">
-          <div className="flex-1 h-px bg-border" />
-          {!editing && !actionsDisabled && !editDisabled && (
-            <Button variant="ghost" size="icon" className="h-7 w-7 ml-2 shrink-0" onClick={() => setEditing(true)} title="Edit">
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
+      ) : null}
+
+      <div className="pm-meeting-body-prose">
+        {(title || canEditTitle || ingestHostRef) && (
+          <div className="pm-meeting-section-head">
+            {titleBlock}
+            {/* Collection pill only — width synced to toolbar actions; Choose on description row */}
+            {ingestHostRef ? (
+              <div
+                ref={ingestHostRef}
+                className="pm-meeting-section-ingest-slot shrink-0"
+              />
+            ) : null}
+            {!hideInlineEdit && !editing && !actionsDisabled && !editDisabled && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setEditing(true)}
+                title="Edit"
+                aria-label="Edit"
+              >
+                <Pencil className="size-3.5" />
+              </Button>
+            )}
+          </div>
+        )}
+
+        {metadata}
+
+        {/* Prose — same horizontal pad as title / description (body-prose) */}
+        <div className="pm-meeting-body-read">
+          {editing ? (
+            <MarkdownEditor
+              value={draft}
+              onChange={setDraft}
+              minHeight="250px"
+              showToolbar={false}
+              flush
+              onEditorReady={(ed) => setEditEditor(ed as Editor)}
+              className="pm-meeting-summary-edit-host"
+            />
+          ) : (
+            <SummaryMarkdownViewer md={content} onRefClick={onRefClick} speakerNames={speakerNames} />
           )}
         </div>
       </div>
-      )}
-
-      {/* Metadata slot (between title bar and divider) */}
-      {metadata}
-
-      {/* Toolbar slot (own row above the divider) */}
-      {toolbar}
-
-      {/* Section tabs: divider + edit (below metadata/toolbar, above content) */}
-      {!title && !editing && !actionsDisabled && !editDisabled && (
-      <div className="flex items-center justify-between px-6 pt-3 pb-1">
-        <div className="flex-1 h-px bg-border" />
-        <Button variant="ghost" size="icon" className="h-7 w-7 ml-2 shrink-0" onClick={() => setEditing(true)} title="Edit">
-          <Pencil className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      )}
-
-      {/* Content area */}
-      <div className="px-6 pb-4 pt-4">
-        {editing ? (
-          <MarkdownEditor
-            value={draft}
-            onChange={setDraft}
-            minHeight="250px"
-            stickyToolbarOffset={stickyOffset + ((title || actionButtons) ? 53 : 0)}
-            toolbarActions={
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="text-[11px] font-medium tracking-[0.06em] uppercase transition-colors"
-                  style={{ color: "var(--color-muted-foreground)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = "#1A5E3D")}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-muted-foreground)")}
-                  onClick={() => { setDraft(content); setEditing(false) }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center h-7 px-4 text-[11px] font-semibold tracking-[0.08em] uppercase rounded-full transition-colors"
-                  style={{ backgroundColor: "var(--color-primary)", color: "var(--color-primary-foreground)" }}
-                  onClick={handleSave}
-                  disabled={saving}
-                >
-                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
-                  Save
-                </button>
-              </div>
-            }
-          />
-        ) : (
-          <SummaryMarkdownViewer md={content} onRefClick={onRefClick} speakerNames={speakerNames} />
-        )}
-      </div>
     </div>
   )
-}
+})
 
 // ── Section metadata (between title bar and content) ──────────────
 
-const SectionMetadata = forwardRef<{ startEditing: () => void }, {
+const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   tab: MeetingTab
   blueprint: Meeting["blueprint"]
   tabs: MeetingTab[]
@@ -233,6 +459,8 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
   onMeetingUpdate: (m: Meeting) => void
   onIngestingChange?: (tabId: string, v: boolean) => void
   hideTitle?: boolean
+  /** Portal collection pill into title-row host; Choose a collection stays on description row. */
+  ingestHostRef?: RefObject<HTMLDivElement | null>
 }>(function SectionMetadata({
   tab,
   blueprint,
@@ -241,6 +469,7 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
   onMeetingUpdate,
   onIngestingChange,
   hideTitle,
+  ingestHostRef,
 }, ref) {
   const bpEntry = (blueprint ?? []).find((b) => b.blueprint_id === tab.blueprint_id)
   // Tab now carries its own description (set at extract time).
@@ -272,10 +501,8 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
   const [switchTarget, setSwitchTarget] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const buttonRef = useRef<HTMLButtonElement>(null)
+  const buttonRef = useRef<HTMLElement>(null)
   const topPillRef = useRef<HTMLButtonElement>(null)
-  const dropdownContentRef = useRef<HTMLDivElement>(null)
-  const actionsMenuRef = useRef<HTMLDivElement>(null)
   const { collections, fetchCollections, setSidebarView, setActiveCollection, setPendingOpenFile } =
     useAppStore(
       useShallow((s) => ({
@@ -299,88 +526,64 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
     : displayName || pendingName || associatedName
   const topButtonIsActive = ingesting || displayActive || !!pendingName
 
-  // Inline editing for section name + description
-  const [editingMeta, setEditingMeta] = useState(false)
-  const [nameDraft, setNameDraft] = useState(sectionDisplayName)
+  // Description only — click the text area to edit (title is edited next to the section head)
+  const [editingDesc, setEditingDesc] = useState(false)
   const [descDraft, setDescDraft] = useState(description)
-  const savingRef = useRef(false)  // sync guard: prevents double-save from blur + click
-  const editContainerRef = useRef<HTMLDivElement>(null)
+  const descSavingRef = useRef(false)
+  const descInputRef = useRef<HTMLTextAreaElement>(null)
 
   useImperativeHandle(ref, () => ({
-    startEditing: () => setEditingMeta(true),
+    startEditingDescription: () => setEditingDesc(true),
   }))
 
-  // Click-outside handler for inline editing
   useEffect(() => {
-    if (!editingMeta) return
-    const handler = (e: MouseEvent) => {
-      if (editContainerRef.current && !editContainerRef.current.contains(e.target as Node)) {
-        commitMeta()
-      }
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingMeta, nameDraft, descDraft])
-
-  // Sync drafts when tab changes
-  useEffect(() => {
-    setNameDraft(sectionDisplayName)
     setDescDraft(description)
-    setEditingMeta(false)
-  }, [tab.tab_id, sectionDisplayName, description])
+    setEditingDesc(false)
+  }, [tab.tab_id, description])
 
-  const commitMeta = async () => {
-    if (!editingMeta) return
-    if (savingRef.current) return
-    if (nameDraft === sectionDisplayName && descDraft === description) {
-      setEditingMeta(false)
+  useEffect(() => {
+    if (!editingDesc) return
+    const el = descInputRef.current
+    if (!el) return
+    el.focus()
+    // Grow to content so layout matches the display paragraph
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [editingDesc])
+
+  const commitDescription = async () => {
+    if (!editingDesc) return
+    if (descSavingRef.current) return
+    const next = descDraft
+    if (next === description) {
+      setEditingDesc(false)
       return
     }
-    savingRef.current = true
+    descSavingRef.current = true
     try {
       const bp = blueprint ?? []
       const m = await updateMeeting(meetingId, {
         blueprint: bp.map((b) => {
           if (b.blueprint_id === tab.blueprint_id) {
-            return { ...b, tab_name: nameDraft, tab_description: descDraft }
+            return { ...b, tab_description: next }
           }
           return b
         }),
         tabs: (tabs ?? []).map((t) => {
           if (t.tab_id === tab.tab_id) {
-            return { ...t, name: nameDraft, description: descDraft, is_dirty: true }
+            return { ...t, description: next, is_dirty: true }
           }
           return t
         }),
       })
-      setEditingMeta(false)
+      setEditingDesc(false)
       onMeetingUpdate(m)
     } catch (err) {
       toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
-      savingRef.current = false
+      descSavingRef.current = false
     }
   }
-
-  // Dropdown / actions menu click-outside (portal-based)
-  useEffect(() => {
-    if (!dropdownOpen && !actionsOpen) return
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (
-        menuRef.current && !menuRef.current.contains(t) &&
-        dropdownContentRef.current && !dropdownContentRef.current.contains(t) &&
-        (!actionsMenuRef.current || !actionsMenuRef.current.contains(t))
-      ) {
-        setDropdownOpen(false)
-        setActionsOpen(false)
-        setCreating(false)
-      }
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [dropdownOpen, actionsOpen])
 
   // Fetch collections when dropdown opens
   useEffect(() => {
@@ -477,23 +680,52 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
       } = res
       if (bridgeNodeId) lastNodeIdRef.current = bridgeNodeId
       onMeetingUpdate(meetingRest as Meeting)
-      // Track async ingest in file-mgmt (Preview-only lock, folder badges)
-      if (bridgeTaskId && bridgeFileId) {
-        const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
-        useFileMgmtStore
-          .getState()
-          ._startTaskPolling(colId, bridgeTaskId, bridgeFileId)
-      }
       const wasUpdate = !!tab.allocated_file_id
-      toast.success(
-        wasUpdate
-          ? bridgeTaskId
-            ? "Collection update queued (new version)…"
-            : "Collection updated"
-          : bridgeTaskId
-            ? "Ingested — processing in collection…"
-            : "Ingested to collection"
-      )
+
+      // allocate returns as soon as the file is registered; indexing is async.
+      // Keep pill "Ingesting…" until the task finishes — don't toast "done" early.
+      if (bridgeTaskId && bridgeFileId) {
+        toast.info(
+          wasUpdate
+            ? "Collection update started…"
+            : "Ingest started — indexing in collection…",
+        )
+        try {
+          const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+          useFileMgmtStore
+            .getState()
+            ._startTaskPolling(colId, bridgeTaskId, bridgeFileId, {
+              silentToast: true,
+            })
+        } catch { /* ignore store wiring */ }
+
+        let settled = false
+        for (let i = 0; i < 120; i++) {
+          await new Promise((r) => setTimeout(r, 1500))
+          try {
+            const task = await getTask(bridgeTaskId)
+            if (task.status === "completed") {
+              toast.success(wasUpdate ? "Collection updated" : "Ingested to collection")
+              settled = true
+              break
+            }
+            if (task.status === "failed") {
+              toast.error(
+                `Ingest failed: ${task.error || task.message || task.filename || "unknown error"}`,
+              )
+              settled = true
+              break
+            }
+          } catch {
+            // keep polling
+          }
+        }
+        if (!settled) {
+          toast.info("Ingest still running in the background…")
+        }
+      } else {
+        toast.success(wasUpdate ? "Collection updated" : "Ingested to collection")
+      }
     } catch (err) {
       toast.error(`Ingest failed: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -605,7 +837,55 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
     setIngesting(false)
   }
 
-  const BUTTON_W = "w-[172px]"
+  const BUTTON_W = "w-[250px]"
+  const portalIngest = !!ingestHostRef
+  const pillShellRef = useRef<HTMLDivElement>(null)
+  const chooseShellRef = useRef<HTMLDivElement>(null)
+
+  // Re-render when host mounts so createPortal has a target
+  const [ingestPortalReady, setIngestPortalReady] = useState(false)
+  useLayoutEffect(() => {
+    setIngestPortalReady(!!ingestHostRef?.current)
+  }, [ingestHostRef, tab.tab_id, showTopButton, displayActive, ingesting])
+
+  /**
+   * Ingest column width = sum of main toolbar action buttons
+   * (`.pm-meeting-tabs-actions`). Pill (title row) + Choose (description row)
+   * share that width and L/R-align under the toolbar.
+   */
+  useLayoutEffect(() => {
+    if (!portalIngest) return
+    const shell = containerRef.current?.closest(".pm-meeting-tabs-shell") as HTMLElement | null
+    const actions = shell?.querySelector(".pm-meeting-tabs-actions") as HTMLElement | null
+    if (!shell || !actions) return
+    const apply = () => {
+      // Fixed ingest column width (pill + Choose a collection)
+      const COL_W = 250
+      shell.style.setProperty("--pm-meeting-ingest-col-w", `${COL_W}px`)
+    }
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(actions)
+    return () => ro.disconnect()
+  }, [portalIngest, tab.tab_id, showTopButton, displayActive, ingesting])
+
+  // SoftMenu click-outside — pill + choose may live in different DOM hosts
+  useEffect(() => {
+    if (!dropdownOpen && !actionsOpen) return
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node
+      const inPill = pillShellRef.current?.contains(t)
+      const inChoose = chooseShellRef.current?.contains(t)
+      const inMenu = (e.target as Element)?.closest?.("[data-slot='menu']")
+      if (!inPill && !inChoose && !inMenu) {
+        setDropdownOpen(false)
+        setActionsOpen(false)
+        setCreating(false)
+      }
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [dropdownOpen, actionsOpen])
 
   const tabLabel = (() => {
     const sections = tabs.filter(t => t.type === "section" && t.md_file_path)
@@ -613,369 +893,325 @@ const SectionMetadata = forwardRef<{ startEditing: () => void }, {
     return idx >= 0 ? `(Topic ${idx + 1})` : tab.tab_id
   })()
 
-  return (
-    <div ref={containerRef} className="px-6 py-3 pb-4 flex gap-4 group relative">
-      {/* Left column: section title + description */}
-      <div className="flex-1 min-w-0 flex flex-col gap-1 relative items-start">
-        {/* Edit button — appears on hover at top-right of left column (or always visible when title is hidden) */}
-        {!editingMeta && (
-          <button
-            className={cn(
-              "h-7 w-7 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-opacity duration-200",
-              hideTitle
-                ? "absolute top-0 -right-1 opacity-0 group-hover:opacity-100"
-                : "absolute top-0 -right-1 opacity-0 group-hover:opacity-100",
-            )}
-            onClick={() => setEditingMeta(true)}
-            title="Edit section"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
+  /** Collection pill — title row (portal) or top of legacy column */
+  const pillControls = showTopButton ? (
+    <div
+      ref={pillShellRef}
+      className={cn(
+        portalIngest
+          ? "pm-meeting-ingest-col pm-meeting-ingest-col--pill w-full"
+          : "w-full",
+      )}
+    >
+      <button
+        type="button"
+        ref={topPillRef}
+        disabled={ingesting}
+        onClick={() => {
+          if (displayActive) {
+            setDropdownOpen(false)
+            setActionsOpen((v) => !v)
+          } else {
+            void handleIngest(associatedId)
+          }
+        }}
+        title={
+          needsReingest
+            ? "Section edited — Update collection to push a new version"
+            : displayActive
+              ? "Open actions (file / files / timeline / remove)"
+              : displaySuggestion
+                ? "Click to ingest"
+                : undefined
+        }
+        className={cn(
+          "pm-meeting-ingest-pill",
+          portalIngest && "pm-meeting-ingest-pill--toolbar",
+          ingesting && "sk-thinking-flow",
+          topButtonIsActive && "is-active",
+          displaySuggestion && !ingesting && "is-suggest",
         )}
-        {editingMeta ? (
-          <div ref={editContainerRef} className="flex flex-col gap-1 w-full">
-            <div className="flex items-center gap-0">
-              <span
-                className="t-body-family"
-                style={{
-                  fontSize: "clamp(20px, 2vw, 24px)",
-                  fontWeight: 400,
-                  letterSpacing: "-0.01em",
-                  lineHeight: 1.35,
-                  color: "var(--ze-ink)",
-                }}
-              >
-                {tabLabel}{" "}
-              </span>
-              <input
-                className="flex-1 text-current bg-transparent border-b border-primary outline-none px-0 py-0.5 min-w-0 t-body-family"
-                style={{
-                  fontSize: "clamp(20px, 2vw, 24px)",
-                  fontWeight: 400,
-                  letterSpacing: "-0.01em",
-                  lineHeight: 1.35,
-                  color: "var(--ze-ink)",
-                }}
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitMeta() } }}
-                autoFocus
-              />
-            </div>
-            <textarea
-              className="text-xs text-muted-foreground bg-transparent border-b border-border outline-none px-0 py-1 flex-1 resize-none min-h-[80px]"
-              placeholder="Section description..."
-              value={descDraft}
-              onChange={(e) => setDescDraft(e.target.value)}
-              rows={4}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitMeta() } }}
-            />
-          </div>
-        ) : (
-          <>
-            {!hideTitle && (
-            <div
-              className="whitespace-normal break-words w-full t-body-family"
-              style={{
-                fontSize: "clamp(20px, 2vw, 24px)",
-                fontWeight: 400,
-                letterSpacing: "-0.01em",
-                lineHeight: 1.35,
-                color: "var(--ze-ink)",
-                textAlign: "left",
-              }}
-            >
-              {tabLabel} {sectionDisplayName}
-            </div>
-            )}
-            {description && (
-              <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Right column: collection buttons */}
-      <div className={cn("shrink-0 flex flex-col gap-1.5 items-end", BUTTON_W)} ref={menuRef}>
-        {showTopButton && (
-          <button
-            type="button"
-            ref={topPillRef}
+      >
+        <span className="relative z-10 flex items-center justify-center gap-1 min-w-0 w-full px-0.5">
+          {needsReingest && !ingesting ? (
+            <RefreshCw className="size-2.5 shrink-0 opacity-50" strokeWidth={2} aria-label="Update available" />
+          ) : null}
+          <span className="truncate min-w-0">{topButtonLabel}</span>
+          {displayActive && !ingesting ? (
+            <ChevronDown className="size-3 opacity-70 shrink-0" />
+          ) : null}
+        </span>
+      </button>
+      <SoftMenu
+        open={actionsOpen && displayActive}
+        portal
+        anchorRef={topPillRef}
+        align="end"
+        className="min-w-[180px]"
+      >
+        {needsReingest && (
+          <MenuItem
             disabled={ingesting}
-            onClick={() => {
-              if (displayActive) {
-                setDropdownOpen(false)
-                setActionsOpen((v) => !v)
-              } else {
-                void handleIngest(associatedId)
-              }
-            }}
-            title={
-              needsReingest
-                ? "Section edited — Update collection to push a new version"
-                : displayActive
-                  ? "Open actions (file / files / timeline / remove)"
-                  : displaySuggestion
-                    ? "Click to ingest"
-                    : undefined
-            }
-            className={cn(
-              "group relative z-0 flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
-              ingesting && "sk-thinking-flow",
-              // Dashed outline for suggestion state (not yet ingested)
-              displaySuggestion && !ingesting && "border border-dashed border-green-600/40",
-            )}
-            style={{
-              fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
-              color: topButtonIsActive ? "var(--color-primary)" : "var(--color-muted-foreground)",
-            }}
+            onClick={() => void handleUpdateCollection()}
           >
-            {/* Background wash behind content */}
-            <span
-              className={cn(
-                "absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
-                ingesting ? "bg-green-wash animate-pulse" : displayActive ? "bg-primary/10" : "",
-              )}
-              style={{
-                transform: displayActive ? "scaleX(1)" : displaySuggestion ? "scaleX(0)" : "scaleX(0)",
-                transformOrigin: "left",
-              }}
-            />
-            {/* Content: [subtle update icon] collection name [chevron] */}
-            <span className="relative z-10 flex items-center justify-center gap-1 min-w-0 w-full px-0.5">
-              {needsReingest && !ingesting ? (
-                <RefreshCw
-                  className="h-2.5 w-2.5 shrink-0 opacity-50"
-                  strokeWidth={2}
-                  aria-label="Update available"
-                />
-              ) : null}
-              <span className="truncate min-w-0">{topButtonLabel}</span>
-              {displayActive && !ingesting ? (
-                <ChevronDown className="h-3 w-3 opacity-70 shrink-0" />
-              ) : null}
-            </span>
-          </button>
+            <RefreshCw className="size-3 shrink-0" />
+            Update collection
+          </MenuItem>
         )}
-        {createPortal(
-          <div
-            ref={actionsMenuRef}
-            className={cn(
-              "fixed z-50 flex-col overflow-hidden rounded border border-primary/30 bg-popover/95 backdrop-blur-md shadow-lg transition-all duration-200",
-              actionsOpen && displayActive
-                ? "opacity-100 visible translate-y-0 pointer-events-auto flex"
-                : "opacity-0 invisible translate-y-2 pointer-events-none hidden"
-            )}
-            style={{
-              width: topPillRef.current
-                ? Math.max(topPillRef.current.getBoundingClientRect().width, 180)
-                : 180,
-              top: menuRef.current
-                ? menuRef.current.getBoundingClientRect().top - 4
-                : 0,
-              left: menuRef.current
-                ? menuRef.current.getBoundingClientRect().left
-                : 0,
-              transform: actionsOpen ? "translateY(-100%)" : "translateY(-90%)",
-            }}
-          >
-            {(
-              [
-                ...(needsReingest
-                  ? [
-                      {
-                        key: "update" as const,
-                        label: "Update collection",
-                        icon: RefreshCw,
-                        onClick: () => void handleUpdateCollection(),
-                      },
-                    ]
-                  : []),
-                {
-                  key: "file" as const,
-                  label: "Open file",
-                  icon: FileText,
-                  onClick: handleOpenFile,
-                },
-                {
-                  key: "files" as const,
-                  label: "Show in Files",
-                  icon: FolderOpen,
-                  onClick: handleShowInFiles,
-                },
-                {
-                  key: "timeline" as const,
-                  label: "Show on Timeline",
-                  icon: GitBranch,
-                  onClick: () => void handleShowOnTimeline(),
-                },
-                {
-                  key: "remove" as const,
-                  label: "Remove from collection",
-                  icon: Trash2,
-                  onClick: () => {
-                    setActionsOpen(false)
-                    setCancelOpen(true)
-                  },
-                  danger: true as const,
-                },
-              ]
-            ).map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={item.onClick}
-                disabled={ingesting && item.key === "update"}
-                className={cn(
-                  "flex items-center gap-2 w-full px-2.5 py-2 text-left text-[10px] font-medium uppercase tracking-[0.08em] transition-colors disabled:opacity-50",
-                  "danger" in item && item.danger
-                    ? "text-red-500/80 hover:bg-red-500/10 hover:text-red-500"
-                    : "text-muted-foreground hover:bg-primary hover:text-primary-foreground"
-                )}
-              >
-                <item.icon className="h-3 w-3 shrink-0" />
-                <span>{item.label}</span>
-              </button>
-            ))}
-          </div>,
-          document.body
-        )}
+        <MenuItem onClick={handleOpenFile}>
+          <FileText className="size-3 shrink-0" />
+          Open file
+        </MenuItem>
+        <MenuItem onClick={handleShowInFiles}>
+          <FolderOpen className="size-3 shrink-0" />
+          Show in Files
+        </MenuItem>
+        <MenuItem onClick={() => void handleShowOnTimeline()}>
+          <GitBranch className="size-3 shrink-0" />
+          Show on Timeline
+        </MenuItem>
+        <MenuItem
+          destructive
+          onClick={() => {
+            setActionsOpen(false)
+            setCancelOpen(true)
+          }}
+        >
+          <Trash2 className="size-3 shrink-0" />
+          Remove from collection
+        </MenuItem>
+      </SoftMenu>
+    </div>
+  ) : null
+
+  /** Choose a collection — description row (portal layout) or under pill (legacy) */
+  const chooseControls = (
+    <div
+      ref={chooseShellRef}
+      className={cn(
+        portalIngest
+          ? "pm-meeting-ingest-col pm-meeting-ingest-col--choose w-full"
+          : "w-full",
+      )}
+    >
+      <div ref={buttonRef as RefObject<HTMLDivElement>} className="w-full">
         <button
           type="button"
-          ref={buttonRef}
           disabled={ingesting}
           onClick={() => {
             setActionsOpen(false)
             setDropdownOpen(!dropdownOpen)
           }}
-          className="group relative z-0 flex items-center justify-center overflow-hidden rounded px-3 py-2 t-sans-family transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full"
-          style={{
-            fontSize: "10px", fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase",
-            color: dropdownOpen
-              ? "var(--color-primary-foreground)"
-              : "var(--color-muted-foreground)",
-          }}
+          className={cn(
+            "pm-meeting-ingest-pill",
+            portalIngest && "pm-meeting-ingest-pill--toolbar",
+            dropdownOpen && "is-active",
+          )}
         >
-          <span className="relative z-10 whitespace-nowrap text-center">
+          <span className="relative z-10 truncate min-w-0 px-0.5">
             {dropdownOpen ? "Cancel" : "Choose a collection"}
           </span>
-          <span
-            className="absolute inset-0 z-0 transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] bg-primary"
-            style={{
-              transform: dropdownOpen ? "scaleX(1)" : "scaleX(0)",
-              transformOrigin: dropdownOpen ? "right" : "left",
-            }}
-          />
         </button>
-        {createPortal(
-          <div
-            ref={dropdownContentRef}
-            className={`fixed z-50 flex-col items-center overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${
-              dropdownOpen
-                ? "opacity-100 visible translate-y-0 pointer-events-auto"
-                : "opacity-0 invisible translate-y-3 pointer-events-none"
-            }`}
-            style={{
-              width: buttonRef.current ? buttonRef.current.getBoundingClientRect().width : "auto",
-              top: menuRef.current ? menuRef.current.getBoundingClientRect().bottom + 4 : 0,
-              left: menuRef.current ? menuRef.current.getBoundingClientRect().left : 0,
-            }}
+      </div>
+      <SoftMenu open={dropdownOpen} portal anchorRef={buttonRef} align="end" className="min-w-[172px]">
+        {collections.length === 0 && (
+          <div className="px-3 py-2 pm-meta text-center">No collections yet</div>
+        )}
+        {collections.map((col) => (
+          <MenuItem
+            key={col.id}
+            active={col.id === associatedId}
+            disabled={!!pendingName}
+            onClick={() => handleSelectCollection(col.id)}
           >
-            {collections.length === 0 && (
-              <div className="px-2 py-3 text-[10px] text-muted-foreground text-center">No collections yet</div>
-            )}
-            {collections.map((col) => (
-              <label
-                key={col.id}
-                onClick={() => handleSelectCollection(col.id)}
-                className={`relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group ${
-                  pendingName ? "pointer-events-none opacity-50" : ""
-                }`}
-              >
-                <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                  <span className={`sk-diamond ${col.id === associatedId ? "on" : ""}`} aria-hidden />
-                  <span className="whitespace-normal break-words min-w-0 leading-snug">{col.name}</span>
-                </span>
-                <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-              </label>
-            ))}
-            <div className="border-t border-primary/20 w-full">
-              {!creating ? (
-                <label
-                  onClick={() => setCreating(true)}
-                  className={`relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group ${
-                    pendingName ? "pointer-events-none opacity-50" : ""
-                  }`}
-                >
-                  <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                    <Plus className="h-3 w-3 shrink-0" />
-                    <span>{hasAssociated ? "Create new collection" : `+ ${tab.name}`}</span>
-                  </span>
-                  <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-                </label>
-              ) : (
-                <div className="px-2 py-2 flex items-center gap-1.5">
-                  <input
-                    className="flex-1 border border-border rounded px-2 py-1 text-[10px] bg-background"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="Collection name"
-                    autoFocus
-                    onKeyDown={(e) => { if (e.key === "Enter") handleCreateAndSelect() }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <button
-                    className="shrink-0 text-[10px] font-medium uppercase tracking-[0.1em] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-80 disabled:opacity-50"
-                    onClick={handleCreateAndSelect}
-                    disabled={!newName.trim() || !!pendingName}
-                  >
-                    Create
-                  </button>
-                </div>
+            {col.name}
+          </MenuItem>
+        ))}
+        {!creating ? (
+          <MenuItem
+            disabled={!!pendingName}
+            onClick={() => setCreating(true)}
+          >
+            <Plus className="size-3 shrink-0" />
+            {hasAssociated ? "Create new collection" : `+ ${tab.name}`}
+          </MenuItem>
+        ) : (
+          <div className="px-2 py-2 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+            <Input
+              className="h-7 flex-1"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Collection name"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") handleCreateAndSelect() }}
+            />
+            <Button
+              type="button"
+              variant="default"
+              size="xs"
+              onClick={handleCreateAndSelect}
+              disabled={!newName.trim() || !!pendingName}
+            >
+              Create
+            </Button>
+          </div>
+        )}
+      </SoftMenu>
+    </div>
+  )
+
+  // Legacy side column: pill + choose stacked, fixed width
+  const legacyIngestColumn = (
+    <div
+      className={cn("shrink-0 flex flex-col gap-1.5 items-end", BUTTON_W)}
+      ref={menuRef}
+    >
+      {pillControls}
+      {chooseControls}
+    </div>
+  )
+
+  return (
+    <div
+      ref={containerRef}
+      className={cn(
+        "group relative",
+        portalIngest
+          ? "pm-meeting-section-meta pm-meeting-section-meta--split"
+          : "px-6 py-3 pb-4 flex gap-4",
+      )}
+    >
+      {/* Left: section title (optional) + click-to-edit description */}
+      <div className="pm-meeting-section-meta-main flex-1 min-w-0 flex flex-col gap-1 relative items-start">
+        {!hideTitle && (
+          <div className="pm-meeting-title whitespace-normal break-words w-full text-left">
+            {tabLabel} {sectionDisplayName}
+          </div>
+        )}
+        {editingDesc ? (
+          <textarea
+            ref={descInputRef}
+            className="pm-meeting-section-desc-input"
+            value={descDraft}
+            placeholder="Add a description…"
+            rows={1}
+            onChange={(e) => {
+              setDescDraft(e.target.value)
+              const el = e.target
+              el.style.height = "auto"
+              el.style.height = `${el.scrollHeight}px`
+            }}
+            onBlur={() => { void commitDescription() }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault()
+                setDescDraft(description)
+                setEditingDesc(false)
+              }
+              // Enter commits; Shift+Enter inserts newline
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault()
+                void commitDescription()
+              }
+            }}
+            aria-label="Section description"
+          />
+        ) : (
+          <div className="pm-meeting-section-desc-row group/desc">
+            <p
+              className={cn(
+                "pm-meeting-section-desc",
+                !description && "is-empty",
               )}
-            </div>
-          </div>,
-          document.body
+            >
+              {description || "Add a description…"}
+            </p>
+            <button
+              type="button"
+              className="pm-meeting-section-desc-edit-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditingDesc(true)
+              }}
+              title="Edit description"
+              aria-label="Edit description"
+            >
+              <Pencil className="size-3" />
+            </button>
+          </div>
         )}
       </div>
 
+      {/* Ingest:
+          - portal: pill → title-row host; Choose → description-row right
+          - legacy: stacked side column */}
+      {portalIngest ? (
+        <>
+          {showTopButton && ingestPortalReady && ingestHostRef?.current
+            ? createPortal(pillControls, ingestHostRef.current)
+            : null}
+          <div className="pm-meeting-section-meta-choose shrink-0">
+            {chooseControls}
+          </div>
+        </>
+      ) : (
+        legacyIngestColumn
+      )}
+
       {/* Cancel Ingestion Confirm Dialog */}
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className="pm-dialog pm-dialog--silk sm:max-w-sm"
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle>Cancel Ingestion</DialogTitle>
+            <DialogKicker>Collection</DialogKicker>
+            <DialogTitle>Remove from collection?</DialogTitle>
+            <DialogDescription>
+              This will remove the section content from &ldquo;{associatedName}&rdquo; and delete the file snapshot.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This will remove the section content from "{associatedName}" and delete the file snapshot. Continue?
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setCancelOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleCancelIngest}>Remove</Button>
-          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setCancelOpen(false)}>Cancel</Button>
+            <Button type="button" variant="destructive-solid" size="sm" onClick={handleCancelIngest}>Remove</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Switch Ingestion Confirm Dialog */}
       <Dialog open={!!switchTarget} onOpenChange={(v) => { if (!v) setSwitchTarget(null) }}>
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className="pm-dialog pm-dialog--silk sm:max-w-sm"
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle>Switch Collection</DialogTitle>
+            <DialogKicker>Collection</DialogKicker>
+            <DialogTitle>Switch collection?</DialogTitle>
+            <DialogDescription>
+              This section is already ingested to &ldquo;{associatedName}&rdquo;.{" "}
+              {switchTarget === "__new__" ? (
+                <>Creating a new collection will delete the existing file snapshot and re-ingest.</>
+              ) : (
+                <>Switching to &ldquo;{collections.find(c => c.id === switchTarget)?.name || switchTarget}&rdquo; will delete the existing file snapshot and re-ingest.</>
+              )}
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This section is already ingested to <span className="font-medium text-foreground">"{associatedName}"</span>.
-            {switchTarget === "__new__" ? (
-              <>Creating a new collection will delete the existing file snapshot and re-ingest.</>
-            ) : (
-              <>Switching to <span className="font-medium text-foreground">"{collections.find(c => c.id === switchTarget)?.name || switchTarget}"</span> will delete the existing file snapshot and re-ingest.</>
-            )}
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setSwitchTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => {
-              if (switchTarget === "__new__") doCreateAndIngest()
-              else if (switchTarget) doIngest(switchTarget)
-            }}>Switch</Button>
-          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setSwitchTarget(null)}>Cancel</Button>
+            <Button
+              type="button"
+              variant="destructive-solid"
+              size="sm"
+              onClick={() => {
+                if (switchTarget === "__new__") doCreateAndIngest()
+                else if (switchTarget) doIngest(switchTarget)
+              }}
+            >
+              Switch
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
@@ -996,6 +1232,15 @@ export function MeetingTabs({
   canShift = true,
   playbackTime = 0,
   className,
+  selectedSummaryId: selectedSummaryIdProp,
+  onSelectedSummaryIdChange,
+  onBindOpenAddSection,
+  onBusyChange,
+  onSectionRailModelChange,
+  onBindSectionRailActions,
+  onMainTabChange,
+  onRequestSideTab,
+  hostTranscriptInParent = true,
 }: Props) {
   const tabs = meeting.tabs ?? []
   const speakerNames: Record<string, string> = meeting.speaker_names ?? {}
@@ -1004,23 +1249,32 @@ export function MeetingTabs({
   // Stable callback ref for auto-fetch when streaming completed while user was away
   const onCompletedAwayRef = useRef(onMeetingUpdate)
   onCompletedAwayRef.current = onMeetingUpdate
+  const loadTabContentRef = useRef<(tabId: string) => Promise<void>>(async () => {})
+  const bpStreamCtrlRef = useRef<{ start: () => void; abort: () => void; dismissStreaming: () => void } | null>(null)
+  /** Dedup local stream-end effect vs hook onCompletedAway (both fire when viewing). */
+  const summaryHandledAtRef = useRef(0)
 
   const handleCompletedAway = useCallback((mid: string) => {
+    // Local isStreaming effect already seeded chips + reloaded while viewing
+    if (Date.now() - summaryHandledAtRef.current < 2500) {
+      bpStreamCtrlRef.current?.dismissStreaming()
+      return
+    }
+    summaryHandledAtRef.current = Date.now()
     getMeeting(mid).then((m) => {
       onCompletedAwayRef.current(m)
-      // Reload General tab from .md file after summarization
       loadedTabsRef.current.delete("tab_general")
-      loadTabContent("tab_general")
+      void loadTabContentRef.current("tab_general")
       toast.success("Summary generated")
     }).catch(() => {
       toast.error("Failed to fetch updated meeting")
     }).finally(() => {
-      // Always clear streaming state so normal path can render
-      bpStreamCtrl.dismissStreaming()
+      bpStreamCtrlRef.current?.dismissStreaming()
     })
   }, [])
 
   const [bpStream, bpStreamCtrl] = useBlueprintStream(meetingId, handleCompletedAway)
+  bpStreamCtrlRef.current = bpStreamCtrl
   // Use meeting.blueprint when available; fall back to early-completion streaming data
   const blueprint = (meeting.blueprint && meeting.blueprint.length > 0)
     ? meeting.blueprint
@@ -1032,19 +1286,102 @@ export function MeetingTabs({
   const hasSummary = !!(tabs.some(t => (t.type === "section" || t.tab_id === "tab_general") && t.md_file_path))
   const [mainTab, setMainTab] = useState(hasSummary ? "summary" : "notes")
 
-  // Sync mainTab when summary content appears/disappears (e.g. after async meeting load or summarization)
+  // Prefer Summary while generating or once content exists — never force Notes
+  // mid-generation (that hid the stream + fence and left a bare Summarize CTA).
   useEffect(() => {
-    if (hasSummary) {
-      setMainTab((prev) => prev === "notes" ? "summary" : prev)
-    } else {
-      setMainTab("notes")
+    const generating =
+      bpStream.isStreaming ||
+      bpStream.summaryGenState !== "idle" ||
+      meeting.processing_state === "summarizing" ||
+      meeting.processing_state === "extracting"
+    if (hasSummary || generating) {
+      setMainTab((prev) => (prev === "notes" ? "summary" : prev))
     }
-  }, [hasSummary])
+  }, [
+    hasSummary,
+    bpStream.isStreaming,
+    bpStream.summaryGenState,
+    meeting.processing_state,
+  ])
+
+  // Summary stream starts only when the user clicks Summarize (speaker gate →
+  // handleEnterStudio / startBlueprintStream, or Re-summarize / Summarize CTA).
+  // Auto-start on transcript-ready skipped Speakers and jumped into Studio.
   useEffect(() => {
-    if (forceTranscriptTab) setMainTab("transcript")
-  }, [forceTranscriptTab])
+    if (!forceTranscriptTab) return
+    if (hostTranscriptInParent) {
+      onRequestSideTab?.("transcript")
+    } else {
+      setMainTab("transcript")
+    }
+  }, [forceTranscriptTab, hostTranscriptInParent, onRequestSideTab])
+  useEffect(() => {
+    onMainTabChange?.(mainTab)
+  }, [mainTab, onMainTabChange])
+  // Keep main tab on content surfaces only (Summary | Notes)
+  useEffect(() => {
+    if (hostTranscriptInParent && (mainTab === "transcript" || mainTab === "speaker")) {
+      setMainTab(hasSummary ? "summary" : "notes")
+    }
+  }, [hostTranscriptInParent, mainTab, hasSummary])
   const contentStickyOffset = tabBarOffset + 36
-  const [selectedSummaryId, setSelectedSummaryId] = useState("tab_general")
+  const [selectedSummaryIdInternal, setSelectedSummaryIdInternal] = useState("tab_general")
+  const selectedSummaryId = selectedSummaryIdProp ?? selectedSummaryIdInternal
+  const setSelectedSummaryId = useCallback((tabId: string) => {
+    if (selectedSummaryIdProp === undefined) setSelectedSummaryIdInternal(tabId)
+    onSelectedSummaryIdChange?.(tabId)
+    setMainTab("summary")
+  }, [selectedSummaryIdProp, onSelectedSummaryIdChange])
+  const editableSectionRef = useRef<{ startEditing: () => void }>(null)
+  const exportBtnRef = useRef<HTMLButtonElement>(null)
+  const sectionIngestHostRef = useRef<HTMLDivElement>(null)
+  const contentScrollRef = useRef<HTMLDivElement>(null)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+
+  /**
+   * Section switch: soft-fade main body (tab bar + toolbar actions stay put).
+   * Layout-paint new section at opacity 0 → short hold → fade in.
+   */
+  const [sectionContentFaded, setSectionContentFaded] = useState(false)
+  const sectionSwapSkipRef = useRef(true)
+  const sectionSwapGenRef = useRef(0)
+  useLayoutEffect(() => {
+    if (sectionSwapSkipRef.current) {
+      sectionSwapSkipRef.current = false
+      return
+    }
+    sectionSwapGenRef.current += 1
+    setSectionContentFaded(true)
+  }, [selectedSummaryId])
+  useEffect(() => {
+    if (!sectionContentFaded) return
+    const gen = sectionSwapGenRef.current
+    const t = window.setTimeout(() => {
+      if (sectionSwapGenRef.current !== gen) return
+      setSectionContentFaded(false)
+    }, 40)
+    return () => window.clearTimeout(t)
+  }, [sectionContentFaded, selectedSummaryId])
+  // Reset skip when meeting changes so first paint is not faded
+  useEffect(() => {
+    sectionSwapSkipRef.current = true
+    setSectionContentFaded(false)
+  }, [meetingId])
+
+  // External section-rail click (prop change) → Summary surface; skip mount
+  const skipExtSectionSync = useRef(true)
+  useEffect(() => {
+    skipExtSectionSync.current = true
+  }, [meetingId])
+  useEffect(() => {
+    if (selectedSummaryIdProp === undefined) return
+    if (skipExtSectionSync.current) {
+      skipExtSectionSync.current = false
+      return
+    }
+    setMainTab("summary")
+  }, [selectedSummaryIdProp])
+
   const [tabMdContents, setTabMdContents] = useState<Record<string, string>>({})
 
   // ── Summary translation ──────────────────────────────────
@@ -1143,24 +1480,23 @@ export function MeetingTabs({
   onSectionCompletedAwayRef.current = onMeetingUpdate
 
   const handleSectionCompletedAway = useCallback((mid: string, tid: string) => {
+    // Always dismiss the *completed* tab (not whatever is selected now).
     getMeeting(mid).then((m) => {
       onSectionCompletedAwayRef.current(m)
       loadedTabsRef.current.delete(tid)
       loadTabContent(tid)
-      sectionCtrlRef.current.dismiss()
+      dismissSectionStream(mid, tid)
     }).catch(() => {
-      sectionCtrlRef.current.dismiss()
+      dismissSectionStream(mid, tid)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId])
 
-  const [sectionStream, sectionStreamCtrl] = useSectionStream(
+  const [sectionStream] = useSectionStream(
     meetingId,
     !isGeneralSelected ? selectedSummaryId : null,
     handleSectionCompletedAway,
   )
-  const sectionCtrlRef = useRef(sectionStreamCtrl)
-  sectionCtrlRef.current = sectionStreamCtrl
 
   // Auto-start section streams for all generating tabs (once per tab per session)
   const startedSectionStreamsRef = useRef<Set<string>>(new Set())
@@ -1177,32 +1513,49 @@ export function MeetingTabs({
     }
   }, [tabs, meetingId])
 
-  // Track streaming completion for the selected section
+  // Track streaming completion for the *selected* section only.
+  // Tab switches re-baseline — they must never look like a true→false edge
+  // (that was dismissing the newly selected live stream and clearing Streaming).
   const sectionWasStreamingRef = useRef(false)
-  const prevSectionTabRef = useRef(selectedSummaryId)
+  const streamingTabRef = useRef<string | null>(
+    isGeneralSelected ? null : selectedSummaryId,
+  )
   useEffect(() => {
-    // Reset tracking when switching to a different section tab
-    if (prevSectionTabRef.current !== selectedSummaryId) {
-      sectionWasStreamingRef.current = false
-      prevSectionTabRef.current = selectedSummaryId
+    const tabId = isGeneralSelected ? null : selectedSummaryId
+
+    if (streamingTabRef.current !== tabId) {
+      streamingTabRef.current = tabId
+      sectionWasStreamingRef.current = !!(tabId && sectionStream.isStreaming)
+      return
     }
 
-    if (!isGeneralSelected && !sectionStream.isStreaming && sectionWasStreamingRef.current) {
-      // Section stream just finished
-      getMeeting(meetingId).then((m) => {
+    if (
+      tabId &&
+      sectionWasStreamingRef.current &&
+      !sectionStream.isStreaming
+    ) {
+      const completedTab = tabId
+      const mid = meetingId
+      // Seed last tokens so SummaryMarkdownViewer paints speaker/ref chips immediately
+      const interim = sectionStream.streamingMd || ""
+      if (interim.trim()) {
+        setTabMdContents((prev) => ({ ...prev, [completedTab]: interim }))
+        loadedTabsRef.current.delete(completedTab)
+      }
+      getMeeting(mid).then((m) => {
         onMeetingUpdate(m)
-        loadedTabsRef.current.delete(selectedSummaryId)
-        loadTabContent(selectedSummaryId)
-        sectionStreamCtrl.dismiss()
+        loadedTabsRef.current.delete(completedTab)
+        loadTabContent(completedTab)
+        dismissSectionStream(mid, completedTab)
         toast.success("Section generated")
       }).catch(() => {
-        sectionStreamCtrl.dismiss()
+        dismissSectionStream(mid, completedTab)
         toast.error("Failed to fetch updated section")
       })
     }
-    sectionWasStreamingRef.current = sectionStream.isStreaming
+    sectionWasStreamingRef.current = !!(tabId && sectionStream.isStreaming)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectionStream.isStreaming, selectedSummaryId, isGeneralSelected])
+  }, [sectionStream.isStreaming, selectedSummaryId, isGeneralSelected, meetingId])
 
   // Notify parent of active tab changes (for transcript tag highlighting)
   useEffect(() => {
@@ -1218,115 +1571,121 @@ export function MeetingTabs({
   const [generatingDesc, setGeneratingDesc] = useState(false)
   // ── Unified busy + polling (P2-01) ─────────────────────────────────
   // busy = server side still processing OR we just fired an action (before server state updates)
+  // Always pin meetingId so switching to another idle meeting cannot fire "complete" toasts.
   type PendingAction =
-    | { type: "summarize" }
-    | { type: "re_summarize" }
-    | { type: "extract" }
-    | { type: "regenerate"; tabId: string; hadAllocation: boolean }
+    | { type: "summarize"; meetingId: string }
+    | { type: "re_summarize"; meetingId: string }
+    | { type: "extract"; meetingId: string }
+    | { type: "regenerate"; meetingId: string; tabId: string; hadAllocation: boolean }
     | null
   const [pendingAction, setPendingAction] = useState<PendingAction>(null)
   const serverBusy = !!(meeting.processing_state && meeting.processing_state !== "idle")
+  // Only this meeting's pending action contributes to local busy chrome
+  const pendingForThisMeeting =
+    !!pendingAction && pendingAction.meetingId === meetingId
   const streamingBusy = bpStream.summaryGenState !== "idle" || bpStream.blueprintGenState !== "idle" || sectionStream.isStreaming
-  const busy = serverBusy || !!pendingAction || streamingBusy
+  const busy = serverBusy || pendingForThisMeeting || streamingBusy
+
+  // Expose open-Add-Section + busy (legacy + rail header)
+  useEffect(() => {
+    onBindOpenAddSection?.(() => setAddSectionOpen(true))
+  }, [onBindOpenAddSection])
+  useEffect(() => {
+    onBusyChange?.(busy)
+  }, [busy, onBusyChange])
 
   // Track whether server was ever busy since pendingAction was set.
   // Guards against the intermediate render where pendingAction is set but
   // the meeting prop (serverBusy) hasn't been updated yet.
   const serverWasBusyRef = useRef(false)
   useEffect(() => {
+    // Only accumulate "was busy" for the meeting that owns the pending action
+    // (or the painted meeting when no foreign pending action is open).
+    if (pendingAction && pendingAction.meetingId !== meetingId) return
     if (serverBusy) serverWasBusyRef.current = true
-  }, [serverBusy])
+  }, [serverBusy, meetingId, pendingAction])
 
-  // Unified cleanup: when server goes idle AFTER being busy due to our action
+  // Meeting switch: re-baseline busy tracking. Never toast for another meeting's work.
   useEffect(() => {
-    if (pendingAction && !serverBusy && serverWasBusyRef.current) {
-      serverWasBusyRef.current = false
-      const action = pendingAction
+    serverWasBusyRef.current = !!(
+      meeting.processing_state && meeting.processing_state !== "idle"
+    )
+    // Landed back on a meeting whose extract/regen finished while away → settle quietly
+    // (no toast on the other meeting; refresh data if needed).
+    if (
+      pendingAction &&
+      pendingAction.meetingId === meetingId &&
+      (!meeting.processing_state || meeting.processing_state === "idle") &&
+      !serverWasBusyRef.current
+    ) {
       setPendingAction(null)
-      // Perform action-specific cleanup
-      switch (action.type) {
-        case "summarize":
-        case "re_summarize":
-          toast.success(action.type === "re_summarize" ? "Summary regenerated" : "Summary generated")
-          break
-        case "extract":
-          // Clear loaded-tabs cache so section tabs re-fetch newly generated content
-          loadedTabsRef.current.clear()
-          setTabMdContents({})
-          toast.success("Extract complete")
-          break
-        case "regenerate":
-          // Delete old allocation AFTER successful regeneration
-          if (action.hadAllocation) {
-            deleteSectionAllocation(meetingId, action.tabId).catch(() => { /* best effort */ })
-          }
-          loadedTabsRef.current.delete(action.tabId)
-          setTabMdContents((prev) => {
-            const next = { ...prev }
-            delete next[action.tabId]
-            return next
-          })
-          // Re-trigger load for the regenerated tab
-          getSectionMd(meetingId, action.tabId).then((md) => {
-            if (md !== null) setTabMdContents((prev) => ({ ...prev, [action.tabId]: md }))
-          }).catch(() => {})
-          toast.success("Regenerate complete")
-          break
+      if (pendingAction.type === "extract" || pendingAction.type === "regenerate") {
+        loadedTabsRef.current.clear()
+        setTabMdContents({})
       }
-      // Refresh meeting data from server (picks up new tabs/sections)
-      getMeeting(meetingId).then((m) => {
-        onMeetingUpdate(m)
-      }).catch(() => {
-        // Fall back to in-memory meeting if fetch fails
-        onMeetingUpdate(meeting)
-      })
+      getMeeting(meetingId)
+        .then((m) => onMeetingUpdate(m))
+        .catch(() => {})
     }
-  }, [meeting.processing_state, pendingAction])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on switch
+  }, [meetingId])
+
+  // Unified cleanup: same-meeting only — busy → idle while this meeting is painted
+  useEffect(() => {
+    if (!pendingAction) return
+    if (pendingAction.meetingId !== meetingId) return
+    if (serverBusy || !serverWasBusyRef.current) return
+
+    serverWasBusyRef.current = false
+    const action = pendingAction
+    setPendingAction(null)
+    // Perform action-specific cleanup
+    switch (action.type) {
+      case "summarize":
+      case "re_summarize":
+        toast.success(action.type === "re_summarize" ? "Summary regenerated" : "Summary generated")
+        break
+      case "extract":
+        // Clear loaded-tabs cache so section tabs re-fetch newly generated content
+        loadedTabsRef.current.clear()
+        setTabMdContents({})
+        toast.success("Extract complete")
+        break
+      case "regenerate":
+        // Delete old allocation AFTER successful regeneration
+        if (action.hadAllocation) {
+          deleteSectionAllocation(meetingId, action.tabId).catch(() => { /* best effort */ })
+        }
+        loadedTabsRef.current.delete(action.tabId)
+        setTabMdContents((prev) => {
+          const next = { ...prev }
+          delete next[action.tabId]
+          return next
+        })
+        // Re-trigger load for the regenerated tab
+        getSectionMd(meetingId, action.tabId).then((md) => {
+          if (md !== null) setTabMdContents((prev) => ({ ...prev, [action.tabId]: md }))
+        }).catch(() => {})
+        toast.success("Regenerate complete")
+        break
+    }
+    // Refresh meeting data from server (picks up new tabs/sections)
+    getMeeting(meetingId).then((m) => {
+      onMeetingUpdate(m)
+    }).catch(() => {
+      // Fall back to in-memory meeting if fetch fails
+      onMeetingUpdate(meeting)
+    })
+  }, [meeting.processing_state, pendingAction, meetingId, serverBusy, meeting, onMeetingUpdate])
 
   const [reSummarizeOpen, setReSummarizeOpen] = useState(false)
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
   const [deleteSectionTarget, setDeleteSectionTarget] = useState<string | null>(null)
-  const sectionMetaRef = useRef<{ startEditing: () => void }>(null)
-  const [summaryHoverOpen, setSummaryHoverOpen] = useState(false)
-  const summaryHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null)
-
-  // Track dropdown position continuously when open (follows button on scroll)
-  useEffect(() => {
-    if (!summaryHoverOpen) return
-    const update = () => {
-      const rect = summaryBtnRef.current?.getBoundingClientRect()
-      if (rect) setDropdownPos({ top: rect.bottom, left: rect.left })
-    }
-    update()
-    window.addEventListener("scroll", update, { passive: true, capture: true })
-    return () => window.removeEventListener("scroll", update, { capture: true })
-  }, [summaryHoverOpen])
+  const sectionMetaRef = useRef<{ startEditingDescription: () => void }>(null)
+  // editableSectionRef declared near selectedSummaryId (main tab tools)
 
   const summaryBarRef = useRef<HTMLDivElement>(null)
-  const tabContainerRef = useRef<HTMLDivElement>(null)
-  const summaryBtnRef = useRef<HTMLButtonElement>(null)
-  const notesBtnRef = useRef<HTMLButtonElement>(null)
-  const transcriptBtnRef = useRef<HTMLButtonElement>(null)
-  const speakerBtnRef = useRef<HTMLButtonElement>(null)
-  const [tabIndicator, setTabIndicator] = useState({ left: 0, width: 0 })
   const [ingestingTabs, setIngestingTabs] = useState<Set<string>>(new Set())
-
-  useEffect(() => {
-    const container = tabContainerRef.current
-    const btn =
-      mainTab === "summary" ? summaryBtnRef.current :
-      mainTab === "notes" ? notesBtnRef.current :
-      mainTab === "transcript" ? transcriptBtnRef.current :
-      speakerBtnRef.current
-    if (!container || !btn) return
-    const containerRect = container.getBoundingClientRect()
-    const btnRect = btn.getBoundingClientRect()
-    setTabIndicator({
-      left: btnRect.left - containerRect.left,
-      width: btnRect.width,
-    })
-  }, [mainTab])
 
   const [notesDraft, setNotesDraft] = useState(notesContent)
   const notesBaselineRef = useRef(notesContent)
@@ -1345,6 +1704,18 @@ export function MeetingTabs({
   // ── Load section markdown when tab is selected ─────────────
   const loadedTabsRef = useRef<Set<string>>(new Set())   // successfully loaded
   const inFlightRef = useRef<Set<string>>(new Set())     // currently fetching (dedup)
+
+  // Parent no longer remounts us on meeting switch — clear section md caches
+  useEffect(() => {
+    loadedTabsRef.current = new Set()
+    inFlightRef.current = new Set()
+    setTabMdContents({})
+    setLoadingTabs(new Set())
+    setSummaryLang({})
+    setTranslations({})
+    setAvailableLangs({})
+    setIngestingTabs(new Set())
+  }, [meetingId])
 
   const loadTabContent = useCallback(async (tabId: string) => {
     // Already loaded → skip
@@ -1373,6 +1744,7 @@ export function MeetingTabs({
       return next
     })
   }, [meetingId])
+  loadTabContentRef.current = loadTabContent
 
   useEffect(() => {
     if (selectedSummaryId && selectedSummaryId !== "tab_general") {
@@ -1399,9 +1771,9 @@ export function MeetingTabs({
     if (notesSaveTimerRef.current) clearTimeout(notesSaveTimerRef.current)
     notesSaveTimerRef.current = setTimeout(async () => {
       try {
-        // Unescape brackets that Tiptap escapes (\[ → [)
-      const cleaned = content.replace(/\\([\[\]])/g, "$1")
-      await updateMeeting(meetingId, { notes: cleaned })
+        // Tiptap md export escapes ~ _ [ ] — restore before disk write
+        const cleaned = unescapeMarkdownOverEscapes(content)
+        await updateMeeting(meetingId, { notes: cleaned })
         notesBaselineRef.current = cleaned
       } catch { /* ignore */ }
     }, SAVE_DELAY)
@@ -1424,16 +1796,26 @@ export function MeetingTabs({
       toast.error("Select at least one section")
       return
     }
+    // Close dialog first; defer busy chrome so main layout doesn’t thrash under silk exit
     setAddSectionOpen(false)
-    setPendingAction({ type: "extract" })
+    setAddForm({ name: "", description: "", blueprintId: null })
+    const extractMeetingId = meetingId
+    const markBusy = () =>
+      setPendingAction({ type: "extract", meetingId: extractMeetingId })
+    // Double rAF: dialog exit paint settles before toolbar / content path reacts
+    requestAnimationFrame(() => {
+      requestAnimationFrame(markBusy)
+    })
     try {
-      const updated = await extract(meetingId, receipts)
+      const updated = await extract(extractMeetingId, receipts)
       setSelectedBlueprintIds(new Set())
       setCustomReceipts([])
       // Notify parent to start polling (meeting now has processing_state="extracting")
       onMeetingUpdate(updated)
     } catch (err) {
-      setPendingAction(null)
+      setPendingAction((prev) =>
+        prev?.type === "extract" && prev.meetingId === extractMeetingId ? null : prev,
+      )
       toast.error(`Extract failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
@@ -1504,44 +1886,53 @@ export function MeetingTabs({
         receipt.blueprint_id = item.blueprint_id
       }
     }
-    setAddForm({ name: "", description: "", blueprintId: null })
     await doExtract([receipt])
   }
 
   const handleSummarize = async () => {
+    loadedTabsRef.current.delete("tab_general")
     bpStreamCtrl.start()
   }
 
   const handleReSummarize = async () => {
     setReSummarizeOpen(false)
+    loadedTabsRef.current.delete("tab_general")
+    setTabMdContents((prev) => {
+      if (!("tab_general" in prev)) return prev
+      const next = { ...prev }
+      delete next.tab_general
+      return next
+    })
     bpStreamCtrl.start()
   }
 
-  // ── Detect streaming finish → fetch meeting ────────────────
-  const streamingDoneRef = useRef(false)
+  // ── Detect streaming finish → prepared chips + fetch meeting ────────────────
+  // While streaming we show plain ReactMarkdown. On end, immediately seed
+  // tabMdContents and leave the generating path so SummaryMarkdownViewer can
+  // resolve speakers + sentence refs (refresh used to be required for that).
   useEffect(() => {
-    if (!bpStream.isStreaming && wasStreamingRef.current) {
-      streamingDoneRef.current = true
-    }
+    const was = wasStreamingRef.current
     wasStreamingRef.current = bpStream.isStreaming
-  }, [bpStream.isStreaming])
+    if (!was || bpStream.isStreaming) return
 
-  // Fetch meeting when streaming completes (deferred so panel exit anim plays)
-  useEffect(() => {
-    if (!streamingDoneRef.current) return
-    streamingDoneRef.current = false
+    summaryHandledAtRef.current = Date.now()
+    const interim = bpStream.streamingMd || ""
+    if (interim.trim()) {
+      setTabMdContents((prev) => ({ ...prev, tab_general: interim }))
+      loadedTabsRef.current.delete("tab_general")
+    }
+    // Drop generating gate (isStreaming already false); clear buffer after seed
+    bpStreamCtrl.dismissStreaming()
+
     getMeeting(meetingId).then((m) => {
       onMeetingUpdate(m)
-      // Reload General tab from .md file after summarization
       loadedTabsRef.current.delete("tab_general")
-      loadTabContent("tab_general")
-      bpStreamCtrl.dismissStreaming()
+      void loadTabContent("tab_general")
       toast.success("Summary generated")
     }).catch(() => {
-      bpStreamCtrl.dismissStreaming()  // clear streaming state even on error
       toast.error("Failed to fetch updated meeting")
     })
-  }, [bpStream.isStreaming])
+  }, [bpStream.isStreaming, bpStream.streamingMd, bpStreamCtrl, meetingId, onMeetingUpdate, loadTabContent])
 
   const handleDeleteSection = (tabId: string) => {
     setDeleteSectionTarget(tabId)
@@ -1570,15 +1961,45 @@ export function MeetingTabs({
     // Remember if section was ingested so we can clean up on success
     const targetTab = tabs.find(t => t.tab_id === tabId)
     const hadAllocation = !!targetTab?.allocated_file_id
-    setPendingAction({ type: "regenerate", tabId, hadAllocation })
+    const regenMeetingId = meetingId
+    setPendingAction({
+      type: "regenerate",
+      meetingId: regenMeetingId,
+      tabId,
+      hadAllocation,
+    })
     try {
-      const updated = await regenerateSection(meetingId, tabId)
+      const updated = await regenerateSection(regenMeetingId, tabId)
       // Notify parent to start polling (meeting now has processing_state="extracting")
       onMeetingUpdate(updated)
     } catch (err) {
-      setPendingAction(null)
+      setPendingAction((prev) =>
+        prev?.type === "regenerate" && prev.meetingId === regenMeetingId ? null : prev,
+      )
       toast.error(`Regenerate failed: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  const handleSaveSectionTitle = async (tabId: string, name: string) => {
+    const next = name.trim()
+    if (!next) return
+    const bp = blueprint ?? []
+    const target = tabs.find((t) => t.tab_id === tabId)
+    const m = await updateMeeting(meetingId, {
+      blueprint: bp.map((b) => {
+        if (target?.blueprint_id && b.blueprint_id === target.blueprint_id) {
+          return { ...b, tab_name: next }
+        }
+        return b
+      }),
+      tabs: (tabs ?? []).map((t) => {
+        if (t.tab_id === tabId) {
+          return { ...t, name: next, is_dirty: true }
+        }
+        return t
+      }),
+    })
+    onMeetingUpdate(m)
   }
 
   const handleSaveSection = async (tabId: string, content: string) => {
@@ -1669,9 +2090,184 @@ export function MeetingTabs({
     return idx >= 0 ? `T${idx + 1}` : tab.tab_id
   }
 
-  const sectionTabs = tabs.filter(
-    (t) => t.type === "section",
-  )
+  // Re-render rail when any section stream ticks (ready / Streaming badges)
+  const [sectionStreamTick, setSectionStreamTick] = useState(0)
+  useEffect(() => {
+    return subscribeSectionStreams(() => {
+      setSectionStreamTick((n) => n + 1)
+    })
+  }, [])
+
+  // ── Top-right Section rail model (full feature parity with old toolbar card) ──
+  useEffect(() => {
+    if (!onSectionRailModelChange) return
+    // Thinking = any live / server summary gen — keep General + fence skeletons visible
+    const thinking =
+      bpStream.blueprintGenState !== "idle" ||
+      bpStream.summaryGenState !== "idle" ||
+      bpStream.isStreaming ||
+      meeting.processing_state === "summarizing" ||
+      pendingAction?.type === "summarize" ||
+      pendingAction?.type === "re_summarize"
+    const items: SectionRailItem[] = []
+
+    // General always present once we have any summary surface / blueprint path
+    if (hasBlueprint || hasSections || hasSummary || thinking) {
+      const generalTab = tabs.find((t) => t.tab_id === "tab_general")
+      const hasGeneralMd = !!generalTab?.md_file_path || hasSummary
+      // Tokens flowing → Streaming badge (avoid redundant summaryGenState checks — TS narrows)
+      const genStreaming =
+        !hasGeneralMd &&
+        (bpStream.summaryGenState === "streaming" || !!bpStream.streamingMd)
+      // Prefilling / summarizing before first token → Generating (not Streaming)
+      const genGenerating =
+        !hasGeneralMd &&
+        !genStreaming &&
+        (bpStream.isStreaming ||
+          bpStream.summaryGenState === "prefilling" ||
+          meeting.processing_state === "summarizing" ||
+          pendingAction?.type === "summarize" ||
+          pendingAction?.type === "re_summarize")
+      items.push({
+        id: "tab_general",
+        label: "General",
+        kind: "general",
+        active: selectedSummaryId === "tab_general",
+        ready: !!(hasGeneralMd || genStreaming || genGenerating || bpStream.isStreaming),
+        streaming: genStreaming,
+        generating: genGenerating,
+      })
+    }
+
+    if (hasSections) {
+      const sections = tabs.filter((t) => t.type === "section")
+      sections.forEach((t, idx) => {
+        const bp = blueprint.find((b) => b.blueprint_id === t.blueprint_id)
+        const stream = getSectionStreamState(meetingId, t.tab_id)
+        const hasMd = !!t.md_file_path
+        const streaming = !hasMd && sectionStreamHasOutput(stream)
+        const serverGenerating = t.processing_state === "generating"
+        // Waiting for first token: server gen, SSE prefilling, or stream open without tokens yet
+        const generating =
+          !hasMd &&
+          !streaming &&
+          (serverGenerating ||
+            stream.isStreaming ||
+            stream.genState === "prefilling" ||
+            sectionStreamIsOpenable(stream))
+        // Openable: disk md, live SSE, or server still generating
+        const ready =
+          hasMd ||
+          sectionStreamIsOpenable(stream) ||
+          serverGenerating ||
+          streaming
+        items.push({
+          id: t.tab_id,
+          label: t.name || bp?.tab_name || "Section",
+          hint: t.description || bp?.tab_description || undefined,
+          kind: "section",
+          active: selectedSummaryId === t.tab_id,
+          shortLabel: `T${idx + 1}`,
+          ready,
+          streaming,
+          generating,
+          // Hide checkmark while this tab is still indexing after allocate
+          ingested: !!t.allocated_file_id && !ingestingTabs.has(t.tab_id),
+        })
+      })
+    } else if (hasBlueprint) {
+      // Pre-extract: multi-select blueprint pills
+      for (const b of blueprint) {
+        if (b.tab_name?.toLowerCase() === "other") continue
+        items.push({
+          id: b.blueprint_id,
+          label: b.tab_name || "Section",
+          hint: b.tab_description || undefined,
+          kind: "blueprint",
+          selected: selectedBlueprintIds.has(b.blueprint_id),
+        })
+      }
+      customReceipts.forEach((c, i) => {
+        items.push({
+          id: `custom:${i}`,
+          label: c.name,
+          hint: c.description || undefined,
+          kind: "custom",
+          selected: true,
+        })
+      })
+    } else if (thinking) {
+      const early = (bpStream.earlyBlueprint ?? [])
+        .filter((b) => b.tab_name && b.tab_name.toLowerCase() !== "other")
+      if (early.length > 0) {
+        early.forEach((b, i) => {
+          items.push({
+            id: `early:${i}`,
+            label: b.tab_name,
+            hint: b.tab_description || undefined,
+            kind: "early",
+          })
+        })
+      } else {
+        ;[1, 2, 3].forEach((i) => {
+          items.push({ id: `sk:${i}`, label: "", kind: "skeleton" })
+        })
+      }
+    }
+
+    onSectionRailModelChange({
+      thinking,
+      busy,
+      hasBlueprint,
+      hasSections,
+      canBreakdown:
+        !hasSections &&
+        (selectedBlueprintIds.size + customReceipts.length) > 0 &&
+        !busy,
+      items,
+    })
+  }, [
+    onSectionRailModelChange,
+    bpStream.blueprintGenState,
+    bpStream.summaryGenState,
+    bpStream.isStreaming,
+    bpStream.earlyBlueprint,
+    hasSections,
+    hasBlueprint,
+    hasSummary,
+    tabs,
+    blueprint,
+    selectedBlueprintIds,
+    customReceipts,
+    selectedSummaryId,
+    busy,
+    meeting.processing_state,
+    pendingAction,
+    meetingId,
+    sectionStreamTick,
+    bpStream.streamingMd,
+    ingestingTabs,
+  ])
+
+  useEffect(() => {
+    if (!onBindSectionRailActions) return
+    onBindSectionRailActions({
+      openAddSection: () => setAddSectionOpen(true),
+      selectSection: (id) => setSelectedSummaryId(id),
+      toggleBlueprint: (id) => {
+        setSelectedBlueprintIds((prev) => {
+          const next = new Set(prev)
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+          return next
+        })
+      },
+      removeCustom: (index) => {
+        setCustomReceipts((prev) => prev.filter((_, j) => j !== index))
+      },
+      breakdown: () => { void handleBreakdown() },
+    })
+  }, [onBindSectionRailActions, setSelectedSummaryId, handleBreakdown])
 
   const getTabContent = (tabId: string): string => {
     if (tabId === "tab_general") {
@@ -1684,6 +2280,14 @@ export function MeetingTabs({
   const selectedTab = tabs.find((t) => t.tab_id === selectedSummaryId)
   const isGeneral = selectedSummaryId === "tab_general"
   const isTabGenerating = selectedTab?.processing_state === "generating"
+  /** Live SSE for the selected section (survives processing_state lag). */
+  // Only while actively generating — bare streamingMd after idle kept ReactMarkdown
+  // without speaker/ref chips (same bug as general summary).
+  const sectionLive =
+    !isGeneral &&
+    (sectionStream.isStreaming ||
+      sectionStream.genState === "prefilling" ||
+      sectionStream.genState === "streaming")
 
   // ── Summary translation view ─────────────────────────────
   // Content priority: live stream > cached translation > original summary.
@@ -1696,151 +2300,246 @@ export function MeetingTabs({
     ? streamingTranslationMd
     : (activeTranslation ?? getTabContent(selectedSummaryId))
 
-  return (
-    <div className={cn("flex flex-col", className)}>
+  const exportSectionLabel = isGeneral
+    ? "General"
+    : selectedTab
+      ? `${tabShortLabel(selectedTab)} ${selectedTab.name || (blueprint as { blueprint_id?: string; tab_name?: string }[]).find((b) => b.blueprint_id === selectedTab.blueprint_id)?.tab_name || ""}`.trim()
+      : "Summary"
+  const exportFilenameBase = safeExportBasename([
+    meeting.title,
+    exportSectionLabel,
+    activeLang || undefined,
+  ])
 
-      {/* ── Tab bar: sticky below meeting title, extends right when floating panel opens ── */}
+  const handleExportMarkdown = () => {
+    setExportMenuOpen(false)
+    const body = displayContent || ""
+    if (!body.trim()) {
+      toast.error("Nothing to export yet")
+      return
+    }
+    try {
+      exportSummaryMarkdown({
+        filenameBase: exportFilenameBase,
+        markdown: body,
+        speakerNames,
+      })
+      toast.success("Markdown downloaded")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed")
+    }
+  }
+
+  const handleExportPdf = () => {
+    setExportMenuOpen(false)
+    const body = displayContent || ""
+    if (!body.trim()) {
+      toast.error("Nothing to export yet")
+      return
+    }
+    try {
+      exportSummaryAsPdf({
+        title: exportFilenameBase,
+        markdown: body,
+        speakerNames,
+      })
+      toast.message("Print dialog opened", {
+        description: "Choose “Save as PDF” as the destination.",
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "PDF export failed")
+    }
+  }
+
+  /* Main content card: top/bottom scroll edge fades (white paper) */
+  const contentEdgeFade = useScrollEdgeFade(
+    contentScrollRef,
+    `${meetingId}:${selectedSummaryId}:${mainTab}:${String(displayContent || "").length}`,
+  )
+
+  // Close export SoftMenu on outside click
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (exportBtnRef.current?.contains(t)) return
+      const menu = document.querySelector('[data-slot="menu"][data-export-summary]')
+      if (menu?.contains(t)) return
+      setExportMenuOpen(false)
+    }
+    document.addEventListener("mousedown", onDown)
+    return () => document.removeEventListener("mousedown", onDown)
+  }, [exportMenuOpen])
+
+  return (
+    <div className={cn("pm-meeting-tabs-shell flex flex-col min-h-0 flex-1", className)}>
+
+      {/* ── Tab bar inside content card: Summary | Notes + tools ── */}
       <div
         ref={summaryBarRef}
         className={cn(
-          "sticky flex items-center border-b border-border px-2 shrink-0 transition-[margin-right] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] bg-background z-10",
-          floatingPanelOpen && canShift ? "-mr-[320px]" : "mr-0",
+          "pm-meeting-tabs-bar flex items-center gap-2 shrink-0",
+          floatingPanelOpen && canShift && "is-panel-open",
         )}
         style={{ top: tabBarOffset }}
       >
-        <div ref={tabContainerRef} className="flex items-center relative">
-          <button
-            ref={summaryBtnRef}
-            className={cn(
-              "flex items-center gap-1 w-24 h-9 text-xs font-light uppercase tracking-wider transition-colors duration-300",
-              mainTab === "summary"
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setMainTab("summary")}
-            onMouseEnter={() => {
-              if (summaryHoverTimer.current) { clearTimeout(summaryHoverTimer.current); summaryHoverTimer.current = null }
-              if (hasBlueprint) {
-                const rect = summaryBtnRef.current?.getBoundingClientRect()
-                if (rect) setDropdownPos({ top: rect.bottom, left: rect.left })
-                setSummaryHoverOpen(true)
-              }
-            }}
-            onMouseLeave={() => {
-              summaryHoverTimer.current = setTimeout(() => setSummaryHoverOpen(false), 150)
-            }}
-          >
-            Summary
-            {(hasBlueprint || bpStream.blueprintGenState !== "idle") && (
-              <ChevronDown className={cn("h-3 w-3 transition-transform duration-200", summaryHoverOpen && "rotate-180")} />
-            )}
-          </button>
-          <button
-            ref={notesBtnRef}
-            className={cn(
-              "h-9 px-3 text-xs font-light uppercase tracking-wider transition-colors duration-300",
-              mainTab === "summary" ? "w-24" : "",
-              mainTab === "notes"
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setMainTab("notes")}
-          >
-            Notes
-          </button>
-          <button
-            ref={transcriptBtnRef}
-            className={cn(
-              "h-9 px-3 text-xs font-light uppercase tracking-wider transition-colors duration-300",
-              mainTab === "transcript"
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setMainTab("transcript")}
-          >
-            Transcript
-          </button>
-          <button
-            ref={speakerBtnRef}
-            className={cn(
-              "h-9 px-3 text-xs font-light uppercase tracking-wider transition-colors duration-300",
-              mainTab === "speaker"
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setMainTab("speaker")}
-          >
-            Speaker
-          </button>
-          {/* Sliding green underline */}
-          <div
-            className="absolute bottom-0 h-[2px] bg-primary pointer-events-none transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]"
-            style={{ left: tabIndicator.left, width: tabIndicator.width }}
-          />
-        </div>
-        {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground ml-2" />}
-
-      {/* Hover dropdown — section picker below the Summary tab (portal to avoid overflow clipping) */}
-        {dropdownPos && createPortal(
-        <div
-          className={cn(
-            "fixed z-50 w-56 overflow-hidden rounded border border-primary/30 bg-popover/60 backdrop-blur-md shadow-lg transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
-            summaryHoverOpen
-              ? "opacity-100 visible translate-y-0 pointer-events-auto"
-              : "opacity-0 invisible -translate-y-3 pointer-events-none",
-          )}
-          style={{ top: dropdownPos.top, left: dropdownPos.left }}
-          onMouseEnter={() => {
-            if (summaryHoverTimer.current) { clearTimeout(summaryHoverTimer.current); summaryHoverTimer.current = null }
-            setSummaryHoverOpen(true)
-          }}
-          onMouseLeave={() => {
-            summaryHoverTimer.current = setTimeout(() => setSummaryHoverOpen(false), 150)
-          }}
+        <Tabs
+          value={mainTab === "transcript" || mainTab === "speaker" ? (hasSummary ? "summary" : "notes") : mainTab}
+          onValueChange={(v) => setMainTab(v)}
+          className="gap-0"
         >
-          <button
-            onClick={() => { setSelectedSummaryId("tab_general"); setMainTab("summary") }}
-            className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
-          >
-            <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-              <span className={cn("sk-diamond", isGeneral && "on")} aria-hidden />
-              <span className="whitespace-normal break-words min-w-0 leading-snug text-left">General</span>
-            </span>
-            <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-          </button>
-          {/* Blueprint-generating skeleton: pulsing placeholder cards */}
-          {bpStream.blueprintGenState === "prefilling" && (
-            <>
-              {[1, 2, 3].map((i) => (
-                <div
-                  key={`bp-sk-${i}`}
-                  className="flex items-center gap-2 px-2 py-2"
-                >
-                  <span className="sk-diamond opacity-30" aria-hidden />
-                  <span className="h-3 bg-muted-foreground/20 rounded animate-pulse" style={{ width: `${60 + i * 15}%` }} />
-                </div>
-              ))}
-            </>
-          )}
-          {sectionTabs.map((tab) => (
-            <button
-              key={tab.tab_id}
-              onClick={() => { setSelectedSummaryId(tab.tab_id); setMainTab("summary") }}
-              title={tab.name}
-              className="relative flex items-center gap-2 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group"
-            >
-              <span className="relative z-10 flex items-center gap-2 px-2 py-2 w-full text-[10px]">
-                <span className={cn("sk-diamond", selectedSummaryId === tab.tab_id && "on")} aria-hidden />
-                <span className="whitespace-normal break-words min-w-0 leading-snug">{tabShortLabel(tab)}: {(blueprint as any[]).find((b: any) => b.blueprint_id === tab.blueprint_id)?.tab_name || tab.name}</span>
-              </span>
-              <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
-            </button>
-          ))}
+          <TabsList className="pm-pill-tabs relative">
+            <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
+            <TabsTrigger value="summary" disabled={!hasSummary && !hasTranscript}>
+              Summary
+            </TabsTrigger>
+            <TabsTrigger value="notes">Notes</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        {busy && <Loader2 className="size-3.5 animate-spin text-[var(--pm-faint)] shrink-0" />}
 
-        </div>
-        , document.body)}
+        {mainTab === "summary" && (hasBlueprint || tabs.some(t => t.tab_id === "tab_general" && t.md_file_path)) && (
+          <div className="pm-meeting-tabs-actions">
+            <SummaryTranslateControl
+              generatedLangs={availableLangs[selectedSummaryId] ?? []}
+              activeLang={activeLang}
+              translating={isTranslating}
+              disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId)}
+              onSelect={(lang) => void handleSelectLang(selectedSummaryId, lang)}
+              onOpen={() => void refreshTranslations(selectedSummaryId)}
+            />
+            {isGeneral && (
+              <Button
+                type="button"
+                variant={busy ? "secondary" : "ghost"}
+                size="sm"
+                className={cn(busy && "sk-thinking-flow")}
+                disabled={busy || ingestingTabs.size > 0}
+                onClick={() => setReSummarizeOpen(true)}
+                title="Re-summarize"
+              >
+                {busy ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                {busy ? "Summarizing…" : "Re-summarize"}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              ref={exportBtnRef}
+              disabled={
+                isTabGenerating ||
+                ingestingTabs.has(selectedSummaryId) ||
+                !String(displayContent || "").trim()
+              }
+              onClick={() => setExportMenuOpen((v) => !v)}
+              title="Export summary"
+              aria-label="Export summary"
+              aria-expanded={exportMenuOpen}
+            >
+              <Download className="size-3.5" />
+            </Button>
+            <SoftMenu
+              open={exportMenuOpen}
+              portal
+              anchorRef={exportBtnRef}
+              align="end"
+              exitMs={MENU_SILK_MS}
+              className="pm-meeting-export-menu min-w-[220px]"
+              data-export-summary=""
+            >
+              <div className="pm-meeting-export-menu-label" aria-hidden>
+                Export
+              </div>
+              <MenuItem onClick={handleExportMarkdown} className="pm-meeting-export-item">
+                <span className="pm-meeting-export-icon" aria-hidden>
+                  <FileText className="size-3.5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <MenuItemTitle>Markdown</MenuItemTitle>
+                  <MenuItemDescription>Download .md · speakers resolved, no refs</MenuItemDescription>
+                </span>
+              </MenuItem>
+              <MenuItem onClick={handleExportPdf} className="pm-meeting-export-item">
+                <span className="pm-meeting-export-icon" aria-hidden>
+                  <FileType2 className="size-3.5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <MenuItemTitle>PDF</MenuItemTitle>
+                  <MenuItemDescription>Print dialog · Save as PDF</MenuItemDescription>
+                </span>
+              </MenuItem>
+            </SoftMenu>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId) || viewingTranslation}
+              onClick={() => editableSectionRef.current?.startEditing()}
+              title="Edit"
+              aria-label="Edit"
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+            {/* Section tools: Re-generate + Delete — stay in toolbar so width stays stable */}
+            {!isGeneral && selectedTab ? (
+              <>
+                <Button
+                  type="button"
+                  variant={isTabGenerating ? "secondary" : "ghost"}
+                  size="sm"
+                  className={cn("shrink-0", isTabGenerating && "sk-thinking-flow")}
+                  disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId) || busy}
+                  onClick={() => {
+                    if (selectedTab.allocated_file_id) {
+                      setRegenerateConfirmOpen(true)
+                    } else {
+                      void handleRegenerate(selectedSummaryId)
+                    }
+                  }}
+                  title="Re-generate section"
+                  aria-label="Re-generate section"
+                >
+                  {isTabGenerating ? (
+                    <Loader2 className="size-3.5 animate-spin mr-1" />
+                  ) : (
+                    <Sparkles className="size-3.5 mr-1" />
+                  )}
+                  {isTabGenerating ? "Generating…" : "Re-generate"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0 text-[var(--pm-danger,#b42318)] hover:text-[var(--pm-danger,#b42318)] hover:bg-[color-mix(in_srgb,var(--pm-danger,#b42318)_8%,transparent)]"
+                  onClick={() => handleDeleteSection(selectedSummaryId)}
+                  title="Delete section"
+                  aria-label="Delete section"
+                  disabled={
+                    isTabGenerating ||
+                    busy ||
+                    ingestingTabs.has(selectedSummaryId)
+                  }
+                >
+                  <Trash2 className="size-3.5 mr-1" />
+                  Delete
+                </Button>
+              </>
+            ) : null}
+          </div>
+        )}
       </div>
 
+      {/* Body scrolls inside the content card; tab bar stays fixed above */}
+      <div className="pm-meeting-content-scroll-shell">
+        <div
+          ref={contentScrollRef}
+          className="pm-meeting-content-scroll"
+        >
       {/* ── Summary Tab ── */}
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
@@ -1848,112 +2547,107 @@ export function MeetingTabs({
           ? "flex flex-col opacity-100"
           : "hidden",
       )}>
-        {/* Content area — scroll handled by parent */}
-        <div className="min-h-[400px]">
-          {/* ═══ Blueprint skeleton — stays until streaming fully ends ═══ */}
-          {(bpStream.blueprintGenState !== "idle" || bpStream.isStreaming) && isGeneral && !hasSections && (
-            <div className="px-6 pt-6">
-              <div className="sk-thinking-flow rounded-lg p-5 space-y-3">
-                <div className="flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--ze-green)" }} />
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Section breakdown
-                  </span>
-                </div>
-                {[1, 2, 3].map((i) => (
-                  <div
-                    key={`bp-sk-${i}`}
-                    className="h-8 rounded animate-pulse"
-                    style={{ background: "oklch(0.38 0.08 160 / 0.12)", width: `${40 + i * 20}%` }}
-                  />
-                ))}
-              </div>
-            </div>
+        <div
+          className={cn(
+            "min-h-0 pm-meeting-content-swap",
+            sectionContentFaded && "is-faded",
           )}
+        >
+          {(() => {
+            /* Summary generating: always fence / stream — never empty "No content yet"
+             * even when early blueprint already landed (hasBlueprint=true).
+             * Do NOT gate on bare streamingMd after isStreaming ends — that kept
+             * ReactMarkdown (no speaker/sentence chips) until a full page refresh. */
+            const isSummaryGenerating =
+              isGeneral &&
+              (bpStream.isStreaming ||
+                bpStream.summaryGenState === "prefilling" ||
+                bpStream.summaryGenState === "streaming" ||
+                meeting.processing_state === "summarizing" ||
+                pendingAction?.type === "summarize" ||
+                pendingAction?.type === "re_summarize")
+            const hasStreamTokens = !!bpStream.streamingMd
 
-          {/* ═══ Summary area: streaming or normal content ═══ */}
-          {bpStream.isStreaming && isGeneral ? (
-            <div className="p-6">
-              {bpStream.summaryGenState === "prefilling" && (
-                <div className="sk-thinking-flow rounded-lg p-5 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--ze-green)" }} />
-                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                      Generating summary…
-                    </span>
-                  </div>
-                  {bpStream.thinkingText && (
-                    <details className="mb-2" open>
-                      <summary className="text-xs text-muted-foreground cursor-pointer select-none">
-                        Thinking…
-                      </summary>
-                      <p className="text-xs text-muted-foreground/60 mt-2 leading-relaxed whitespace-pre-wrap t-mono-family max-h-32 overflow-auto">
-                        {bpStream.thinkingText}
-                      </p>
-                    </details>
-                  )}
-                  {[1, 2, 3, 4, 5].map((i) => (
-                    <div
-                      key={`sum-sk-${i}`}
-                      className="h-4 rounded animate-pulse"
-                      style={{ background: "oklch(0.38 0.08 160 / 0.12)", width: `${50 + i * 10}%` }}
-                    />
-                  ))}
-                </div>
-              )}
-              {bpStream.summaryGenState === "streaming" && (
-                <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {normalizeMd(bpStream.streamingMd)}
-                  </ReactMarkdown>
-                </div>
-              )}
-              {bpStream.summaryGenState === "idle" && bpStream.streamingMd && (
-                /* Summary done, waiting for meeting refresh — show completed markdown */
-                <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {normalizeMd(bpStream.streamingMd)}
-                  </ReactMarkdown>
-                </div>
-              )}
-            </div>
-          ) : (isTabGenerating || (isGeneral && !hasBlueprint && (meeting.processing_state === "summarizing" || pendingAction?.type === "summarize" || pendingAction?.type === "re_summarize"))) || (!isGeneral && loadingTabs.has(selectedSummaryId)) ? (
-            isGeneral ? (
-              <ThinkingSkeleton />
-            ) : (
-              /* Section tab generating — show streaming content or skeleton */
-              (() => {
-                const secGenState = sectionStream.genState
-                const hasStreamingContent = secGenState === "streaming" || (secGenState === "idle" && sectionStream.streamingMd)
-                if (hasStreamingContent) {
-                  return (
-                    <div className="flex flex-col min-h-0 overflow-auto">
-                      {/* Section header */}
-                      <div className="px-6 pt-6 pb-3">
-                        <div className="flex items-start gap-2">
-                          <span
-                            className="shrink-0 t-body-family"
-                            style={{
-                              fontSize: "clamp(20px, 2vw, 24px)",
-                              fontWeight: 400,
-                              letterSpacing: "-0.01em",
-                              lineHeight: 1.35,
-                              color: "var(--ze-ink)",
-                            }}
-                          >
-                            {tabShortLabel(selectedTab!)} {selectedTab?.name}
-                          </span>
-                          {sectionStream.isStreaming && (
-                            <Loader2 className="h-4 w-4 animate-spin mt-1.5 shrink-0" style={{ color: "var(--ze-green)" }} />
-                          )}
-                        </div>
-                        {selectedTab?.description && (
-                          <p className="text-xs text-muted-foreground leading-relaxed mt-1">{selectedTab.description}</p>
-                        )}
-                        <div className="flex-1 h-px bg-border mt-4" />
+            if (isSummaryGenerating) {
+              // Waiting: skeleton fence only. Streaming tokens: normal content layout (no fence).
+              if (!hasStreamTokens) {
+                return (
+                  <div className="pm-meeting-fence-pad">
+                    <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-5 space-y-4 min-h-[200px]">
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--ze-green)" }} />
+                        <span className="pm-label">Generating summary…</span>
                       </div>
-                      {/* Streaming markdown content */}
-                      <div className="px-6 flex-1">
+                      {bpStream.thinkingText ? (
+                        <details className="mb-2" open>
+                          <summary className="text-xs text-muted-foreground cursor-pointer select-none">
+                            Thinking…
+                          </summary>
+                          <p className="text-xs text-muted-foreground/60 mt-2 leading-relaxed whitespace-pre-wrap t-mono-family max-h-32 overflow-auto">
+                            {bpStream.thinkingText}
+                          </p>
+                        </details>
+                      ) : null}
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <div
+                          key={`sum-sk-${i}`}
+                          className="h-4 rounded animate-pulse"
+                          style={{
+                            background: "oklch(0.38 0.08 160 / 0.12)",
+                            width: `${50 + i * 10}%`,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )
+              }
+              return (
+                <div className="flex flex-col min-h-0 overflow-auto px-6 pt-6 pb-8">
+                  <div className="pm-meeting-body-read">
+                    <div className="pm-meeting-stream-md">
+                      <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {normalizeMd(bpStream.streamingMd)}
+                        </ReactMarkdown>
+                      </div>
+                      {bpStream.isStreaming && (
+                        <span className="sk-stream-cursor" aria-hidden />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            }
+
+            if (
+              isTabGenerating ||
+              sectionLive ||
+              (!isGeneral && loadingTabs.has(selectedSummaryId))
+            ) {
+              if (isGeneral) return <ThinkingSkeleton />
+              const secGenState = sectionStream.genState
+              const hasStreamingContent =
+                secGenState === "streaming" ||
+                sectionStream.streamingMd.length > 0
+              if (hasStreamingContent) {
+                return (
+                  <div className="flex flex-col min-h-0 overflow-auto">
+                    <div className="px-6 pt-6 pb-3">
+                      <div className="flex items-start gap-2">
+                        <span className="pm-meeting-title shrink-0">
+                          {tabShortLabel(selectedTab!)} {selectedTab?.name}
+                        </span>
+                        {sectionStream.isStreaming && (
+                          <Loader2 className="size-3.5 animate-spin mt-1.5 shrink-0 text-[var(--pm-green)]" />
+                        )}
+                      </div>
+                      {selectedTab?.description && (
+                        <p className="pm-meta leading-relaxed mt-1">{selectedTab.description}</p>
+                      )}
+                    </div>
+                    <div className="px-6 flex-1">
+                      <div className="pm-meeting-body-read">
                         <div className="prose prose-sm dark:prose-invert max-w-none">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>
                             {normalizeMd(sectionStream.streamingMd)}
@@ -1961,319 +2655,103 @@ export function MeetingTabs({
                         </div>
                       </div>
                     </div>
-                  )
-                }
-                // Prefilling state — show skeleton
-                return (
-                  <div className="flex flex-col min-h-0 overflow-auto">
-                    {/* Section header */}
-                    <div className="px-6 pt-6 pb-3">
-                      <div className="flex items-start gap-2">
-                        <span
-                          className="shrink-0 t-body-family"
-                          style={{
-                            fontSize: "clamp(20px, 2vw, 24px)",
-                            fontWeight: 400,
-                            letterSpacing: "-0.01em",
-                            lineHeight: 1.35,
-                            color: "var(--ze-ink)",
-                          }}
-                        >
-                          {tabShortLabel(selectedTab!)} {selectedTab?.name}
-                        </span>
-                        <Loader2 className="h-4 w-4 animate-spin mt-1.5 shrink-0" style={{ color: "var(--ze-green)" }} />
-                      </div>
-                      {selectedTab?.description && (
-                        <p className="text-xs text-muted-foreground leading-relaxed mt-1">{selectedTab.description}</p>
-                      )}
-                      <div className="flex-1 h-px bg-border mt-4" />
+                  </div>
+                )
+              }
+              return (
+                <div className="flex flex-col min-h-0 overflow-auto">
+                  <div className="px-6 pt-6 pb-3">
+                    <div className="flex items-start gap-2">
+                      <span className="pm-meeting-title shrink-0">
+                        {tabShortLabel(selectedTab!)} {selectedTab?.name}
+                      </span>
+                      <Loader2 className="size-3.5 animate-spin mt-1.5 shrink-0 text-[var(--pm-green)]" />
                     </div>
-                    {/* Skeleton card — same visual style as General prefilling */}
-                    <div className="px-6 flex-1">
-                      <div className="sk-thinking-flow rounded-lg p-6 pt-10 space-y-4">
-                        <div className="h-6 w-1/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.12)" }} />
-                        <div className="space-y-3 pt-2">
-                          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.1s" }} />
-                          <div className="h-3 w-5/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.3s" }} />
-                          <div className="h-3 w-4/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.5s" }} />
-                          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.2s" }} />
-                          <div className="h-3 w-3/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.6s" }} />
-                        </div>
-                        <div className="h-4 w-1/4 rounded animate-pulse pt-2" style={{ background: "oklch(0.38 0.08 160 / 0.1)", animationDelay: "0.4s" }} />
-                        <div className="space-y-3 pt-1">
-                          <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.7s" }} />
-                          <div className="h-3 w-2/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.9s" }} />
-                        </div>
+                    {selectedTab?.description && (
+                      <p className="pm-meta leading-relaxed mt-1">{selectedTab.description}</p>
+                    )}
+                  </div>
+                  <div className="pm-meeting-fence-pad flex-1">
+                    <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-6 pt-10 space-y-4">
+                      <div className="h-6 w-1/3 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.12)" }} />
+                      <div className="space-y-3 pt-2">
+                        <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.1s" }} />
+                        <div className="h-3 w-5/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.3s" }} />
+                        <div className="h-3 w-4/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.5s" }} />
+                        <div className="h-3 w-full rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.2s" }} />
+                        <div className="h-3 w-3/6 rounded animate-pulse" style={{ background: "oklch(0.38 0.08 160 / 0.08)", animationDelay: "0.6s" }} />
                       </div>
                     </div>
                   </div>
-                )
-              })()
-            )
-          ) : !hasBlueprint && !tabs.some(t => t.tab_id === "tab_general" && t.md_file_path) ? (
-            <div className="flex items-center justify-center h-full">
-              {hasTranscript ? (
-                <Button variant="outline" size="sm" onClick={handleSummarize}>
-                  <Sparkles className="h-3.5 w-3.5 mr-1.5" /> Summarize
-                </Button>
-              ) : (
-                <p className="text-muted-foreground text-sm">No content yet.</p>
-              )}
-            </div>
-          ) : (
+                </div>
+              )
+            }
+
+            const hasGeneralMd =
+              !!tabMdContents["tab_general"] ||
+              !!tabs.some((t) => t.tab_id === "tab_general" && t.md_file_path)
+            if (!hasBlueprint && !hasGeneralMd) {
+              return (
+                <div className="flex items-center justify-center h-full min-h-[160px]">
+                  {hasTranscript ? (
+                    <Button variant="default" size="sm" onClick={handleSummarize}>
+                      <Sparkles className="size-3.5 mr-1.5" /> Summarize
+                    </Button>
+                  ) : (
+                    <p className="pm-meta">No content yet.</p>
+                  )}
+                </div>
+              )
+            }
+
+            return null
+          })()}
+          {/* Settled content path (has summary md / sections) — chips via SummaryMarkdownViewer */}
+          {!(
+            isGeneral &&
+            (bpStream.isStreaming ||
+              bpStream.summaryGenState === "prefilling" ||
+              bpStream.summaryGenState === "streaming" ||
+              meeting.processing_state === "summarizing" ||
+              pendingAction?.type === "summarize" ||
+              pendingAction?.type === "re_summarize")
+          ) &&
+          !(
+            isTabGenerating ||
+            sectionLive ||
+            (!isGeneral && loadingTabs.has(selectedSummaryId))
+          ) &&
+          (hasBlueprint ||
+            !!tabMdContents["tab_general"] ||
+            !!tabMdContents[selectedSummaryId] ||
+            tabs.some((t) => t.tab_id === "tab_general" && t.md_file_path)) ? (
             <>
               <EditableSectionContent
+                ref={editableSectionRef}
                 content={displayContent}
                 onSave={async (draft) => handleSaveSection(selectedSummaryId, draft)}
                 onRefClick={handleRefClick}
                 speakerNames={speakerNames}
                 actionsDisabled={ingestingTabs.has(selectedSummaryId)}
                 editDisabled={viewingTranslation}
+                hideInlineEdit
                 stickyOffset={contentStickyOffset}
-                title={
-                  isGeneral
-                    ? "General"
-                    : selectedTab ? (
-                        <span className="group/title inline-flex items-center gap-1.5">
-                          <span>{tabShortLabel(selectedTab)} {selectedTab.name || (blueprint as any[]).find((b: any) => b.blueprint_id === selectedTab.blueprint_id)?.tab_name || ""}</span>
-                          <button
-                            className="opacity-0 group-hover/title:opacity-100 transition-opacity duration-200 h-6 w-6 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent shrink-0"
-                            onClick={(e) => { e.stopPropagation(); sectionMetaRef.current?.startEditing() }}
-                            title="Edit section name"
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                        </span>
-                      ) : ""
+                ingestHostRef={!isGeneral && selectedTab ? sectionIngestHostRef : undefined}
+                title={isGeneral ? "General" : undefined}
+                titlePrefix={
+                  !isGeneral && selectedTab ? tabShortLabel(selectedTab) : undefined
                 }
-                actionButtons={
-                  <SummaryTranslateControl
-                    generatedLangs={availableLangs[selectedSummaryId] ?? []}
-                    activeLang={activeLang}
-                    translating={isTranslating}
-                    disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId)}
-                    onSelect={(lang) => void handleSelectLang(selectedSummaryId, lang)}
-                    onOpen={() => void refreshTranslations(selectedSummaryId)}
-                  />
+                titleName={
+                  !isGeneral && selectedTab
+                    ? selectedTab.name ||
+                      blueprint.find((b) => b.blueprint_id === selectedTab.blueprint_id)?.tab_name ||
+                      ""
+                    : undefined
                 }
-                toolbar={
-                  isGeneral ? (
-                    <div className="px-4 pt-3 pb-4 space-y-3">
-                      <button
-                        type="button"
-                        disabled={busy || ingestingTabs.size > 0}
-                        onClick={() => setReSummarizeOpen(true)}
-                        title="Re-summarize"
-                        className={cn(
-                          "inline-flex items-center justify-center gap-2 rounded-md h-8 px-4 text-[11px] font-semibold tracking-[0.1em] uppercase flex-1 select-none transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] w-full",
-                          busy
-                            ? "sk-thinking-flow text-[var(--ze-green)]"
-                            : "sk-send-btn",
-                        )}
-                      >
-                        <span className="relative z-10 flex items-center gap-2">
-                          {busy ? (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--ze-green)]" />
-                              Summarizing...
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCw className="h-3.5 w-3.5" />
-                              RE-SUMMARIZE
-                            </>
-                          )}
-                        </span>
-                      </button>
-
-                      {/* ── Sections (v3) ── */}
-                      {hasBlueprint && (
-                        <div className="border border-border rounded-md p-3 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Sections</span>
-                            <span className="flex-1 h-px bg-border/50" />
-                          </div>
-
-                          {!hasSections ? (
-                            <>
-                              <div className="space-y-1.5">
-                                {blueprint.map((b) => {
-                                  const isSelected = selectedBlueprintIds.has(b.blueprint_id)
-                                  const pill = (
-                                    <button
-                                      key={b.blueprint_id}
-                                      disabled={busy}
-                                      onClick={() => {
-                                        setSelectedBlueprintIds((prev) => {
-                                          const next = new Set(prev)
-                                          if (next.has(b.blueprint_id)) next.delete(b.blueprint_id)
-                                          else next.add(b.blueprint_id)
-                                          return next
-                                        })
-                                      }}
-                                      className={cn(
-                                        "w-full text-left inline-flex items-center gap-2 px-3 py-2 rounded-full cursor-pointer transition-all text-xs font-medium",
-                                        busy && isSelected
-                                          ? "sk-thinking-flow text-primary"
-                                          : isSelected
-                                            ? "border border-primary/40 text-primary bg-primary/5"
-                                            : "border border-border text-muted-foreground hover:text-primary hover:border-primary/30 bg-transparent",
-                                      )}
-                                    >
-                                      <span className={cn(
-                                        "w-2 h-2 rounded-full shrink-0 transition-colors",
-                                        isSelected ? "bg-primary" : "border border-muted-foreground/30",
-                                      )} />
-                                      {b.tab_name}
-                                    </button>
-                                  )
-                                  if (!b.tab_description) return <span key={b.blueprint_id} className="block">{pill}</span>
-                                  return (
-                                    <Tooltip key={b.blueprint_id}>
-                                      <TooltipTrigger render={pill} />
-                                      <TooltipContent side="top" className="max-w-xs px-2.5 py-1.5 text-[11px] bg-[#0A120E] text-[#FAFAF7] rounded-[3px]">
-                                        {b.tab_description}
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  )
-                                })}
-                                {customReceipts.map((c, i) => (
-                                  <button
-                                    key={`cus-${i}`}
-                                    disabled={busy}
-                                    onClick={() => { if (!busy) setCustomReceipts((prev) => prev.filter((_, j) => j !== i)) }}
-                                    className={cn(
-                                      "w-full text-left inline-flex items-center gap-2 px-3 py-2 rounded-full cursor-pointer transition-all text-xs font-medium",
-                                      busy
-                                        ? "sk-thinking-flow text-primary"
-                                        : "border border-primary/40 text-primary bg-primary/5",
-                                    )}
-                                  >
-                                    <span className="w-2 h-2 rounded-full bg-primary shrink-0" />
-                                    {c.name}
-                                    <X className="h-3 w-3 ml-auto shrink-0 text-muted-foreground hover:text-primary" />
-                                  </button>
-                                ))}
-                              </div>
-                              <div className="flex items-center gap-2 pt-1">
-                                <button
-                                  onClick={() => setAddSectionOpen(true)}
-                                  disabled={busy}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full cursor-pointer text-xs font-medium border border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                  <Plus className="h-3.5 w-3.5" />
-                                  Add Section
-                                </button>
-                                {customReceipts.length + selectedBlueprintIds.size > 0 && (
-                                  <button
-                                    onClick={handleBreakdown}
-                                    disabled={busy}
-                                    className={cn(
-                                      "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full cursor-pointer text-xs font-semibold uppercase tracking-wider transition-all",
-                                      busy
-                                        ? "sk-thinking-flow text-primary"
-                                        : "bg-primary text-primary-foreground hover:bg-primary/80",
-                                    )}
-                                  >
-                                    {busy ? "Extracting..." : "Breakdown"}
-                                  </button>
-                                )}
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="space-y-1.5">
-                                {sectionTabs.map((tab) => (
-                                  <button
-                                    key={tab.tab_id}
-                                    onClick={() => { setSelectedSummaryId(tab.tab_id); setMainTab("summary") }}
-                                    className={cn(
-                                      "group w-full text-left inline-flex items-center gap-2 px-3 py-2 rounded-full cursor-pointer transition-all text-xs font-medium",
-                                      selectedSummaryId === tab.tab_id
-                                        ? "bg-primary text-primary-foreground"
-                                        : "bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.20)]",
-                                    )}
-                                  >
-                                    <span className={cn(
-                                      "sk-diamond",
-                                      selectedSummaryId === tab.tab_id && "on",
-                                    )} aria-hidden />
-                                    <span className={cn(
-                                      "text-[10px] font-semibold uppercase tracking-wider shrink-0",
-                                      selectedSummaryId === tab.tab_id ? "text-primary-foreground/70" : "",
-                                    )}>
-                                      {tabShortLabel(tab)}
-                                    </span>
-                                    {tab.name}
-                                  </button>
-                                ))}
-                              </div>
-                              <button
-                                onClick={() => setAddSectionOpen(true)}
-                                disabled={busy}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full cursor-pointer text-xs font-medium border border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                                Add Section
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ) : (() => {
-                        const generating = isTabGenerating
-                        return (
-                          <div className="flex items-center gap-2 px-6 pb-2">
-                            {/* Regenerate — visible when is_dirty (user modified name/description) */}
-                            {!!selectedTab?.is_dirty && (
-                            <button
-                              type="button"
-                              disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId)}
-                              onClick={() => {
-                                if (selectedTab?.allocated_file_id) {
-                                  setRegenerateConfirmOpen(true)
-                                } else {
-                                  handleRegenerate(selectedSummaryId)
-                                }
-                              }}
-                              title="Regenerate"
-                              className={cn(
-                                "inline-flex items-center justify-center gap-2 rounded-md h-8 px-4 text-[11px] font-semibold tracking-[0.1em] uppercase flex-1 select-none transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)]",
-                                generating
-                                  ? "sk-thinking-flow text-[var(--ze-green)]"
-                                  : "sk-send-btn",
-                              )}
-                            >
-                              <span className="relative z-10 flex items-center gap-2">
-                                {generating ? (
-                                  <>
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--ze-green)]" />
-                                    Generating...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Sparkles className="h-3.5 w-3.5" />
-                                    RE-GENERATE
-                                  </>
-                                )}
-                              </span>
-                            </button>
-                            )}
-                            {!isTabGenerating && !busy && (
-                              <button
-                                type="button"
-                                className="text-[11px] font-medium tracking-[0.06em] uppercase shrink-0 select-none transition-colors duration-200 text-muted-foreground hover:text-[#8C2E2E] ml-auto"
-                                onClick={() => handleDeleteSection(selectedSummaryId)}
-                                title="Delete section"
-                                disabled={ingestingTabs.has(selectedSummaryId)}
-                              >
-                                DELETE
-                              </button>
-                            )}
-                          </div>
-                        )
-                      })()
+                onSaveTitle={
+                  !isGeneral && selectedTab
+                    ? (name) => handleSaveSectionTitle(selectedTab.tab_id, name)
+                    : undefined
                 }
                 metadata={
                   !isGeneral && selectedTab ? (
@@ -2285,6 +2763,7 @@ export function MeetingTabs({
                       meetingId={meetingId}
                       onMeetingUpdate={onMeetingUpdate}
                       hideTitle
+                      ingestHostRef={sectionIngestHostRef}
                       onIngestingChange={(tabId, v) => {
                         setIngestingTabs((prev) => {
                           const has = prev.has(tabId)
@@ -2300,106 +2779,193 @@ export function MeetingTabs({
                   ) : undefined
                 }
               />
-
-
             </>
-          )}
+          ) : null}
         </div>
       </div>
 
       {/* ── Notes Tab ── */}
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
-        mainTab === "notes"
-          ? "flex flex-col opacity-100"
-          : "hidden",
+        mainTab === "notes" ? "flex flex-col opacity-100" : "hidden",
       )}>
-        <div>
+        <div className="pm-meeting-notes-card">
           <MarkdownEditor
             value={notesDraft}
             onChange={handleNotesChange}
             minHeight="400px"
             stickyToolbarOffset={contentStickyOffset}
-            placeholder="Write your meeting notes here (Markdown supported)..."
+            placeholder="Write your meeting notes here (Markdown supported)…"
           />
         </div>
       </div>
 
-      {/* ── Transcript Tab ── */}
-      <div className={cn(
-        "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
-        mainTab === "transcript"
-          ? "flex flex-col"
-          : "hidden",
-      )}>
-        <div className="min-h-[400px]">
-          <TranscriptTab
-            segments={transcriptSegments}
-            partialText={partialText}
-            onSegmentClick={onSeekTo}
-            focusRef={focusRef}
-            activeSectionTag={activeSectionTag}
-            speakerNames={speakerNames}
-            tabs={tabs}
-            playbackTime={playbackTime}
-          />
-        </div>
-      </div>
+      {/* Transcript / Speaker live in the parent side rail when hostTranscriptInParent */}
+      {!hostTranscriptInParent && (
+        <>
+          <div className={cn(
+            "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+            mainTab === "transcript" ? "flex flex-col" : "hidden",
+          )}>
+            <div className="pm-meeting-panel-card">
+              <TranscriptTab
+                segments={transcriptSegments}
+                partialText={partialText}
+                onSegmentClick={onSeekTo}
+                focusRef={focusRef}
+                activeSectionTag={activeSectionTag}
+                speakerNames={speakerNames}
+                tabs={tabs}
+                playbackTime={playbackTime}
+              />
+            </div>
+          </div>
 
-      {/* ── Speaker Tab ── */}
-      <div className={cn(
-        "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
-        mainTab === "speaker"
-          ? "flex flex-col"
-          : "hidden",
-      )}>
-        <div className="min-h-[400px]">
-        <SpeakersTab
-          segments={transcriptSegments}
-          speakerNames={speakerNames}
-          onUpdateSpeakerName={(id, name) => {
-            const updated = { ...meeting.speaker_names, [id]: name }
-            updateMeeting(meetingId, { speaker_names: updated }).then((m) => {
-              onMeetingUpdate(m)
-              // Refresh [spk:…] display in open note distill blocks
-              void import("@/components/ui/tiptap-editor").then((mod) => {
-                mod.invalidateMeetingSpeakerCache(meetingId)
-              })
-            }).catch(() => {})
-          }}
-          onSegmentClick={onSeekTo}
-          activeSectionTag={activeSectionTag}
+          <div className={cn(
+            "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+            mainTab === "speaker" ? "flex flex-col" : "hidden",
+          )}>
+            <div className="pm-meeting-panel-card">
+              <SpeakersTab
+                segments={transcriptSegments}
+                speakerNames={speakerNames}
+                onUpdateSpeakerName={(id, name) => {
+                  const updated = { ...meeting.speaker_names, [id]: name }
+                  updateMeeting(meetingId, { speaker_names: updated }).then((m) => {
+                    onMeetingUpdate(m)
+                    void import("@/components/ui/tiptap-editor").then((mod) => {
+                      mod.invalidateMeetingSpeakerCache(meetingId)
+                    })
+                  }).catch(() => {})
+                }}
+                onSegmentClick={onSeekTo}
+                activeSectionTag={activeSectionTag}
+              />
+            </div>
+          </div>
+        </>
+      )}
+        </div>{/* /.pm-meeting-content-scroll */}
+        <div
+          className={cn(
+            "pm-rail-edge-fade pm-rail-edge-fade--top",
+            contentEdgeFade.top && "is-visible",
+          )}
+          aria-hidden
         />
-        </div>
-      </div>
+        <div
+          className={cn(
+            "pm-rail-edge-fade pm-rail-edge-fade--bottom",
+            contentEdgeFade.bottom && "is-visible",
+          )}
+          aria-hidden
+        />
+      </div>{/* /.pm-meeting-content-scroll-shell */}
 
-      {/* Add Section Dialog */}
+      {/* Add Section Dialog — premium silk form */}
       <Dialog open={addSectionOpen} onOpenChange={(open) => {
         setAddSectionOpen(open)
         if (!open) setAddForm({ name: "", description: "", blueprintId: null })
       }}>
-        <DialogContent className="!max-w-[90vw] sm:!max-w-3xl">
+        <DialogContent
+          className="pm-dialog pm-dialog--silk pm-meeting-add-section-dialog sm:max-w-[560px]"
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle>Add Section</DialogTitle>
+            <DialogKicker>Section</DialogKicker>
+            <DialogTitle>
+              {hasSections ? "Extract a section" : "Add to breakdown"}
+            </DialogTitle>
+            <DialogDescription>
+              {hasSections
+                ? "Name a topic and describe what to pull from the transcript. Extraction starts immediately."
+                : "Add a topic to the breakdown list. Run Breakdown when your selection is ready."}
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {hasSections
-              ? "Define a topic to extract. It will be processed immediately."
-              : "Add a section to the breakdown list. Click Breakdown to process all selected sections."}
-          </p>
-          {hasSections ? (
-            <div className="flex gap-5 mt-3">
-              {/* Left sidebar: unextracted blueprint items — collection selector style */}
-              {(() => {
-                const bpItems = blueprint.filter(b => !tabs.some(t => t.blueprint_id === b.blueprint_id))
-                if (bpItems.length === 0) return null
-                return (
-                  <div className="w-1/3 shrink-0 overflow-hidden rounded border border-primary/20 bg-popover/40 backdrop-blur-sm">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground px-3 py-2.5 border-b border-border/50">Blueprint</p>
-                    <div className="max-h-[280px] overflow-y-auto py-1">
-                      {bpItems.map(b => (
+
+          {(() => {
+            const bpItems = hasSections
+              ? blueprint.filter((b) => !tabs.some((t) => t.blueprint_id === b.blueprint_id))
+              : []
+            const hasBpRail = bpItems.length > 0
+
+            const formFields = (
+              <div className="pm-meeting-add-section-form">
+                <div className="pm-meeting-add-section-field">
+                  <label className="pm-meeting-add-section-label" htmlFor="add-section-name">
+                    Name
+                    <span className="pm-meeting-add-section-req" aria-hidden>*</span>
+                  </label>
+                  <Input
+                    id="add-section-name"
+                    className="pm-meeting-add-section-input"
+                    placeholder="e.g. Vendor Negotiation"
+                    value={addForm.name}
+                    onChange={(e) => {
+                      setAddForm((prev) => ({ ...prev, name: e.target.value, blueprintId: null }))
+                    }}
+                  />
+                </div>
+                <div className="pm-meeting-add-section-field">
+                  <div className="pm-meeting-add-section-label-row">
+                    <label className="pm-meeting-add-section-label" htmlFor="add-section-desc">
+                      Description
+                    </label>
+                    <button
+                      type="button"
+                      className="pm-meeting-add-section-ai"
+                      disabled={generatingDesc}
+                      onClick={handleGenerateDesc}
+                      title="Generate from General Summary"
+                    >
+                      {generatingDesc ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="size-3" />
+                      )}
+                      <span>{generatingDesc ? "Writing…" : "Suggest"}</span>
+                    </button>
+                  </div>
+                  <div
+                    className={cn(
+                      "pm-meeting-add-section-textarea-shell",
+                      generatingDesc && "sk-flow-full",
+                    )}
+                  >
+                    <Textarea
+                      id="add-section-desc"
+                      className="pm-meeting-add-section-textarea"
+                      placeholder="What should this section cover from the meeting?"
+                      value={addForm.description}
+                      onChange={(e) => {
+                        setAddForm((prev) => ({
+                          ...prev,
+                          description: e.target.value,
+                          blueprintId: null,
+                        }))
+                      }}
+                      rows={7}
+                    />
+                  </div>
+                </div>
+              </div>
+            )
+
+            if (!hasBpRail) {
+              return <div className="pm-meeting-add-section-body">{formFields}</div>
+            }
+
+            return (
+              <div className="pm-meeting-add-section-body pm-meeting-add-section-body--split">
+                <aside className="pm-meeting-add-section-bp" aria-label="Blueprint topics">
+                  <p className="pm-meeting-add-section-bp-label">From blueprint</p>
+                  <div className="pm-meeting-add-section-bp-list">
+                    {bpItems.map((b) => {
+                      const on = addForm.blueprintId === b.blueprint_id
+                      return (
                         <button
                           key={b.blueprint_id}
+                          type="button"
                           onClick={() => {
                             setAddForm({
                               name: b.tab_name,
@@ -2407,138 +2973,95 @@ export function MeetingTabs({
                               blueprintId: b.blueprint_id,
                             })
                           }}
-                          className="relative flex items-center gap-2.5 w-full cursor-pointer overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] text-muted-foreground hover:text-primary-foreground group text-left"
+                          className={cn(
+                            "pm-meeting-add-section-bp-item",
+                            on && "is-active",
+                          )}
                         >
-                          <span className="relative z-10 flex items-center gap-2.5 px-3 py-2 w-full text-[11px]">
-                            <span className={cn("sk-diamond", addForm.blueprintId === b.blueprint_id && "on")} aria-hidden />
-                            <span className="whitespace-normal break-words min-w-0 leading-snug">{b.tab_name}</span>
-                          </span>
-                          <span className="absolute inset-0 z-0 bg-primary transition-transform duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] scale-x-0 origin-left group-hover:scale-x-100 group-hover:origin-right" />
+                          <span className="pm-meeting-add-section-bp-name">{b.tab_name}</span>
+                          {b.tab_description ? (
+                            <span className="pm-meeting-add-section-bp-hint">
+                              {b.tab_description}
+                            </span>
+                          ) : null}
                         </button>
-                      ))}
-                    </div>
+                      )
+                    })}
                   </div>
-                )
-              })()}
-              {/* Right: form fields — same height as sidebar */}
-              <div className={cn("flex-1 min-w-0 space-y-4", blueprint.filter(b => !tabs.some(t => t.blueprint_id === b.blueprint_id)).length === 0 ? "" : "self-stretch flex flex-col justify-between")}>
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Section Name *</label>
-                    <input
-                      className="w-full border border-border rounded px-3 py-2.5 text-sm bg-background mt-1.5 focus:border-primary/50 focus:outline-none transition-colors"
-                      placeholder="e.g. Vendor Negotiation"
-                      value={addForm.name}
-                      onChange={(e) => {
-                        setAddForm(prev => ({ ...prev, name: e.target.value, blueprintId: null }))
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Description</label>
-                    <div className={cn("relative mt-1.5", generatingDesc && "sk-flow-full rounded")}>
-                      <textarea
-                        className={cn(
-                          "w-full rounded px-3 py-2.5 text-sm bg-background resize-none min-h-[200px]",
-                          generatingDesc ? "border-0" : "border border-border focus:border-primary/50 focus:outline-none transition-colors"
-                        )}
-                        placeholder="e.g. Discussion of the supplier contract renewal for Client X. Covers pricing negotiation strategy, delivery timeline adjustments, quality assurance requirements, and the phased rollout decision. Signals: mentions of the client name, contract terms, supplier performance, or renewal timeline."
-                        value={addForm.description}
-                        onChange={(e) => {
-                          setAddForm(prev => ({ ...prev, description: e.target.value, blueprintId: null }))
-                        }}
-                        rows={8}
-                      />
-                      <button
-                        type="button"
-                        disabled={generatingDesc}
-                        onClick={handleGenerateDesc}
-                        className="absolute bottom-2.5 right-2.5 h-8 w-8 flex items-center justify-center rounded-full bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.22)] transition-colors"
-                        title="Generate description from General Summary"
-                      >
-                        {generatingDesc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                </aside>
+                <div className="pm-meeting-add-section-main">{formFields}</div>
               </div>
-            </div>
-          ) : (
-            <div className="space-y-4 mt-3">
-              <div>
-                <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Section Name *</label>
-                <input
-                  className="w-full border border-border rounded px-3 py-2.5 text-sm bg-background mt-1.5 focus:border-primary/50 focus:outline-none transition-colors"
-                  placeholder="e.g. Vendor Negotiation"
-                  value={addForm.name}
-                  onChange={(e) => {
-                    setAddForm(prev => ({ ...prev, name: e.target.value, blueprintId: null }))
-                  }}
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Description</label>
-                <div className={cn("relative mt-1.5", generatingDesc && "sk-flow-full rounded")}>
-                  <textarea
-                    className={cn(
-                      "w-full rounded px-3 py-2.5 text-sm bg-background resize-none min-h-[200px]",
-                      generatingDesc ? "border-0" : "border border-border focus:border-primary/50 focus:outline-none transition-colors"
-                    )}
-                    placeholder="e.g. Discussion of the supplier contract renewal for Client X. Covers pricing negotiation strategy, delivery timeline adjustments, quality assurance requirements, and the phased rollout decision. Signals: mentions of the client name, contract terms, supplier performance, or renewal timeline."
-                    value={addForm.description}
-                    onChange={(e) => {
-                      setAddForm(prev => ({ ...prev, description: e.target.value, blueprintId: null }))
-                    }}
-                    rows={8}
-                  />
-                  <button
-                    type="button"
-                    disabled={generatingDesc}
-                    onClick={handleGenerateDesc}
-                    className="absolute bottom-2.5 right-2.5 h-8 w-8 flex items-center justify-center rounded-full bg-[rgba(61,175,115,0.12)] text-[#2D8A5E] hover:bg-[rgba(61,175,115,0.22)] transition-colors"
-                    title="Generate description from General Summary"
-                  >
-                    {generatingDesc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-4">
-            <Button variant="outline" onClick={() => { setAddSectionOpen(false); setAddForm({ name: "", description: "", blueprintId: null }) }}>Cancel</Button>
-            <Button onClick={handleAddOrExtract}>{hasSections ? "Extract" : "Add"}</Button>
-          </div>
+            )
+          })()}
+
+          <DialogFooter className="pm-meeting-add-section-footer">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="pm-meeting-add-section-cancel"
+              onClick={() => {
+                setAddSectionOpen(false)
+                setAddForm({ name: "", description: "", blueprintId: null })
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              className="pm-meeting-add-section-submit"
+              disabled={!addForm.name.trim()}
+              onClick={handleAddOrExtract}
+            >
+              {hasSections ? "Extract section" : "Add to list"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Re-summarize Confirmation Dialog */}
       <Dialog open={reSummarizeOpen} onOpenChange={setReSummarizeOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className="pm-dialog pm-dialog--silk sm:max-w-sm"
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle>Re-summarize Meeting</DialogTitle>
+            <DialogKicker>Summary</DialogKicker>
+            <DialogTitle>Re-summarize meeting?</DialogTitle>
+            <DialogDescription>
+              Re-summarizing will overwrite the existing General summary and section breakdown.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Re-summarizing will overwrite the existing General summary and section breakdown. Continue?
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setReSummarizeOpen(false)}>Cancel</Button>
-            <Button onClick={handleReSummarize}>Re-summarize</Button>
-          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setReSummarizeOpen(false)}>Cancel</Button>
+            <Button type="button" variant="default" size="sm" onClick={handleReSummarize}>Re-summarize</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Regenerate Section Confirmation Dialog */}
       <Dialog open={regenerateConfirmOpen} onOpenChange={setRegenerateConfirmOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className="pm-dialog pm-dialog--silk sm:max-w-sm"
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle>Regenerate Section</DialogTitle>
+            <DialogKicker>Section</DialogKicker>
+            <DialogTitle>Regenerate section?</DialogTitle>
+            <DialogDescription>
+              Regenerating will delete the existing ingested file snapshot. The section will be re-extracted from the transcript.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Regenerating will delete the existing ingested file snapshot. The section will be re-extracted from the transcript. Continue?
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setRegenerateConfirmOpen(false)}>Cancel</Button>
+          <DialogFooter>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setRegenerateConfirmOpen(false)}>Cancel</Button>
             <Button
+              type="button"
+              variant="default"
+              size="sm"
               onClick={() => {
                 setRegenerateConfirmOpen(false)
                 handleRegenerate(selectedSummaryId)
@@ -2546,23 +3069,28 @@ export function MeetingTabs({
             >
               Regenerate
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Delete Section Confirmation Dialog */}
       <Dialog open={!!deleteSectionTarget} onOpenChange={(v) => { if (!v) setDeleteSectionTarget(null) }}>
-        <DialogContent className="max-w-sm">
+        <DialogContent
+          className="pm-dialog pm-dialog--silk sm:max-w-sm"
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+        >
           <DialogHeader>
-            <DialogTitle>Delete Section</DialogTitle>
+            <DialogKicker>Section</DialogKicker>
+            <DialogTitle>Delete section?</DialogTitle>
+            <DialogDescription>
+              Delete this section? This removes all its tags from the transcript.
+            </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Delete this section? This removes all its tags from the transcript.
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setDeleteSectionTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={confirmDeleteSection}>Delete</Button>
-          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setDeleteSectionTarget(null)}>Cancel</Button>
+            <Button type="button" variant="destructive-solid" size="sm" onClick={confirmDeleteSection}>Delete</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

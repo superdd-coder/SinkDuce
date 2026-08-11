@@ -18,7 +18,27 @@ See ``docs/MEETING_PROVIDER_SPEC.md`` for the full adapter authoring contract.
 
 from __future__ import annotations
 
-from src.providers.registry import ProviderRegistry
+from typing import Any
+
+from src.providers.registry import ProviderEntry, ProviderRegistry
 
 file_transcription_registry = ProviderRegistry("file_transcription")
 realtime_transcription_registry = ProviderRegistry("realtime_transcription")
+
+
+def cls_supports_hot_words(cls: type) -> bool:
+    """Read adapter class flag ``supports_hot_words`` (bool class attr)."""
+    raw = getattr(cls, "supports_hot_words", False)
+    if isinstance(raw, bool):
+        return raw
+    # Legacy @property / method on base — treat as unsupported unless bool attr
+    return False
+
+
+def entry_public_dict(entry: ProviderEntry) -> dict[str, Any]:
+    """Serialize a transcription registry entry for the frontend."""
+    return {
+        "name": entry.name,
+        "display_name": entry.display_name,
+        "supports_hot_words": cls_supports_hot_words(entry.cls),
+    }

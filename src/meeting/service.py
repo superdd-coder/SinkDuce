@@ -12,7 +12,13 @@ from pathlib import Path
 
 from src.config import get_config
 from src.meeting import store
-from src.meeting.models import Meeting, MeetingStatus, TranscriptionResult
+from src.meeting.models import (
+    GenerationState,
+    Meeting,
+    MeetingStatus,
+    ProcessingState,
+    TranscriptionResult,
+)
 from src.meeting.transcription.base import (
     FileTranscriptionProvider,
     RealtimeTranscriptionProvider,
@@ -145,7 +151,25 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
         raise ValueError(f"Meeting {meeting_id} has no audio file")
 
     logger.info("[TRANSCRIBE-HANDLER] Meeting %s audio_path=%s", meeting_id, meeting.audio_path)
-    store.update_meeting(meeting_id, status=MeetingStatus.transcribing, transcription_error=None)
+    # Ensure re-tx never leaves stale tabs/blueprint that would skip Speakers UI.
+    try:
+        store.delete_pipeline_data(meeting_id)
+    except Exception as exc:
+        logger.warning("[TRANSCRIBE-HANDLER] delete_pipeline_data failed (non-fatal): %s", exc)
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.transcribing,
+        transcription_error=None,
+        processing_state=ProcessingState.idle.value,
+        summary_gen_state=GenerationState.idle.value,
+        blueprint_gen_state=GenerationState.idle.value,
+        summary=None,
+        detail=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        tabs=None,
+        speaker_names=None,
+    )
     update(5, "Loading transcription provider...")
 
     # 2. Get the active file transcription provider
@@ -156,7 +180,9 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
 
     # Auto-load the provider if its model is downloaded but not yet loaded.
     # If the model is NOT downloaded, raise a clear error — do NOT auto-download.
-    if provider_cfg and provider_cfg.adapter.startswith("funasr_local"):
+    from src.meeting.transcription import is_local_file_adapter
+
+    if provider_cfg and is_local_file_adapter(provider_cfg.adapter):
         from src.services import _is_builtin_model_downloaded, reload_provider
         from src.providers.load_state import get_state
         model_id = provider_cfg.id
@@ -246,23 +272,23 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
     )
     update(95, "Updating meeting status...")
 
-    # 5. Mark meeting as completed
-    store.update_meeting(meeting_id, status=MeetingStatus.completed)
-    update(95, "Starting summary generation...")
-
-    # 6. Auto-trigger summary generation (same path as the Summarize button)
-    try:
-        task_manager.create_task(
-            filename=f"meeting_summary:{meeting_id}",
-            task_type="meeting_summary",
-            meeting_id=meeting_id,
-        )
-        logger.info("[TRANSCRIBE-HANDLER] Auto-triggered meeting_summary for %s", meeting_id)
-    except Exception as e:
-        logger.warning("[TRANSCRIBE-HANDLER] Failed to auto-trigger summary (non-fatal): %s", e)
-
+    # 5. Mark meeting as completed — Speakers gate first; user starts Summary.
+    store.update_meeting(
+        meeting_id,
+        status=MeetingStatus.completed,
+        # Keep Studio fields empty until user passes Speakers → Summarize
+        tabs=None,
+        blueprint=None,
+        blueprint_taxonomy=None,
+        summary=None,
+        detail=None,
+    )
     update(100, "Transcription complete")
 
+    logger.info(
+        "[TRANSCRIBE-HANDLER] Transcript ready for %s — Speakers gate, then Summary from client",
+        meeting_id,
+    )
     logger.info("[TRANSCRIBE-HANDLER] DONE for meeting %s", meeting_id)
     return {
         "message": "Transcription complete",
@@ -409,27 +435,113 @@ class MeetingService:
 
     # -- Provider accessors -------------------------------------------------
 
+    @staticmethod
+    def _provider_matches_adapter(instance: object, adapter: str) -> bool:
+        """Return False if a cached instance is clearly the wrong backend family."""
+        name = type(instance).__name__.lower()
+        ad = (adapter or "").lower()
+        if "dashscope" in ad:
+            return "dashscope" in name
+        if "funasr" in ad:
+            return "funasr" in name and "dashscope" not in name
+        if "openrouter" in ad:
+            return "openrouter" in name or "openai" in name
+        if "openai" in ad:
+            return "openai" in name or "compat" in name
+        return True
+
     def get_active_file_provider(self) -> FileTranscriptionProvider | None:
-        """Get the active file transcription provider from config."""
+        """Get the active file transcription provider from config.
+
+        Always re-reads config so Settings “Default” switches take effect
+        without restarting the process. Drops stale cache entries that do not
+        match the active adapter (e.g. DashScope under builtin-local-file).
+        """
+        from src.providers.cache import invalidate as cache_invalidate
+        from src.providers.cache import peek as cache_peek
+
         config = get_config()
         provider_cfg = config.transcription.active_file_provider
         if provider_cfg is None:
             provider_cfg = config.transcription.get_local_file_provider()
+        # Builtin id must always resolve to FunASR ONNX factory config
+        if provider_cfg.id == "builtin-local-file":
+            provider_cfg = config.transcription.get_local_file_provider()
+            provider_cfg = provider_cfg.model_copy(update={"is_active": True})
+        cache_key = f"file_trans:{provider_cfg.id}"
+        cached = cache_peek(cache_key)
+        if cached is not None and not self._provider_matches_adapter(
+            cached, provider_cfg.adapter
+        ):
+            logger.warning(
+                "Dropping stale file provider cache %s (%s) for adapter %s",
+                cache_key,
+                type(cached).__name__,
+                provider_cfg.adapter,
+            )
+            cache_invalidate(cache_key)
+        logger.info(
+            "Active file transcription provider: id=%s adapter=%s model=%s",
+            provider_cfg.id,
+            provider_cfg.adapter,
+            provider_cfg.model,
+        )
         return cached_provider(
-            f"file_trans:{provider_cfg.id}",
+            cache_key,
             lambda: create_file_transcription_provider(provider_cfg),
         )
 
     def get_active_realtime_provider(self) -> RealtimeTranscriptionProvider | None:
-        """Get the active realtime transcription provider from config."""
+        """Get the active realtime transcription provider from config.
+
+        Always re-reads config so Settings “Default” switches take effect.
+        Drops stale cache entries that do not match the active adapter.
+        """
+        from src.providers.cache import invalidate as cache_invalidate
+        from src.providers.cache import peek as cache_peek
+
         config = get_config()
         provider_cfg = config.transcription.active_realtime_provider
         if provider_cfg is None:
             provider_cfg = config.transcription.get_local_realtime_provider()
+        if provider_cfg.id == "builtin-local-rt":
+            provider_cfg = config.transcription.get_local_realtime_provider()
+            provider_cfg = provider_cfg.model_copy(update={"is_active": True})
+        cache_key = f"rt_trans:{provider_cfg.id}"
+        cached = cache_peek(cache_key)
+        if cached is not None and not self._provider_matches_adapter(
+            cached, provider_cfg.adapter
+        ):
+            logger.warning(
+                "Dropping stale realtime provider cache %s (%s) for adapter %s",
+                cache_key,
+                type(cached).__name__,
+                provider_cfg.adapter,
+            )
+            cache_invalidate(cache_key)
+        logger.info(
+            "Active realtime transcription provider: id=%s adapter=%s model=%s",
+            provider_cfg.id,
+            provider_cfg.adapter,
+            provider_cfg.model,
+        )
         return cached_provider(
-            f"rt_trans:{provider_cfg.id}",
+            cache_key,
             lambda: create_realtime_transcription_provider(provider_cfg),
         )
+
+    def get_active_realtime_provider_meta(self) -> dict:
+        """Lightweight active realtime provider identity (no model load)."""
+        config = get_config()
+        cfg = config.transcription.active_realtime_provider
+        if cfg is None:
+            return {"id": None, "adapter": None, "name": None, "model": None}
+        return {
+            "id": cfg.id,
+            "adapter": cfg.adapter,
+            "name": cfg.name,
+            "model": cfg.model,
+        }
 
     # -- Summary generation (v3 Blueprint) ----------------------------------
 

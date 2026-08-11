@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
 import { Globe } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import {
   getWebSearchConfirmState,
   subscribeWebSearchConfirm,
@@ -12,57 +11,47 @@ import {
 
 function ConfirmCard({ query }: { query: string }) {
   return (
-    <div className="pointer-events-auto w-full rounded-lg border border-amber-500/40 bg-background shadow-xl px-3.5 py-3 space-y-2.5">
-      <div className="flex items-start gap-2.5 min-w-0">
-        <div className="mt-0.5 rounded-md bg-amber-500/15 p-1.5 text-amber-600 dark:text-amber-400 shrink-0">
-          <Globe className="h-4 w-4" />
+    <div className="pm-web-confirm pointer-events-auto w-full" role="group">
+      <div className="pm-web-confirm-head">
+        <div className="pm-web-confirm-icon" aria-hidden>
+          <Globe className="h-3.5 w-3.5" strokeWidth={1.75} />
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-semibold text-foreground leading-snug">
-            Search the public internet?
-          </div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground leading-relaxed">
+        <div className="pm-web-confirm-copy min-w-0 flex-1">
+          <div className="pm-web-confirm-title">Search the public internet?</div>
+          <p className="pm-web-confirm-desc">
             Results are{" "}
-            <span className="font-medium text-amber-700 dark:text-amber-400">external WEB data</span>
-            {" — "}not from your private knowledge base. Decision applies to{" "}
-            <span className="font-medium">this turn</span>.
-          </p>
-          <p
-            className="mt-1.5 text-[12px] text-amber-900 dark:text-amber-200 bg-amber-500/10 border border-amber-500/25 rounded px-2 py-1.5 break-words"
-            title={query}
-          >
-            {query || "—"}
+            <span className="pm-web-confirm-em">external web data</span>
+            {" — "}not from your private knowledge base. Applies to{" "}
+            <span className="pm-web-confirm-em">this turn</span>.
           </p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-end gap-1.5">
-        <Button
+      <p className="pm-web-confirm-query" title={query}>
+        {query || "—"}
+      </p>
+      <div className="pm-web-confirm-actions">
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="h-8 text-[11px] px-2.5"
+          className="pm-web-confirm-btn pm-web-confirm-btn--ghost"
           onClick={() => answerWebSearchConfirm(false)}
         >
           Decline
-        </Button>
-        <Button
+        </button>
+        <button
           type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 text-[11px] px-2.5 border-amber-500/40 text-amber-800 dark:text-amber-300"
+          className="pm-web-confirm-btn pm-web-confirm-btn--soft"
           onClick={() => answerWebSearchConfirm(true, { always: true })}
           title="Allow web search for this chat session until the tab is closed"
         >
           Always allow this session
-        </Button>
-        <Button
+        </button>
+        <button
           type="button"
-          size="sm"
-          className="h-8 text-[11px] px-3 bg-amber-600 hover:bg-amber-700 text-white"
+          className="pm-web-confirm-btn pm-web-confirm-btn--pri"
           onClick={() => answerWebSearchConfirm(true)}
         >
           Allow
-        </Button>
+        </button>
       </div>
     </div>
   )

@@ -76,11 +76,51 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
             elif src.startswith("file:"):
                 file_id = src[len("file:"):]
 
+        # Human label for ### Source: — cluster still keys on stable source id.
+        # Prefer live resolve (SQLite current name) over frozen payload label.
+        from src.collections.file_index import (
+            is_generic_display_name,
+            is_opaque_source_key,
+            resolve_display_name,
+        )
+
+        payload_label = meta.get("source_label") or meta.get("display_name")
+        pl_raw = str(payload_label).strip() if payload_label else ""
+        pl = pl_raw if pl_raw and not is_opaque_source_key(pl_raw) else None
+        source_display = ""
+        if collection and source:
+            try:
+                source_display = resolve_display_name(
+                    str(collection),
+                    str(source),
+                    payload_label=pl,
+                )
+            except Exception:
+                source_display = ""
+        if is_generic_display_name(source_display):
+            source_display = ""
+        if not source_display and pl and not is_generic_display_name(pl):
+            source_display = pl
+        if not source_display:
+            src_s = str(source or "")
+            if src_s.startswith("__meeting__:"):
+                source_display = "Meeting"
+            elif src_s.startswith("__note__:"):
+                source_display = "Note"
+            elif src_s.startswith("__file__:") or src_s.startswith("file:"):
+                source_display = "Document"
+            else:
+                base = src_s.replace("\\", "/").rsplit("/", 1)[-1] or src_s
+                source_display = (
+                    base if not is_opaque_source_key(base) else "Document"
+                )
+
         entry = {
             "text": text,
             "score": score,
             "collection": str(collection),
             "source": str(source),
+            "source_display": source_display,
             "chunk_index": int(chunk_index) if chunk_index else 0,
             "point_id": str(point_id),
             "context": str(context) if context else "",
@@ -142,8 +182,10 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
                 continue
 
             first = source_chunks[0]
+            # Prefer human-readable label (not raw __file__:{id})
+            source_heading = first.get("source_display") or source_name
 
-            parts.append(f"### Source: {source_name}")
+            parts.append(f"### Source: {source_heading}")
 
             if first.get("uploaded_at"):
                 parts.append(f"Uploaded: {first['uploaded_at']}")
@@ -169,7 +211,7 @@ def build_context(chunks: list, gap_indicators: bool = True) -> str:
                     n_gap = cur_idx - prev_idx - 1
                     gap_hint = (
                         f"[Note: {n_gap} intermediate chunk{'s' if n_gap > 1 else ''} "
-                        f"(#{prev_idx + 1}–#{cur_idx - 1}) from {source_name} were omitted "
+                        f"(#{prev_idx + 1}–#{cur_idx - 1}) from {source_heading} were omitted "
                         f"— content not directly relevant to the query.]"
                     )
                     parts.append(gap_hint)

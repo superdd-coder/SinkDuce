@@ -1,6 +1,7 @@
+import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import { Pencil, Trash2 } from "lucide-react"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import type { CollectionItem } from "@/stores/app-store"
 
 interface CollectionListProps {
@@ -12,97 +13,222 @@ interface CollectionListProps {
   onRename: (id: string) => void
 }
 
-export function CollectionList({ collections, activeCollection, onSelect, onCreate, onDelete, onRename }: CollectionListProps) {
+type IndicatorBox = { top: number; height: number }
+
+export function CollectionList({
+  collections,
+  activeCollection,
+  onSelect,
+  onCreate,
+  onDelete,
+  onRename,
+}: CollectionListProps) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const [indicator, setIndicator] = useState<IndicatorBox | null>(null)
+  /** When false, indicator jumps with no transition (enter Library / first paint). */
+  const [indicatorReady, setIndicatorReady] = useState(false)
+  /**
+   * true → next measure places hard (no slide).
+   * Set on first paint + whenever the list becomes visible again (view switch).
+   * Cleared after a hard place so collection clicks still animate.
+   */
+  const hardPlaceRef = useRef(true)
+  const visibleRef = useRef(false)
+
+  const measureIndicator = useCallback(
+    (opts?: { hard?: boolean }) => {
+      const list = listRef.current
+      const row = activeCollection
+        ? rowRefs.current.get(activeCollection)
+        : null
+      if (!list || !row) {
+        setIndicator(null)
+        return
+      }
+      // Hidden view → zero box; don’t arm transitions from bogus coords
+      if (list.getBoundingClientRect().height < 4) {
+        hardPlaceRef.current = true
+        setIndicatorReady(false)
+        return
+      }
+
+      const next = {
+        top: row.offsetTop,
+        height: row.offsetHeight,
+      }
+      const hard = opts?.hard ?? hardPlaceRef.current
+
+      if (hard) {
+        // Paint at final position with transition disabled, then arm slides
+        setIndicatorReady(false)
+        setIndicator(next)
+        hardPlaceRef.current = false
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setIndicatorReady(true)
+          })
+        })
+      } else {
+        setIndicator(next)
+        setIndicatorReady(true)
+      }
+    },
+    [activeCollection]
+  )
+
+  useLayoutEffect(() => {
+    measureIndicator()
+  }, [measureIndicator, collections])
+
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!list) return
+
+    // Entering Library after Chat/etc.: list goes from hidden → visible
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        const now = entry.isIntersecting && entry.intersectionRatio > 0
+        if (now && !visibleRef.current) {
+          hardPlaceRef.current = true
+          measureIndicator({ hard: true })
+        }
+        visibleRef.current = now
+      },
+      { threshold: [0, 0.01, 0.1] }
+    )
+    io.observe(list)
+
+    const ro = new ResizeObserver(() => {
+      // Layout settle after show — hard place if we still owe one
+      if (hardPlaceRef.current) measureIndicator({ hard: true })
+      else measureIndicator()
+    })
+    ro.observe(list)
+
+    const onResize = () => measureIndicator()
+    window.addEventListener("resize", onResize)
+    return () => {
+      io.disconnect()
+      ro.disconnect()
+      window.removeEventListener("resize", onResize)
+    }
+  }, [measureIndicator])
+
+  const setRowRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (el) rowRefs.current.set(id, el)
+    else rowRefs.current.delete(id)
+  }, [])
+
+  const edgeFade = useScrollEdgeFade(listRef, collections.length)
+
   return (
-    <div
-      className="w-64 border-r flex flex-col shrink-0 border-border bg-background"
-    >
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-4 h-12 border-b border-border"
-      >
-        <span
-          className="uppercase t-body-family"
-          style={{
-            fontSize: "14px",
-            fontWeight: 300,
-            letterSpacing: "-0.015em",
-            color: "var(--muted-foreground)",
-          }}
-        >
-          Collections
-        </span>
-        <button
-          type="button"
-          onClick={onCreate}
-          className="text-[10px] font-medium uppercase tracking-[0.1em] px-2 py-0.5 cursor-pointer transition-opacity hover:opacity-85 bg-primary text-primary-foreground border-none t-sans-family"
-          style={{ borderRadius: "2px" }}
-        >
-          + New
-        </button>
-      </div>
+    <aside className="pm-shell-collections" aria-label="Collections">
+      <div className="pm-shell-collections-surface">
+        <div className="pm-shell-collections-head pm-rail-head">
+          <h2 className="pm-shell-collections-title pm-rail-title">Collections</h2>
+          <button
+            type="button"
+            onClick={onCreate}
+            className="pm-shell-collections-new pm-rail-new"
+            title="New collection"
+          >
+            New
+          </button>
+        </div>
 
-      {/* List */}
-      <ScrollArea className="flex-1">
-        <div className="px-5 py-3">
-          {collections.map((col) => {
-            const isActive = activeCollection === col.id
-            return (
+        {/* Native scroll + edge fades — same path as Chat Sessions / Meeting */}
+        <div className="pm-rail-list-shell">
+          <div ref={listRef} className="pm-shell-col-list">
+            {indicator && (
               <div
-                key={col.id}
                 className={cn(
-                  "group relative py-2.5 cursor-pointer flex items-center justify-between border-b transition-colors border-b border-dashed border-border",
-                  isActive ? "text-foreground" : "text-foreground/80",
+                  "pm-shell-col-indicator",
+                  indicatorReady && "is-ready"
                 )}
-                onClick={() => onSelect(col.id)}
-              >
-                {/* Active indicator */}
-                {isActive && (
-                  <span
-                    className="absolute left-[-20px] top-0 bottom-0 w-[1.5px] bg-primary"
-                  />
-                )}
+                style={{
+                  transform: `translateY(${indicator.top}px)`,
+                  height: indicator.height,
+                }}
+                aria-hidden
+              />
+            )}
 
-                <span className={cn("text-xs truncate flex-1", isActive ? "font-medium" : "font-normal")}>
-                  {col.name}
-                </span>
+            {collections.map((col) => {
+              const isActive = activeCollection === col.id
+              return (
+                <div
+                  key={col.id}
+                  ref={(el) => setRowRef(col.id, el)}
+                  role="button"
+                  tabIndex={0}
+                  className={cn("pm-shell-col-row group", isActive && "is-active")}
+                  onClick={() => onSelect(col.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      onSelect(col.id)
+                    }
+                  }}
+                >
+                  <span className="pm-shell-col-name truncate flex-1 min-w-0">
+                    {col.name}
+                  </span>
 
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {col.points_count > 0 && (
+                  <div className="pm-shell-col-meta">
                     <span
-                      className="text-[10px] font-medium text-muted-foreground"
+                      className={cn(
+                        "pm-shell-col-count",
+                        col.points_count <= 0 && "opacity-0"
+                      )}
                     >
-                      {col.points_count}
+                      {col.points_count > 0 ? col.points_count : "0"}
                     </span>
-                  )}
-
-                  {/* Hover actions */}
-                  <div className="hidden group-hover:flex items-center gap-1 ml-1">
-                    <button
-                      type="button"
-                      className="p-0.5 cursor-pointer text-muted-foreground"
-                      style={{ background: "none", border: "none" }}
-                      onClick={(e) => { e.stopPropagation(); onRename(col.id) }}
-                      title="Rename"
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                    <button
-                      type="button"
-                      className="p-0.5 cursor-pointer text-muted-foreground"
-                      style={{ background: "none", border: "none" }}
-                      onClick={(e) => { e.stopPropagation(); onDelete(col.id) }}
-                      title="Delete"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
+                    <div className="pm-shell-col-actions">
+                      <button
+                        type="button"
+                        className="pm-shell-col-action"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onRename(col.id)
+                        }}
+                        title="Rename"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        className="pm-shell-col-action pm-shell-col-action--danger"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onDelete(col.id)
+                        }}
+                        title="Delete"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
+          <div
+            className={cn(
+              "pm-rail-edge-fade pm-rail-edge-fade--top",
+              edgeFade.top && "is-visible",
+            )}
+            aria-hidden
+          />
+          <div
+            className={cn(
+              "pm-rail-edge-fade pm-rail-edge-fade--bottom",
+              edgeFade.bottom && "is-visible",
+            )}
+            aria-hidden
+          />
         </div>
-      </ScrollArea>
-    </div>
+      </div>
+    </aside>
   )
 }

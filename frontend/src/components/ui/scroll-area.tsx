@@ -17,7 +17,12 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        className={cn(
+          "size-full rounded-[inherit] transition-[color,box-shadow] outline-none",
+          "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1",
+          // Stop rubber-band / scroll chaining when already at top or bottom
+          "overscroll-y-none overscroll-contain"
+        )}
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

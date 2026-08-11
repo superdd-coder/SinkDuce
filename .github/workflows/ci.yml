@@ -19,7 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build Docker image
-        run: docker compose build
+        # Source build stack (default docker-compose.yml only pulls Hub image)
+        run: docker compose -f docker-compose.build.yml build
 
   pytest:
     runs-on: ubuntu-latest

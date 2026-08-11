@@ -11,9 +11,9 @@
 
 set -euo pipefail
 
-PROJECT="sinkduce"
 HEALTH_URL="http://localhost:18900/health"
 START_TIMEOUT=60   # seconds to wait for the container to become healthy
+COMPOSE=(docker compose -f docker-compose.build.yml)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -26,14 +26,14 @@ err()  { printf "${RED}[pre-push]${NC} %s\n" "$*"; }
 
 cleanup() {
     log "Cleaning up containers…"
-    docker compose down --remove-orphans 2>/dev/null || true
+    "${COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
 }
 
 trap cleanup EXIT
 
 # ── 1. Docker build ─────────────────────────────────────────────────
 log "Building Docker image (this may take a minute)…"
-if ! docker compose build --quiet 2>&1; then
+if ! "${COMPOSE[@]}" build --quiet 2>&1; then
     err "Docker build FAILED."
     err ""
     err "The push was blocked. Fix the build error and try again."
@@ -44,7 +44,7 @@ log "Docker build passed."
 
 # ── 2. Start containers ─────────────────────────────────────────────
 log "Starting containers…"
-docker compose up -d --wait 2>/dev/null || true
+"${COMPOSE[@]}" up -d --wait 2>/dev/null || true
 
 # ── 3. Health check (poll until timeout) ─────────────────────────────
 log "Waiting for health endpoint (timeout ${START_TIMEOUT}s)…"

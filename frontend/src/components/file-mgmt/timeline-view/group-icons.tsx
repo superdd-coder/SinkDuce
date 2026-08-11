@@ -22,11 +22,14 @@ import {
 import { cn } from "@/lib/utils"
 import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
 
-/** System UI ink green (#1A5E3D / --ze-green). */
+/**
+ * System / brand forest — `--pm-green` / `--ze-green`.
+ * Prefer this for Meeting · Notes · branch chrome so icons match Premium shell.
+ */
 export const ZE_GREEN = "#1A5E3D"
 
-/** Archived system folder — muted slate gray. */
-export const ARCHIVE_GRAY = "#94A3B8"
+/** Archived system folder — `--pm-faint` family (warm gray, not cool slate). */
+export const ARCHIVE_GRAY = "#969C96"
 
 /** Virtual focus id for nodes with no group. */
 export const UNCATEGORIZED_ID = "__uncategorized__"
@@ -57,22 +60,24 @@ export const LUCIDE_PRESETS: { key: string; Icon: LucideIcon; label: string }[] 
 ]
 
 /**
- * Morandi low-saturation palette — pairs with ink green (#1A5E3D)
- * while staying distinguishable from each other.
+ * Folder / node-group Lucide tints — clear hues, medium chroma.
+ *
+ * Need to read at ~16px: distinct hues + enough saturation (not gray sludge).
+ * Still below neon; brand green stays one option among a full ring.
  */
 export const ICON_COLORS = [
-  "#7A9A88", // sage green (near brand, softer)
-  "#7D93A8", // dusty blue-slate
-  "#9A8BA8", // muted mauve
-  "#B5A48A", // warm sand / taupe
-  "#B08A88", // dusty rose
-  "#7E9B98", // muted teal-gray
-  "#A39B90", // warm stone
-  "#8E9AAB", // cool slate
+  "#1A5E3D", // brand forest (--pm-green)
+  "#2A8A9A", // teal
+  "#3B6FBF", // blue
+  "#7B5CB8", // violet
+  "#C45A6A", // rose
+  "#D07A30", // orange
+  "#C4A020", // gold
+  "#3D8B5A", // leaf green (lighter than brand)
 ]
 
-/** Default Morandi color for new lucide icons. */
-export const DEFAULT_ICON_COLOR = ICON_COLORS[0]
+/** Default for new lucide icons — leaf green, clearer than muted teal-gray. */
+export const DEFAULT_ICON_COLOR = ICON_COLORS[7]
 
 const LUCIDE_MAP: Record<string, LucideIcon> = Object.fromEntries(
   LUCIDE_PRESETS.map((p) => [p.key, p.Icon])
@@ -317,7 +322,7 @@ export function buildIconPayload(state: IconPickerState): {
   }
 }
 
-/** Shared icon picker UI (groups + plain folders). */
+/** Shared icon picker UI (groups + plain folders) — Premium soft chrome. */
 export function IconPickerPanel({
   iconMode,
   iconKey,
@@ -338,23 +343,19 @@ export function IconPickerPanel({
   onSymbol: (s: string) => void
 }) {
   return (
-    <div>
-      <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1.5">
-        Icon
-      </label>
-      <div className="space-y-2">
-        <div className="grid grid-cols-8 gap-1">
-          {LUCIDE_PRESETS.map((p) => (
+    <div className="pm-group-icon-picker">
+      <div className="pm-group-icon-grid" role="listbox" aria-label="Icon">
+        {LUCIDE_PRESETS.map((p) => {
+          const on = iconMode === "lucide" && iconKey === p.key
+          return (
             <button
               key={p.key}
               type="button"
+              role="option"
               title={p.label}
-              className={cn(
-                "h-8 w-8 rounded border flex items-center justify-center transition-colors",
-                iconMode === "lucide" && iconKey === p.key
-                  ? "border-primary bg-primary/10 ring-1 ring-primary/30"
-                  : "border-border hover:bg-muted/40"
-              )}
+              aria-selected={on}
+              aria-pressed={on}
+              className={cn("pm-group-icon-cell", on && "is-on")}
               onClick={() => {
                 onIconMode("lucide")
                 onIconKey(p.key)
@@ -363,48 +364,62 @@ export function IconPickerPanel({
             >
               <p.Icon
                 className="h-3.5 w-3.5 transition-colors"
+                strokeWidth={1.6}
                 style={{ color: iconColor }}
               />
             </button>
-          ))}
+          )
+        })}
+      </div>
+
+      {/* COLOR label + jelly bars on one row; track pads so select rings aren’t clipped */}
+      <div className="pm-group-swatch-row">
+        <span className="pm-group-swatch-label">Color</span>
+        <div className="pm-group-swatch-track" role="listbox" aria-label="Color">
+          {ICON_COLORS.map((c) => {
+            const on = iconColor.toLowerCase() === c.toLowerCase()
+            return (
+              <button
+                key={c}
+                type="button"
+                role="option"
+                className={cn("pm-group-swatch", on && "is-on")}
+                style={{
+                  background: c,
+                  ["--pm-swatch" as string]: c,
+                }}
+                onClick={() => {
+                  onIconColor(c)
+                  onIconMode(
+                    iconMode === "emoji" && !symbol ? "lucide" : iconMode
+                  )
+                }}
+                title={c}
+                aria-label={`Color ${c}`}
+                aria-selected={on}
+                aria-pressed={on}
+              />
+            )
+          })}
         </div>
-        <div className="flex gap-1.5 flex-wrap items-center">
-          <span className="text-[10px] text-muted-foreground/60 mr-0.5">Color</span>
-          {ICON_COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className={cn(
-                "h-5 w-5 rounded-full border-2 transition-transform",
-                iconColor === c
-                  ? "border-foreground scale-110"
-                  : "border-transparent hover:scale-105"
-              )}
-              style={{ background: c }}
-              onClick={() => {
-                onIconColor(c)
-                onIconMode(iconMode === "emoji" && !symbol ? "lucide" : iconMode)
-              }}
-              title={c}
-            />
-          ))}
-        </div>
-        <div>
-          <label className="text-[10px] text-muted-foreground/60 block mb-1">
-            Custom
-          </label>
-          <input
-            className="w-full text-sm border rounded px-2 py-1.5 bg-background"
-            value={symbol}
-            onChange={(e) => {
-              const next = limitSymbolInput(e.target.value)
-              onSymbol(next)
-              if (next) onIconMode("emoji")
-              else onIconMode("lucide")
-            }}
-            placeholder="Custom icon"
-          />
-        </div>
+      </div>
+
+      <div className="pm-group-custom-field">
+        <label className="pm-field-label" htmlFor="pm-group-custom-icon">
+          Custom symbol
+        </label>
+        <input
+          id="pm-group-custom-icon"
+          className="pm-field w-full"
+          value={symbol}
+          onChange={(e) => {
+            const next = limitSymbolInput(e.target.value)
+            onSymbol(next)
+            if (next) onIconMode("emoji")
+            else onIconMode("lucide")
+          }}
+          placeholder="Optional emoji"
+        />
       </div>
     </div>
   )
