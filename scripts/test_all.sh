@@ -22,16 +22,17 @@ echo "Unit tests: PASS"
 
 # ── Docker build ───────────────────────────────────────
 echo ""
-echo ">>> Docker compose build"
-docker compose build app 2>&1 | tail -3
+echo ">>> Docker compose build (from source)"
+COMPOSE_BUILD=(docker compose -f docker-compose.build.yml)
+"${COMPOSE_BUILD[@]}" build app 2>&1 | tail -3
 
 # ── E2E tests (needs running server) ───────────────────
 if [ "${1:-}" = "--e2e" ]; then
     echo ""
     echo ">>> Starting services for E2E..."
-    docker compose up -d qdrant
+    "${COMPOSE_BUILD[@]}" up -d qdrant
     sleep 3
-    docker compose up -d app
+    "${COMPOSE_BUILD[@]}" up -d app
     sleep 8
 
     echo ""
@@ -44,7 +45,7 @@ if [ "${1:-}" = "--e2e" ]; then
 
     echo ""
     echo ">>> Stopping services"
-    docker compose down
+    "${COMPOSE_BUILD[@]}" down
 fi
 
 echo ""

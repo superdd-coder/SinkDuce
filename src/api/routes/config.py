@@ -1322,23 +1322,29 @@ def get_models_state():
 
 @router.post("/models/download")
 def start_model_download(body: dict = Body(default={})):
-    """Start downloading models in the background.
+    """Start downloading local ONNX ASR packs from the GitHub Release (background).
 
-    Body: {"hf_token": "hf_xxx", "model_ids": ["llm", "embedding"]} or {} for all
+    Body: ``{"model_ids": ["transcription", "realtime"]}`` or ``{}`` for full pack.
+    ``hf_token`` is accepted for backward compatibility and ignored — there is no
+    HuggingFace fallback; only the official release zip is used.
     """
     from src.models.download import download_model, start_download_all
 
-    hf_token = body.get("hf_token")
     model_ids = body.get("model_ids")
+    # hf_token intentionally ignored (API compat only)
 
     if model_ids:
-        for mid in model_ids:
-            t = threading.Thread(target=download_model, args=(mid, hf_token), daemon=True)
-            t.start()
+        # One background job is enough — package download is serialized internally
+        first = model_ids[0]
+        t = threading.Thread(target=download_model, args=(first, None), daemon=True)
+        t.start()
     else:
-        start_download_all(hf_token)
+        start_download_all(None)
 
-    return {"success": True, "message": "Download started"}
+    return {
+        "success": True,
+        "message": "Download started (GitHub Release ONNX pack)",
+    }
 
 
 # Map download-registry model ids → built-in provider that must be unloaded

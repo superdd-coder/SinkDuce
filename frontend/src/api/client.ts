@@ -305,10 +305,11 @@ export interface ModelStatus {
 export const getModelStatus = () =>
   request<ModelStatus[]>("/models/status")
 
-export const downloadModels = (hf_token?: string, model_ids?: string[]) =>
+/** Download ONNX ASR packs from the official GitHub Release (no HuggingFace). */
+export const downloadModels = (model_ids?: string[]) =>
   request<{ success: boolean; message?: string }>("/models/download", {
     method: "POST",
-    body: JSON.stringify({ hf_token, model_ids }),
+    body: JSON.stringify({ model_ids }),
   })
 
 export const deleteLocalModel = (model_id: string) =>

@@ -8,9 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { FieldLabel } from "@/components/ui/field-label"
-import { Download, Loader2, Check, AlertCircle, Eye, EyeOff } from "lucide-react"
+import { Download, Loader2, Check, AlertCircle } from "lucide-react"
 import { getModelStatus, downloadModels, type ModelStatus } from "@/api/client"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -26,13 +24,15 @@ const BUNDLES: BundleDef[] = [
   {
     id: "file",
     label: "File Transcription (ONNX)",
-    description: "SenseVoice int8 ONNX + FSMN-VAD + CT-Punc + CAM++ (export quant on first load)",
+    description:
+      "SenseVoice int8 + FSMN-VAD + CT-Punc + CAM++ — from GitHub Release onnx-models pack",
     modelIds: ["transcription", "vad", "speaker", "punc"],
   },
   {
     id: "realtime",
     label: "Real-time Transcription (ONNX)",
-    description: "Paraformer Streaming — exported to ONNX on first load",
+    description:
+      "Paraformer Streaming int8 — same GitHub Release pack (full zip installs both)",
     modelIds: ["realtime"],
   },
 ]
@@ -46,8 +46,6 @@ interface ModelDownloadDialogProps {
 export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDownloadDialogProps) {
   const [models, setModels] = useState<ModelStatus[]>([])
   const [loading, setLoading] = useState(true)
-  const [hfToken, setHfToken] = useState("")
-  const [showToken, setShowToken] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [selectedBundles, setSelectedBundles] = useState<Set<string>>(new Set())
 
@@ -154,8 +152,9 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
     setDownloading(true)
     try {
       const ids = Array.from(selectedModelIds)
-      await downloadModels(hfToken || undefined, ids.length > 0 ? ids : undefined)
-      toast.info("Download started...")
+      // Backend always pulls the full GitHub Release zip (no HF fallback).
+      await downloadModels(ids.length > 0 ? ids : undefined)
+      toast.info("Downloading ONNX pack from GitHub Release…")
     } catch {
       toast.error("Failed to start download")
       setDownloading(false)
@@ -203,30 +202,11 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
             <div className="pm-settings-dlg-scroll">
               <div className="pm-dialog-body pm-settings-dlg-body">
                 <section className="pm-settings-dlg-card">
-                  <span className="pm-settings-dlg-card-kicker">Authentication</span>
-                  <div className="pm-settings-dlg-field">
-                    <FieldLabel>HuggingFace token</FieldLabel>
-                    <p className="pm-settings-dlg-card-hint mb-1.5">
-                      Optional. Some models need a token from huggingface.co/settings/tokens
-                    </p>
-                    <div className="pm-settings-dlg-secret">
-                      <Input
-                        type={showToken ? "text" : "password"}
-                        value={hfToken}
-                        onChange={(e) => setHfToken(e.target.value)}
-                        placeholder="hf_xxxxx"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="pm-settings-dlg-secret-btn"
-                        onClick={() => setShowToken(!showToken)}
-                      >
-                        {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                  </div>
+                  <span className="pm-settings-dlg-card-kicker">Source</span>
+                  <p className="pm-settings-dlg-card-hint">
+                    Models install only from the official GitHub Release
+                    (onnx-models pack). There is no HuggingFace fallback.
+                  </p>
                 </section>
 
                 <section className="pm-settings-dlg-card">

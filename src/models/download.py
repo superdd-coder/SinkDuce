@@ -1,11 +1,27 @@
-"""Unified model download manager for all local models."""
+"""Local ONNX ASR model manager — download **only** from GitHub Releases.
+
+No HuggingFace / ModelScope fallback. The app pulls the pre-exported pack:
+
+  https://github.com/<repo>/releases/download/onnx-models-v<ver>/sinkduce-onnx-models-v<ver>.zip
+
+and extracts into ``HF_HOME/onnx/<pack>/`` (default ``data/models/onnx/``).
+
+Env overrides (tests / air-gapped mirrors):
+  SINKDUCE_ONNX_MODELS_VERSION  default ``1.0.0``
+  SINKDUCE_ONNX_MODELS_REPO     default ``superdd-coder/SinkDuce``
+  SINKDUCE_ONNX_MODELS_URL      full zip URL (skips repo/version construction)
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 import shutil
+import tempfile
 import threading
+import urllib.error
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,30 +29,60 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Model registry
+# Release package (single source of truth)
+# ---------------------------------------------------------------------------
+
+DEFAULT_ONNX_MODELS_VERSION = "1.0.0"
+DEFAULT_ONNX_MODELS_REPO = "superdd-coder/SinkDuce"
+
+
+def onnx_models_version() -> str:
+    return (os.environ.get("SINKDUCE_ONNX_MODELS_VERSION") or DEFAULT_ONNX_MODELS_VERSION).strip()
+
+
+def onnx_models_repo() -> str:
+    return (os.environ.get("SINKDUCE_ONNX_MODELS_REPO") or DEFAULT_ONNX_MODELS_REPO).strip()
+
+
+def onnx_release_zip_name(version: str | None = None) -> str:
+    ver = version or onnx_models_version()
+    return f"sinkduce-onnx-models-v{ver}.zip"
+
+
+def onnx_release_zip_url() -> str:
+    """URL of the GitHub Release asset. No alternate mirrors."""
+    override = (os.environ.get("SINKDUCE_ONNX_MODELS_URL") or "").strip()
+    if override:
+        return override
+    ver = onnx_models_version()
+    repo = onnx_models_repo()
+    name = onnx_release_zip_name(ver)
+    return f"https://github.com/{repo}/releases/download/onnx-models-v{ver}/{name}"
+
+
+# ---------------------------------------------------------------------------
+# Model registry (status UI / readiness per pack)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ModelInfo:
     id: str
     display_name: str
-    source: str  # "hf"
-    repo_id: str  # HuggingFace repo id or ModelScope model id
-    category: str  # "llm", "embedding", "reranker", "transcription"
-    size_mb: int  # approximate size in MB
+    source: str  # always "github" for ONNX ASR packs
+    repo_id: str  # logical HF-style id → onnx folder name (slash → --)
+    category: str
+    size_mb: int
 
 
 LOCAL_MODELS: list[ModelInfo] = [
-    # size_mb ≈ ONNX int8 pack size (not original .pt)
-    ModelInfo("transcription", "SenseVoiceSmall (ONNX int8)", "hf", "FunAudioLLM/SenseVoiceSmall", "transcription", 240),
-    ModelInfo("vad", "FSMN-VAD (ONNX int8)", "hf", "funasr/fsmn-vad", "transcription", 1),
-    ModelInfo("speaker", "CAM++ Speaker (ONNX)", "hf", "funasr/campplus", "transcription", 30),
-    ModelInfo("punc", "CT-Punc (ONNX int8)", "hf", "funasr/ct-punc", "transcription", 280),
-    ModelInfo("realtime", "Paraformer Streaming (ONNX int8)", "hf", "funasr/paraformer-zh-streaming", "transcription", 230),
+    # size_mb ≈ ONNX int8 pack size inside the release zip
+    ModelInfo("transcription", "SenseVoiceSmall (ONNX int8)", "github", "FunAudioLLM/SenseVoiceSmall", "transcription", 240),
+    ModelInfo("vad", "FSMN-VAD (ONNX int8)", "github", "funasr/fsmn-vad", "transcription", 1),
+    ModelInfo("speaker", "CAM++ Speaker (ONNX)", "github", "funasr/campplus", "transcription", 30),
+    ModelInfo("punc", "CT-Punc (ONNX int8)", "github", "funasr/ct-punc", "transcription", 280),
+    ModelInfo("realtime", "Paraformer Streaming (ONNX int8)", "github", "funasr/paraformer-zh-streaming", "transcription", 230),
 ]
 
-# Transcription models are considered ready when the ONNX pack exists under
-# ``HF_HOME/onnx/<repo--name>/`` (preferred). Legacy HF hub .pt is optional.
 _TRANSCRIPTION_ONNX_IDS = frozenset(
     {"transcription", "vad", "speaker", "punc", "realtime"}
 )
@@ -47,16 +93,12 @@ _TRANSCRIPTION_ONNX_IDS = frozenset(
 
 _download_lock = threading.Lock()
 _download_progress: dict[str, dict[str, Any]] = {}  # model_id -> {status, progress, message}
+_package_lock = threading.Lock()
+_package_active = False
 
 
 def _hf_home() -> Path:
     return Path(os.environ.get("HF_HOME", "data/models"))
-
-
-def _get_model_dir(model: ModelInfo) -> Path:
-    """Return the expected HF hub directory for a downloaded model (legacy .pt)."""
-    safe_name = model.repo_id.replace("/", "--")
-    return _hf_home() / "hub" / f"models--{safe_name}"
 
 
 def _get_onnx_dir(model: ModelInfo) -> Path:
@@ -65,29 +107,25 @@ def _get_onnx_dir(model: ModelInfo) -> Path:
     return _hf_home() / "onnx" / safe_name
 
 
-def _has_config(d: Path) -> bool:
-    """Check if a directory has a model config file (any of the common formats)."""
-    for name in ("config.json", "config.yaml", "configuration.json", "model_config.json", "vad.yaml"):
-        if (d / name).exists():
-            return True
-    return False
+def _get_model_dir(model: ModelInfo) -> Path:
+    """Legacy HF hub path (only used for cleanup of old installs)."""
+    safe_name = model.repo_id.replace("/", "--")
+    return _hf_home() / "hub" / f"models--{safe_name}"
 
 
 def _is_onnx_ready(model: ModelInfo) -> bool:
-    """True if ``data/models/onnx/<repo>/`` has the artifacts we need to load."""
+    """True if ``HF_HOME/onnx/<repo>/`` has the artifacts we need to load."""
     d = _get_onnx_dir(model)
     if not d.is_dir():
         return False
 
     mid = model.id
     if mid == "realtime":
-        # Streaming Paraformer: encoder + decoder (prefer int8)
         has_enc = (d / "model_quant.onnx").is_file() or (d / "model.onnx").is_file()
         has_dec = (d / "decoder_quant.onnx").is_file() or (d / "decoder.onnx").is_file()
         return has_enc and has_dec
 
     if mid == "speaker":
-        # Any reasonably large embedding onnx
         for f in d.glob("*.onnx"):
             try:
                 if f.is_file() and f.stat().st_size > 1_000_000:
@@ -97,10 +135,8 @@ def _is_onnx_ready(model: ModelInfo) -> bool:
         return False
 
     if mid == "vad":
-        # VAD int8 can be < 1MB; allow smaller threshold
         return (d / "model_quant.onnx").is_file() or (d / "model.onnx").is_file()
 
-    # SenseVoice / punc: prefer int8 quant graph
     if (d / "model_quant.onnx").is_file():
         try:
             return d.joinpath("model_quant.onnx").stat().st_size > 100_000
@@ -114,78 +150,23 @@ def _is_onnx_ready(model: ModelInfo) -> bool:
     return False
 
 
-def _is_hub_ready(model: ModelInfo) -> bool:
-    """Legacy: HuggingFace hub snapshot with .pt / .bin weights."""
-    d = _get_model_dir(model)
-    if not d.exists():
-        return False
-
-    min_file_size = max(100_000, min(500_000, (model.size_mb * 1_000_000) // 20))
-    snaps = d / "snapshots"
-    if snaps.exists():
-        for s in snaps.iterdir():
-            if not s.is_dir():
-                continue
-            if not _has_config(s) and not any(s.glob("*.pt")) and not any(s.glob("*.bin")):
-                continue
-            for f in s.iterdir():
-                if not f.is_file():
-                    continue
-                try:
-                    sz = f.stat().st_size
-                except OSError:
-                    continue
-                if sz < min_file_size:
-                    continue
-                if f.suffix == ".safetensors" and _is_valid_safetensors(f):
-                    return True
-                if f.suffix in (".bin", ".pt", ".onnx"):
-                    return True
-    if _has_config(d):
-        for ext in ("*.safetensors", "*.bin", "*.pt", "*.onnx"):
-            for f in d.glob(ext):
-                try:
-                    if f.is_file() and f.stat().st_size > min_file_size:
-                        return True
-                except OSError:
-                    continue
-    return False
-
-
 def _is_downloaded(model: ModelInfo) -> bool:
-    """Check if a model is ready on disk.
-
-    Transcription packs: prefer ONNX under ``HF_HOME/onnx/``.
-    Other categories: HF hub cache as before.
-    """
-    if model.id in _TRANSCRIPTION_ONNX_IDS or model.category == "transcription":
-        if _is_onnx_ready(model):
-            return True
-        # Fall back to hub only for non-default workflows (legacy pytorch adapters)
-        return _is_hub_ready(model)
-
-    return _is_hub_ready(model)
+    """Ready only when the ONNX pack is on disk — no hub/.pt fallback."""
+    return _is_onnx_ready(model)
 
 
-def _is_valid_safetensors(path: Path) -> bool:
-    """Quick check that a safetensors file is not truncated."""
-    try:
-        with open(path, "rb") as f:
-            # safetensors files start with a JSON header length (8 bytes LE)
-            header_len_bytes = f.read(8)
-            if len(header_len_bytes) < 8:
-                return False
-            import struct
-            header_len = struct.unpack("<Q", header_len_bytes)[0]
-            # Sanity: header should be between 64 bytes and 10MB
-            if header_len < 64 or header_len > 10_000_000:
-                return False
-            header_bytes = f.read(header_len)
-            if len(header_bytes) < header_len:
-                return False
-        return True
-    except Exception:
-        return False
+def _set_progress(model_ids: list[str], status: str, progress: int, message: str) -> None:
+    with _download_lock:
+        for mid in model_ids:
+            _download_progress[mid] = {
+                "status": status,
+                "progress": progress,
+                "message": message,
+            }
+
+
+def _all_model_ids() -> list[str]:
+    return [m.id for m in LOCAL_MODELS]
 
 
 # ---------------------------------------------------------------------------
@@ -193,12 +174,11 @@ def _is_valid_safetensors(path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 def check_models_status() -> list[dict[str, Any]]:
-    """Return status of all local models based on actual file presence."""
+    """Return status of all local models based on ONNX pack presence."""
     result = []
     for m in LOCAL_MODELS:
         downloaded = _is_downloaded(m)
         progress_info = _download_progress.get(m.id, {})
-        # Always trust actual file state over cached progress
         if downloaded:
             status = "downloaded"
             progress = 100
@@ -232,7 +212,11 @@ def check_models_status() -> list[dict[str, Any]]:
 
 
 def download_model(model_id: str, hf_token: str | None = None) -> None:
-    """Download a single model. Called in a background thread."""
+    """Ensure the GitHub Release ONNX pack is installed (covers this model).
+
+    ``hf_token`` is accepted for API compatibility and **ignored**.
+    """
+    del hf_token  # no HuggingFace path
     model = next((m for m in LOCAL_MODELS if m.id == model_id), None)
     if not model:
         logger.error("Unknown model: %s", model_id)
@@ -240,37 +224,29 @@ def download_model(model_id: str, hf_token: str | None = None) -> None:
 
     if _is_downloaded(model):
         with _download_lock:
-            _download_progress[model_id] = {"status": "done", "progress": 100, "message": f"{model.display_name} already downloaded"}
+            _download_progress[model_id] = {
+                "status": "done",
+                "progress": 100,
+                "message": f"{model.display_name} already downloaded",
+            }
         logger.info("Model already downloaded: %s", model.display_name)
         return
 
-    with _download_lock:
-        _download_progress[model_id] = {"status": "downloading", "progress": 0, "message": f"Downloading {model.display_name}..."}
-
-    try:
-        _download_hf(model, hf_token)
-
-        # Verify download completed successfully
-        if _is_downloaded(model):
-            _download_progress[model_id] = {"status": "done", "progress": 100, "message": f"{model.display_name} downloaded"}
-            logger.info("Model downloaded: %s", model.display_name)
-        else:
-            _download_progress[model_id] = {"status": "error", "progress": 0, "message": "Download completed but model files not found"}
-            logger.error("Model download appeared to succeed but files missing: %s", model.display_name)
-    except Exception as e:
-        _download_progress[model_id] = {"status": "error", "progress": 0, "message": str(e)}
-        logger.error("Failed to download %s: %s", model.display_name, e)
+    _download_onnx_release_package(requested_ids=[model_id])
 
 
 def download_all(hf_token: str | None = None) -> None:
-    """Download all missing models sequentially."""
-    for m in LOCAL_MODELS:
-        if not _is_downloaded(m):
-            download_model(m.id, hf_token)
+    """Download the full ONNX release package if any pack is missing."""
+    del hf_token
+    missing = [m.id for m in LOCAL_MODELS if not _is_downloaded(m)]
+    if not missing:
+        logger.info("All ONNX packs already present")
+        return
+    _download_onnx_release_package(requested_ids=missing)
 
 
 def start_download_all(hf_token: str | None = None) -> None:
-    """Start downloading all missing models in a background thread."""
+    """Start package download in a background thread."""
     t = threading.Thread(target=download_all, args=(hf_token,), daemon=True)
     t.start()
 
@@ -292,10 +268,7 @@ def _dir_size_mb(path: Path) -> float:
 
 
 def delete_model(model_id: str) -> dict[str, Any]:
-    """Delete local model packs (ONNX first, then legacy HF hub).
-
-    Removes ``HF_HOME/onnx/<repo>`` and ``HF_HOME/hub/models--{repo}``.
-    """
+    """Delete local ONNX pack (and leftover hub cache if any)."""
     model = next((m for m in LOCAL_MODELS if m.id == model_id), None)
     if not model:
         return {"success": False, "error": f"Unknown model: {model_id}"}
@@ -345,38 +318,116 @@ def delete_models(model_ids: list[str]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Internal download functions
+# GitHub Release download (only path)
 # ---------------------------------------------------------------------------
 
-def _download_hf(model: ModelInfo, hf_token: str | None = None) -> None:
-    """Download a model from HuggingFace Hub to the standard cache layout."""
-    from huggingface_hub import snapshot_download
+def _download_onnx_release_package(requested_ids: list[str] | None = None) -> None:
+    """Download + extract the release zip. Fail hard if anything goes wrong."""
+    global _package_active
 
-    logger.info("Downloading HF model: %s", model.repo_id)
+    track_ids = list(requested_ids) if requested_ids else _all_model_ids()
+    # Progress is shown on every pack in the registry (zip always installs all)
+    progress_ids = _all_model_ids()
 
-    def _update_progress(pct: int, msg: str):
-        with _download_lock:
-            _download_progress[model.id] = {
-                "status": "downloading",
-                "progress": pct,
-                "message": msg,
-            }
+    with _package_lock:
+        if _package_active:
+            logger.info("ONNX release download already in progress; skip concurrent start")
+            return
+        # Re-check under lock
+        still_missing = [mid for mid in track_ids if not _is_downloaded(
+            next(m for m in LOCAL_MODELS if m.id == mid)
+        )]
+        if not still_missing and all(_is_downloaded(m) for m in LOCAL_MODELS):
+            _set_progress(progress_ids, "done", 100, "Already downloaded")
+            return
+        _package_active = True
 
-    _update_progress(1, f"Downloading {model.display_name}...")
+    url = onnx_release_zip_url()
+    dest_home = _hf_home()
+    dest_home.mkdir(parents=True, exist_ok=True)
+    ver = onnx_models_version()
 
     try:
-        snapshot_download(
-            repo_id=model.repo_id,
-            token=hf_token or None,
-            resume_download=True,
+        _set_progress(
+            progress_ids,
+            "downloading",
+            1,
+            f"Downloading ONNX models v{ver} from GitHub Release...",
         )
+        logger.info("Downloading ONNX models from %s", url)
+
+        with tempfile.TemporaryDirectory(prefix="sinkduce-onnx-") as tmp:
+            tmp_path = Path(tmp)
+            zip_path = tmp_path / onnx_release_zip_name()
+
+            def _hook(block_num: int, block_size: int, total_size: int) -> None:
+                if total_size <= 0:
+                    return
+                downloaded = min(block_num * block_size, total_size)
+                # Reserve 0–85% for network, 85–100% for extract/verify
+                pct = int(85 * downloaded / total_size)
+                pct = max(1, min(85, pct))
+                mb = downloaded / 1_000_000
+                total_mb = total_size / 1_000_000
+                _set_progress(
+                    progress_ids,
+                    "downloading",
+                    pct,
+                    f"Downloading ONNX pack… {mb:.0f}/{total_mb:.0f} MB",
+                )
+
+            try:
+                urllib.request.urlretrieve(url, zip_path, reporthook=_hook)  # noqa: S310 — fixed release URL
+            except urllib.error.HTTPError as e:
+                raise RuntimeError(
+                    f"GitHub Release download failed HTTP {e.code} for {url}. "
+                    f"Publish onnx-models-v{ver} with asset {onnx_release_zip_name()}."
+                ) from e
+            except urllib.error.URLError as e:
+                raise RuntimeError(
+                    f"GitHub Release download failed for {url}: {e.reason}"
+                ) from e
+
+            if not zip_path.is_file() or zip_path.stat().st_size < 32:
+                raise RuntimeError(f"Downloaded file missing or empty: {zip_path}")
+
+            _set_progress(progress_ids, "downloading", 88, "Extracting ONNX packs...")
+            _extract_onnx_zip(zip_path, dest_home)
+
+        _set_progress(progress_ids, "downloading", 95, "Verifying ONNX packs...")
+        missing = [m.display_name for m in LOCAL_MODELS if not _is_downloaded(m)]
+        if missing:
+            raise RuntimeError(
+                "Release zip extracted but packs incomplete: " + ", ".join(missing)
+            )
+
+        _set_progress(progress_ids, "done", 100, f"ONNX models v{ver} installed")
+        logger.info("ONNX models v%s installed under %s/onnx", ver, dest_home)
+
     except Exception as e:
-        with _download_lock:
-            _download_progress[model.id] = {
-                "status": "error",
-                "progress": 0,
-                "message": str(e),
-            }
+        msg = str(e)
+        logger.error("ONNX release install failed: %s", msg)
+        _set_progress(progress_ids, "error", 0, msg)
         raise
+    finally:
+        with _package_lock:
+            _package_active = False
 
 
+def _extract_onnx_zip(zip_path: Path, dest_home: Path) -> None:
+    """Extract release zip so ``dest_home/onnx/<pack>/`` exists.
+
+    Archive root must be ``onnx/`` (as produced by package_onnx_release.sh).
+    """
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        names = zf.namelist()
+        if not any(n.replace("\\", "/").startswith("onnx/") for n in names):
+            raise RuntimeError(
+                "Invalid ONNX release zip: expected top-level 'onnx/' directory"
+            )
+        # Safety: refuse path traversal
+        for info in zf.infolist():
+            name = info.filename.replace("\\", "/")
+            if name.startswith("/") or ".." in name.split("/"):
+                raise RuntimeError(f"Unsafe path in zip: {info.filename}")
+        zf.extractall(dest_home)

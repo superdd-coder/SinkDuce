@@ -28,6 +28,10 @@ coverage/
 htmlcov/
 .coverage
 
+# Local ONNX model packaging output (large binaries — publish via GitHub Release only)
+# Layout: model_release/v<ver>/sinkduce-onnx-models-v<ver>.zip (+ sha256 / MANIFEST / notes)
+model_release/
+
 # Node
 frontend/node_modules/
 frontend/dist/

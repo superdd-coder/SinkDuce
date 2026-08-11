@@ -88,7 +88,6 @@ def test_is_downloaded_prefers_onnx_pack(tmp_path, monkeypatch):
     (onnx_dir / "config.yaml").write_text("x: 1\n")
     assert dl._is_onnx_ready(model) is True
     assert dl._is_downloaded(model) is True
-    assert dl._is_hub_ready(model) is False
 
 
 def test_resample_mono_linear_identity():
