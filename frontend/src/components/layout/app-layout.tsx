@@ -11,11 +11,9 @@ import { RecallView } from "@/components/recall/recall-view"
 import { LLMProviderView } from "@/components/llm-provider/llm-provider-view"
 import { MeetingView } from "@/components/meeting/meeting-view"
 import { ModelDownloadDialog } from "@/components/model-download-dialog"
-import { getModelStatus, getSetupStatus, markSetupComplete, type ModelStatus } from "@/api/client"
+import { getModelStatus, type ModelStatus } from "@/api/client"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
-
-const DISMISSED_KEY = "model-download-dismissed"
 
 type ViewProps = { active: boolean }
 
@@ -96,83 +94,78 @@ export function AppLayout() {
     return () => window.clearTimeout(t)
   }, [sidebarView, displayView])
 
-  // Check on startup
+  // Never auto-open download UI on first deploy. Only resume a minimized chip
+  // if a download is already running (started from Settings).
   useEffect(() => {
-    const dismissed = localStorage.getItem(DISMISSED_KEY)
-    Promise.all([getModelStatus(), getSetupStatus().catch(() => ({ setup_completed: true, models: [], categories: [] }))])
-      .then(([m, setup]) => {
+    getModelStatus()
+      .then((m) => {
         setModels(m)
-        const hasMissing = m.some((x) => !x.downloaded)
-        const hasActive = m.some((x) => x.status === "downloading")
-        const shouldShowSetup = !setup.setup_completed && hasMissing
-        if (hasActive) {
+        if (
+          m.some(
+            (x) => x.status === "downloading" || x.status === "extracting"
+          )
+        ) {
           setIsDownloading(true)
           setMinimized(true)
-        } else if (shouldShowSetup || (hasMissing && !dismissed)) {
-          setDownloadDialogOpen(true)
         }
       })
       .catch(() => {})
   }, [])
 
-  // Poll while downloading
+  // Poll while a background download is minimized
   useEffect(() => {
     if (!isDownloading) return
     const interval = setInterval(async () => {
       try {
         const m = await getModelStatus()
         setModels(m)
-        const stillDownloading = m.some((x) => x.status === "downloading")
+        const stillDownloading = m.some(
+          (x) => x.status === "downloading" || x.status === "extracting"
+        )
         if (!stillDownloading) {
           setIsDownloading(false)
+          setMinimized(false)
           const allDone = m.every((x) => x.downloaded)
           if (allDone) {
             toast.success("All models downloaded!")
-            setMinimized(false)
-            setDownloadDialogOpen(true) // Show completion state
           } else {
             const errors = m.filter((x) => x.status === "error")
             if (errors.length > 0) {
-              toast.error(`Download failed: ${errors.map(e => e.display_name).join(", ")}`)
+              toast.error(
+                `Download failed: ${errors.map((e) => e.display_name).join(", ")}`
+              )
             }
-            setMinimized(false)
-            setDownloadDialogOpen(true)
           }
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }, 3000)
     return () => clearInterval(interval)
   }, [isDownloading])
 
-  const handleDialogClose = useCallback((open: boolean) => {
-    if (!open) {
-      const hasActive = models.some((x) => x.status === "downloading")
-      if (hasActive) {
-        // Minimize instead of closing
-        setMinimized(true)
-        setIsDownloading(true)
-        setDownloadDialogOpen(false)
-        return
+  const handleDialogClose = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        const hasActive = models.some(
+          (x) => x.status === "downloading" || x.status === "extracting"
+        )
+        if (hasActive) {
+          setMinimized(true)
+          setIsDownloading(true)
+          setDownloadDialogOpen(false)
+          return
+        }
       }
-      // Mark as dismissed so it doesn't re-appear on refresh
-      localStorage.setItem(DISMISSED_KEY, "true")
-    }
-    setDownloadDialogOpen(open)
-  }, [models])
+      setDownloadDialogOpen(open)
+    },
+    [models]
+  )
 
   const handleComplete = useCallback(() => {
-    localStorage.setItem(DISMISSED_KEY, "true")
-    markSetupComplete().catch(() => {})
     setDownloadDialogOpen(false)
     setMinimized(false)
   }, [])
-
-  // Reset dismissed flag when models change (new missing models)
-  useEffect(() => {
-    if (models.length > 0 && models.every((m) => m.downloaded)) {
-      localStorage.removeItem(DISMISSED_KEY)
-    }
-  }, [models])
 
   const viewEntries = useMemo(
     () => (Object.keys(views) as SidebarView[]).filter((k) => visitedViews.has(k)),

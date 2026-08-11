@@ -9895,6 +9895,152 @@ button.pm-rail-new:hover:not(:disabled) {
   transition: width 200ms ease;
 }
 
+/* Toolbar Download: fixed width; progress fill + soft state morph */
+.pm-settings-dl-btn {
+  --pm-dl-pct: 0%;
+  --pm-dl-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  position: relative;
+  width: 11.5rem;
+  min-width: 11.5rem;
+  max-width: 11.5rem;
+  box-sizing: border-box;
+  overflow: hidden;
+  isolation: isolate;
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+  transition:
+    background-color 0.38s var(--pm-dl-ease),
+    color 0.32s var(--pm-dl-ease),
+    box-shadow 0.32s var(--pm-dl-ease),
+    transform 0.15s var(--pm-dl-ease),
+    opacity 0.28s var(--pm-dl-ease),
+    border-color 0.32s var(--pm-dl-ease);
+}
+
+/* Track + animated fill (width interpolates between poll ticks) */
+.pm-settings-dl-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--pm-dl-pct, 0%);
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: var(--pm-green);
+  background-image: linear-gradient(
+    105deg,
+    transparent 0%,
+    transparent 38%,
+    color-mix(in srgb, #ffffff 26%, transparent) 50%,
+    transparent 62%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  background-position: 140% 0;
+  opacity: 0;
+  transform: scaleX(0.98);
+  transform-origin: left center;
+  transition:
+    width 0.55s var(--pm-dl-ease),
+    opacity 0.4s var(--pm-dl-ease),
+    transform 0.4s var(--pm-dl-ease);
+}
+
+/* Soft edge glow on the leading face of the fill */
+.pm-settings-dl-btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--pm-dl-pct, 0%) - 14px);
+  width: 28px;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, #ffffff 18%, transparent),
+    transparent
+  );
+  opacity: 0;
+  transition:
+    left 0.55s var(--pm-dl-ease),
+    opacity 0.35s var(--pm-dl-ease);
+}
+
+.pm-settings-dl-btn.is-busy {
+  /* Soft track under the green fill — same family as the default button */
+  background-color: color-mix(in srgb, var(--pm-green) 30%, #ffffff) !important;
+  color: var(--pm-on) !important;
+  opacity: 1 !important;
+  cursor: default;
+  pointer-events: none;
+  box-shadow: none;
+}
+
+.pm-settings-dl-btn.is-busy:hover {
+  background-color: color-mix(in srgb, var(--pm-green) 30%, #ffffff) !important;
+}
+
+.pm-settings-dl-btn.is-busy::before {
+  opacity: 1;
+  transform: scaleX(1);
+  animation: pm-dl-flow 1.85s linear infinite;
+}
+
+.pm-settings-dl-btn.is-busy::after {
+  opacity: 1;
+}
+
+.pm-settings-dl-btn-inner {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pm-settings-dl-btn-text {
+  display: inline-block;
+  animation: pm-dl-label-in 0.32s var(--pm-dl-ease) both;
+}
+
+@keyframes pm-dl-flow {
+  0% {
+    background-position: 140% 0;
+  }
+  100% {
+    background-position: -140% 0;
+  }
+}
+
+@keyframes pm-dl-label-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-settings-dl-btn,
+  .pm-settings-dl-btn::before,
+  .pm-settings-dl-btn::after {
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
+  .pm-settings-dl-btn-text {
+    animation: none !important;
+  }
+}
+
 /* Legacy device layout (unused; keep minimal for safety) */
 .pm-settings-adv-device {
   display: flex;

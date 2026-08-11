@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -741,7 +741,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       try {
         const ms = await getModelStatus()
         setLocalModelCatalog(ms)
-        stillDownloading = ms.some((m) => m.status === "downloading")
+        stillDownloading = ms.some(
+          (m) => m.status === "downloading" || m.status === "extracting"
+        )
         const map: Record<string, boolean> = {}
         for (const m of ms) map[m.id] = m.downloaded
         setModelDownloaded({
@@ -769,7 +771,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         const ms = await getModelStatus()
         const states = await getModelState()
         const isLoading = Object.values(states.load_states || {}).some((v) => v === "loading")
-        const isDownloading = ms.some((m) => m.status === "downloading")
+        const isDownloading = ms.some(
+          (m) => m.status === "downloading" || m.status === "extracting"
+        )
         if (isLoading || isDownloading) {
           startPolling(true)
         }
@@ -2031,11 +2035,113 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
                   {/* Local model download management */}
                   <div className="pm-settings-adv-block">
+                    {(() => {
+                      const LOCAL_BUNDLES = [
+                        {
+                          id: "file",
+                          label: "File transcription pack",
+                          description: "SenseVoice + VAD + speaker + punctuation",
+                          modelIds: ["transcription", "vad", "speaker", "punc"] as const,
+                        },
+                        {
+                          id: "realtime",
+                          label: "Realtime transcription",
+                          description: "Paraformer streaming",
+                          modelIds: ["realtime"] as const,
+                        },
+                      ] as const
+                      const allIds = LOCAL_BUNDLES.flatMap((b) => [...b.modelIds])
+                      const allMembers = allIds
+                        .map((id) => localModelCatalog.find((m) => m.id === id))
+                        .filter(Boolean) as ModelStatus[]
+                      const catalogKnown = allMembers.length > 0
+                      const allDone =
+                        catalogKnown && allMembers.every((m) => m.downloaded)
+                      const anyDownloading = allMembers.some(
+                        (m) =>
+                          m.status === "downloading" ||
+                          m.status === "extracting"
+                      )
+                      const anyExtracting = allMembers.some(
+                        (m) => m.status === "extracting"
+                      )
+                      const downloadProgress = Math.max(
+                        0,
+                        ...allMembers
+                          .filter(
+                            (m) =>
+                              m.status === "downloading" ||
+                              m.status === "extracting"
+                          )
+                          .map((m) => Math.round(m.progress || 0)),
+                        0
+                      )
+                      const deletingAll = allIds.some((id) =>
+                        deletingModelIds.has(id)
+                      )
+                      const primaryActionLabel = anyExtracting
+                        ? "Extracting…"
+                        : anyDownloading
+                          ? `Downloading ${downloadProgress}%`
+                          : "Download"
+                      // Only crossfade on semantic phase change — not every % tick
+                      const primaryActionPhase = anyExtracting
+                        ? "extracting"
+                        : anyDownloading
+                          ? "downloading"
+                          : "idle"
+
+                      const handleDeleteAll = async () => {
+                        const ids = [...allIds]
+                        const hasFiles = ids.some((id) => {
+                          const m = localModelCatalog.find((x) => x.id === id)
+                          return m?.downloaded || m?.status === "error"
+                        })
+                        if (!hasFiles) {
+                          toast.message("Nothing to delete")
+                          return
+                        }
+                        if (
+                          !confirm(
+                            "Delete all local FunASR models from disk?\n\n" +
+                              "File and realtime packs will be removed. You can re-download later."
+                          )
+                        ) {
+                          return
+                        }
+                        setDeletingModelIds((prev) => new Set([...prev, ...ids]))
+                        try {
+                          const res = await deleteLocalModels(ids)
+                          if (!res.success) {
+                            toast.error(res.error || "Delete failed")
+                          } else {
+                            const freed = res.freed_mb
+                              ? ` (~${res.freed_mb} MB)`
+                              : ""
+                            toast.success(`Local models deleted${freed}`)
+                          }
+                          await refreshModelDownloaded()
+                          await refreshLoadStates()
+                          fetchFileTransProviders()
+                          fetchRtTransProviders()
+                        } catch (e) {
+                          toast.error(String(e))
+                        } finally {
+                          setDeletingModelIds((prev) => {
+                            const next = new Set(prev)
+                            ids.forEach((id) => next.delete(id))
+                            return next
+                          })
+                        }
+                      }
+
+                      return (
+                        <>
                     <div className="pm-settings-adv-head">
                       <div>
                         <h3 className="pm-settings-subhead">Local model downloads</h3>
                         <p className="pm-settings-adv-desc">
-                          Download and manage FunASR models for offline file and realtime transcription (CPU).
+                          Download FunASR models for offline file and realtime transcription (CPU).
                         </p>
                       </div>
                       <div className="pm-settings-adv-toolbar">
@@ -2050,118 +2156,127 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           <RefreshCw className="h-3.5 w-3.5" />
                           Refresh
                         </Button>
-                        <Button variant="default" size="sm" onClick={() => setModelDownloadOpen(true)}>
-                          <Download className="h-3.5 w-3.5" />
-                          Manage downloads
-                        </Button>
+                        {allDone ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleDeleteAll}
+                            disabled={deletingAll || anyDownloading}
+                          >
+                            {deletingAll ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                            Delete
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            className={cn(
+                              "pm-settings-dl-btn",
+                              anyDownloading && "is-busy"
+                            )}
+                            style={
+                              {
+                                ["--pm-dl-pct" as string]: `${
+                                  anyDownloading
+                                    ? Math.min(
+                                        100,
+                                        Math.max(0, downloadProgress)
+                                      )
+                                    : 0
+                                }%`,
+                              } as CSSProperties
+                            }
+                            onClick={() => {
+                              if (anyDownloading || deletingAll) return
+                              setModelDownloadOpen(true)
+                            }}
+                            disabled={deletingAll}
+                            aria-busy={anyDownloading || undefined}
+                            title={
+                              anyExtracting
+                                ? "Extracting ONNX packs…"
+                                : anyDownloading
+                                  ? `Downloading… ${downloadProgress}%`
+                                  : "Download local models"
+                            }
+                          >
+                            <span className="pm-settings-dl-btn-inner">
+                              {anyDownloading ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Download className="h-3.5 w-3.5" />
+                              )}
+                              <span
+                                className="pm-settings-dl-btn-text"
+                                key={primaryActionPhase}
+                              >
+                                {primaryActionLabel}
+                              </span>
+                            </span>
+                          </Button>
+                        )}
                       </div>
                     </div>
                     <div className="pm-settings-local-model-stack">
-                      {([
-                        {
-                          id: "file",
-                          label: "File transcription pack",
-                          description: "SenseVoice + VAD + speaker + punctuation",
-                          modelIds: ["transcription", "vad", "speaker", "punc"] as const,
-                        },
-                        {
-                          id: "realtime",
-                          label: "Realtime transcription",
-                          description: "Paraformer streaming",
-                          modelIds: ["realtime"] as const,
-                        },
-                      ] as const).map((bundle) => {
+                      {LOCAL_BUNDLES.map((bundle) => {
                         const members = bundle.modelIds
                           .map((id) => localModelCatalog.find((m) => m.id === id))
                           .filter(Boolean) as ModelStatus[]
                         const known = members.length > 0
-                        const allDone = known && members.every((m) => m.downloaded)
-                        const anyDownloaded = members.some((m) => m.downloaded)
-                        const anyDownloading = members.some((m) => m.status === "downloading")
+                        const packDone =
+                          known && members.every((m) => m.downloaded)
+                        const anyPackDownloaded = members.some((m) => m.downloaded)
+                        const anyPackDownloading = members.some(
+                          (m) =>
+                            m.status === "downloading" ||
+                            m.status === "extracting"
+                        )
                         const anyError = members.some((m) => m.status === "error")
-                        const totalMb = members.reduce((s, m) => s + (m.size_mb || 0), 0)
-                        const avgProgress = anyDownloading
-                          ? Math.round(
-                              members
-                                .filter((m) => m.status === "downloading" || m.downloaded)
-                                .reduce((s, m) => s + (m.downloaded ? 100 : m.progress || 0), 0) /
-                                Math.max(members.length, 1),
-                            )
-                          : allDone
-                            ? 100
-                            : 0
+                        const totalMb = members.reduce(
+                          (s, m) => s + (m.size_mb || 0),
+                          0
+                        )
+                        // Progress only on toolbar Download button — cards stay calm
                         const statusLabel = !known
                           ? "Unknown"
-                          : anyDownloading
-                            ? `Downloading ${avgProgress}%`
+                          : anyPackDownloading
+                            ? "In progress"
                             : anyError
                               ? "Error"
-                              : allDone
+                              : packDone
                                 ? "Ready"
-                                : anyDownloaded
+                                : anyPackDownloaded
                                   ? "Partial"
                                   : "Not downloaded"
                         const badgeVariant = anyError
                           ? "destructive"
-                          : allDone
+                          : packDone
                             ? "default"
-                            : anyDownloading
+                            : anyPackDownloading
                               ? "secondary"
                               : "outline"
-                        const bundleBusy = bundle.modelIds.some((id) => deletingModelIds.has(id))
-                        const handleDeleteBundle = async () => {
-                          // Whole pack only — never delete partial components alone
-                          const ids = [...bundle.modelIds]
-                          const hasFiles = ids.some((id) => {
-                            const m = localModelCatalog.find((x) => x.id === id)
-                            return m?.downloaded || m?.status === "error"
-                          })
-                          if (!hasFiles) {
-                            toast.message("Nothing to delete")
-                            return
-                          }
-                          if (
-                            !confirm(
-                              `Delete entire “${bundle.label}” from disk?\n\n` +
-                                `All components in this pack will be removed. You can re-download later.`,
-                            )
-                          ) {
-                            return
-                          }
-                          setDeletingModelIds((prev) => new Set([...prev, ...ids]))
-                          try {
-                            const res = await deleteLocalModels(ids)
-                            if (!res.success) {
-                              toast.error(res.error || "Delete failed")
-                            } else {
-                              const freed = res.freed_mb ? ` (~${res.freed_mb} MB)` : ""
-                              toast.success(`Deleted ${bundle.label}${freed}`)
-                            }
-                            await refreshModelDownloaded()
-                            await refreshLoadStates()
-                            fetchFileTransProviders()
-                            fetchRtTransProviders()
-                          } catch (e) {
-                            toast.error(String(e))
-                          } finally {
-                            setDeletingModelIds((prev) => {
-                              const next = new Set(prev)
-                              ids.forEach((id) => next.delete(id))
-                              return next
-                            })
-                          }
-                        }
                         return (
                           <div key={bundle.id} className="pm-settings-provider-card">
                             <div className="pm-settings-provider-top">
                               <div className="pm-settings-provider-name-row">
-                                <span className="pm-settings-provider-name">{bundle.label}</span>
+                                <span className="pm-settings-provider-name">
+                                  {bundle.label}
+                                </span>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                <Badge variant={badgeVariant as "default" | "secondary" | "destructive" | "outline"}>
-                                  {anyDownloading && (
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                  )}
+                                <Badge
+                                  variant={
+                                    badgeVariant as
+                                      | "default"
+                                      | "secondary"
+                                      | "destructive"
+                                      | "outline"
+                                  }
+                                >
                                   {statusLabel}
                                 </Badge>
                               </div>
@@ -2178,67 +2293,30 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                   <li key={m.id}>
                                     <span>{m.display_name || m.id}</span>
                                     <span className="pm-settings-local-model-part-status">
-                                      {m.status === "downloading"
-                                        ? `${Math.round(m.progress || 0)}%`
-                                        : m.downloaded
-                                          ? "Ready"
-                                          : m.status === "error"
-                                            ? "Error"
+                                      {m.downloaded
+                                        ? "Ready"
+                                        : m.status === "error"
+                                          ? "Error"
+                                          : anyPackDownloading
+                                            ? "…"
                                             : "—"}
                                     </span>
                                   </li>
                                 ))}
                               </ul>
                             )}
-
-                            {anyDownloading && (
-                              <div className="pm-settings-local-model-bar" aria-hidden>
-                                <div
-                                  className="pm-settings-local-model-bar-fill"
-                                  style={{ width: `${Math.min(100, Math.max(0, avgProgress))}%` }}
-                                />
-                              </div>
-                            )}
-
-                            <div className="min-h-[1rem]" />
-
-                            <div className="pm-settings-provider-actions">
-                              {!allDone && (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  onClick={() => setModelDownloadOpen(true)}
-                                  disabled={anyDownloading || bundleBusy}
-                                >
-                                  <Download className="h-3 w-3" />
-                                  Download
-                                </Button>
-                              )}
-                              {anyDownloaded && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={handleDeleteBundle}
-                                  disabled={bundleBusy || anyDownloading}
-                                >
-                                  {bundleBusy ? (
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                  ) : (
-                                    <Trash2 className="h-3 w-3" />
-                                  )}
-                                  Delete pack
-                                </Button>
-                              )}
-                            </div>
                           </div>
                         )
                       })}
                       {localModelCatalog.length === 0 && (
                         <p className="pm-settings-adv-desc" style={{ margin: 0 }}>
-                          Loading model status… or open Manage downloads to check availability.
+                          Loading model status… click Refresh if this stays empty.
                         </p>
                       )}
                     </div>
+                        </>
+                      )
+                    })()}
                   </div>
 
                   {/* Developer mode */}
@@ -2426,6 +2504,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       <ModelDownloadDialog
         open={modelDownloadOpen}
         onOpenChange={setModelDownloadOpen}
+        onDownloadStart={() => {
+          startPolling(true)
+          void refreshModelDownloaded()
+        }}
         onComplete={() => {
           fetchProviders()
           fetchEmbProviders()

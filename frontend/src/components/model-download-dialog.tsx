@@ -25,14 +25,14 @@ const BUNDLES: BundleDef[] = [
     id: "file",
     label: "File Transcription (ONNX)",
     description:
-      "SenseVoice int8 + FSMN-VAD + CT-Punc + CAM++ — from GitHub Release onnx-models pack",
+      "SenseVoice int8 + FSMN-VAD + CT-Punc + CAM++ — GitHub Release onnx-models pack",
     modelIds: ["transcription", "vad", "speaker", "punc"],
   },
   {
     id: "realtime",
     label: "Real-time Transcription (ONNX)",
     description:
-      "Paraformer Streaming int8 — same GitHub Release pack (full zip installs both)",
+      "Paraformer Streaming int8 — same GitHub Release pack",
     modelIds: ["realtime"],
   },
 ]
@@ -41,13 +41,19 @@ interface ModelDownloadDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onComplete: () => void
+  /** Called when a download job is successfully started (so parent can poll). */
+  onDownloadStart?: () => void
 }
 
-export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDownloadDialogProps) {
+export function ModelDownloadDialog({
+  open,
+  onOpenChange,
+  onComplete,
+  onDownloadStart,
+}: ModelDownloadDialogProps) {
   const [models, setModels] = useState<ModelStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
-  const [selectedBundles, setSelectedBundles] = useState<Set<string>>(new Set())
 
   const modelMap = useMemo(() => {
     const map = new Map<string, ModelStatus>()
@@ -55,34 +61,55 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
     return map
   }, [models])
 
-  // Compute selected model IDs from selected bundles (only non-downloaded)
-  const selectedModelIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const b of BUNDLES) {
-      if (selectedBundles.has(b.id)) {
-        for (const mid of b.modelIds) {
-          const m = modelMap.get(mid)
-          if (m && !m.downloaded) ids.add(mid)
-        }
-      }
-    }
-    return ids
-  }, [selectedBundles, modelMap])
-
   const bundleStates = useMemo(() => {
     return BUNDLES.map((b) => {
-      const memberModels = b.modelIds.map((mid) => modelMap.get(mid)).filter(Boolean) as ModelStatus[]
-      const allDone = memberModels.length > 0 && memberModels.every((m) => m.downloaded)
-      const anyDownloading = memberModels.some((m) => m.status === "downloading")
+      const memberModels = b.modelIds
+        .map((mid) => modelMap.get(mid))
+        .filter(Boolean) as ModelStatus[]
+      const allDone =
+        memberModels.length > 0 && memberModels.every((m) => m.downloaded)
+      const anyDownloading = memberModels.some(
+        (m) => m.status === "downloading" || m.status === "extracting"
+      )
+      const anyExtracting = memberModels.some(
+        (m) => m.status === "extracting"
+      )
       const anyError = memberModels.some((m) => m.status === "error")
       const totalSize = memberModels.reduce((sum, m) => sum + m.size_mb, 0)
-      return { bundle: b, memberModels, allDone, anyDownloading, anyError, totalSize }
+      return {
+        bundle: b,
+        memberModels,
+        allDone,
+        anyDownloading,
+        anyExtracting,
+        anyError,
+        totalSize,
+      }
     })
   }, [modelMap])
 
   const allBundlesDone = bundleStates.every((b) => b.allDone)
-  const isDownloading = models.some((m) => m.status === "downloading")
+  const isDownloading = models.some(
+    (m) => m.status === "downloading" || m.status === "extracting"
+  )
+  const isExtracting = models.some((m) => m.status === "extracting")
+  const downloadProgress = Math.max(
+    0,
+    ...models
+      .filter((m) => m.status === "downloading" || m.status === "extracting")
+      .map((m) => Math.round(m.progress || 0)),
+    0
+  )
   const hasError = models.some((m) => m.status === "error")
+  const missingCount = models.filter((m) => !m.downloaded).length
+  const totalMissingMb = models
+    .filter((m) => !m.downloaded)
+    .reduce((sum, m) => sum + (m.size_mb || 0), 0)
+  const primaryBtnLabel = isExtracting
+    ? "Extracting…"
+    : isDownloading
+      ? `Downloading ${downloadProgress}%`
+      : "Download"
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -96,24 +123,10 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
   }, [])
 
   useEffect(() => {
-    if (open) {
-      setLoading(true)
-      setDownloading(false)
-      fetchStatus().then(() => {
-        // After loading, auto-select bundles with missing models
-        setSelectedBundles(() => {
-          const toSelect = new Set<string>()
-          for (const b of BUNDLES) {
-            const hasMissing = b.modelIds.some((mid) => {
-              const m = modelMap.get(mid)
-              return m && !m.downloaded
-            })
-            if (hasMissing) toSelect.add(b.id)
-          }
-          return toSelect
-        })
-      })
-    }
+    if (!open) return
+    setLoading(true)
+    setDownloading(false)
+    void fetchStatus()
   }, [open, fetchStatus])
 
   // Poll progress while downloading
@@ -123,24 +136,24 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
       try {
         const status = await getModelStatus()
         setModels(status)
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }, 2000)
     return () => clearInterval(interval)
   }, [downloading])
 
-  // Auto-detect download completion and refresh
+  // Auto-detect download completion
   useEffect(() => {
     if (!downloading || models.length === 0) return
-    const stillActive = models.some((m) => m.status === "downloading")
+    const stillActive = models.some(
+      (m) => m.status === "downloading" || m.status === "extracting"
+    )
     if (!stillActive) {
       setDownloading(false)
-      // Refresh to get final state
-      fetchStatus()
+      void fetchStatus()
       const allDone = BUNDLES.every((b) =>
-        b.modelIds.every((mid) => {
-          const m = modelMap.get(mid)
-          return m?.downloaded
-        })
+        b.modelIds.every((mid) => modelMap.get(mid)?.downloaded)
       )
       if (allDone) {
         toast.success("All models downloaded!")
@@ -151,32 +164,30 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
   const handleDownload = async () => {
     setDownloading(true)
     try {
-      const ids = Array.from(selectedModelIds)
-      // Backend always pulls the full GitHub Release zip (no HF fallback).
-      await downloadModels(ids.length > 0 ? ids : undefined)
+      // Full GitHub Release pack — no per-bundle selection
+      await downloadModels()
+      onDownloadStart?.()
       toast.info("Downloading ONNX pack from GitHub Release…")
+      // Progress continues in Settings toolbar — close dialog after start
+      onOpenChange(false)
     } catch {
       toast.error("Failed to start download")
       setDownloading(false)
     }
   }
 
-  const toggleBundle = (bundleId: string) => {
-    setSelectedBundles((prev) => {
-      const next = new Set(prev)
-      if (next.has(bundleId)) next.delete(bundleId)
-      else next.add(bundleId)
-      return next
-    })
-  }
+  const sizeLabel =
+    totalMissingMb >= 1000
+      ? `${(totalMissingMb / 1000).toFixed(1)} GB`
+      : `${Math.round(totalMissingMb)} MB`
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
           "pm-dialog pm-dialog--silk pm-settings-dlg",
-          "max-w-lg",
-          "!animate-none data-open:!animate-none data-closed:!animate-none",
+          "max-w-md",
+          "!animate-none data-open:!animate-none data-closed:!animate-none"
         )}
         overlayClassName="pm-dialog-overlay--silk"
       >
@@ -186,124 +197,138 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center py-8">
+          <div className="flex items-center justify-center py-10">
             <Loader2 className="h-6 w-6 animate-spin text-[var(--pm-muted)]" />
           </div>
         ) : allBundlesDone ? (
           <div className="text-center py-6 space-y-3">
             <Check className="h-8 w-8 mx-auto text-[var(--pm-green)]" />
             <p className="pm-meta">All models are downloaded and ready.</p>
-            <Button variant="default" onClick={() => { onComplete(); onOpenChange(false) }}>
+            <Button
+              variant="default"
+              onClick={() => {
+                onComplete()
+                onOpenChange(false)
+              }}
+            >
               Done
             </Button>
           </div>
         ) : (
           <>
-            <div className="pm-settings-dlg-scroll">
-              <div className="pm-dialog-body pm-settings-dlg-body">
-                <section className="pm-settings-dlg-card">
-                  <span className="pm-settings-dlg-card-kicker">Source</span>
-                  <p className="pm-settings-dlg-card-hint">
-                    Models install only from the official GitHub Release
-                    (onnx-models pack). There is no HuggingFace fallback.
-                  </p>
-                </section>
+            <div className="pm-dialog-body space-y-4 px-1 pb-1">
+              <p className="text-[13px] leading-relaxed text-[var(--pm-ink)]">
+                Local transcription models are not fully installed yet. Click{" "}
+                <strong className="font-medium">Download</strong> to fetch the
+                official ONNX pack from GitHub Release (file + realtime ASR).
+                There is no HuggingFace fallback.
+              </p>
+              {missingCount > 0 && (
+                <p className="pm-meta">
+                  About {sizeLabel} remaining · {missingCount} model
+                  {missingCount === 1 ? "" : "s"} missing
+                </p>
+              )}
 
-                <section className="pm-settings-dlg-card">
-                  <span className="pm-settings-dlg-card-kicker">Bundles</span>
-                  <div className="space-y-2">
-                    {bundleStates.map(({ bundle, memberModels, allDone, anyDownloading, anyError, totalSize }) => (
-                      <div
-                        key={bundle.id}
-                        className={cn(
-                          "rounded-[var(--pm-r-sm)] p-3 transition-colors",
-                          allDone
-                            ? "bg-[var(--pm-green-wash)]"
-                            : selectedBundles.has(bundle.id)
-                              ? "bg-[color-mix(in_srgb,var(--pm-green)_6%,#ffffff)]"
-                              : "bg-[color-mix(in_srgb,var(--pm-ink)_2.5%,#ffffff)]",
+              <div className="space-y-2">
+                {bundleStates.map(
+                  ({
+                    bundle,
+                    memberModels,
+                    allDone,
+                    anyDownloading,
+                    anyExtracting,
+                    anyError,
+                    totalSize,
+                  }) => (
+                    <div
+                      key={bundle.id}
+                      className={cn(
+                        "rounded-[var(--pm-r-sm)] px-3 py-2.5",
+                        allDone
+                          ? "bg-[var(--pm-green-wash)]"
+                          : "bg-[color-mix(in_srgb,var(--pm-ink)_2.5%,#ffffff)]"
+                      )}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        {allDone ? (
+                          <Check className="h-4 w-4 text-[var(--pm-green)] shrink-0 mt-0.5" />
+                        ) : anyDownloading ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-muted)] shrink-0 mt-0.5" />
+                        ) : anyError ? (
+                          <AlertCircle className="h-4 w-4 text-[var(--pm-danger)] shrink-0 mt-0.5" />
+                        ) : (
+                          <Download className="h-4 w-4 text-[var(--pm-muted)] shrink-0 mt-0.5" />
                         )}
-                      >
-                        <div className="flex items-center gap-3">
-                          {!allDone && (
-                            <input
-                              type="checkbox"
-                              checked={selectedBundles.has(bundle.id)}
-                              disabled={isDownloading}
-                              onChange={() => toggleBundle(bundle.id)}
-                              className="pm-settings-check"
-                              aria-label={`Select ${bundle.label}`}
-                            />
-                          )}
-                          {allDone && <Check className="h-4 w-4 text-[var(--pm-green)] shrink-0" />}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="pm-title">{bundle.label}</span>
-                              {anyDownloading && (
-                                <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-muted)]" />
-                              )}
-                              {anyError && (
-                                <AlertCircle className="h-4 w-4 text-[var(--pm-danger)]" />
-                              )}
-                            </div>
-                            <p className="pm-meta">
-                              {totalSize >= 1000
-                                ? `${(totalSize / 1000).toFixed(1)}GB`
-                                : `${totalSize}MB`}{" "}
-                              · {bundle.description}
-                            </p>
+                        <div className="min-w-0 flex-1">
+                          <div className="pm-title text-[13px]">
+                            {bundle.label}
                           </div>
-                        </div>
-                        <div className="mt-2 ml-7 space-y-0.5">
-                          {memberModels.map((m) => (
-                            <div key={m.id} className="flex items-center gap-2 pm-meta">
-                              <span className="truncate">{m.display_name}</span>
-                              <span>·</span>
-                              <span className="shrink-0">{m.size_mb}MB</span>
-                              {m.downloaded && (
-                                <Check className="h-3 w-3 text-[var(--pm-green)] shrink-0" />
-                              )}
-                              {m.status === "downloading" && (
-                                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                              )}
-                              {m.status === "error" && (
-                                <span className="text-[var(--pm-danger)] shrink-0">{m.message}</span>
-                              )}
-                            </div>
-                          ))}
+                          <p className="pm-meta mt-0.5">
+                            {totalSize >= 1000
+                              ? `${(totalSize / 1000).toFixed(1)}GB`
+                              : `${totalSize}MB`}
+                            {" · "}
+                            {allDone
+                              ? "Installed"
+                              : anyExtracting
+                                ? "Extracting…"
+                                : anyDownloading
+                                  ? "In progress…"
+                                  : "Will be included"}
+                          </p>
+                          {anyError &&
+                            memberModels
+                              .filter((m) => m.status === "error")
+                              .map((m) => (
+                                <p
+                                  key={m.id}
+                                  className="pm-meta text-[var(--pm-danger)] mt-1"
+                                >
+                                  {m.display_name}: {m.message}
+                                </p>
+                              ))}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                  {hasError && (
-                    <div className="pm-meta text-[var(--pm-danger)] p-2 rounded-[var(--pm-r-sm)] bg-[color-mix(in_srgb,var(--pm-danger)_10%,#ffffff)]">
-                      {models
-                        .filter((m) => m.status === "error")
-                        .map((m) => (
-                          <p key={m.id}>
-                            {m.display_name}: {m.message}
-                          </p>
-                        ))}
                     </div>
-                  )}
-                </section>
+                  )
+                )}
               </div>
+
+              {hasError && (
+                <div className="pm-meta text-[var(--pm-danger)] p-2 rounded-[var(--pm-r-sm)] bg-[color-mix(in_srgb,var(--pm-danger)_10%,#ffffff)]">
+                  Some models failed — click Download to retry the pack.
+                </div>
+              )}
             </div>
+
             <DialogFooter>
               {!isDownloading && (
-                <Button variant="ghost" onClick={() => { onComplete(); onOpenChange(false) }}>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    onComplete()
+                    onOpenChange(false)
+                  }}
+                >
                   Skip
                 </Button>
               )}
               <Button
                 variant="default"
                 onClick={handleDownload}
-                disabled={selectedModelIds.size === 0 || isDownloading}
+                disabled={isDownloading}
               >
                 {isDownloading ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" />Downloading…</>
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {primaryBtnLabel}
+                  </>
                 ) : (
-                  <><Download className="h-4 w-4" />Download ({selectedBundles.size})</>
+                  <>
+                    <Download className="h-4 w-4" />
+                    Download
+                  </>
                 )}
               </Button>
             </DialogFooter>

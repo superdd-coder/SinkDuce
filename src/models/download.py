@@ -185,8 +185,9 @@ def check_models_status() -> list[dict[str, Any]]:
             message = progress_info.get("message", "") if progress_info.get("status") == "done" else ""
         else:
             progress_status = progress_info.get("status", "")
-            if progress_status == "downloading":
-                status = "downloading"
+            if progress_status in ("downloading", "extracting"):
+                # Keep "extracting" visible to UI (解压中); else downloading + %
+                status = progress_status
                 progress = progress_info.get("progress", 0)
                 message = progress_info.get("message", "")
             elif progress_status == "error":
@@ -391,10 +392,10 @@ def _download_onnx_release_package(requested_ids: list[str] | None = None) -> No
             if not zip_path.is_file() or zip_path.stat().st_size < 32:
                 raise RuntimeError(f"Downloaded file missing or empty: {zip_path}")
 
-            _set_progress(progress_ids, "downloading", 88, "Extracting ONNX packs...")
+            _set_progress(progress_ids, "extracting", 88, "Extracting ONNX packs...")
             _extract_onnx_zip(zip_path, dest_home)
 
-        _set_progress(progress_ids, "downloading", 95, "Verifying ONNX packs...")
+        _set_progress(progress_ids, "extracting", 95, "Verifying ONNX packs...")
         missing = [m.display_name for m in LOCAL_MODELS if not _is_downloaded(m)]
         if missing:
             raise RuntimeError(
