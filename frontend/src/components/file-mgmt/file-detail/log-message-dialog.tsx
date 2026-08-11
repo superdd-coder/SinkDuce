@@ -13,7 +13,10 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
+  DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
@@ -26,8 +29,9 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs"
-import { Loader2, Pencil, Trash2 } from "lucide-react"
+import { History, Loader2, Pencil, Trash2 } from "lucide-react"
 import { cn, transformImageBlocks } from "@/lib/utils"
+import { ChunkMd } from "@/components/shared/chunk-md"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
@@ -45,6 +49,7 @@ import {
   deleteFileVersion,
   FileMgmtApiError,
   getFileDetail,
+  rollbackFileVersion,
   updateMessage,
 } from "@/api/file-mgmt"
 import {
@@ -94,6 +99,8 @@ export interface LogMessageDialogProps {
   onSaved?: (msg: Message) => void
   /** After permanently deleting a non-current version */
   onVersionDeleted?: () => void
+  /** After rolling back to this version (later versions hard-deleted) */
+  onVersionRolledBack?: () => void
 }
 
 /**
@@ -127,6 +134,7 @@ export function LogMessageDialog({
   isCurrentVersion = false,
   onSaved,
   onVersionDeleted,
+  onVersionRolledBack,
 }: LogMessageDialogProps) {
   /**
    * Keep last payload while closing so exit animation can finish.
@@ -176,12 +184,15 @@ export function LogMessageDialog({
   const [content, setContent] = useState("")
   const [saving, setSaving] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [rollbackConfirmOpen, setRollbackConfirmOpen] = useState(false)
+  const [rollingBack, setRollingBack] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     if (!open || !activeMessage) return
     setEditing(false)
     setDeleteConfirmOpen(false)
+    setRollbackConfirmOpen(false)
     setContent(
       isVersionUpdate
         ? versionUpdateBody(activeMessage.body)
@@ -308,6 +319,40 @@ export function LogMessageDialog({
     collectionId,
     onOpenChange,
     onVersionDeleted,
+  ])
+
+  const handleRollbackVersion = useCallback(async () => {
+    if (!activeVersion || activeIsCurrent) return
+    const fileId = activeVersion.file_id
+    const versionId = activeVersion.version_id
+    if (!fileId || !versionId) return
+    setRollingBack(true)
+    try {
+      const res = await rollbackFileVersion(collectionId, fileId, versionId)
+      const n = res.deleted_count ?? res.deleted_version_ids?.length ?? 0
+      toast.success(
+        n > 0
+          ? `Rolled back to v${res.version_no} — permanently deleted ${n} later version${n === 1 ? "" : "s"}`
+          : `Rolled back to v${res.version_no}`
+      )
+      setRollbackConfirmOpen(false)
+      onOpenChange(false)
+      onVersionRolledBack?.()
+    } catch (err) {
+      toast.error(
+        err instanceof FileMgmtApiError
+          ? err.message
+          : `Rollback failed: ${err instanceof Error ? err.message : String(err)}`
+      )
+    } finally {
+      setRollingBack(false)
+    }
+  }, [
+    activeVersion,
+    activeIsCurrent,
+    collectionId,
+    onOpenChange,
+    onVersionRolledBack,
   ])
 
   if (!activeMessage) return null
@@ -472,6 +517,11 @@ export function LogMessageDialog({
                       ? () => setDeleteConfirmOpen(true)
                       : undefined
                   }
+                  onRequestRollback={
+                    !activeIsCurrent && activeVersion
+                      ? () => setRollbackConfirmOpen(true)
+                      : undefined
+                  }
                 />
               </div>
 
@@ -552,6 +602,71 @@ export function LogMessageDialog({
                 )}
               </Button>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Rollback confirm — premium compact danger (pm-dialog-confirm) */}
+        <Dialog
+          open={rollbackConfirmOpen}
+          onOpenChange={(v) => {
+            if (!rollingBack) setRollbackConfirmOpen(v)
+          }}
+        >
+          <DialogContent
+            showCloseButton={false}
+            overlayClassName="pm-dialog-overlay--silk"
+            className="pm-dialog pm-dialog-confirm"
+          >
+            <DialogHeader>
+              <DialogKicker>Version</DialogKicker>
+              <DialogTitle>Roll back to this version?</DialogTitle>
+              {activeVersion ? (
+                <p
+                  className="pm-dialog-confirm-target"
+                  title={
+                    activeVersion.storage_file_id
+                      ? `v${activeVersion.version_no} · ${activeVersion.storage_file_id}`
+                      : `v${activeVersion.version_no}`
+                  }
+                >
+                  <span className="tabular-nums">v{activeVersion.version_no}</span>
+                  {activeVersion.storage_file_id
+                    ? ` · ${activeVersion.storage_file_id}`
+                    : ""}
+                </p>
+              ) : null}
+              <DialogDescription>
+                Make this the live revision. Later revisions are permanently
+                deleted. This cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={rollingBack}
+                onClick={() => setRollbackConfirmOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive-solid"
+                size="sm"
+                disabled={rollingBack}
+                onClick={() => void handleRollbackVersion()}
+              >
+                {rollingBack ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                    Rolling back…
+                  </>
+                ) : (
+                  "Roll back"
+                )}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </>
@@ -636,12 +751,14 @@ function VersionFileTabs({
   version,
   isCurrentVersion,
   onRequestDelete,
+  onRequestRollback,
 }: {
   collectionId: string
   docSource: string | null
   version: FileVersion | null
   isCurrentVersion: boolean
   onRequestDelete?: () => void
+  onRequestRollback?: () => void
 }) {
   const [tab, setTab] = useState("raw")
   const [previewContent, setPreviewContent] = useState<string | null>(null)
@@ -790,16 +907,31 @@ function VersionFileTabs({
             )}
           </TabsTrigger>
         </TabsList>
-        {onRequestDelete && (
-          <button
-            type="button"
-            className="pm-ws-link shrink-0 inline-flex items-center gap-1 !text-[var(--pm-danger)]"
-            onClick={onRequestDelete}
-            title="Permanently delete this version"
-          >
-            <Trash2 className="h-3 w-3" strokeWidth={1.75} />
-            Delete
-          </button>
+        {(onRequestRollback || onRequestDelete) && (
+          <div className="flex items-center gap-2 shrink-0">
+            {onRequestRollback && (
+              <button
+                type="button"
+                className="pm-ws-link shrink-0 inline-flex items-center gap-1"
+                onClick={onRequestRollback}
+                title="Make this version current and permanently delete newer versions"
+              >
+                <History className="h-3 w-3" strokeWidth={1.75} />
+                Roll back
+              </button>
+            )}
+            {onRequestDelete && (
+              <button
+                type="button"
+                className="pm-ws-link shrink-0 inline-flex items-center gap-1 !text-[var(--pm-danger)]"
+                onClick={onRequestDelete}
+                title="Permanently delete this version"
+              >
+                <Trash2 className="h-3 w-3" strokeWidth={1.75} />
+                Delete
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -959,9 +1091,12 @@ function VersionFileTabs({
                         </span>
                       )}
                     </div>
-                    <p className="pm-ws-prose-item whitespace-pre-wrap">
-                      {chunk.text}
-                    </p>
+                    <ChunkMd
+                      text={chunk.text}
+                      collection={collectionId}
+                      fileId={version?.file_id || undefined}
+                      source={docSource || undefined}
+                    />
                   </div>
                 ))
               )}

@@ -19,7 +19,10 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
+  DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -48,9 +51,11 @@ import {
   FolderOpen,
   GitBranch,
   Star,
+  History,
   X,
 } from "lucide-react"
 import { cn, transformImageBlocks } from "@/lib/utils"
+import { ChunkMd } from "@/components/shared/chunk-md"
 import {
   SoftMenu,
   MenuItem,
@@ -87,6 +92,8 @@ import {
   deleteFile,
   deleteMessage,
   createFileMessage,
+  rollbackFileVersion,
+  FileMgmtApiError,
 } from "@/api/file-mgmt"
 import type {
   FileDetail,
@@ -485,6 +492,8 @@ export function FileMgmtDetailDialog({
   // Actions
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [rollbackConfirm, setRollbackConfirm] = useState(false)
+  const [rollingBack, setRollingBack] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   /** Bottom action dropdowns — same pattern as folder toolbar (Archive / Delete). */
   const [actionMenu, setActionMenu] = useState<"archive" | "delete" | null>(
@@ -928,22 +937,28 @@ export function FileMgmtDetailDialog({
   const isParentChild = chunks.some((c) => c.chunk_type === "parent")
   const groupedChunks = useMemo(() => {
     if (!isParentChild) return null
-    const groups: Array<{ parent: ChunkDetail; children: ChunkDetail[] }> = []
-    let currentParent: ChunkDetail | null = null
-    let currentChildren: ChunkDetail[] = []
+    // Group by parent_id (not sequential scan) so children still attach when
+    // API order is imperfect or children were recovered without version_id.
+    const parents = chunks
+      .filter((c) => c.chunk_type === "parent")
+      .slice()
+      .sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0))
+    const childrenByParent = new Map<string, ChunkDetail[]>()
     for (const c of chunks) {
-      if (c.chunk_type === "parent") {
-        if (currentParent)
-          groups.push({ parent: currentParent, children: currentChildren })
-        currentParent = c
-        currentChildren = []
-      } else if (c.chunk_type === "child") {
-        currentChildren.push(c)
-      }
+      if (c.chunk_type !== "child") continue
+      const pid = (c.parent_id || "").trim()
+      if (!pid) continue
+      const list = childrenByParent.get(pid) || []
+      list.push(c)
+      childrenByParent.set(pid, list)
     }
-    if (currentParent)
-      groups.push({ parent: currentParent, children: currentChildren })
-    return groups
+    for (const list of childrenByParent.values()) {
+      list.sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0))
+    }
+    return parents.map((parent) => ({
+      parent,
+      children: childrenByParent.get(parent.id) || [],
+    }))
   }, [chunks, isParentChild])
 
   const timeline = useMemo(
@@ -1295,6 +1310,39 @@ export function FileMgmtDetailDialog({
     }
   }
 
+  /** Make focused historical version current; hard-delete all later versions. */
+  const handleRollback = async () => {
+    if (!fileId || !focusVersionId || !isHistoricalFocus) return
+    setRollingBack(true)
+    try {
+      const res = await rollbackFileVersion(
+        collectionId,
+        fileId,
+        focusVersionId
+      )
+      const n = res.deleted_count ?? res.deleted_version_ids?.length ?? 0
+      toast.success(
+        n > 0
+          ? `Rolled back to v${res.version_no} — permanently deleted ${n} later version${n === 1 ? "" : "s"}`
+          : `Rolled back to v${res.version_no}`
+      )
+      setRollbackConfirm(false)
+      // Reopen as current (drop historical pin)
+      await loadDetail()
+      await refreshFiles(collectionId)
+      onOpenChange(false)
+      onDeleted?.()
+    } catch (err) {
+      toast.error(
+        err instanceof FileMgmtApiError
+          ? err.message
+          : `Rollback failed: ${err instanceof Error ? err.message : String(err)}`
+      )
+    } finally {
+      setRollingBack(false)
+    }
+  }
+
   const handleDeleteMessage = async (msg: Message) => {
     if (msg.author_type === "system" || isVersionUpdateMessage(msg)) {
       toast.error("Version update notes cannot be deleted")
@@ -1528,15 +1576,29 @@ export function FileMgmtDetailDialog({
                         )}
                       </TabsTrigger>
                     </TabsList>
-                    {goToLabel && (
-                      <button
-                        type="button"
-                        className="pm-ws-link shrink-0"
-                        onClick={handleGoToSource}
-                      >
-                        {goToLabel}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isHistoricalFocus && focusVersionId && fileId && (
+                        <button
+                          type="button"
+                          className="pm-ws-link shrink-0 inline-flex items-center gap-1"
+                          disabled={rollingBack || actionBusy}
+                          onClick={() => setRollbackConfirm(true)}
+                          title="Make this version current and permanently delete newer versions"
+                        >
+                          <History className="h-3 w-3" strokeWidth={1.75} />
+                          Roll back
+                        </button>
+                      )}
+                      {goToLabel && (
+                        <button
+                          type="button"
+                          className="pm-ws-link shrink-0"
+                          onClick={handleGoToSource}
+                        >
+                          {goToLabel}
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Preview — original file; white stage inside main card */}
@@ -1883,16 +1945,29 @@ export function FileMgmtDetailDialog({
                                           <Crosshair className="h-3.5 w-3.5" />
                                         </div>
                                       </div>
-                                      <p className="pm-ws-prose-item !text-[var(--pm-muted)] line-clamp-3">
-                                        {group.parent.text}
-                                      </p>
+                                      <div
+                                        className={cn(
+                                          "line-clamp-3 overflow-hidden",
+                                          "text-[var(--pm-muted)]"
+                                        )}
+                                      >
+                                        <ChunkMd
+                                          text={group.parent.text}
+                                          collection={collectionId}
+                                          fileId={fileId || undefined}
+                                          source={docSource || undefined}
+                                        />
+                                      </div>
                                     </div>
                                   </button>
                                   {isExpanded && (
                                     <div className="border-t border-[color-mix(in_srgb,var(--pm-ink)_7%,transparent)] bg-[color-mix(in_srgb,var(--pm-ink)_2%,transparent)] p-3 space-y-2 pl-8">
-                                      <p className="pm-ws-prose-item">
-                                        {group.parent.text}
-                                      </p>
+                                      <ChunkMd
+                                        text={group.parent.text}
+                                        collection={collectionId}
+                                        fileId={fileId || undefined}
+                                        source={docSource || undefined}
+                                      />
                                       {group.children.map((child) => (
                                         <div
                                           key={child.id}
@@ -1917,9 +1992,12 @@ export function FileMgmtDetailDialog({
                                             </Badge>
                                             <Crosshair className="h-3 w-3 ml-auto text-[var(--pm-faint)]" />
                                           </div>
-                                          <p className="pm-ws-prose-item">
-                                            {child.text}
-                                          </p>
+                                          <ChunkMd
+                                            text={child.text}
+                                            collection={collectionId}
+                                            fileId={fileId || undefined}
+                                            source={docSource || undefined}
+                                          />
                                         </div>
                                       ))}
                                     </div>
@@ -1967,14 +2045,19 @@ export function FileMgmtDetailDialog({
                                     className="w-full text-left"
                                     onClick={() => toggleChunkExpand(chunk.id)}
                                   >
-                                    <p
+                                    <div
                                       className={cn(
-                                        "pm-ws-prose-item",
-                                        !expanded && "line-clamp-4"
+                                        !expanded &&
+                                          "line-clamp-4 overflow-hidden"
                                       )}
                                     >
-                                      {chunk.text}
-                                    </p>
+                                      <ChunkMd
+                                        text={chunk.text}
+                                        collection={collectionId}
+                                        fileId={fileId || undefined}
+                                        source={docSource || undefined}
+                                      />
+                                    </div>
                                     {!expanded &&
                                       (chunk.text?.length ?? 0) > 200 && (
                                         <span className="pm-ws-link mt-1 inline-block">
@@ -2857,7 +2940,87 @@ export function FileMgmtDetailDialog({
           void loadDetail()
           void refreshFiles(collectionId)
         }}
+        onVersionRolledBack={() => {
+          setLogMsgOpen(null)
+          void loadDetail()
+          void refreshFiles(collectionId)
+        }}
       />
+
+      {/* Rollback historical version — premium compact confirm */}
+      <Dialog
+        open={rollbackConfirm}
+        onOpenChange={(v) => {
+          if (!rollingBack) setRollbackConfirm(v)
+        }}
+      >
+        <DialogContent
+          showCloseButton={false}
+          overlayClassName="pm-dialog-overlay--silk"
+          className="pm-dialog pm-dialog-confirm"
+        >
+          <DialogHeader>
+            <DialogKicker>Version</DialogKicker>
+            <DialogTitle>Roll back to this version?</DialogTitle>
+            {focusVersion || focusVersionId ? (
+              <p
+                className="pm-dialog-confirm-target"
+                title={
+                  focusVersion?.storage_file_id
+                    ? `v${focusVersion.version_no} · ${focusVersion.storage_file_id}`
+                    : focusVersion
+                      ? `v${focusVersion.version_no}`
+                      : "Selected version"
+                }
+              >
+                {focusVersion ? (
+                  <>
+                    <span className="tabular-nums">
+                      v{focusVersion.version_no}
+                    </span>
+                    {focusVersion.storage_file_id
+                      ? ` · ${focusVersion.storage_file_id}`
+                      : ""}
+                  </>
+                ) : (
+                  "Selected version"
+                )}
+              </p>
+            ) : null}
+            <DialogDescription>
+              Make this the live revision. Later revisions are permanently
+              deleted. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={rollingBack}
+              onClick={() => setRollbackConfirm(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive-solid"
+              size="sm"
+              disabled={rollingBack}
+              onClick={() => void handleRollback()}
+            >
+              {rollingBack ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                  Rolling back…
+                </>
+              ) : (
+                "Roll back"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <NodePreviewSheet
         collectionId={collectionId}

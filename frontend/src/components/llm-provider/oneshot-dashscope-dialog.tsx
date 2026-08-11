@@ -1,7 +1,8 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogKicker, DialogTitle } from "@/components/ui/dialog"
+import { FieldLabel } from "@/components/ui/field-label"
 import { Loader2, Eye, EyeOff } from "lucide-react"
 import {
   getLLMProviders, updateLLMProvider,
@@ -13,6 +14,7 @@ import {
   updateConfig,
 } from "@/api/client"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 
 interface OneShotDashscopeDialogProps {
   open: boolean
@@ -138,107 +140,99 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-settings-dlg",
+          "sm:max-w-md",
+          "!animate-none data-open:!animate-none data-closed:!animate-none",
+        )}
+        overlayClassName="pm-dialog-overlay--silk"
+      >
         <DialogHeader>
-          <DialogTitle>OneShot Setting with Dashscope API</DialogTitle>
+          <DialogKicker>Settings</DialogKicker>
+          <DialogTitle>OneShot Dashscope</DialogTitle>
           <DialogDescription>
-            Enter your Dashscope API Key to configure all providers at once. Model names are prefilled with defaults.
+            One API key configures LLM, embedding, rerank, and transcription defaults.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2 min-w-0">
-          {/* API Key */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Dashscope API Key</label>
-            <div className="relative">
-              <Input
-                type={showApiKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-..."
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute right-0 top-0 h-full px-3"
-                onClick={() => setShowApiKey(!showApiKey)}
-              >
-                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
-            </div>
-          </div>
 
-          {/* LLM Model */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">LLM Model</label>
-            <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="deepseek-v4-flash" />
-            <p className="text-xs text-muted-foreground">Base URL: {DASHSCOPE_BASE_URL}</p>
-          </div>
+        <div className="pm-settings-dlg-scroll">
+          <div className="pm-dialog-body pm-settings-dlg-body">
+            <section className="pm-settings-dlg-card">
+              <span className="pm-settings-dlg-card-kicker">API key</span>
+              <div className="pm-settings-dlg-field">
+                <FieldLabel>Dashscope key</FieldLabel>
+                <div className="pm-settings-dlg-secret">
+                  <Input
+                    type={showApiKey ? "text" : "password"}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="sk-..."
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="pm-settings-dlg-secret-btn"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                  >
+                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+            </section>
 
-          {/* Chat Model */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Chat Model</label>
-            <Input value={chatModel} onChange={(e) => setChatModel(e.target.value)} placeholder="deepseek-v4-flash" />
-            <p className="text-xs text-muted-foreground">Model used for Chat function calling. Must support Functions.</p>
-          </div>
+            <section className="pm-settings-dlg-card">
+              <span className="pm-settings-dlg-card-kicker">Models</span>
+              <div className="pm-settings-dlg-fields">
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>LLM</FieldLabel>
+                  <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="deepseek-v4-flash" />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Chat (tools)</FieldLabel>
+                  <Input value={chatModel} onChange={(e) => setChatModel(e.target.value)} placeholder="deepseek-v4-flash" />
+                  <p className="pm-settings-dlg-card-hint mt-1.5">Must support function calling.</p>
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Visual</FieldLabel>
+                  <Input value={visualModel} onChange={(e) => setVisualModel(e.target.value)} placeholder="qwen3.5-flash" />
+                </div>
+                <div className="pm-settings-dlg-grid">
+                  <div className="pm-settings-dlg-field">
+                    <FieldLabel>Embedding</FieldLabel>
+                    <Input value={embModel} onChange={(e) => setEmbModel(e.target.value)} placeholder="text-embedding-v4" />
+                  </div>
+                  <div className="pm-settings-dlg-field">
+                    <FieldLabel>Reranker</FieldLabel>
+                    <Input value={rerankerModel} onChange={(e) => setRerankerModel(e.target.value)} placeholder="qwen3-rerank" />
+                  </div>
+                </div>
+                <p className="pm-settings-dlg-card-hint">Base URL · {DASHSCOPE_BASE_URL}</p>
+              </div>
+            </section>
 
-          {/* Visual Model */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Visual Model</label>
-            <Input
-              value={visualModel}
-              onChange={(e) => setVisualModel(e.target.value)}
-              placeholder="qwen3.5-flash"
-            />
-            <p className="text-xs text-muted-foreground">
-              Vision-capable model for image description. Will be checked as Visual in LLM settings.
-            </p>
-          </div>
-
-          {/* Embedding Model */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Embedding Model</label>
-            <Input
-              value={embModel}
-              onChange={(e) => setEmbModel(e.target.value)}
-              placeholder="text-embedding-v4"
-            />
-            <p className="text-xs text-muted-foreground">
-              Base URL: {DASHSCOPE_BASE_URL}
-            </p>
-          </div>
-
-          {/* Reranker Model */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Reranker Model</label>
-            <Input
-              value={rerankerModel}
-              onChange={(e) => setRerankerModel(e.target.value)}
-              placeholder="qwen3-rerank"
-            />
-            <p className="text-xs text-muted-foreground">
-              Provider: Qwen (DashScope)
-            </p>
-          </div>
-
-          {/* Transcription models are fixed (no picker) */}
-          <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
-            <p className="text-sm font-medium">Transcription (fixed)</p>
-            <p className="text-xs text-muted-foreground">
-              File: <span className="font-mono">{FILE_TRANS_MODEL}</span>
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Realtime: <span className="font-mono">{RT_TRANS_MODEL}</span>
-              {" · "}instant hot words · semantic punctuation
-            </p>
+            <section className="pm-settings-dlg-card">
+              <span className="pm-settings-dlg-card-kicker">Transcription</span>
+              <div className="pm-settings-dlg-callout">
+                <span className="pm-label">Fixed models</span>
+                <p className="pm-meta">File · <span className="font-mono">{FILE_TRANS_MODEL}</span></p>
+                <p className="pm-meta">
+                  Realtime · <span className="font-mono">{RT_TRANS_MODEL}</span>
+                  {" · "}hot words · semantic punctuation
+                </p>
+              </div>
+            </section>
           </div>
         </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Setting up...</> : "Apply All"}
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="default" onClick={handleSave} disabled={saving}>
+            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Setting up…</> : "Apply all"}
           </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
+
 }

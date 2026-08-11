@@ -1233,7 +1233,10 @@ async def list_files(collection: str):
         return {"collection": collection, "files": []}
 
     def _fetch():
-        from src.collections.file_index import load as load_file_index
+        from src.collections.file_index import (
+            load as load_file_index,
+            resolve_display_name,
+        )
 
         idx = load_file_index(collection)
 
@@ -1244,17 +1247,38 @@ async def list_files(collection: str):
             key=lambda x: x[1].get("ingested_at", 0),
             reverse=True,
         ):
-            src = entry.get("source", fid)
+            src = entry.get("source", fid) or fid
+            # Prefer SQLite current storage name for __file__: (multi-version / rename)
+            raw_src = str(src)
+            resolve_src = (
+                raw_src
+                if raw_src.startswith("__")
+                else f"__file__:{fid}"
+            )
+            display = resolve_display_name(
+                collection,
+                resolve_src,
+                payload_label=entry.get("source_label"),
+                index=idx,
+            )
+            # Prefer resolved name; never fall back to raw __file__/__meeting__ keys
+            label = (entry.get("source_label") or "").strip()
+            if not display and label and not label.startswith("__"):
+                display = label
+            if display.startswith("Note: "):
+                display = display[len("Note: ") :].strip() or display
+            if display.startswith("Meeting: "):
+                display = display[len("Meeting: ") :].strip() or display
             files.append({
-                "source": src,
+                "source": raw_src if raw_src.startswith("__") else resolve_src,
                 # Index key is the managed file_id (needed to open FileMgmt detail)
                 "file_id": fid,
                 "chunk_count": entry.get("chunks", 0),
                 "file_type": entry.get("file_type", ""),
                 "original_ext": entry.get("original_ext", ""),
-                "display_name": entry.get("source_label", src),
-                "has_meeting": src.startswith("__meeting__:"),
-                "note_title": entry.get("source_label", "") if entry.get("file_type") == "note" else "",
+                "display_name": display or label or fid[:8],
+                "has_meeting": raw_src.startswith("__meeting__:"),
+                "note_title": label if entry.get("file_type") == "note" else "",
             })
 
         # Legacy: scroll Qdrant for chunks without file_id (created before file_id system).
@@ -1444,42 +1468,114 @@ def get_file_chunks(
         with_vectors=False,
     )
 
-    chunks = [
-        {
+    def _point_to_chunk(p: dict) -> dict:
+        pl = p.get("payload") or {}
+        return {
             "id": p["id"],
-            "text": p["payload"].get("text", ""),
-            "chunk_index": p["payload"].get("chunk_index", 0),
-            "file_type": p["payload"].get("file_type", ""),
-            "context": p["payload"].get("context", ""),
-            "chunk_type": p["payload"].get("chunk_type", "normal"),
-            "parent_id": p["payload"].get("parent_id"),
-            "summary": p["payload"].get("summary", ""),
-            "version_id": p["payload"].get("version_id") or "",
-            "archived": bool(p["payload"].get("archived")),
+            "text": pl.get("text", ""),
+            "chunk_index": pl.get("chunk_index", 0),
+            "file_type": pl.get("file_type", ""),
+            "context": pl.get("context", ""),
+            "chunk_type": pl.get("chunk_type", "normal"),
+            "parent_id": pl.get("parent_id"),
+            "summary": pl.get("summary", ""),
+            "version_id": pl.get("version_id") or "",
+            "archived": bool(pl.get("archived")),
             # Position fields for source navigation
-            "char_offset": p["payload"].get("char_offset"),
-            "page_number": p["payload"].get("page_number"),
-            "slide_number": p["payload"].get("slide_number"),
-            "section_label": p["payload"].get("section_label"),
-            "heading_path": p["payload"].get("heading_path"),
-            "note_id": p["payload"].get("note_id", ""),
-            "meeting_id": p["payload"].get("meeting_id", ""),
+            "char_offset": pl.get("char_offset"),
+            "page_number": pl.get("page_number"),
+            "slide_number": pl.get("slide_number"),
+            "section_label": pl.get("section_label"),
+            "heading_path": pl.get("heading_path"),
+            "note_id": pl.get("note_id", ""),
+            "meeting_id": pl.get("meeting_id", ""),
         }
-        for p in all_points
-    ]
-    # Sort: group parent with its children (parent0, child0_0, child0_1, parent1, child1_0, ...)
-    parent_idx_map = {c["id"]: c["chunk_index"] for c in chunks if c.get("chunk_type") == "parent"}
+
+    chunks = [_point_to_chunk(p) for p in all_points]
+
+    # ── Attach child chunks missing version_id ──────────────────────────
+    # Parent-child ingest stamps version_id on parents when re-indexing a
+    # new file version, but many historical child points only have
+    # parent_id (no version_id / is_current). Pinning the scroll to
+    # current_version_id then returns parents with 0 children.
+    # Recover by loading children for this source whose parent_id is in
+    # the returned parent set.
+    parent_ids = {
+        c["id"] for c in chunks if c.get("chunk_type") == "parent"
+    }
+    have_children = any(c.get("chunk_type") == "child" for c in chunks)
+    if parent_ids and not have_children:
+        child_must = [
+            FieldCondition(key="source", match=MatchValue(value=source)),
+            FieldCondition(key="chunk_type", match=MatchValue(value="child")),
+        ]
+        child_not: list = []
+        # Historical open already sets include_archived=True; for current
+        # view still skip file-level archived children when possible.
+        if not include_archived and not resolved_version:
+            child_not.append(
+                FieldCondition(key="archived", match=MatchValue(value=True))
+            )
+        child_filter = Filter(
+            must=child_must, must_not=child_not or None
+        )
+        try:
+            child_points, _ = services.db.scroll_points(
+                collection=collection,
+                limit=10000,
+                offset=None,
+                scroll_filter=child_filter,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception:
+            logger.exception(
+                "get_file_chunks: failed to load children for %s/%s",
+                collection,
+                source,
+            )
+            child_points = []
+        seen_ids = {c["id"] for c in chunks}
+        attached = 0
+        for p in child_points:
+            pl = p.get("payload") or {}
+            pid = pl.get("parent_id")
+            if not pid or pid not in parent_ids:
+                continue
+            cid = str(p["id"])
+            if cid in seen_ids:
+                continue
+            chunks.append(_point_to_chunk(p))
+            seen_ids.add(cid)
+            attached += 1
+        if attached:
+            total = len(chunks)
+            logger.info(
+                "get_file_chunks: attached %d children missing version pin "
+                "for %s parents (source=%s)",
+                attached,
+                len(parent_ids),
+                source[:80],
+            )
+
+    # Sort: group parent with its children (parent0, child0_0, child0_1, parent1, …)
+    parent_idx_map = {
+        c["id"]: c["chunk_index"]
+        for c in chunks
+        if c.get("chunk_type") == "parent"
+    }
+
     def _sort_key(c):
         ct = c.get("chunk_type", "normal")
         ci = c.get("chunk_index", 0)
         pid = c.get("parent_id")
         if ct == "parent":
             return (ci, 0, 0)  # parent comes before its children
-        elif ct == "child":
+        if ct == "child":
             parent_ci = parent_idx_map.get(pid, 9999)
-            return (parent_ci, 1, ci)  # children after their parent, ordered by chunk_index
-        else:
-            return (ci, 0, 0)
+            return (parent_ci, 1, ci)
+        return (ci, 0, 0)
+
     chunks.sort(key=_sort_key)
 
     # Apply pagination after sorting

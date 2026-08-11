@@ -22,6 +22,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import {
@@ -258,8 +259,8 @@ export function UpdateFileDialog({
           "flex flex-col p-0 !gap-0 overflow-hidden"
         )}
       >
-        {/* Chrome — File detail title language (serif name + quiet meta) */}
-        <div className="pm-ws-chrome">
+        {/* Chrome — File detail title language; actions = ui/Button sm (~28px, same as X / pm-ws-action) */}
+        <div className="pm-ws-chrome pm-ws-chrome--actions">
           <DialogHeader className="shrink-0 flex-1 min-w-0 !p-0 !space-y-0">
             <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
               <span className="pm-ws-title truncate">Update file</span>
@@ -270,34 +271,35 @@ export function UpdateFileDialog({
                 : "Local preview only — nothing is saved until you upload."}
             </DialogDescription>
           </DialogHeader>
-          {/* Primary actions sit with chrome (ghost + green pri); room for X */}
-          <div className="flex items-center gap-2 shrink-0">
-            <button
+          <div className="pm-ws-chrome-actions">
+            <Button
               type="button"
-              className="pm-btn-ghost pm-btn-xs"
+              variant="ghost"
+              size="sm"
               disabled={busy}
               onClick={() => handleClose(false)}
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="pm-btn-pri pm-btn-xs gap-1"
+              variant="default"
+              size="sm"
               disabled={busy || !pendingFile}
               onClick={() => void handleConfirmUpload()}
             >
               {busy ? (
                 <>
-                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Queuing…
                 </>
               ) : (
                 <>
-                  <Upload className="h-3 w-3" strokeWidth={1.75} />
+                  <Upload className="h-3.5 w-3.5" strokeWidth={1.75} />
                   Upload version
                 </>
               )}
-            </button>
+            </Button>
           </div>
           <div className="w-8 shrink-0" aria-hidden />
         </div>
@@ -411,14 +413,16 @@ export function UpdateFileDialog({
                         </span>
                       </p>
                     </div>
-                    <button
+                    <Button
                       type="button"
-                      className="pm-btn-ghost pm-btn-xs shrink-0"
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0"
                       disabled={busy}
                       onClick={() => inputRef.current?.click()}
                     >
                       Replace
-                    </button>
+                    </Button>
                   </div>
 
                   {/* Preview stage — soft canvas well inside white card */}

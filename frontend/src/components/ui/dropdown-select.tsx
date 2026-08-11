@@ -9,10 +9,20 @@ import { createPortal } from "react-dom"
 import { ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 
+export type DropdownSelectOption = {
+  value: string
+  label: string
+  /**
+   * Visual mark only (e.g. green status dot) — no text badge.
+   * Used by Recall Evaluate for collections that already have test cases.
+   */
+  indicator?: boolean
+}
+
 interface DropdownSelectProps {
   value: string
   onChange: (value: string) => void
-  options: { value: string; label: string }[]
+  options: DropdownSelectOption[]
   placeholder?: string
   disabled?: boolean
   className?: string
@@ -150,8 +160,9 @@ export function DropdownSelect({
     return () => document.removeEventListener("keydown", onKey)
   }, [open, close])
 
-  const selectedLabel =
-    options.find((o) => o.value === value)?.label || placeholder || "Select..."
+  const selected = options.find((o) => o.value === value)
+  const selectedLabel = selected?.label || placeholder || "Select..."
+  const selectedHasMark = !!selected?.indicator
 
   const menu =
     mounted && menuPos ? (
@@ -194,6 +205,13 @@ export function DropdownSelect({
                 <span className="pm-select-opt-label min-w-0 truncate">
                   {opt.label}
                 </span>
+                {opt.indicator ? (
+                  <span
+                    className="pm-select-opt-mark"
+                    title="Has test cases"
+                    aria-label="Has test cases"
+                  />
+                ) : null}
               </button>
             )
           })
@@ -232,6 +250,13 @@ export function DropdownSelect({
         >
           {selectedLabel}
         </span>
+        {selectedHasMark ? (
+          <span
+            className="pm-select-opt-mark shrink-0"
+            title="Has test cases"
+            aria-label="Has test cases"
+          />
+        ) : null}
         {/* Tag pills match static .pm-node-tag — no chevron */}
         {!isTag && (
           <ChevronDown

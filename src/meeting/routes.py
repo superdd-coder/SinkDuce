@@ -500,6 +500,24 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
     # and cannot use asyncio.get_event_loop() there.
     main_loop = asyncio.get_running_loop()
 
+    meta = meeting_service.get_active_realtime_provider_meta()
+    logger.info(
+        "[REALTIME-WS] Config active realtime: id=%s adapter=%s model=%s",
+        meta.get("id"),
+        meta.get("adapter"),
+        meta.get("model"),
+    )
+    # Tell client which engine will be used (before possibly slow local load)
+    await websocket.send_json(
+        {
+            "type": "provider",
+            "provider_id": meta.get("id"),
+            "adapter": meta.get("adapter"),
+            "name": meta.get("name"),
+            "model": meta.get("model"),
+        }
+    )
+
     provider = meeting_service.get_active_realtime_provider()
     if not provider:
         print("[REALTIME-WS] >>> NO PROVIDER CONFIGURED", flush=True)
@@ -510,8 +528,15 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         await websocket.close()
         return
 
-    print(f"[REALTIME-WS] >>> provider: {type(provider).__name__}", flush=True)
-    logger.info("[REALTIME-WS] Provider found: %s, starting transcription", type(provider).__name__)
+    print(
+        f"[REALTIME-WS] >>> provider: {type(provider).__name__} adapter={meta.get('adapter')}",
+        flush=True,
+    )
+    logger.info(
+        "[REALTIME-WS] Provider instance: %s (adapter=%s)",
+        type(provider).__name__,
+        meta.get("adapter"),
+    )
 
     async def _safe_send(payload):
         try:
@@ -564,8 +589,11 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         print(f"[REALTIME-WS] >>> calling provider.start()", flush=True)
         await provider.start(on_segment, hot_words=hot_words, language_hints=language_hints)
         print(f"[REALTIME-WS] >>> provider.start() returned, entering receive loop", flush=True)
+        await websocket.send_json({"type": "ready", "message": "realtime session ready"})
 
         client_requested_stop = False
+        pcm_frames = 0
+        pcm_bytes = 0
         while True:
             # receive() returns a dict with "type" plus either "text" or "bytes".
             # We use this to support a JSON stop signal from the client (so
@@ -585,7 +613,20 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
                 # Unknown text message — ignore.
                 continue
             if "bytes" in message:
-                await provider.send_frame(message["bytes"])
+                data = message["bytes"] or b""
+                pcm_frames += 1
+                pcm_bytes += len(data)
+                if pcm_frames <= 3 or pcm_frames % 50 == 0:
+                    logger.info(
+                        "[REALTIME-WS] pcm frame#%d +%dB total=%dB adapter=%s",
+                        pcm_frames,
+                        len(data),
+                        pcm_bytes,
+                        meta.get("adapter"),
+                    )
+                # send_frame only enqueues for local FunASR; must stay fast
+                # so the WS receive loop does not stall behind generate().
+                await provider.send_frame(data)
 
         # Client asked for a graceful stop. Order matters:
         #   1. Tell the SDK to finalize first (otherwise it doesn't know

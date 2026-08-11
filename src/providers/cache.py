@@ -45,6 +45,21 @@ def get_or_create(key: str, factory) -> Any:
         return instance
 
 
+def peek(key: str) -> Any | None:
+    """Return cached instance without creating one."""
+    return _cache.get(key)
+
+
+def has(key: str) -> bool:
+    """True if a cached instance exists for key."""
+    return key in _cache and _cache.get(key) is not None
+
+
+def keys() -> list[str]:
+    """Return current cache keys (copy)."""
+    return list(_cache.keys())
+
+
 def invalidate(key: str) -> None:
     """Remove a cached instance (e.g. when config changes)."""
     key_lock = _get_key_lock(key)

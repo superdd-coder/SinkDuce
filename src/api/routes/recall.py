@@ -41,18 +41,150 @@ EVAL_DIR.mkdir(parents=True, exist_ok=True)
 # ── Helpers ────────────────────────────────────────────────
 
 
-def _hydrate_recall_result(chunk: RetrievedChunk, *, collection: str, id: str = "") -> RecallResult:
-    meta = chunk.metadata
+def _searchable_chunk_scroll_filter() -> Filter:
+    """Match Retriever archive filter: exclude archived / non-current points.
+
+    Same semantics as ``src/rag/retriever.py`` (Phase 4):
+    - drop ``archived == True``
+    - drop ``is_current == False``
+    Missing keys are kept (legacy points).
+    """
+    return Filter(
+        must_not=[
+            FieldCondition(key="archived", match=MatchValue(value=True)),
+            FieldCondition(key="is_current", match=MatchValue(value=False)),
+        ]
+    )
+
+
+def _is_searchable_eval_payload(payload: dict | None) -> bool:
+    """Post-filter for eval case generation — keep only chunks search can hit.
+
+    Mirrors retriever exclusion of archived / non-current versions, and skips
+    empty / config points that must never become target_chunk_id.
+    """
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("archived") is True:
+        return False
+    if payload.get("is_current") is False:
+        return False
+    chunk_type = str(payload.get("chunk_type") or "normal")
+    if chunk_type.startswith("__") or chunk_type == "config":
+        return False
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return False
+    return True
+
+
+def _display_for_source(
+    collection: str,
+    source: str,
+    payload_label: str | None,
+    *,
+    index_cache: dict[str, dict] | None = None,
+) -> str | None:
+    """Resolve a human display name; never returns opaque keys or generic placeholders."""
+    from src.collections.file_index import (
+        is_generic_display_name,
+        resolve_display_name,
+    )
+
+    src = (source or "").strip()
+    if not src:
+        return None
+    col = (collection or "").strip()
+    try:
+        name = resolve_display_name(
+            col,
+            src,
+            payload_label=payload_label,
+            index=index_cache,
+        )
+    except Exception:
+        logger.debug(
+            "resolve_display_name failed col=%s source=%s",
+            col,
+            src,
+            exc_info=True,
+        )
+        name = ""
+    name = (name or "").strip()
+    # Empty / opaque / "Document" / "Meeting" → None so UI can use filesMap
+    if not name or is_generic_display_name(name):
+        return None
+    return name
+
+
+def _hydrate_recall_result(
+    chunk: RetrievedChunk,
+    *,
+    collection: str,
+    id: str = "",
+    index_cache: dict[str, dict] | None = None,
+) -> RecallResult:
+    """Map a RetrievedChunk to RecallResult with rename-aware display_name."""
+    meta = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+    source = str(meta.get("source", "") or "")
+    payload_label = meta.get("source_label")
+    if payload_label is not None:
+        payload_label = str(payload_label).strip() or None
+        from src.collections.file_index import is_opaque_source_key
+
+        if is_opaque_source_key(payload_label):
+            payload_label = None
+    col = collection or str(meta.get("collection", "") or "")
+    display = _display_for_source(
+        col, source, payload_label, index_cache=index_cache
+    )
+
     return RecallResult(
         id=id or meta.get("id", ""),
         text=chunk.text,
         score=chunk.score,
-        source=meta.get("source", ""),
-        collection=collection or meta.get("collection", ""),
+        source=source,
+        collection=col,
         chunk_index=meta.get("chunk_index", 0),
         chunk_type=meta.get("chunk_type", "normal"),
         context=meta.get("context"),
         parent_id=meta.get("parent_id"),
+        display_name=display,
+        source_label=payload_label,
+    )
+
+
+def _hydrate_child_dict(
+    child: dict,
+    *,
+    collection: str,
+    index_cache: dict[str, dict] | None = None,
+) -> RecallResult:
+    """Hydrate parent-child child dicts from DirectQuery (not RetrievedChunk)."""
+    source = str(child.get("source", "") or "")
+    payload_label = child.get("source_label")
+    if payload_label is not None:
+        payload_label = str(payload_label).strip() or None
+        from src.collections.file_index import is_opaque_source_key
+
+        if is_opaque_source_key(payload_label):
+            payload_label = None
+    col = collection or str(child.get("collection", "") or "")
+    display = _display_for_source(
+        col, source, payload_label, index_cache=index_cache
+    )
+    return RecallResult(
+        id=str(child.get("id", "")),
+        text=str(child.get("text", "")),
+        score=float(child.get("score", 0.0) or 0.0),
+        source=source,
+        collection=col,
+        chunk_index=int(child.get("chunk_index", 0) or 0),
+        chunk_type=str(child.get("chunk_type", "child") or "child"),
+        context=child.get("context"),
+        parent_id=child.get("parent_id"),
+        display_name=display,
+        source_label=payload_label,
     )
 
 
@@ -252,20 +384,26 @@ def recall_search(req: RecallSearchRequest):
             rerank_top_k=params["rerank_top_k"],
             search_mode=params["search_mode"],
             min_score=params["min_score"],
-            max_iterations=params["max_iterations"],
             sparse_llm_tokenize=params["sparse_llm_tokenize"],
         )
         elapsed = int((time.time() - t0) * 1000)
-        results = [
-            RecallResult(
-                id=c.metadata.get("id", ""), text=c.text, score=c.score,
-                source=c.metadata.get("source", ""),
-                collection=c.metadata.get("collection", valid_collections[0] if valid_collections else ""),
-                chunk_index=c.metadata.get("chunk_index", 0),
-                chunk_type=c.metadata.get("chunk_type", "normal"),
-                context=c.metadata.get("context"),
-            ) for c in (aq_result.all_chunks or [])
-        ]
+        # Preload files.json once per collection (avoid N× disk reads)
+        from src.collections.file_index import load as load_file_index
+
+        index_by_col: dict[str, dict] = {
+            c: load_file_index(c) for c in valid_collections
+        }
+        default_col = valid_collections[0] if valid_collections else ""
+        results = []
+        for c in aq_result.all_chunks or []:
+            col = c.metadata.get("collection") or default_col
+            results.append(
+                _hydrate_recall_result(
+                    c,
+                    collection=col,
+                    index_cache=index_by_col.get(col) or index_by_col.get(default_col),
+                )
+            )
         context = getattr(aq_result, "context", "")
         return RecallSearchResponse(results=results, time_ms=elapsed, total=len(results),
                                     query_used=req.query, search_params=search_params,
@@ -290,11 +428,22 @@ def recall_search(req: RecallSearchRequest):
     child_groups_map: dict[str, list[dict]] = dict(dq_result.child_groups)
 
     elapsed = int((time.time() - t0) * 1000)
+    from src.collections.file_index import load as load_file_index
+
+    index_by_col: dict[str, dict] = {
+        c: load_file_index(c) for c in valid_collections
+    }
+    default_col = valid_collections[0] if valid_collections else ""
     results = []
     for c in chunks:
-        result = _hydrate_recall_result(c, collection=c.metadata.get("collection", valid_collections[0]))
+        col = c.metadata.get("collection") or default_col
+        idx = index_by_col.get(col) or index_by_col.get(default_col)
+        result = _hydrate_recall_result(c, collection=col, index_cache=idx)
         if result.chunk_type == "parent" and result.id in child_groups_map:
-            result.children = [RecallResult(**child) for child in child_groups_map[result.id]]
+            result.children = [
+                _hydrate_child_dict(child, collection=col, index_cache=idx)
+                for child in child_groups_map[result.id]
+            ]
         results.append(result)
 
     from src.rag.context_builder import build_context as _bc
@@ -378,12 +527,22 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
     if not services.db.collection_exists(collection):
         raise HTTPException(status_code=404, detail="Collection not found")
 
+    # Only sample chunks that Search/Eval can actually retrieve (non-archived,
+    # current version). Aligns with Retriever archive_filter.
     all_points = []
     offset = None
+    scroll_filter = _searchable_chunk_scroll_filter()
     while True:
         points, offset = services.db.scroll_points(
-            collection=collection, limit=1000, offset=offset,
-            with_payload=["source", "text", "summary", "context"], with_vectors=False,
+            collection=collection,
+            limit=1000,
+            offset=offset,
+            scroll_filter=scroll_filter,
+            with_payload=[
+                "source", "text", "summary", "context",
+                "archived", "is_current", "chunk_type",
+            ],
+            with_vectors=False,
         )
         all_points.extend(points)
         if offset is None:
@@ -391,8 +550,13 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
 
     # Group chunks by source, keeping the chunk_id so we can pin a target
     source_data: dict[str, dict] = {}
+    skipped_unsearchable = 0
     for p in all_points:
-        src = p["payload"].get("source", "")
+        payload = p.get("payload") or {}
+        if not _is_searchable_eval_payload(payload):
+            skipped_unsearchable += 1
+            continue
+        src = payload.get("source", "")
         chunk_id = str(p["id"])
         if not src or not chunk_id:
             continue
@@ -400,10 +564,16 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
             source_data[src] = {"chunks": [], "summary": ""}
         source_data[src]["chunks"].append({
             "id": chunk_id,
-            "text": p["payload"].get("text", ""),
+            "text": payload.get("text", ""),
         })
         if not source_data[src]["summary"]:
-            source_data[src]["summary"] = p["payload"].get("summary", "") or p["payload"].get("context", "")
+            source_data[src]["summary"] = payload.get("summary", "") or payload.get("context", "")
+
+    if skipped_unsearchable:
+        logger.info(
+            "generate_cases: skipped %d unsearchable points (archived/non-current/empty/config)",
+            skipped_unsearchable,
+        )
 
     # Build per-file chunk pools
     file_chunks: dict[str, list[dict]] = {}

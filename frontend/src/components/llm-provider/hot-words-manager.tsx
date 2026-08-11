@@ -2,7 +2,14 @@ import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { FieldLabel } from "@/components/ui/field-label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Plus, Trash2, BookOpen, Save } from "lucide-react"
 import {
@@ -11,6 +18,7 @@ import {
   type HotWordsLibrary, type HotWordsLibrarySummary, type HotWordItem,
 } from "@/api/client"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 
 interface Props {
   open: boolean
@@ -122,51 +130,64 @@ export function HotWordsManager({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-6xl h-[80vh] flex flex-col p-0">
-        <DialogHeader className="px-6 pt-6 pb-0 shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5" />
-            Hot Words Management
-          </DialogTitle>
+      <DialogContent
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-settings-hw-dialog",
+          "sm:max-w-6xl h-[80vh]",
+          "!animate-none data-open:!animate-none data-closed:!animate-none",
+        )}
+        overlayClassName="pm-dialog-overlay--silk"
+      >
+        <DialogHeader className="shrink-0">
+          <DialogKicker>Settings</DialogKicker>
+          <DialogTitle>Hot words</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-1 min-h-0 px-6 pb-6 pt-4 gap-4">
-          {/* Left panel: library list */}
-          <div className="w-56 shrink-0 flex flex-col border border-border rounded-lg overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/50">
-              <span className="text-sm font-medium">Libraries</span>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleNew} title="New library">
+        <div className="pm-settings-hw">
+          {/* Left rail */}
+          <div className="pm-settings-hw-rail">
+            <div className="pm-settings-hw-rail-head">
+              <span className="pm-label text-[var(--pm-ink)]">Libraries</span>
+              <Button variant="ghost" size="icon-sm" onClick={handleNew} title="New library">
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
-            <ScrollArea className="flex-1">
-              <div className="p-1">
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="p-2 space-y-0.5">
                 {libraries.map((lib) => (
                   <div
                     key={lib.id}
-                    className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer text-sm ${
-                      selectedId === lib.id
-                        ? "bg-primary/10 text-primary font-medium"
-                        : "hover:bg-muted"
-                    }`}
+                    role="button"
+                    tabIndex={0}
+                    className={cn(
+                      "pm-settings-hw-lib",
+                      selectedId === lib.id && "is-active",
+                    )}
                     onClick={() => handleSwitchLibrary(lib.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        handleSwitchLibrary(lib.id)
+                      }
+                    }}
                   >
                     <div className="truncate flex-1 min-w-0">
-                      <div className="truncate">{lib.name}</div>
-                      <div className="text-xs text-muted-foreground">{lib.word_count} words</div>
+                      <div className="pm-title truncate">{lib.name}</div>
+                      <div className="pm-meta">{lib.word_count} words</div>
                     </div>
                     {deleteConfirmId === lib.id ? (
-                      <div className="flex items-center gap-1 shrink-0 ml-1">
+                      <div className="flex items-center gap-0.5 shrink-0 ml-1">
                         <Button
-                          variant="ghost" size="icon"
-                          className="h-5 w-5 text-destructive"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="text-[var(--pm-danger)]"
                           onClick={(e) => { e.stopPropagation(); handleDelete(lib.id) }}
                         >
                           <Trash2 className="h-3 w-3" />
                         </Button>
                         <Button
-                          variant="ghost" size="icon"
-                          className="h-5 w-5"
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null) }}
                         >
                           ×
@@ -174,9 +195,9 @@ export function HotWordsManager({ open, onOpenChange }: Props) {
                       </div>
                     ) : (
                       <Button
-                        variant="ghost" size="icon"
-                        className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0 ml-1"
-                        style={{ opacity: undefined }}
+                        variant="ghost"
+                        size="icon-xs"
+                        className="shrink-0 ml-1 opacity-50 hover:opacity-100"
                         onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(lib.id) }}
                       >
                         <Trash2 className="h-3 w-3" />
@@ -185,7 +206,7 @@ export function HotWordsManager({ open, onOpenChange }: Props) {
                   </div>
                 ))}
                 {libraries.length === 0 && (
-                  <p className="text-xs text-muted-foreground p-2 text-center">
+                  <p className="pm-meta p-2 text-center">
                     No libraries yet. Click + to create one.
                   </p>
                 )}
@@ -193,54 +214,54 @@ export function HotWordsManager({ open, onOpenChange }: Props) {
             </ScrollArea>
           </div>
 
-          {/* Right panel: library details */}
-          <div className="flex-1 min-w-0 flex flex-col border border-border rounded-lg overflow-hidden">
+          {/* Main pane */}
+          <div className="pm-settings-hw-main">
             {selectedLib ? (
               <>
-                <div className="px-4 py-3 border-b border-border space-y-3 shrink-0">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Name</label>
+                <div className="pm-settings-hw-main-head flex-col !items-stretch space-y-3">
+                  <div className="pm-config-field">
+                    <FieldLabel>Name</FieldLabel>
                     <Input
                       value={selectedLib.name}
                       onChange={(e) => updateField("name", e.target.value)}
-                      className="h-8 mt-1"
                     />
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Description</label>
+                  <div className="pm-config-field">
+                    <FieldLabel>Description</FieldLabel>
                     <Textarea
                       value={selectedLib.description}
                       onChange={(e) => updateField("description", e.target.value)}
-                      className="h-16 mt-1 resize-none"
+                      className="h-16 resize-none"
                     />
                   </div>
                 </div>
 
-                {/* Word list */}
                 <div className="flex-1 min-h-0 flex flex-col">
-                  <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30 shrink-0">
-                    <span className="text-sm font-medium">
+                  <div className="pm-settings-hw-words-head">
+                    <span className="pm-label text-[var(--pm-ink)]">
                       Words ({selectedLib.words.length})
                     </span>
-                    <Button variant="outline" size="sm" onClick={addWord}>
-                      <Plus className="h-3 w-3 mr-1" /> Add Word
+                    <Button variant="ghost" size="xs" onClick={addWord}>
+                      <Plus className="h-3 w-3" />
+                      Add word
                     </Button>
                   </div>
-                  <ScrollArea className="flex-1">
-                    <div className="divide-y divide-border">
+                  <ScrollArea className="flex-1 min-h-0">
+                    <div className="py-1">
                       {selectedLib.words.map((word, i) => (
-                        <div key={i} className="flex items-center gap-2 px-4 py-2">
+                        <div key={i} className="pm-settings-hw-word-row">
                           <Input
                             value={word.text}
                             onChange={(e) => updateWord(i, "text", e.target.value)}
                             placeholder="Hot word"
-                            className="h-8 flex-1 min-w-0"
+                            className="flex-1 min-w-0"
                           />
-                          <div className="flex items-center gap-1 shrink-0">
-                            <label className="text-xs text-muted-foreground">W:</label>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="pm-meta">W</span>
                             <Input
                               type="number"
-                              min={1} max={10}
+                              min={1}
+                              max={10}
                               value={isNaN(word.weight) ? "" : word.weight}
                               onChange={(e) => {
                                 const v = e.target.value
@@ -251,18 +272,19 @@ export function HotWordsManager({ open, onOpenChange }: Props) {
                               onBlur={() => {
                                 if (isNaN(word.weight)) updateWord(i, "weight", 4)
                               }}
-                              className="h-8 w-14 text-center"
+                              className="w-14 text-center"
                             />
                           </div>
                           <Input
                             value={word.lang || ""}
                             onChange={(e) => updateWord(i, "lang", e.target.value)}
                             placeholder="lang"
-                            className="h-8 w-16"
+                            className="w-16"
                           />
                           <Button
-                            variant="ghost" size="icon"
-                            className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="shrink-0 text-[var(--pm-danger)] hover:text-[var(--pm-danger)]"
                             onClick={() => removeWord(i)}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -270,30 +292,29 @@ export function HotWordsManager({ open, onOpenChange }: Props) {
                         </div>
                       ))}
                       {selectedLib.words.length === 0 && (
-                        <p className="text-xs text-muted-foreground p-4 text-center">
-                          No words. Click "Add Word" to add one.
+                        <p className="pm-meta p-4 text-center">
+                          No words. Click “Add word” to add one.
                         </p>
                       )}
                     </div>
                   </ScrollArea>
                 </div>
 
-                {/* Save bar */}
-                <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-muted/30 shrink-0">
-                  <span className="text-xs text-muted-foreground">
+                <div className="pm-settings-hw-foot">
+                  <span className="pm-meta">
                     {isDirty ? "Unsaved changes" : "Saved"}
                   </span>
                   <Button size="sm" onClick={handleSave} disabled={!isDirty || isSaving}>
-                    <Save className="h-3.5 w-3.5 mr-1" />
-                    {isSaving ? "Saving..." : "Save"}
+                    <Save className="h-3.5 w-3.5" />
+                    {isSaving ? "Saving…" : "Save"}
                   </Button>
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground">
-                <div className="text-center">
-                  <BookOpen className="h-10 w-10 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">Select a library or create one</p>
+              <div className="flex-1 flex items-center justify-center">
+                <div className="pm-settings-empty">
+                  <BookOpen className="h-8 w-8" />
+                  <p className="pm-meta">Select a library or create one</p>
                 </div>
               </div>
             )}

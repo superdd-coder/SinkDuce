@@ -649,17 +649,27 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   // Start/stop realtime transcription when recording starts/stops,
   // and when realtimeEnabled is toggled during recording.
+  // Do NOT depend on isTranscribing flips from WS reconnect — that used to
+  // spawn parallel sessions and spam engine toasts.
+  const startTranscriptionRef = useRef(transcription.startTranscription)
+  const stopTranscriptionRef = useRef(transcription.stopTranscription)
+  startTranscriptionRef.current = transcription.startTranscription
+  stopTranscriptionRef.current = transcription.stopTranscription
+  const isTranscribingRef = useRef(transcription.isTranscribing)
+  isTranscribingRef.current = transcription.isTranscribing
+
   useEffect(() => {
     if (!hasRealtimeProvider) return
 
     const shouldTranscribe = recorder.isRecording && realtimeEnabled
 
-    if (shouldTranscribe && !transcription.isTranscribing) {
-      transcription.startTranscription(["auto"])
-    } else if (!shouldTranscribe && transcription.isTranscribing) {
-      transcription.stopTranscription()
+    if (shouldTranscribe && !isTranscribingRef.current) {
+      // Prefer explicit language for local Chinese streaming; "auto" is stripped server-side
+      startTranscriptionRef.current(["zh"])
+    } else if (!shouldTranscribe && isTranscribingRef.current) {
+      stopTranscriptionRef.current()
     }
-  }, [recorder.isRecording, hasRealtimeProvider, realtimeEnabled, transcription.isTranscribing])
+  }, [recorder.isRecording, hasRealtimeProvider, realtimeEnabled])
 
   // Fetch meetings list
   const fetchMeetings = useCallback(async () => {

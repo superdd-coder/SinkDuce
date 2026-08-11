@@ -332,6 +332,7 @@ class AgenticQueryService:
                     query=aq_item.query, retained_chunks=list(vf.chunks),
                     retained_info=vf.retained_info, gap_analysis=vf.gap_analysis,
                     task=aq_item.task or "", task_query=aq_item.task_query or "",
+                    retrieved_chunks=list(getattr(vf, "retrieved_chunks", None) or []),
                 )
                 # emit: step="aq_done", aq_id, chunks, has_gaps, content=summary
                 _emit("aq_done", f"{len(vf.chunks)} chunks" + (", has gaps" if has_gaps else ""),
@@ -402,11 +403,24 @@ class AgenticQueryService:
                 )
 
         # ── Collect chunks (dedup by ID, sort by score desc) ───────────
+        # Prefer grade-retained chunks. When the grader drops everything
+        # (common on hard queries), surface pre-grade retrieval candidates
+        # so Search/Recall can still inspect ranked hits + agent context.
         all_chunks: list[RetrievedChunk] = []
         for sq in sq_results:
-            for c in (sq.retained_chunks or []):
-                cid = c.metadata.get("id", "") if hasattr(c, "metadata") else ""
-                if cid and cid not in seen_chunk_ids:
+            source = list(sq.retained_chunks or [])
+            if not source:
+                source = list(getattr(sq, "retrieved_chunks", None) or [])
+            for c in source:
+                meta = c.metadata if hasattr(c, "metadata") else {}
+                cid = (
+                    (meta.get("id") or meta.get("chunk_id") or "")
+                    if isinstance(meta, dict) else ""
+                )
+                if not cid:
+                    # Still include chunks missing ids (dedupe by text prefix)
+                    cid = f"txt:{hash((getattr(c, 'text', '') or '')[:240])}"
+                if cid not in seen_chunk_ids:
                     seen_chunk_ids.add(cid)
                     all_chunks.append(c)
         all_chunks.sort(key=lambda c: c.score, reverse=True)

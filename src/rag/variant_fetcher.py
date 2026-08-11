@@ -24,6 +24,7 @@ from src.rag import get_log_ctx as _ctx
 class VariantFetcherResult:
     """Result from VariantFetcher.run()."""
     chunks: list = field(default_factory=list)          # list[RetrievedChunk] — retained chunks
+    retrieved_chunks: list = field(default_factory=list)  # pre-grade unique chunks
     retained_info: str = ""
     gap_analysis: str = ""       # what's still missing (empty = complete)
     steps: list = field(default_factory=list)            # list[dict]
@@ -205,6 +206,7 @@ class VariantFetcher:
                     len(state.retained_chunks), unique_before_grade, gap_flag)
         return VariantFetcherResult(
             chunks=list(state.retained_chunks),
+            retrieved_chunks=list(state.all_chunks),
             retained_info=state.retained_info,
             gap_analysis=state.current_gap_analysis,
             steps=steps,

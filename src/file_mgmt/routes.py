@@ -439,6 +439,21 @@ def delete_file_version(
     return service.delete_file_version(collection_id, file_id, version_id)
 
 
+@router.post(
+    "/{collection_id}/files/{file_id}/versions/{version_id}/rollback",
+    status_code=200,
+)
+def rollback_file_version(
+    collection_id: str, file_id: str, version_id: str
+):
+    """Roll back to this version: make it current and hard-delete all later versions.
+
+    Later versions are permanently removed (blob + vectors + log), not archived.
+    Earlier history (lower version_no) is kept as archived history.
+    """
+    return service.rollback_file_version(collection_id, file_id, version_id)
+
+
 @router.patch("/{collection_id}/files/{file_id}")
 def update_file(collection_id: str, file_id: str, req: dict):
     """Update file metadata (is_definitive, filename). Archive via PATCH .../archive."""

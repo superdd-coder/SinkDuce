@@ -21,6 +21,7 @@ class SubQueryResult:
     answer: str | None = None      # None when generate_answer=False
     task: str = ""                  # decompose task label
     task_query: str = ""            # complete task description
+    retrieved_chunks: list = field(default_factory=list)  # pre-grade candidates
 
 
 # ── Prompts ────────────────────────────────────────────────────────────────

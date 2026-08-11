@@ -526,6 +526,28 @@ export const deleteFileVersion = (
     { method: "DELETE" }
   )
 
+/**
+ * Roll back to a historical version: make it current and permanently delete
+ * all later versions (blob + Qdrant + log) — not archive.
+ */
+export const rollbackFileVersion = (
+  collectionId: string,
+  fileId: string,
+  versionId: string
+) =>
+  req<{
+    file_id: string
+    version_id: string
+    version_no: number
+    storage_file_id: string
+    deleted_version_ids: string[]
+    deleted_count: number
+    restored_chunks: number
+    current: boolean
+  }>(`/${collectionId}/files/${fileId}/versions/${versionId}/rollback`, {
+    method: "POST",
+  })
+
 /** Promote a derived path (source_node_id set) to a persistent path. */
 export const promoteFilePath = (
   collectionId: string,

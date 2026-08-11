@@ -296,7 +296,84 @@ def _parse_blocks(text: str) -> list[MarkdownBlock]:
 
     # Build heading paths
     _assign_heading_paths(blocks)
+    # Keep table-source :::image fences with the following table (never split)
+    blocks = _merge_table_source_images(blocks)
     return blocks
+
+
+def _is_image_fence_block(block: MarkdownBlock) -> bool:
+    """True if *block* is a standalone :::image … ::: fence (table figure or figure)."""
+    if block.block_type not in ("fenced_div", "paragraph"):
+        return False
+    head = block.content.lstrip()
+    if not head.startswith(":::image"):
+        return False
+    # Must contain a closing bare ::: line
+    for line in head.split("\n")[1:]:
+        if line.strip() == ":::":
+            return True
+    return False
+
+
+def _merge_table_source_images(blocks: list[MarkdownBlock]) -> list[MarkdownBlock]:
+    """Glue a leading :::image fence to the immediately following table.
+
+    Parse (MinerU / PDF) places the cropped table image *before* the table
+    markup.  Treating them as separate blocks lets the packer flush the image
+    into chunk N and the table into chunk N+1.  Merging keeps the pair atomic
+    for packing; oversized tables still split rows, but the figure stays on
+    the first sub-table only (see ``_strip_leading_image_fence``).
+    """
+    if not blocks:
+        return blocks
+    out: list[MarkdownBlock] = []
+    i = 0
+    n = len(blocks)
+    while i < n:
+        b = blocks[i]
+        nxt = blocks[i + 1] if i + 1 < n else None
+        if (
+            nxt is not None
+            and _is_image_fence_block(b)
+            and nxt.block_type in ("table", "html_table")
+        ):
+            out.append(
+                MarkdownBlock(
+                    block_type=nxt.block_type,
+                    content=b.content.rstrip() + "\n\n" + nxt.content.lstrip(),
+                    start_offset=b.start_offset,
+                    end_offset=nxt.end_offset,
+                    heading_level=nxt.heading_level,
+                    heading_path=list(nxt.heading_path or b.heading_path),
+                )
+            )
+            i += 2
+            continue
+        out.append(b)
+        i += 1
+    return out
+
+
+def _strip_leading_image_fence(content: str) -> tuple[str, str]:
+    """Split ``:::image … :::\\n<table|GFM>`` into (fence_prefix, table_body).
+
+    Returns ``("", content)`` when there is no leading image fence.
+    """
+    if not content.lstrip().startswith(":::image"):
+        return "", content
+    lines = content.split("\n")
+    # Find start line (allow leading blank lines)
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    if start >= len(lines) or not lines[start].strip().startswith(":::image"):
+        return "", content
+    for i in range(start + 1, len(lines)):
+        if lines[i].strip() == ":::":
+            prefix = "\n".join(lines[start : i + 1]) + "\n"
+            rest = "\n".join(lines[i + 1 :]).lstrip("\n")
+            return prefix, rest
+    return "", content
 
 
 def _assign_heading_paths(blocks: list[MarkdownBlock]) -> None:
@@ -394,13 +471,19 @@ def _split_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBl
     count toward ``max_tokens`` — only data rows participate in the budget.
     This keeps sub-tables compact while letting each one carry more data.
 
+    When a table-source ``:::image`` fence is glued in front of the table
+    (see ``_merge_table_source_images``), it is preserved on the **first**
+    sub-block only so the figure is not duplicated across row splits.
+
     For the *first* sub-block ``start_offset`` points to the real header in
     the original text.  For *subsequent* sub-blocks ``start_offset`` points
     to the first data row in the original text (the repeated header is
     injected and doesn't exist there).
     """
+    figure_prefix, table_body = _strip_leading_image_fence(block.content)
+
     # ── Global prune: remove columns empty across ALL data rows ─────
-    full_table = _prune_empty_table_columns(block.content)
+    full_table = _prune_empty_table_columns(table_body)
     lines = full_table.split("\n")
     if len(lines) < 3:
         return [block]
@@ -409,37 +492,42 @@ def _split_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBl
     separator_line = lines[1]
     data_lines = lines[2:]
 
-    # Pre-compute position of each data line within the *original* block.content
-    _orig_lines = block.content.split("\n")
+    # Pre-compute position of each data line within the *table body* (no figure)
+    _orig_lines = table_body.split("\n")
     _data_start_positions: list[int] = []
     _pos = len(_orig_lines[0]) + 1 + len(_orig_lines[1]) + 1  # +1 for each \n
     for row_text in _orig_lines[2:]:
         _data_start_positions.append(_pos)
         _pos += len(row_text) + 1
+    # Offset of table body inside original block.content
+    body_off = len(figure_prefix) if figure_prefix else 0
 
     parts: list[MarkdownBlock] = []
     current_rows: list[str] = []
     current_tokens = 0  # header does NOT count toward max_tokens
     _data_start_idx = 0  # index into _data_start_positions for the current group
 
+    def _emit(part_content: str, data_start_idx: int) -> None:
+        # First sub-block carries the table-source figure when present
+        if data_start_idx == 0 and figure_prefix:
+            part_content = figure_prefix.rstrip() + "\n\n" + part_content
+        tbl_start = block.start_offset if data_start_idx == 0 else (
+            block.start_offset + body_off + _data_start_positions[data_start_idx]
+        )
+        parts.append(MarkdownBlock(
+            block_type="table", content=part_content,
+            start_offset=tbl_start,
+            end_offset=block.end_offset,
+            heading_path=list(block.heading_path),
+        ))
+
     for i, row in enumerate(data_lines):
         row_tokens = _estimate_tokens(row)
         if current_rows and current_tokens + row_tokens > max_tokens:
-            # Flush current group
             part_content = _prune_empty_table_columns(
                 header_line + "\n" + separator_line + "\n" + "\n".join(current_rows)
             )
-            # First sub-block: start_offset = block.start_offset (real header)
-            # Subsequent: start_offset = first data row's position in original text
-            tbl_start = block.start_offset if _data_start_idx == 0 else (
-                block.start_offset + _data_start_positions[_data_start_idx]
-            )
-            parts.append(MarkdownBlock(
-                block_type="table", content=part_content,
-                start_offset=tbl_start,
-                end_offset=block.end_offset,
-                heading_path=list(block.heading_path),
-            ))
+            _emit(part_content, _data_start_idx)
             current_rows = []
             current_tokens = 0  # header does NOT count
             _data_start_idx = i
@@ -451,15 +539,7 @@ def _split_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBl
         part_content = _prune_empty_table_columns(
             header_line + "\n" + separator_line + "\n" + "\n".join(current_rows)
         )
-        tbl_start = block.start_offset if _data_start_idx == 0 else (
-            block.start_offset + _data_start_positions[_data_start_idx]
-        )
-        parts.append(MarkdownBlock(
-            block_type="table", content=part_content,
-            start_offset=tbl_start,
-            end_offset=block.end_offset,
-            heading_path=list(block.heading_path),
-        ))
+        _emit(part_content, _data_start_idx)
 
     return parts if parts else [block]
 
@@ -650,6 +730,9 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     so the table remains valid.  The opening ``<table ...>`` and closing
     ``</table>`` wrappers are also injected for every sub-block.
 
+    A leading table-source ``:::image`` fence (glued by
+    ``_merge_table_source_images``) is kept on the first sub-block only.
+
     ``start_offset`` for the first sub-block points to the original ``<table>``
     opening tag.  For subsequent sub-blocks it points to the first ``<tr>`` of
     the data rows in the original text (the repeated header/table-wrappers are
@@ -657,7 +740,7 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     """
     import re as _re
 
-    content = block.content
+    figure_prefix, content = _strip_leading_image_fence(block.content)
 
     # ── Extract opening <table ...> and closing </table> ──
     _table_open_m = _re.search(r"^<table[^>]*>", content, _re.IGNORECASE)
@@ -723,6 +806,19 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     )
     _data_start_idx = 0
 
+    def _emit_html(part_content: str, data_start_idx: int) -> None:
+        if data_start_idx == 0 and figure_prefix:
+            part_content = figure_prefix.rstrip() + "\n\n" + part_content
+        tbl_start = block.start_offset if data_start_idx == 0 else (
+            block.start_offset + _tr_positions[data_start_idx]
+        )
+        parts.append(MarkdownBlock(
+            block_type="html_table", content=part_content,
+            start_offset=tbl_start,
+            end_offset=block.end_offset,
+            heading_path=list(block.heading_path),
+        ))
+
     for i, m in enumerate(data_tr_matches):
         row_text = m.group(0)
         row_tokens = _estimate_tokens(row_text)
@@ -730,15 +826,7 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
             # Flush current group — rebuild a full HTML table
             part_inner = "".join(header_tr_content) + "\n" + "\n".join(current_rows)
             part_content = table_open + "\n" + part_inner + "\n" + table_close
-            tbl_start = block.start_offset if _data_start_idx == 0 else (
-                block.start_offset + _tr_positions[_data_start_idx]
-            )
-            parts.append(MarkdownBlock(
-                block_type="html_table", content=part_content,
-                start_offset=tbl_start,
-                end_offset=block.end_offset,
-                heading_path=list(block.heading_path),
-            ))
+            _emit_html(part_content, _data_start_idx)
             current_rows = []
             current_tokens = _estimate_tokens(
                 table_open + "\n" + "".join(header_tr_content) + table_close
@@ -751,15 +839,7 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     if current_rows:
         part_inner = "".join(header_tr_content) + "\n" + "\n".join(current_rows)
         part_content = table_open + "\n" + part_inner + "\n" + table_close
-        tbl_start = block.start_offset if _data_start_idx == 0 else (
-            block.start_offset + _tr_positions[_data_start_idx]
-        )
-        parts.append(MarkdownBlock(
-            block_type="html_table", content=part_content,
-            start_offset=tbl_start,
-            end_offset=block.end_offset,
-            heading_path=list(block.heading_path),
-        ))
+        _emit_html(part_content, _data_start_idx)
 
     return parts if parts else [block]
 

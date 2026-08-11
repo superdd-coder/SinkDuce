@@ -521,6 +521,42 @@ input[type="checkbox"] {
   margin-bottom: 2em;
   border-radius: 0.375rem;
 }
+/*
+ * File / chunk previews: table-source images sit immediately above the table.
+ * Global .prose img { 2em } creates a huge dead band — kill it in doc shells.
+ */
+.pm-ws-doc-stage .prose img,
+.pm-ws-doc-stage .ProseMirror img,
+.pm-ws-tile .prose img,
+.pm-recall-md img,
+.pm-recall-md-img {
+  margin-top: 0.25rem !important;
+  margin-bottom: 0.35rem !important;
+}
+/* TipTap image node view (Parse tab) — collapse dead space under figure */
+.pm-ws-doc-stage .ProseMirror .image-container,
+.pm-ws-doc-stage .ProseMirror [data-node-view-wrapper] {
+  margin-top: 0.35rem !important;
+  margin-bottom: 0.35rem !important;
+}
+.pm-ws-doc-stage .ProseMirror .image-caption:empty,
+.pm-ws-doc-stage .ProseMirror .image-caption[style*="display: none"] {
+  display: none !important;
+  margin: 0 !important;
+  min-height: 0 !important;
+}
+.pm-ws-doc-stage .ProseMirror .image-visual-desc[style*="display: none"] {
+  display: none !important;
+  margin: 0 !important;
+}
+/* Table right after an image / image container */
+.pm-ws-doc-stage .ProseMirror img + table,
+.pm-ws-doc-stage .ProseMirror p:has(img) + table,
+.pm-ws-doc-stage .ProseMirror .image-container + table,
+.pm-ws-doc-stage .ProseMirror [data-node-view-wrapper] + table,
+.pm-ws-doc-stage .ProseMirror [data-node-view-wrapper] + * table {
+  margin-top: 0.35rem !important;
+}
 
 /* ── Visual Translate: aurora border for images with AI descriptions ── */
 
@@ -4924,15 +4960,15 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   margin-bottom: 6px;
 }
 /*
- * Reading text inset — narrow the prose measure without shifting
- * Summary header actions (Consolidate) or the stage tab bar.
+ * Body measure = full left column (same edges as stats / Summary title).
+ * Do not inset blurb/summary — that looked like a horizontal offset.
  */
 .pm-overview-left-body .pm-blurb-row,
 .pm-overview-left-body .pm-summary-body {
-  margin-left: clamp(16px, 4vw, 40px);
-  margin-right: clamp(16px, 4vw, 40px);
-  width: auto !important;
-  max-width: none !important;
+  margin-left: 0;
+  margin-right: 0;
+  width: 100% !important;
+  max-width: 100% !important;
   box-sizing: border-box;
 }
 .pm-overview-left-body .pm-blurb,
@@ -7285,42 +7321,78 @@ button.pm-rail-new:hover:not(:disabled) {
   line-height: 1.5;
 }
 /*
- * Compact danger / confirm dialogs (Delete note, Delete session, …)
- * Kicker + serif title + soft target chip + quiet copy + footer actions.
+ * Compact danger / confirm dialogs (Delete note, Delete session, rollback, …)
+ * Kicker + sentence-case serif title + soft target chip + quiet copy + footer.
  */
 .pm-dialog.pm-dialog-confirm[data-slot="dialog-content"] {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  box-sizing: border-box !important;
+  width: min(360px, calc(100vw - 2rem)) !important;
+  max-width: min(360px, calc(100vw - 2rem)) !important;
+  min-width: 0 !important;
   padding: 22px 22px 16px !important;
-  gap: 18px !important;
-  max-width: min(320px, calc(100vw - 2rem)) !important;
+  gap: 16px !important;
+  overflow: hidden !important; /* keep chip/footer inside cream shell */
+}
+/* Sentence case — global .pm-dialog-title is uppercase; confirm questions stay prose */
+.pm-dialog-confirm .pm-dialog-title,
+.pm-dialog-confirm [data-slot="dialog-title"] {
+  text-transform: none !important;
+  font-size: clamp(17px, 2vw, 20px) !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.3 !important;
+  max-width: 100%;
 }
 .pm-dialog-confirm [data-slot="dialog-header"] {
   margin: 0 !important;
   gap: 6px !important;
+  min-width: 0 !important;
+  max-width: 100%;
 }
 /* Named target — white nest chip on canvas (not inline bold quotes) */
 .pm-dialog-confirm-target {
   margin: 8px 0 2px !important;
   padding: 10px 12px;
-  border-radius: var(--pm-r, 16px);
+  border-radius: var(--pm-r-sm, 10px);
   background: #ffffff;
   box-shadow: var(--pm-shadow-sm);
-  font: 300 13px/1.35 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
+  font: 300 12.5px/1.4 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif) !important;
   font-weight: 300 !important;
   letter-spacing: -0.01em !important;
   color: var(--pm-ink, #121410) !important;
   text-transform: none !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Prefer soft wrap for long filenames; ellipsis only if still overflowing */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .pm-dialog-confirm [data-slot="dialog-description"] {
   margin-top: 4px !important;
-  max-width: none;
+  max-width: none !important;
+  min-width: 0 !important;
 }
 .pm-dialog-confirm [data-slot="dialog-footer"] {
-  margin-top: 0 !important;
-  padding-top: 0 !important;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  margin: 0 !important;
+  margin-top: 2px !important;
+  padding: 0 !important;
   gap: 8px !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  flex-shrink: 0;
 }
 /* Field label — global control (also under .pm-dialog) */
 .pm-field-label,
@@ -7945,6 +8017,1253 @@ button.pm-rail-new:hover:not(:disabled) {
   .pm-config-fold,
   .pm-field-chip,
   .pm-config-save-status {
+    transition-duration: 0.01ms !important;
+  }
+}
+/*
+ * Global Settings (Navigate → Settings / LLM Provider view).
+ * Layout: stage → section soft-float cards · dialog canvas → nested white cards.
+ *
+ * Type ladder (SPEC families · ENGINEERING §3.3):
+ *   page title     → Source Serif 300  · display
+ *   section title  → Source Serif 300  · Models / Embedding / …
+ *   subhead        → Source Serif 300  · File transcription / Enrichment / More
+ *   provider name  → Source Serif 300  · tile identity
+ *   body / desc    → Geist 300
+ *   field label    → Geist 400 label
+ *   meta / url     → Geist 300 meta
+ * Controls: ui/* only.
+ */
+.pm-settings {
+  --pm-settings-gutter: 20px;
+  --pm-settings-t-section: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-sub: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-name: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-body: 300 13.5px/1.55 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  --pm-settings-t-meta: 300 12px/1.45 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  height: 100%;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 14px var(--pm-settings-gutter) 44px;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 13.5px;
+  font-weight: 300;
+  line-height: 1.55;
+  color: var(--pm-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01" 0, "kern" 1;
+}
+.pm-settings-inner {
+  max-width: 860px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  padding: 4px 4px 12px;
+  box-sizing: border-box;
+}
+/* Page masthead */
+.pm-settings-mast {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 4px 4px;
+  min-width: 0;
+}
+.pm-settings-page-kicker {
+  margin: 0;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--pm-green);
+}
+.pm-settings-page-title {
+  margin: 0;
+  font: var(--pm-t-display);
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: clamp(24px, 2.8vw, 28px);
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: 0.01em;
+  line-height: 1.18;
+  text-transform: none;
+  color: var(--pm-ink);
+}
+.pm-settings-page-desc {
+  margin: 0;
+  max-width: 48ch;
+  font: var(--pm-settings-t-body);
+  font-weight: 300;
+  color: var(--pm-muted);
+  line-height: 1.6;
+}
+/*
+ * Settings surface control locks — same ui/* variants, denser form rhythm.
+ * Do not invent a third button/select skin; only compose type + spacing.
+ */
+.pm-settings [data-slot="button"],
+.pm-settings-dlg [data-slot="button"] {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+}
+/* DropdownSelect — body-weight values, soft nested control */
+.pm-settings .pm-select-trigger--md,
+.pm-settings-dlg .pm-select-trigger--md,
+.pm-settings .pm-select-trigger--sm,
+.pm-settings-dlg .pm-select-trigger--sm {
+  font: var(--pm-settings-t-body);
+  font-weight: 300;
+  letter-spacing: 0.005em;
+  min-height: 36px;
+  padding: 0 12px 0 14px;
+  background: color-mix(in srgb, var(--pm-ink) 2.5%, #ffffff);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 8%, transparent);
+}
+.pm-settings .pm-select-trigger:hover:not(.is-disabled):not(.pm-select-trigger--tag),
+.pm-settings-dlg .pm-select-trigger:hover:not(.is-disabled):not(.pm-select-trigger--tag) {
+  background: color-mix(in srgb, var(--pm-ink) 4%, #ffffff);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 12%, transparent);
+}
+.pm-settings .pm-select-trigger.is-open,
+.pm-settings .pm-select-trigger:focus-visible,
+.pm-settings-dlg .pm-select-trigger.is-open,
+.pm-settings-dlg .pm-select-trigger:focus-visible {
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 38%, transparent),
+    0 0 0 3px var(--pm-green-wash);
+}
+.pm-settings .pm-select-trigger-label,
+.pm-settings-dlg .pm-select-trigger-label {
+  font-weight: 300;
+}
+/* Inputs / meta chrome on this surface */
+.pm-settings [data-slot="input"],
+.pm-settings-dlg [data-slot="input"] {
+  font: var(--pm-settings-t-body) !important;
+  font-weight: 300 !important;
+}
+.pm-settings .pm-meta,
+.pm-settings-dlg .pm-meta {
+  font: var(--pm-settings-t-meta);
+  font-weight: 300;
+}
+.pm-settings .pm-field-label,
+.pm-settings-dlg .pm-field-label,
+.pm-settings [data-slot="field-label"],
+.pm-settings-dlg [data-slot="field-label"] {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.07em !important;
+  color: var(--pm-faint) !important;
+}
+/* Visual / Chat / Meeting model stack inside More fold */
+.pm-settings-model-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.pm-settings-model-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+.pm-settings-model-field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pm-settings-model-field-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Think pill next to Meeting select — same language as Chat composer */
+.pm-settings-model-field-row .pm-chat-tool-chip {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  gap: 5px;
+}
+.pm-settings-model-field-row .pm-chat-tool-chip.is-on {
+  /* keep flow animation from --flow; pill already 999px */
+  color: var(--pm-green);
+}
+/* Soft check — replaces native system checkbox in Settings only */
+.pm-settings-check {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink) 12%, transparent);
+  cursor: pointer;
+  position: relative;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-settings-check:hover:not(:disabled) {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green) 35%, transparent);
+}
+.pm-settings-check:checked {
+  background: var(--pm-green);
+  box-shadow: none;
+}
+.pm-settings-check:checked::after {
+  content: "";
+  position: absolute;
+  left: 4.5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--pm-on, #e8f0eb);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+.pm-settings-check:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pm-settings-check:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 40%, transparent),
+    0 0 0 3px var(--pm-green-wash);
+}
+/* Section stack on stage (no chrome box) */
+.pm-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+/* Form / content = nested white soft-float card (Group / Config language) */
+.pm-settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px 20px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-shadow-sm);
+  min-width: 0;
+  box-sizing: border-box;
+}
+.pm-settings-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+.pm-settings-card-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+/*
+ * Section titles (Models · Embedding · Rerank …) —
+ * Source Serif 300 display-lite · same family as page title / collection names.
+ */
+.pm-settings-card-kicker {
+  margin: 0;
+  font: var(--pm-settings-t-section);
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: clamp(17px, 1.7vw, 19px);
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  text-transform: none;
+  color: var(--pm-ink);
+}
+.pm-settings-card-desc {
+  margin: 0;
+  font: var(--pm-settings-t-body);
+  font-weight: 300;
+  color: var(--pm-muted);
+  line-height: 1.55;
+  max-width: 52ch;
+}
+/*
+ * Nested subheads (File transcription · Realtime · Enrichment · More fold) —
+ * Source Serif 300 one step below section titles; never uppercase Geist chrome.
+ */
+.pm-settings-subhead {
+  margin: 0;
+  font: var(--pm-settings-t-sub);
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: clamp(14.5px, 1.35vw, 15.5px);
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+  text-transform: none;
+  color: var(--pm-ink);
+}
+.pm-settings-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+  /* shadow air */
+  padding: 2px;
+}
+@media (max-width: 720px) {
+  .pm-settings-provider-grid {
+    grid-template-columns: 1fr;
+  }
+}
+/*
+ * Provider / local-model tiles — nested inside section soft-float cards.
+ * White + soft shadow only (no hard ring) · radius 14.
+ */
+.pm-settings-provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-shadow-sm);
+  box-sizing: border-box;
+  transition: box-shadow 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-settings-provider-card:hover {
+  background: #ffffff;
+  box-shadow: var(--pm-shadow);
+}
+/* Section body under head — stack grid + optional fold */
+.pm-settings-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  /* Air so nested soft shadows are not hard-cut by the parent card */
+  padding: 2px 2px 4px;
+}
+/* More fold nested inside Models card — soft float, no ring */
+.pm-settings-card .pm-settings-fold-card {
+  box-shadow: var(--pm-shadow-sm);
+  background: #ffffff;
+  border-radius: 14px;
+  overflow: visible;
+}
+.pm-settings-card .pm-settings-fold-card .pm-settings-fold-trigger {
+  border-radius: 14px;
+}
+.pm-settings-card .pm-settings-fold-card:has(.is-open) .pm-settings-fold-trigger {
+  border-radius: 14px 14px 0 0;
+}
+.pm-settings-card .pm-settings-fold-trigger {
+  padding: 12px 14px;
+}
+.pm-settings-card .pm-settings-fold-body {
+  padding: 0 14px 14px;
+}
+/* Empty state nested in section card */
+.pm-settings-card .pm-settings-empty {
+  box-shadow: var(--pm-shadow-sm);
+  background: #ffffff;
+  border-radius: 14px;
+}
+.pm-settings-provider-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.pm-settings-provider-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pm-settings-provider-name {
+  font: var(--pm-settings-t-name);
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: clamp(14.5px, 1.35vw, 15.5px);
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  text-transform: none;
+  color: var(--pm-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-settings-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--pm-ink) 16%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-ink) 5%, transparent);
+}
+.pm-settings-status-dot.is-ready {
+  background: var(--pm-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green) 14%, transparent);
+}
+.pm-settings-status-dot.is-error {
+  background: var(--pm-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-danger) 12%, transparent);
+}
+.pm-settings-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+.pm-settings-model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font: var(--pm-settings-t-meta);
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  color: var(--pm-muted);
+  background: color-mix(in srgb, var(--pm-ink) 4%, #ffffff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-settings-model-chip.is-default {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+  font-weight: 400;
+}
+.pm-settings-model-chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--pm-ink) 18%, transparent);
+}
+.pm-settings-model-chip.is-default .pm-settings-model-chip-dot,
+.pm-settings-model-chip.is-visual .pm-settings-model-chip-dot {
+  background: var(--pm-green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-green) 12%, transparent);
+}
+.pm-settings-provider-meta {
+  margin: 0;
+  font: var(--pm-settings-t-meta);
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  color: var(--pm-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.pm-settings-provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: none;
+}
+/* Action strip — label role; no outline grid */
+.pm-settings-provider-actions [data-slot="button"] {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.05em !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  border-radius: 999px !important;
+}
+.pm-settings-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 16px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  text-align: center;
+  color: var(--pm-faint);
+}
+/* Nested empty (inside fold body / dlg card) — soft float, no ring */
+.pm-settings-fold-body .pm-settings-empty,
+.pm-settings-dlg-card .pm-settings-empty {
+  box-shadow: var(--pm-shadow-sm);
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 18px 12px;
+}
+.pm-settings-empty svg {
+  opacity: 0.4;
+  color: var(--pm-muted);
+}
+/*
+ * Fold card — title + collapsible body share ONE white soft-float shell.
+ * Trigger is a header row; body unfolds below without a second card.
+ */
+.pm-settings-fold-card {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.pm-settings-fold-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--pm-muted);
+  transition: color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-settings-fold-trigger:hover {
+  color: var(--pm-green);
+  box-shadow: none;
+}
+.pm-settings-fold-trigger.is-open {
+  color: var(--pm-ink);
+}
+.pm-settings-fold-chev {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--pm-faint);
+  transition: transform 240ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  transform-origin: center;
+}
+.pm-settings-fold-trigger.is-open .pm-settings-fold-chev {
+  transform: rotate(90deg);
+  color: var(--pm-green);
+}
+.pm-settings-fold-body {
+  padding: 0 16px 16px;
+  min-width: 0;
+}
+/* Open fold: light hairline under title (not a hard section divider) */
+.pm-settings-fold-card:has(.pm-settings-fold-trigger.is-open) .pm-settings-fold-trigger {
+  padding-bottom: 10px;
+}
+/*
+ * Advanced fold — one consistent vertical rhythm.
+ * Block → head (kicker + desc) → toolbar chips → param grid.
+ * All control rows share the same min-height midline.
+ */
+.pm-settings-adv-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.pm-settings-adv-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.pm-settings-adv-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.pm-settings-adv-head .pm-settings-subhead {
+  margin: 0;
+}
+@media (min-width: 640px) {
+  .pm-settings-adv-head:has(.pm-settings-adv-toolbar) {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .pm-settings-adv-head:has(.pm-settings-adv-toolbar) .pm-settings-adv-toolbar {
+    flex-shrink: 0;
+  }
+}
+.pm-settings-adv-desc {
+  margin: 0;
+  font: var(--pm-settings-t-meta, var(--pm-t-meta));
+  font-weight: 300;
+  line-height: 1.5;
+  color: var(--pm-faint);
+  max-width: 52ch;
+}
+/* Chip / mode toolbar — single baseline */
+.pm-settings-adv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+/* 2-col param grid — equal row heights, labels + controls stacked */
+.pm-settings-adv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  min-width: 0;
+  align-items: start;
+}
+@media (max-width: 560px) {
+  .pm-settings-adv-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.pm-settings-adv-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.pm-settings-adv-field .pm-field-label,
+.pm-settings-adv-field [data-slot="field-label"] {
+  margin-bottom: 0 !important;
+}
+/* Compact number inputs — not full-bleed empty fields */
+.pm-settings-adv-field [data-slot="input"] {
+  max-width: 100%;
+  height: 34px;
+  text-align: left;
+}
+/* Full-width select in enrichment etc. */
+.pm-settings-adv-field--wide [data-slot="input"],
+.pm-settings-adv-field--wide .pm-select-trigger {
+  max-width: none;
+}
+/* Horizontal control row: text left · control right, vertical center */
+.pm-settings-adv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 16px;
+  min-height: 36px;
+  min-width: 0;
+}
+.pm-settings-adv-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.pm-settings-adv-row-text .pm-settings-subhead {
+  margin: 0;
+}
+.pm-settings-adv-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.pm-settings-adv-row-actions [data-slot="button"],
+.pm-settings-adv-row-actions .pm-field-chip,
+.pm-settings-adv-row-actions .pm-config-switch {
+  flex-shrink: 0;
+}
+/* Advanced fold trigger uses subhead language */
+.pm-settings-fold-trigger .pm-settings-card-kicker,
+.pm-settings-fold-trigger .pm-settings-subhead {
+  color: var(--pm-ink);
+}
+
+/* Local model packs: always stack vertically (File then Realtime) */
+.pm-settings-local-model-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px;
+}
+
+/* Local model status line under meta */
+.pm-settings-local-status-line {
+  margin: 0;
+  font: var(--pm-settings-t-meta, var(--pm-t-meta));
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--pm-muted, #6b7280);
+  min-height: 1.25em;
+}
+.pm-settings-local-status-line.is-loading {
+  color: var(--pm-warn, #b45309);
+}
+.pm-settings-local-status-line.is-error {
+  color: var(--pm-err, #f31260);
+}
+.pm-settings-local-status-line.is-ok {
+  color: var(--pm-green, #15803d);
+}
+.pm-settings-status-dot.is-loading {
+  background: var(--pm-warn, #f5a524);
+  box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.2);
+  animation: pm-pulse-dot 1.2s ease-in-out infinite;
+}
+@keyframes pm-pulse-dot {
+  50% { opacity: 0.45; }
+}
+
+/* Local model parts list inside provider-style cards */
+.pm-settings-local-model-parts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font: var(--pm-settings-t-meta, var(--pm-t-meta));
+  color: var(--pm-muted, #6b7280);
+}
+.pm-settings-local-model-parts li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+.pm-settings-local-model-part-status {
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-faint, #9ca3af);
+  min-width: 2.5rem;
+  text-align: right;
+  flex-shrink: 0;
+}
+.pm-settings-local-model-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+.pm-settings-local-model-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--pm-accent, #3d8bfd);
+  transition: width 200ms ease;
+}
+
+/* Legacy device layout (unused; keep minimal for safety) */
+.pm-settings-adv-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  min-height: 36px;
+}
+.pm-settings-adv-device-label {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-faint);
+  flex: 0 0 auto;
+  line-height: 1;
+}
+.pm-settings-adv-device-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pm-settings-adv-device > [data-slot="button"] {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+/*
+ * Optional Advanced params — silk fold (ENGINEERING §4, same clock as .pm-config-fold).
+ * Hybrid/Dense · Rerank on/off: open/close same duration, no hard cut.
+ */
+.pm-settings-adv-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 280ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity 220ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  pointer-events: none;
+}
+.pm-settings-adv-fold.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  pointer-events: auto;
+}
+.pm-settings-adv-fold-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+/* Base grid + optional folds: no flex gap between closed 0-height folds */
+.pm-settings-adv-fields-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+.pm-settings-adv-fold-pad {
+  /* Gap from content above when open; collapsed height stays 0 via 0fr */
+  padding-top: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-settings-adv-fold {
+    transition-duration: 0.01ms !important;
+  }
+}
+.pm-settings-link {
+  color: var(--pm-green);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.pm-settings-link:hover {
+  color: var(--pm-green-deep, var(--pm-green));
+}
+.pm-settings-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.pm-settings-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* Field chips in Settings — slightly more air + tracking */
+.pm-settings .pm-field-chip,
+.pm-settings-dlg .pm-field-chip {
+  min-height: 28px;
+  padding: 5px 12px;
+  letter-spacing: 0.05em;
+  font-weight: 400;
+}
+/* Section head primary actions — soft pill */
+.pm-settings-card-head [data-slot="button"],
+.pm-settings-section > .pm-settings-card-head [data-slot="button"] {
+  border-radius: 999px !important;
+  letter-spacing: 0.05em !important;
+}
+/* Soft switch scale on settings rows */
+.pm-settings .pm-config-switch,
+.pm-settings-dlg .pm-config-switch {
+  width: 38px;
+  height: 22px;
+}
+.pm-settings .pm-config-switch-thumb,
+.pm-settings-dlg .pm-config-switch-thumb {
+  width: 18px;
+  height: 18px;
+}
+.pm-settings .pm-config-switch.is-on .pm-config-switch-thumb,
+.pm-settings-dlg .pm-config-switch.is-on .pm-config-switch-thumb {
+  transform: translateX(16px);
+}
+/* Default toggle — field-chip language (no native checkbox chrome) */
+.pm-settings-default-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.pm-settings-default-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+/*
+ * ── Settings dialogs (Add provider / OneShot / SimpleProvider) ──
+ * Canvas shell (pm-dialog) + nested white cards = Group / To-do language.
+ * Shadow air: ENGINEERING §3.6 — gutter ≥ sm lobe on scroll host.
+ * Type vars re-declared (dialogs portal outside .pm-settings).
+ */
+.pm-settings-dlg {
+  --pm-settings-t-section: 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-sub: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-name: 300 15px/1.3 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  --pm-settings-t-body: 300 13.5px/1.55 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  --pm-settings-t-meta: 300 12px/1.45 var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+}
+.pm-settings-dlg.pm-dialog[data-slot="dialog-content"] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  /*
+   * Shell pad includes shadow gutter. Do not use tight p-5 from ui/dialog
+   * (Tailwind gap-4/p-5 would eat the soft float).
+   */
+  padding: 20px 18px 14px !important;
+  max-height: min(85vh, 720px);
+  overflow: hidden !important;
+}
+.pm-settings-dlg-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  /*
+   * Clip only vertically; generous padding so --pm-shadow-sm
+   * (blur ~16–28px) is not hard-cut at edges or between cards.
+   */
+  overflow-x: hidden;
+  overflow-y: auto;
+  margin: 0 -6px;
+  padding: 10px 14px 22px;
+  box-sizing: border-box;
+}
+.pm-settings-dlg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  /* Extra end pad so last card bottom shadow is never flush-cut */
+  padding-bottom: 4px;
+}
+/* Nested white form card inside dialog canvas */
+.pm-settings-dlg-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-shadow-sm);
+  min-width: 0;
+  box-sizing: border-box;
+}
+/*
+ * Compact default preference row — sits inside Connection card,
+ * not a second full soft-float block (Embedding/Rerank looked oversized).
+ */
+.pm-settings-dlg-pref {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  min-width: 0;
+  margin-top: 2px;
+  padding-top: 10px;
+  /* Soft separator — not a hard structure line */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--pm-ink) 6%, transparent);
+}
+.pm-settings-dlg-pref-label {
+  margin: 0;
+  font: var(--pm-t-meta);
+  font-weight: 300;
+  color: var(--pm-muted);
+  line-height: 1.4;
+  min-width: 0;
+}
+.pm-settings-dlg-pref .pm-field-chip {
+  flex: 0 0 auto;
+}
+/* Nested card titles inside dialogs (Connection / Models) — Serif sub scale */
+.pm-settings-dlg-card-kicker {
+  margin: 0;
+  font: var(--pm-settings-t-sub);
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 14.5px;
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+  text-transform: none;
+  color: var(--pm-ink);
+}
+.pm-settings-dlg-card-hint {
+  margin: 0;
+  font: var(--pm-settings-t-meta, var(--pm-t-meta));
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  color: var(--pm-faint);
+  line-height: 1.5;
+}
+/* Dialog field labels — faint uppercase (FieldLabel already .pm-field-label) */
+.pm-settings-dlg .pm-field-label,
+.pm-settings .pm-field-label {
+  letter-spacing: 0.07em !important;
+  color: var(--pm-faint) !important;
+  font-weight: 400 !important;
+}
+.pm-settings-dlg-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.pm-settings-dlg-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+@media (max-width: 420px) {
+  .pm-settings-dlg-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.pm-settings-dlg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+.pm-settings-dlg-field .pm-field-label,
+.pm-settings-dlg-field [data-slot="field-label"] {
+  margin-bottom: 6px;
+}
+/* Secret input with trailing ghost icon */
+.pm-settings-dlg-secret {
+  position: relative;
+  min-width: 0;
+}
+.pm-settings-dlg-secret [data-slot="input"] {
+  padding-right: 2.25rem;
+}
+.pm-settings-dlg-secret-btn {
+  position: absolute !important;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+/* Model list — soft float tray; selection language matches .pm-select-opt */
+.pm-settings-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 12.5rem;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  border: none;
+}
+.pm-settings-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-settings-model-row:hover {
+  background: var(--pm-green-wash);
+}
+.pm-settings-model-row.is-selected {
+  background: color-mix(in srgb, var(--pm-green) 12%, #ffffff);
+  color: var(--pm-green);
+}
+/* Dot = same as DropdownSelect option marker */
+.pm-settings-model-diamond {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  transform: none;
+  background: color-mix(in srgb, var(--pm-ink) 12%, transparent);
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-settings-model-row.is-selected .pm-settings-model-diamond {
+  background: var(--pm-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-green) 14%, transparent);
+}
+.pm-settings-model-id {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--pm-t-meta);
+  font-size: 12px;
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: inherit;
+}
+.pm-settings-model-row.is-selected .pm-settings-model-id {
+  font-weight: 400;
+  color: var(--pm-green);
+}
+/* Capability tags — field-chip language */
+.pm-settings-model-tag {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--pm-muted);
+  background: color-mix(in srgb, var(--pm-ink) 4%, #ffffff);
+  border: none;
+  cursor: pointer;
+  transition:
+    background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-settings-model-tag:hover {
+  color: var(--pm-ink);
+  background: color-mix(in srgb, var(--pm-ink) 7%, #ffffff);
+}
+.pm-settings-model-tag.is-on {
+  color: var(--pm-on, #e8f0eb);
+  background: var(--pm-green);
+}
+.pm-settings-model-tag.is-soft-on {
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+/* Fixed callout strip (transcription fixed models, etc.) */
+.pm-settings-dlg-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--pm-r-sm, 8px);
+  background: color-mix(in srgb, var(--pm-ink) 3%, #ffffff);
+}
+.pm-settings-dlg-callout .pm-label {
+  color: var(--pm-ink);
+}
+/* Dialog footer breathing room */
+.pm-settings-dlg [data-slot="dialog-footer"] {
+  flex-shrink: 0;
+  padding-top: 2px !important;
+  gap: 8px !important;
+}
+/* Hot Words — workspace-scale soft dual pane on canvas */
+.pm-settings-hw-dialog.pm-dialog[data-slot="dialog-content"] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  padding: 20px 20px 16px !important;
+  overflow: hidden !important;
+}
+.pm-settings-hw {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 12px;
+  /* shadow air */
+  padding: 2px;
+}
+.pm-settings-hw-rail,
+.pm-settings-hw-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-radius: var(--pm-r, 16px);
+  background: #ffffff;
+  box-shadow: var(--pm-shadow-sm);
+  overflow: hidden;
+}
+.pm-settings-hw-rail {
+  width: 14rem;
+  flex: 0 0 auto;
+}
+.pm-settings-hw-main {
+  flex: 1 1 auto;
+}
+.pm-settings-hw-rail-head,
+.pm-settings-hw-main-head,
+.pm-settings-hw-words-head,
+.pm-settings-hw-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  flex-shrink: 0;
+}
+.pm-settings-hw-main-head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+.pm-settings-hw-lib {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-settings-hw-lib:hover {
+  background: var(--pm-green-wash);
+}
+.pm-settings-hw-lib.is-active {
+  background: var(--pm-green-wash);
+}
+.pm-settings-hw-lib.is-active .pm-title {
+  color: var(--pm-green);
+}
+.pm-settings-hw-word-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-settings-provider-card,
+  .pm-settings-fold-trigger,
+  .pm-settings-fold-chev,
+  .pm-settings-model-row,
+  .pm-settings-model-tag,
+  .pm-settings-hw-lib {
     transition-duration: 0.01ms !important;
   }
 }
@@ -8712,6 +10031,24 @@ button.pm-rail-new:hover:not(:disabled) {
   font: inherit;
   font-weight: inherit;
   color: inherit;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Non-text status mark (e.g. collection has eval cases) — green soft diamond */
+.pm-select-opt-mark {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 1px;
+  background: var(--pm-green, #1a5e3d);
+  transform: rotate(45deg);
+  opacity: 0.85;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-green) 14%, transparent);
+}
+.pm-select-trigger .pm-select-opt-mark {
+  margin-left: 2px;
+  margin-right: 2px;
 }
 .pm-select-opt:hover {
   background: var(--pm-green-wash);
@@ -9123,6 +10460,31 @@ button.pm-rail-new:hover:not(:disabled) {
   border-bottom: none !important;
   background: transparent !important;
   box-shadow: none !important;
+}
+/*
+ * Title-row primary actions (Update file Cancel / Upload, etc.)
+ * Match close X + pm-ws-action height (~28px via Button size=sm).
+ * Top-align with multi-line header (title + meta desc).
+ * Do NOT use .pm-btn-xs here — that is 10px dense card chrome only.
+ */
+.pm-ws-chrome--actions {
+  align-items: flex-start;
+}
+.pm-ws-chrome-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  /* Optical: sit with serif title, not mid-desc */
+  padding-top: 2px;
+  min-height: 28px;
+}
+.pm-ws-chrome-actions [data-slot="button"] {
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.04em !important;
+  height: 28px !important;
+  min-height: 28px !important;
 }
 .pm-ws-icon-btn {
   display: inline-flex !important;
@@ -20210,4 +21572,1096 @@ button.pm-ws-path-row {
 .pm-shell-view-layer > .pm-shell-workspace {
   height: 100%;
   min-height: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Premium · Recall surface
+   Shell = Settings language (canvas scroll · white section cards).
+   Softer radii / shadows / air than default form density.
+   Controls: ui/* · Chat tool chips · soft folds.
+   ═══════════════════════════════════════════════════════════════════ */
+.pm-recall {
+  --pm-recall-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --pm-recall-ms: 340ms;
+  /* Local radius scale — rounder than default form chrome */
+  --pm-recall-r: 20px;
+  --pm-recall-r-md: 16px;
+  --pm-recall-r-sm: 12px;
+  --pm-recall-r-xs: 10px;
+  --pm-recall-card-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.85) inset,
+    0 1px 2px rgba(18, 20, 16, 0.03),
+    0 8px 28px -10px rgba(18, 20, 16, 0.1);
+  --pm-recall-nest-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 1px 2px rgba(18, 20, 16, 0.025),
+    0 4px 16px -6px rgba(18, 20, 16, 0.07);
+}
+/* Host fill — page itself scrolls like Settings (no inner stage) */
+.pm-shell-view-layer > .pm-settings.pm-recall {
+  height: 100%;
+  min-height: 0;
+}
+/* Tabs under mast — a little more air */
+.pm-recall-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.pm-recall .pm-tabs [data-slot="tabs-trigger"] {
+  border-radius: 999px !important;
+}
+/* ── Section stack ── */
+.pm-recall-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+/*
+ * Section card — rounder soft float on canvas
+ */
+.pm-recall-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 22px;
+  border-radius: var(--pm-recall-r);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-recall-card-shadow);
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: visible;
+}
+.pm-recall-card--composer {
+  gap: 16px;
+  padding: 18px 20px 20px;
+}
+.pm-recall-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+.pm-recall-card-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+/* Section title = Settings card-kicker (Source Serif 300) */
+.pm-recall-section-title {
+  margin: 0;
+  font: var(--pm-settings-t-section, 300 18px/1.25 var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif));
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: clamp(17px, 1.7vw, 19px);
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  text-transform: none;
+  color: var(--pm-ink);
+}
+.pm-recall-section-desc {
+  margin: 0;
+  font: var(--pm-settings-t-body, var(--pm-t-body));
+  font-weight: 300;
+  color: var(--pm-muted);
+  line-height: 1.55;
+  max-width: 52ch;
+}
+/* ── Query + Search CTA (matched height, compact) ── */
+.pm-recall-query-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pm-recall-query {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Beat Textarea default min-h-16; match Button size=sm (h-7 = 28px) */
+  min-height: 28px !important;
+  height: auto !important;
+  max-height: 120px;
+  resize: none;
+  field-sizing: content;
+  border: none !important;
+  background: #ffffff !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green) 12%, transparent) !important;
+  border-radius: 8px !important;
+  padding: 4px 10px !important;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 13px !important;
+  font-weight: 300 !important;
+  line-height: 20px !important;
+  color: var(--pm-ink) !important;
+  transition:
+    box-shadow 180ms var(--pm-recall-ease),
+    background 180ms var(--pm-recall-ease);
+}
+.pm-recall-query::placeholder {
+  color: var(--pm-faint) !important;
+  font-weight: 300;
+  font-style: normal;
+}
+.pm-recall-query:focus-visible {
+  background: #ffffff !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 36%, transparent),
+    0 0 0 3px var(--pm-green-wash) !important;
+}
+.pm-recall-query-row > [data-slot="button"] {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  border-radius: 8px !important;
+  font-size: 12px !important;
+  flex-shrink: 0;
+  align-self: center;
+}
+/* Tool row — chips + params, no hard dividers */
+.pm-recall-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+  padding-top: 2px;
+}
+.pm-recall-toolbar-sep {
+  width: 1px;
+  height: 12px;
+  margin: 0 2px;
+  background: color-mix(in srgb, var(--pm-ink) 8%, transparent);
+  flex-shrink: 0;
+  align-self: center;
+}
+/* Dense numeric field chip — pill (soft green wash, not gray) */
+.pm-recall-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px 0 12px;
+  border-radius: 999px;
+  background: var(--pm-green-wash);
+  white-space: nowrap;
+}
+.pm-recall-field [data-slot="field-label"],
+.pm-recall-field .pm-field-label {
+  margin: 0 !important;
+  font: var(--pm-t-label) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.06em !important;
+  color: var(--pm-muted) !important;
+}
+.pm-recall-field [data-slot="input"] {
+  width: 2.25rem;
+  height: 1.5rem;
+  padding: 0 2px !important;
+  text-align: center;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font: var(--pm-t-meta) !important;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-ink) !important;
+}
+.pm-recall-field [data-slot="input"]:focus-visible {
+  box-shadow: none !important;
+}
+/*
+ * Param slot — horizontal soft open/close (Rerank K / Min %).
+ * Always mounted; grid 0fr↔1fr + opacity (no hard cut).
+ */
+.pm-recall-param-slot {
+  display: grid;
+  grid-template-columns: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-columns var(--pm-recall-ms) var(--pm-recall-ease),
+    opacity var(--pm-recall-ms) var(--pm-recall-ease);
+  min-width: 0;
+}
+.pm-recall-param-slot.is-open {
+  grid-template-columns: 1fr;
+  opacity: 1;
+}
+.pm-recall-param-slot-clip {
+  min-width: 0;
+  overflow: hidden;
+}
+.pm-recall-param-slot-inner {
+  display: inline-flex;
+  align-items: center;
+  padding-left: 0;
+  transform: translateX(-6px);
+  opacity: 0;
+  transition:
+    transform var(--pm-recall-ms) var(--pm-recall-ease),
+    opacity var(--pm-recall-ms) var(--pm-recall-ease);
+}
+.pm-recall-param-slot.is-open .pm-recall-param-slot-inner {
+  transform: translateX(0);
+  opacity: 1;
+}
+/* Hybrid mode group + sparkles */
+.pm-recall-hybrid {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 5.75rem; /* room for dual-label "Dense"/"Hybrid" chip */
+  padding: 0;
+  border-radius: 999px;
+  transition:
+    max-width var(--pm-recall-ms) var(--pm-recall-ease),
+    padding var(--pm-recall-ms) var(--pm-recall-ease),
+    background var(--pm-recall-ms) var(--pm-recall-ease);
+  overflow: hidden;
+}
+.pm-recall-hybrid.is-open {
+  max-width: 11rem;
+  padding: 0 2px 0 0;
+  background: color-mix(in srgb, var(--pm-green) 6%, transparent);
+}
+.pm-recall-hybrid-extra {
+  display: inline-flex;
+  align-items: center;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    max-width var(--pm-recall-ms) var(--pm-recall-ease),
+    opacity var(--pm-recall-ms) var(--pm-recall-ease);
+}
+.pm-recall-hybrid.is-open .pm-recall-hybrid-extra {
+  max-width: 2.75rem;
+  opacity: 1;
+}
+/* Composer tool chips — slightly taller, fully pill */
+.pm-recall .pm-chat-tool-chip {
+  min-height: 30px;
+  padding: 0 12px;
+  letter-spacing: 0.05em;
+  border-radius: 999px !important;
+}
+/*
+ * Collection pop — same shell as Chat (.pm-chat-pop--collections).
+ * Anchored below the chip (toolbar is near page top), so enter from above.
+ */
+.pm-recall-col-pop:not(.is-open) {
+  transform: translateY(-8px);
+}
+.pm-recall-col-pop.is-open {
+  transform: translateY(0);
+}
+.pm-recall-col-pop .pm-chat-pop-item-name {
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font: var(--pm-t-body);
+  font-weight: 300;
+}
+/*
+ * Dual word stack — both labels always mounted; .is-active crossfades.
+ * Avoids hard-cut remount when toggling Agent↔Direct / Hybrid↔Dense.
+ */
+.pm-recall-chip-swap {
+  position: relative;
+  display: inline-grid;
+  grid-template-areas: "word";
+  align-items: center;
+  justify-items: center;
+  min-width: 3.25em; /* stable width for longer of the pair */
+}
+.pm-recall-chip-swap--mode {
+  min-width: 3.6em; /* Dense / Hybrid */
+}
+.pm-recall-chip-swap > span {
+  grid-area: word;
+  transition:
+    opacity 280ms var(--pm-recall-ease),
+    transform 280ms var(--pm-recall-ease);
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.pm-recall-chip-swap > span.is-active {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+/* In-card content crossfade (context ↔ list, empty ↔ results already use fold) */
+.pm-recall-crossfade {
+  display: grid;
+  grid-template-areas: "pane";
+  min-width: 0;
+}
+.pm-recall-crossfade > * {
+  grid-area: pane;
+  min-width: 0;
+  transition:
+    opacity var(--pm-recall-ms) var(--pm-recall-ease),
+    visibility var(--pm-recall-ms) var(--pm-recall-ease);
+}
+.pm-recall-crossfade > [data-active="false"] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.pm-recall-crossfade > [data-active="true"] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  z-index: 1;
+}
+/* ── Soft expand ── */
+.pm-recall-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--pm-recall-ms) var(--pm-recall-ease),
+    opacity var(--pm-recall-ms) var(--pm-recall-ease);
+}
+.pm-recall-fold.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.pm-recall-fold-clip {
+  overflow: hidden;
+  min-height: 0;
+}
+.pm-recall-fold-body {
+  transform: translateY(-8px);
+  opacity: 0;
+  transition:
+    transform var(--pm-recall-ms) var(--pm-recall-ease),
+    opacity var(--pm-recall-ms) var(--pm-recall-ease);
+}
+.pm-recall-fold.is-open .pm-recall-fold-body {
+  transform: translateY(0);
+  opacity: 1;
+}
+/* ── Results header strip ── */
+.pm-recall-results-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+  padding: 0 2px;
+}
+.pm-recall-results-count {
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 15px;
+  font-weight: 300;
+  letter-spacing: -0.01em;
+  color: var(--pm-ink);
+}
+.pm-recall-results-count em {
+  font-style: normal;
+  color: var(--pm-muted);
+  font-size: 13px;
+  margin-left: 6px;
+}
+.pm-recall-results-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* ── Result list ── */
+.pm-recall-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  overflow: visible;
+  padding: 2px; /* air for soft nest shadow */
+}
+/*
+ * Result tiles — soft white nest, rounder, light float on section card
+ */
+.pm-recall-result-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: var(--pm-recall-r-md);
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--pm-recall-nest-shadow);
+  min-width: 0;
+  box-sizing: border-box;
+  transition:
+    box-shadow 200ms var(--pm-recall-ease),
+    transform 200ms var(--pm-recall-ease);
+}
+.pm-recall-result-card:hover {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.95) inset,
+    0 2px 4px rgba(18, 20, 16, 0.03),
+    0 10px 28px -8px rgba(18, 20, 16, 0.1);
+}
+.pm-recall-result {
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+}
+.pm-recall-result-rail {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 2.85rem;
+  padding-top: 2px;
+}
+.pm-recall-rank {
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-ink);
+}
+.pm-recall-score {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-green);
+  white-space: nowrap;
+}
+.pm-recall-score-track {
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--pm-green-wash);
+  overflow: hidden;
+  position: relative;
+}
+.pm-recall-score-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--pm-green) 65%, transparent);
+  transition: width 420ms var(--pm-recall-ease);
+}
+.pm-recall-result-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pm-recall-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.pm-recall-result-source {
+  font: var(--pm-t-meta);
+  color: var(--pm-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+.pm-recall-result-text {
+  margin: 0;
+  font: var(--pm-t-prose);
+  font-size: 14px;
+  line-height: 1.72;
+  color: var(--pm-text);
+  max-width: none;
+  min-width: 0;
+}
+/* Soft callout — more rounded rail */
+.pm-recall-callout {
+  font: var(--pm-t-body);
+  font-weight: 300;
+  line-height: 1.55;
+  color: var(--pm-text);
+  font-style: italic;
+  border-left: 2.5px solid color-mix(in srgb, var(--pm-green) 45%, transparent);
+  padding: 10px 14px;
+  background: var(--pm-green-wash);
+  border-radius: 0 var(--pm-recall-r-sm) var(--pm-recall-r-sm) 0;
+}
+.pm-recall-callout strong {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--pm-green);
+}
+/* ── Matched child chunks ── */
+.pm-recall-children {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 2px 0 0;
+  padding: 14px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--pm-ink) 5%, transparent);
+}
+.pm-recall-children-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  min-width: 0;
+}
+.pm-recall-children-title {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+}
+.pm-recall-children-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  height: 1.25rem;
+  padding: 0 7px;
+  border-radius: 999px;
+  font: var(--pm-t-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+}
+.pm-recall-children-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.pm-recall-child-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: var(--pm-recall-r-sm);
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  outline: 1px solid color-mix(in srgb, var(--pm-green) 12%, transparent);
+  outline-offset: -1px;
+  box-sizing: border-box;
+  transition:
+    background 180ms var(--pm-recall-ease),
+    outline-color 180ms var(--pm-recall-ease),
+    box-shadow 180ms var(--pm-recall-ease);
+}
+.pm-recall-child-card:hover {
+  background: #ffffff;
+  outline-color: color-mix(in srgb, var(--pm-green) 28%, transparent);
+  box-shadow: 0 2px 10px -4px color-mix(in srgb, var(--pm-green) 18%, transparent);
+}
+.pm-recall-child-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.pm-recall-child-index {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--pm-green);
+  background: var(--pm-green-wash);
+  font-variant-numeric: tabular-nums;
+}
+.pm-recall-child-head-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pm-recall-child-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pm-recall-child-body {
+  min-width: 0;
+  margin: 0;
+  font: var(--pm-t-body);
+  font-weight: 300;
+  line-height: 1.55;
+  color: var(--pm-text);
+}
+.pm-recall-child-context {
+  margin: 0;
+}
+/* Markdown / tables inside chunks — ONE type system (Geist body), never serif prose */
+.pm-recall-md {
+  --pm-chunk-r: 12px;
+  overflow-x: auto;
+  min-width: 0;
+  /* Beat parent .pm-ws-prose-item (Source Serif + !important) */
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 13px !important;
+  font-weight: 300 !important;
+  line-height: 1.55 !important;
+  letter-spacing: 0.005em !important;
+  color: var(--pm-text, #3a3f3a) !important;
+  font-style: normal !important;
+  text-transform: none !important;
+}
+.pm-recall-md :where(p, li, td, th, span, div) {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  color: inherit;
+}
+.pm-recall-md-plain {
+  display: block;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit !important;
+  color: inherit !important;
+  line-height: inherit !important;
+}
+.pm-recall-md :where(p) {
+  margin: 0 0 0.4em;
+  font: inherit !important;
+}
+.pm-recall-md :where(p:last-child) {
+  margin-bottom: 0;
+}
+/* Empty / whitespace-only paragraphs (common around raw <img>) */
+.pm-recall-md p:empty,
+.pm-recall-md p:blank {
+  display: none !important;
+  margin: 0 !important;
+  height: 0 !important;
+  padding: 0 !important;
+}
+/* Figure paragraph — beat .prose img 2em margins (no :where — needs real specificity) */
+.pm-recall-md p.pm-recall-md-figure,
+.pm-recall-md p:has(> img:only-child) {
+  margin: 0.2rem 0 0.25rem !important;
+  padding: 0 !important;
+  line-height: 0 !important;
+}
+.pm-recall-md p.pm-recall-md-figure + .pm-recall-md-table-wrap,
+.pm-recall-md p:has(> img) + .pm-recall-md-table-wrap,
+.pm-recall-md img + .pm-recall-md-table-wrap,
+.pm-recall-md > img + .pm-recall-md-table-wrap {
+  margin-top: 0.25rem !important;
+}
+/* Soft rounded table card */
+.pm-recall-md-table-wrap {
+  margin: 0.25rem 0 0.45rem;
+  border-radius: var(--pm-chunk-r, 12px);
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 14%, transparent),
+    0 2px 10px -4px color-mix(in srgb, var(--pm-ink) 8%, transparent);
+}
+.pm-recall-md-table-wrap > table,
+.pm-recall-md :where(table) {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: inherit !important;
+  font-size: 12.5px !important;
+  font-weight: 300 !important;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-text) !important;
+  margin: 0;
+  background: #ffffff;
+  border: none;
+  outline: none;
+}
+/* Standalone table (no wrap) — still rounded */
+.pm-recall-md > table {
+  margin: 0.35rem 0 0.55rem;
+  border-radius: var(--pm-chunk-r, 12px);
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 14%, transparent),
+    0 2px 10px -4px color-mix(in srgb, var(--pm-ink) 8%, transparent);
+}
+.pm-recall-md :where(th),
+.pm-recall-md :where(td) {
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-green) 10%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--pm-green) 8%, transparent);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: 300 !important;
+  color: inherit !important;
+}
+.pm-recall-md :where(th:last-child),
+.pm-recall-md :where(td:last-child) {
+  border-right: none;
+}
+.pm-recall-md :where(tr:last-child td) {
+  border-bottom: none;
+}
+.pm-recall-md :where(th) {
+  background: var(--pm-green-wash);
+  font-weight: 400 !important;
+  color: var(--pm-ink) !important;
+  letter-spacing: 0.01em;
+}
+.pm-recall-md :where(tr:nth-child(even) td) {
+  background: color-mix(in srgb, var(--pm-green) 3%, #ffffff);
+}
+.pm-recall-md :where(code) {
+  font-family: var(--pm-ff-mono, ui-monospace, monospace) !important;
+  font-size: 0.92em !important;
+  padding: 0.1em 0.35em;
+  border-radius: 6px;
+  background: var(--pm-green-wash);
+}
+.pm-recall-md :where(pre) {
+  margin: 0.4rem 0;
+  padding: 10px 12px;
+  border-radius: var(--pm-chunk-r, 12px);
+  overflow-x: auto;
+  background: color-mix(in srgb, var(--pm-green) 4%, #ffffff);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.pm-recall-md :where(ul, ol) {
+  margin: 0.25rem 0 0.5rem;
+  padding-left: 1.25rem;
+}
+/* Document figures from :::image blocks — high specificity vs .prose img */
+.pm-recall-md img,
+.pm-recall-md .pm-recall-md-img,
+img.pm-recall-md-img {
+  display: block !important;
+  max-width: min(100%, 420px) !important;
+  max-height: 240px !important;
+  width: auto !important;
+  height: auto !important;
+  object-fit: contain !important;
+  margin: 0.2rem 0 0.25rem !important;
+  vertical-align: top !important;
+  border-radius: var(--pm-chunk-r, 12px) !important;
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-green) 12%, transparent),
+    0 4px 16px -6px rgba(18, 20, 16, 0.1);
+}
+/* File-detail tiles: never let serif prose bleed into chunk bodies */
+.pm-ws-tile .pm-recall-md,
+.pm-ws-prose-item .pm-recall-md {
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif) !important;
+  font-size: 13px !important;
+  font-weight: 300 !important;
+  line-height: 1.55 !important;
+}
+/* ── Case / history rows ── */
+.pm-recall-row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--pm-recall-r-sm, 12px);
+  background: #ffffff;
+  outline: 1px solid color-mix(in srgb, var(--pm-green) 10%, transparent);
+  outline-offset: -1px;
+  transition:
+    background 180ms var(--pm-recall-ease),
+    outline-color 180ms var(--pm-recall-ease);
+}
+.pm-recall-row:hover {
+  outline-color: color-mix(in srgb, var(--pm-green) 22%, transparent);
+  background: color-mix(in srgb, var(--pm-green) 3%, #ffffff);
+}
+.pm-recall-row.is-open {
+  background: color-mix(in srgb, var(--pm-green) 5%, #ffffff);
+  outline-color: color-mix(in srgb, var(--pm-green) 20%, transparent);
+}
+.pm-recall-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  text-align: left;
+  width: 100%;
+  color: inherit;
+  font: var(--pm-t-body);
+  font-weight: 300;
+  border-radius: var(--pm-recall-r-sm, 12px);
+}
+.pm-recall-row-main:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--pm-green-wash);
+}
+.pm-recall-row-query {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 13.5px;
+  font-weight: 300;
+  letter-spacing: -0.005em;
+  color: var(--pm-ink);
+}
+.pm-recall-row-detail {
+  padding: 0 16px 16px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pm-recall-chunk {
+  padding: 14px 16px;
+  border-radius: var(--pm-recall-r-sm, 12px);
+  background: #ffffff;
+  box-shadow: var(--pm-recall-nest-shadow, var(--pm-shadow-sm));
+  border: none;
+  max-height: 12rem;
+  overflow: auto;
+  font: var(--pm-t-prose);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--pm-text);
+  white-space: pre-wrap;
+}
+/* ── Metrics — soft rounded tiles ── */
+.pm-recall-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+  overflow: visible;
+  padding: 2px;
+}
+@media (max-width: 640px) {
+  .pm-recall-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.pm-recall-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px 16px 14px;
+  border-radius: var(--pm-recall-r-md, 16px);
+  background: #ffffff;
+  box-shadow: var(--pm-recall-nest-shadow, var(--pm-shadow-sm));
+  border: none;
+  outline: 1px solid color-mix(in srgb, var(--pm-green) 10%, transparent);
+  outline-offset: -1px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 440ms var(--pm-recall-ease),
+    transform 440ms var(--pm-recall-ease);
+}
+.pm-recall-metric.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.pm-recall-metric-value {
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: clamp(22px, 2.5vw, 28px);
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--pm-ink);
+}
+.pm-recall-metric-value.is-good {
+  color: var(--pm-green);
+}
+.pm-recall-metric-label {
+  font: var(--pm-t-label);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+}
+/* Judgment — soft rounded */
+.pm-recall-judgment {
+  border-left: 2.5px solid color-mix(in srgb, var(--pm-green) 22%, transparent);
+  padding: 12px 14px;
+  border-radius: 0 var(--pm-recall-r-sm, 12px) var(--pm-recall-r-sm, 12px) 0;
+  background: #ffffff;
+  outline: 1px solid color-mix(in srgb, var(--pm-green) 8%, transparent);
+  outline-offset: -1px;
+}
+.pm-recall-judgment.is-pos {
+  border-left-color: var(--pm-green);
+  background: var(--pm-green-wash);
+  outline-color: transparent;
+}
+.pm-recall-judgment.is-neg {
+  border-left-color: var(--pm-danger);
+  background: color-mix(in srgb, var(--pm-danger) 5%, #ffffff);
+  outline-color: transparent;
+}
+/* Empty */
+.pm-recall-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 52px 24px 44px;
+  text-align: center;
+  min-width: 0;
+}
+.pm-recall-empty--inline {
+  padding: 28px 20px 24px;
+  align-items: flex-start;
+  text-align: left;
+}
+.pm-recall-empty--inline .pm-recall-empty-sub {
+  max-width: 52ch;
+}
+.pm-recall-empty-icon {
+  color: color-mix(in srgb, var(--pm-green) 45%, var(--pm-faint));
+  opacity: 0.65;
+  margin-bottom: 2px;
+}
+.pm-recall-empty-title {
+  margin: 0;
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 19px;
+  font-weight: 300;
+  letter-spacing: -0.015em;
+  color: var(--pm-ink);
+}
+.pm-recall-empty-sub {
+  margin: 0;
+  max-width: 34ch;
+  font: var(--pm-t-body);
+  font-weight: 300;
+  color: var(--pm-muted);
+  line-height: 1.6;
+}
+.pm-recall-context {
+  max-height: 36rem;
+  overflow: auto;
+  padding: 16px 18px;
+  border-radius: var(--pm-recall-r-md, 16px);
+  background: #ffffff;
+  box-shadow: none;
+  outline: 1px solid color-mix(in srgb, var(--pm-green) 10%, transparent);
+  outline-offset: -1px;
+  font: var(--pm-t-prose);
+  color: var(--pm-text);
+}
+.pm-recall-context :is(h1, h2, h3) {
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-weight: 400;
+  color: var(--pm-ink);
+}
+.pm-recall-context p,
+.pm-recall-context li {
+  font: var(--pm-t-prose);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.pm-recall-context code,
+.pm-recall-context pre {
+  font-family: var(--pm-ff-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.pm-recall-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+.pm-recall-tab-panel {
+  animation: tab-fade-in 0.32s var(--pm-recall-ease) both;
+}
+/* Stagger result cards on appear */
+.pm-recall-result-card {
+  animation: tab-fade-in 0.36s var(--pm-recall-ease) both;
+}
+.pm-recall-list > .pm-recall-result-card:nth-child(1) { animation-delay: 0ms; }
+.pm-recall-list > .pm-recall-result-card:nth-child(2) { animation-delay: 40ms; }
+.pm-recall-list > .pm-recall-result-card:nth-child(3) { animation-delay: 80ms; }
+.pm-recall-list > .pm-recall-result-card:nth-child(4) { animation-delay: 120ms; }
+.pm-recall-list > .pm-recall-result-card:nth-child(5) { animation-delay: 160ms; }
+.pm-recall-list > .pm-recall-result-card:nth-child(n + 6) { animation-delay: 180ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-recall-fold,
+  .pm-recall-fold-body,
+  .pm-recall-hybrid,
+  .pm-recall-hybrid-extra,
+  .pm-recall-param-slot,
+  .pm-recall-param-slot-inner,
+  .pm-recall-chip-swap > span,
+  .pm-recall-crossfade > *,
+  .pm-recall-metric,
+  .pm-recall-tab-panel,
+  .pm-recall-row,
+  .pm-recall-result-card {
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
+  .pm-recall-fold {
+    opacity: 1;
+  }
+  .pm-recall-fold:not(.is-open) {
+    display: none;
+  }
+  .pm-recall-fold-body {
+    transform: none;
+    opacity: 1;
+  }
+  .pm-recall-metric {
+    opacity: 1;
+    transform: none;
+  }
+  .pm-recall-param-slot:not(.is-open) {
+    display: none;
+  }
+  .pm-recall-chip-swap > span {
+    transform: none;
+  }
+  .pm-recall-chip-swap > span:not(.is-active) {
+    display: none;
+  }
 }

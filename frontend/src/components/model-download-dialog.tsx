@@ -1,10 +1,19 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogKicker,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { FieldLabel } from "@/components/ui/field-label"
 import { Download, Loader2, Check, AlertCircle, Eye, EyeOff } from "lucide-react"
 import { getModelStatus, downloadModels, type ModelStatus } from "@/api/client"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 
 interface BundleDef {
   id: string
@@ -164,138 +173,161 @@ export function ModelDownloadDialog({ open, onOpenChange, onComplete }: ModelDow
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent
+        className={cn(
+          "pm-dialog pm-dialog--silk pm-settings-dlg",
+          "max-w-lg",
+          "!animate-none data-open:!animate-none data-closed:!animate-none",
+        )}
+        overlayClassName="pm-dialog-overlay--silk"
+      >
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Download className="h-5 w-5" />
-            Download Local Models
-          </DialogTitle>
+          <DialogKicker>Settings</DialogKicker>
+          <DialogTitle>Download local models</DialogTitle>
         </DialogHeader>
 
         {loading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <Loader2 className="h-6 w-6 animate-spin text-[var(--pm-muted)]" />
           </div>
         ) : allBundlesDone ? (
           <div className="text-center py-6 space-y-3">
-            <Check className="h-8 w-8 mx-auto text-green-500" />
-            <p className="text-sm text-muted-foreground">All models are downloaded and ready.</p>
-            <Button onClick={() => { onComplete(); onOpenChange(false) }}>Done</Button>
+            <Check className="h-8 w-8 mx-auto text-[var(--pm-green)]" />
+            <p className="pm-meta">All models are downloaded and ready.</p>
+            <Button variant="default" onClick={() => { onComplete(); onOpenChange(false) }}>
+              Done
+            </Button>
           </div>
         ) : (
-          <div className="space-y-4">
-            {/* HF Token */}
-            <div>
-              <label className="text-sm font-medium">HuggingFace Token (optional)</label>
-              <p className="text-xs text-muted-foreground mb-1.5">
-                Some models require authentication. Get yours at huggingface.co/settings/tokens
-              </p>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Input
-                    type={showToken ? "text" : "password"}
-                    value={hfToken}
-                    onChange={(e) => setHfToken(e.target.value)}
-                    placeholder="hf_xxxxx"
-                  />
-                  <button
-                    type="button"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-                    onClick={() => setShowToken(!showToken)}
-                  >
-                    {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Bundle list */}
-            <div className="space-y-3">
-              <label className="text-sm font-medium">Transcription Models</label>
-              {bundleStates.map(({ bundle, memberModels, allDone, anyDownloading, anyError, totalSize }) => (
-                <div
-                  key={bundle.id}
-                  className={`rounded-md border p-3 ${allDone ? "border-green-200 bg-green-50/30" : "border-border"}`}
-                >
-                  <div className="flex items-center gap-3">
-                    {!allDone && (
-                      <input
-                        type="checkbox"
-                        checked={selectedBundles.has(bundle.id)}
-                        disabled={isDownloading}
-                        onChange={() => toggleBundle(bundle.id)}
-                        className="rounded"
+          <>
+            <div className="pm-settings-dlg-scroll">
+              <div className="pm-dialog-body pm-settings-dlg-body">
+                <section className="pm-settings-dlg-card">
+                  <span className="pm-settings-dlg-card-kicker">Authentication</span>
+                  <div className="pm-settings-dlg-field">
+                    <FieldLabel>HuggingFace token</FieldLabel>
+                    <p className="pm-settings-dlg-card-hint mb-1.5">
+                      Optional. Some models need a token from huggingface.co/settings/tokens
+                    </p>
+                    <div className="pm-settings-dlg-secret">
+                      <Input
+                        type={showToken ? "text" : "password"}
+                        value={hfToken}
+                        onChange={(e) => setHfToken(e.target.value)}
+                        placeholder="hf_xxxxx"
                       />
-                    )}
-                    {allDone && <Check className="h-4 w-4 text-green-500 shrink-0" />}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">{bundle.label}</span>
-                        {anyDownloading && (
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        )}
-                        {anyError && (
-                          <AlertCircle className="h-4 w-4 text-destructive" />
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {totalSize >= 1000 ? `${(totalSize / 1000).toFixed(1)}GB` : `${totalSize}MB`} · {bundle.description}
-                      </p>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="pm-settings-dlg-secret-btn"
+                        onClick={() => setShowToken(!showToken)}
+                      >
+                        {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
                     </div>
                   </div>
+                </section>
 
-                  {/* Sub-models */}
-                  <div className="mt-2 ml-8 space-y-0.5">
-                    {memberModels.map((m) => (
-                      <div key={m.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span className="truncate">{m.display_name}</span>
-                        <span>·</span>
-                        <span className="shrink-0">{m.size_mb}MB</span>
-                        {m.downloaded && <Check className="h-3 w-3 text-green-500 shrink-0" />}
-                        {m.status === "downloading" && (
-                          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />
+                <section className="pm-settings-dlg-card">
+                  <span className="pm-settings-dlg-card-kicker">Bundles</span>
+                  <div className="space-y-2">
+                    {bundleStates.map(({ bundle, memberModels, allDone, anyDownloading, anyError, totalSize }) => (
+                      <div
+                        key={bundle.id}
+                        className={cn(
+                          "rounded-[var(--pm-r-sm)] p-3 transition-colors",
+                          allDone
+                            ? "bg-[var(--pm-green-wash)]"
+                            : selectedBundles.has(bundle.id)
+                              ? "bg-[color-mix(in_srgb,var(--pm-green)_6%,#ffffff)]"
+                              : "bg-[color-mix(in_srgb,var(--pm-ink)_2.5%,#ffffff)]",
                         )}
-                        {m.status === "error" && (
-                          <span className="text-destructive shrink-0">{m.message}</span>
-                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          {!allDone && (
+                            <input
+                              type="checkbox"
+                              checked={selectedBundles.has(bundle.id)}
+                              disabled={isDownloading}
+                              onChange={() => toggleBundle(bundle.id)}
+                              className="pm-settings-check"
+                              aria-label={`Select ${bundle.label}`}
+                            />
+                          )}
+                          {allDone && <Check className="h-4 w-4 text-[var(--pm-green)] shrink-0" />}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="pm-title">{bundle.label}</span>
+                              {anyDownloading && (
+                                <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-muted)]" />
+                              )}
+                              {anyError && (
+                                <AlertCircle className="h-4 w-4 text-[var(--pm-danger)]" />
+                              )}
+                            </div>
+                            <p className="pm-meta">
+                              {totalSize >= 1000
+                                ? `${(totalSize / 1000).toFixed(1)}GB`
+                                : `${totalSize}MB`}{" "}
+                              · {bundle.description}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-2 ml-7 space-y-0.5">
+                          {memberModels.map((m) => (
+                            <div key={m.id} className="flex items-center gap-2 pm-meta">
+                              <span className="truncate">{m.display_name}</span>
+                              <span>·</span>
+                              <span className="shrink-0">{m.size_mb}MB</span>
+                              {m.downloaded && (
+                                <Check className="h-3 w-3 text-[var(--pm-green)] shrink-0" />
+                              )}
+                              {m.status === "downloading" && (
+                                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                              )}
+                              {m.status === "error" && (
+                                <span className="text-[var(--pm-danger)] shrink-0">{m.message}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ))}
                   </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Error message */}
-            {hasError && (
-              <div className="text-xs text-destructive p-2 rounded bg-destructive/10">
-                {models
-                  .filter((m) => m.status === "error")
-                  .map((m) => (
-                    <p key={m.id}>{m.display_name}: {m.message}</p>
-                  ))}
+                  {hasError && (
+                    <div className="pm-meta text-[var(--pm-danger)] p-2 rounded-[var(--pm-r-sm)] bg-[color-mix(in_srgb,var(--pm-danger)_10%,#ffffff)]">
+                      {models
+                        .filter((m) => m.status === "error")
+                        .map((m) => (
+                          <p key={m.id}>
+                            {m.display_name}: {m.message}
+                          </p>
+                        ))}
+                    </div>
+                  )}
+                </section>
               </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex gap-2 pt-2">
+            </div>
+            <DialogFooter>
               {!isDownloading && (
-                <Button variant="outline" onClick={() => { onComplete(); onOpenChange(false) }}>
+                <Button variant="ghost" onClick={() => { onComplete(); onOpenChange(false) }}>
                   Skip
                 </Button>
               )}
               <Button
+                variant="default"
                 onClick={handleDownload}
                 disabled={selectedModelIds.size === 0 || isDownloading}
-                className="flex-1"
               >
                 {isDownloading ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Downloading...</>
+                  <><Loader2 className="h-4 w-4 animate-spin" />Downloading…</>
                 ) : (
-                  <><Download className="h-4 w-4 mr-2" />Download ({selectedBundles.size})</>
+                  <><Download className="h-4 w-4" />Download ({selectedBundles.size})</>
                 )}
               </Button>
-            </div>
-          </div>
+            </DialogFooter>
+          </>
         )}
       </DialogContent>
     </Dialog>

@@ -311,18 +311,60 @@ export const downloadModels = (hf_token?: string, model_ids?: string[]) =>
     body: JSON.stringify({ hf_token, model_ids }),
   })
 
-export const toggleModelLoad = (model_id: string) =>
-  request<{ success: boolean; model_id: string; loaded: boolean; error?: string }>(
-    `/models/${model_id}/toggle-load`,
-    { method: "POST" }
-  )
+export const deleteLocalModel = (model_id: string) =>
+  request<{
+    success: boolean
+    model_id?: string
+    display_name?: string
+    removed?: boolean
+    freed_mb?: number
+    unloaded_providers?: string[]
+    error?: string
+  }>(`/models/${encodeURIComponent(model_id)}`, { method: "DELETE" })
+
+export const deleteLocalModels = (model_ids: string[]) =>
+  request<{
+    success: boolean
+    freed_mb?: number
+    unloaded_providers?: string[]
+    results?: Array<{ model_id: string; success: boolean; freed_mb?: number; error?: string }>
+    error?: string
+  }>("/models/delete", {
+    method: "POST",
+    body: JSON.stringify({ model_ids }),
+  })
+
+export const toggleModelLoad = (
+  model_id: string,
+  action?: "load" | "unload",
+) =>
+  request<{
+    success: boolean
+    model_id: string
+    loaded: boolean
+    status?: string
+    message?: string
+    error?: string
+  }>(`/models/${model_id}/toggle-load`, {
+    method: "POST",
+    body: JSON.stringify(action ? { action } : {}),
+  })
+
+export interface ModelLoadDetail {
+  state?: string
+  message?: string
+  error?: string
+  started_at?: number
+  load_s?: number
+}
 
 export interface ModelState {
   llm_loaded: boolean
   embedding_loaded: boolean
   reranker_loaded: boolean
-  config_unloaded: string[]
+  config_unloaded?: string[]
   load_states: Record<string, string>
+  load_details?: Record<string, ModelLoadDetail>
 }
 
 export const getModelState = () =>
@@ -618,6 +660,10 @@ export interface RecallResult {
   chunk_type: string
   context?: string
   parent_id?: string
+  /** Current human-readable name (rename / multi-version aware) */
+  display_name?: string
+  /** Ingest-time label snapshot (fallback only) */
+  source_label?: string
   children?: RecallResult[]
 }
 
@@ -1277,14 +1323,21 @@ export const deleteFileTranscriptionProvider = (id: string) =>
   })
 
 export const setActiveFileTranscriptionProvider = (id: string) =>
-  request<{ message?: string; error?: string }>(`/transcription/file-providers/${id}/set-active`, {
+  request<{
+    message?: string
+    error?: string
+    provider_id?: string
+    adapter?: string
+    name?: string
+  }>(`/transcription/file-providers/${id}/set-active`, {
     method: "POST",
   })
 
 export const testFileTranscriptionProvider = (id: string) =>
-  request<{ success: boolean; message?: string; error?: string }>(`/transcription/file-providers/${id}/test`, {
-    method: "POST",
-  })
+  request<{ success: boolean; message?: string; error?: string; code?: string }>(
+    `/transcription/file-providers/${id}/test`,
+    { method: "POST" },
+  )
 
 
 // Realtime transcription providers
@@ -1309,14 +1362,21 @@ export const deleteRealtimeTranscriptionProvider = (id: string) =>
   })
 
 export const setActiveRealtimeTranscriptionProvider = (id: string) =>
-  request<{ message?: string; error?: string }>(`/transcription/realtime-providers/${id}/set-active`, {
+  request<{
+    message?: string
+    error?: string
+    provider_id?: string
+    adapter?: string
+    name?: string
+  }>(`/transcription/realtime-providers/${id}/set-active`, {
     method: "POST",
   })
 
 export const testRealtimeTranscriptionProvider = (id: string) =>
-  request<{ success: boolean; message?: string; error?: string }>(`/transcription/realtime-providers/${id}/test`, {
-    method: "POST",
-  })
+  request<{ success: boolean; message?: string; error?: string; code?: string }>(
+    `/transcription/realtime-providers/${id}/test`,
+    { method: "POST" },
+  )
 
 
 // ── Notes ──

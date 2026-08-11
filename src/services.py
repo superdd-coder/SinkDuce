@@ -136,23 +136,69 @@ def _reload_transcription_provider(model_id: str, loading: bool):
 
     if model_id == "builtin-local-file":
         cache_key = f"file_trans:{model_id}"
-        provider_cfg = config.transcription.active_file_provider or config.transcription.get_local_file_provider()
-        create_fn = __import__('src.meeting.transcription', fromlist=['create_file_transcription_provider']).create_file_transcription_provider
+        # Always FunASR local factory config — never the active cloud provider.
+        # (Previous bug: used active_file_provider → DashScope cached under builtin id.)
+        provider_cfg = config.transcription.get_local_file_provider()
+        # Prefer device from persisted builtin row if present
+        for p in config.transcription.file_providers:
+            if p.id == model_id and p.device:
+                provider_cfg = provider_cfg.model_copy(update={"device": p.device})
+                break
+        create_fn = __import__(
+            "src.meeting.transcription",
+            fromlist=["create_file_transcription_provider"],
+        ).create_file_transcription_provider
+        human = "file transcription (SenseVoice pack)"
     elif model_id == "builtin-local-rt":
         cache_key = f"rt_trans:{model_id}"
-        provider_cfg = config.transcription.active_realtime_provider or config.transcription.get_local_realtime_provider()
-        create_fn = __import__('src.meeting.transcription', fromlist=['create_realtime_transcription_provider']).create_realtime_transcription_provider
+        provider_cfg = config.transcription.get_local_realtime_provider()
+        for p in config.transcription.realtime_providers:
+            if p.id == model_id and p.device:
+                provider_cfg = provider_cfg.model_copy(update={"device": p.device})
+                break
+        create_fn = __import__(
+            "src.meeting.transcription",
+            fromlist=["create_realtime_transcription_provider"],
+        ).create_realtime_transcription_provider
+        human = "realtime transcription (Paraformer streaming)"
     else:
         return
 
     if loading:
-        if get_state(model_id) in ("loaded", "loading"):
+        # If a wrong instance was cached under this key (e.g. DashScope), drop it
+        # even when state already says "loaded".
+        from src.providers.cache import peek as cache_peek
+        cached = cache_peek(cache_key)
+        if cached is not None and get_state(model_id) == "loaded":
+            # Verify it is the expected FunASR class family
+            cls_name = type(cached).__name__
+            if "DashScope" in cls_name or "OpenAI" in cls_name or "OpenRouter" in cls_name:
+                logger.warning(
+                    "Cache mismatch for %s: found %s, forcing reload as FunASR",
+                    model_id,
+                    cls_name,
+                )
+                cache_invalidate(cache_key)
+                set_state(model_id, "unloaded", message="Cleared stale provider cache")
+            else:
+                return  # Already loaded correctly
+        elif get_state(model_id) in ("loaded", "loading"):
             return  # Already loaded or loading — avoid duplicate load
         if not _is_builtin_model_downloaded(model_id):
             logger.warning("Cannot load transcription provider: model not downloaded")
+            set_state(
+                model_id,
+                "error",
+                message="Model files missing",
+                error="Download models first, then Load.",
+            )
             return
         cache_invalidate(cache_key)
-        set_state(model_id, "loading")
+        set_state(
+            model_id,
+            "loading",
+            message=f"Loading {human} into memory (CPU may take 10–60s)…",
+        )
         logger.info("Loading transcription provider: %s (%s)", model_id, provider_cfg.adapter)
 
         def _load():
@@ -160,19 +206,42 @@ def _reload_transcription_provider(model_id: str, loading: bool):
                 from src.providers.load_state import acquire_load_slot, release_load_slot
                 acquire_load_slot()
                 try:
+                    set_state(
+                        model_id,
+                        "loading",
+                        message=f"Loading {human}…",
+                    )
                     cached_provider(cache_key, lambda: create_fn(provider_cfg))
-                    set_state(model_id, "loaded")
-                    logger.info("Transcription provider loaded: %s (%s)", model_id, provider_cfg.adapter)
+                    set_state(
+                        model_id,
+                        "loaded",
+                        message=f"Ready — {human}",
+                    )
+                    logger.info(
+                        "Transcription provider loaded: %s (%s)",
+                        model_id,
+                        provider_cfg.adapter,
+                    )
                 finally:
                     release_load_slot()
             except Exception as e:
-                set_state(model_id, "error")
-                logger.warning("Failed to load transcription provider: %s (%s) - %s", model_id, provider_cfg.adapter, e)
+                set_state(
+                    model_id,
+                    "error",
+                    message="Load failed",
+                    error=str(e),
+                )
+                logger.warning(
+                    "Failed to load transcription provider: %s (%s) - %s",
+                    model_id,
+                    provider_cfg.adapter,
+                    e,
+                )
 
         threading.Thread(target=_load, daemon=True).start()
     else:
         cache_invalidate(cache_key)
-        set_state(model_id, "unloaded")
+        set_state(model_id, "unloaded", message="Unloaded from memory")
         logger.info("Transcription provider unloaded: %s", model_id)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,6 +204,66 @@ def start_download_all(hf_token: str | None = None) -> None:
     """Start downloading all missing models in a background thread."""
     t = threading.Thread(target=download_all, args=(hf_token,), daemon=True)
     t.start()
+
+
+def delete_model(model_id: str) -> dict[str, Any]:
+    """Delete downloaded model files from the HuggingFace hub cache.
+
+    Removes ``HF_HOME/hub/models--{repo}`` for the registered model id.
+    Safe if the directory is already missing.
+    """
+    model = next((m for m in LOCAL_MODELS if m.id == model_id), None)
+    if not model:
+        return {"success": False, "error": f"Unknown model: {model_id}"}
+
+    model_dir = _get_model_dir(model)
+    removed = False
+    freed_mb = 0.0
+    if model_dir.exists():
+        # Approximate size before delete
+        try:
+            total = 0
+            for root, _dirs, files in os.walk(model_dir):
+                for name in files:
+                    try:
+                        total += (Path(root) / name).stat().st_size
+                    except OSError:
+                        pass
+            freed_mb = round(total / 1_000_000, 1)
+        except OSError:
+            freed_mb = 0.0
+        shutil.rmtree(model_dir, ignore_errors=False)
+        removed = True
+        logger.info("Deleted local model files: %s (%s)", model.display_name, model_dir)
+    else:
+        logger.info("Model dir already absent: %s", model_dir)
+
+    with _download_lock:
+        _download_progress.pop(model_id, None)
+
+    return {
+        "success": True,
+        "model_id": model_id,
+        "display_name": model.display_name,
+        "removed": removed,
+        "path": str(model_dir),
+        "freed_mb": freed_mb,
+        "downloaded": _is_downloaded(model),
+    }
+
+
+def delete_models(model_ids: list[str]) -> dict[str, Any]:
+    """Delete multiple models; returns per-id results."""
+    results = []
+    for mid in model_ids:
+        results.append(delete_model(mid))
+    ok = all(r.get("success") for r in results)
+    freed = sum(float(r.get("freed_mb") or 0) for r in results)
+    return {
+        "success": ok,
+        "results": results,
+        "freed_mb": round(freed, 1),
+    }
 
 
 # ---------------------------------------------------------------------------
