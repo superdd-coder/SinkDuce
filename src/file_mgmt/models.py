@@ -344,6 +344,23 @@ class TodoCreate(BaseModel):
     body: str | None = None  # detailed description (optional)
     ddl: str | None = None  # ISO date or datetime; optional
     target_chain_id: str | None = None  # null = main chain
+    # When set, remove this smart-suggestion item after successful create
+    suggestion_id: str | None = None
+
+
+class TodoSuggestionItem(BaseModel):
+    suggestion_id: str
+    title: str
+    body: str | None = None
+
+
+class TodoSuggestionsOut(BaseModel):
+    chain_id: str
+    status: str  # idle | pending | generating | ready | error
+    suggestions: list[TodoSuggestionItem] = []
+    error: str | None = None
+    updated_at: str | None = None
+    generated_at: str | None = None
 
 
 class TodoUpdate(BaseModel):

@@ -3429,6 +3429,230 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
   }
 }
 
+/*
+ * Smart todo suggestion — frosted pill next to chain-end +Todo.
+ * Width hugs text. Reveal via clip-path L→R (not fixed max-width).
+ */
+.pm-todo-suggest-host {
+  --pm-sug-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --pm-sug-expand-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --pm-sug-collapse-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Airier frosted bubble — not solid white */
+  --pm-sug-glass: color-mix(in srgb, #ffffff 52%, transparent);
+  --pm-sug-glass-hot: color-mix(in srgb, #ffffff 64%, transparent);
+  --pm-sug-max: min(320px, 48vw);
+  --pm-sug-shadow:
+    0 1px 2px rgba(18, 20, 16, 0.04),
+    0 6px 16px -4px rgba(18, 20, 16, 0.11),
+    0 12px 24px -10px rgba(18, 20, 16, 0.08);
+  --pm-sug-shadow-hot:
+    0 2px 4px rgba(18, 20, 16, 0.05),
+    0 8px 20px -6px rgba(18, 20, 16, 0.13),
+    0 14px 28px -12px rgba(18, 20, 16, 0.1);
+  position: relative;
+  margin-left: 12px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex-shrink: 0;
+  /* Bleed so soft shadow is not clipped by ancestors */
+  padding: 14px 16px 16px 4px;
+  margin-right: -12px;
+  overflow: visible;
+}
+.pm-todo-suggest-stack {
+  position: relative;
+  display: grid;
+  grid-template: 1fr / 1fr;
+  width: max-content;
+  max-width: var(--pm-sug-max);
+  min-height: 36px;
+  align-items: center;
+  justify-items: start;
+  overflow: visible;
+}
+.pm-todo-suggest-host.is-open .pm-todo-suggest-stack {
+  z-index: 50;
+}
+/* Outer: fan translateY; size follows shell */
+.pm-todo-suggest-bubble {
+  grid-area: 1 / 1;
+  position: relative;
+  display: block;
+  width: max-content;
+  max-width: var(--pm-sug-max);
+  min-width: 0;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  text-align: left;
+  opacity: 1;
+  pointer-events: auto;
+  overflow: visible;
+  transition:
+    opacity 200ms var(--pm-sug-ease),
+    transform 240ms var(--pm-sug-ease);
+  will-change: transform, opacity;
+}
+.pm-todo-suggest-bubble.is-collapsed {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+/*
+ * shell: drop-shadow follows painted pill (shrinks with width)
+ * clip: glass + overflow; width animates so text + pill collapse together
+ */
+.pm-todo-suggest-bubble-shell {
+  display: block;
+  width: max-content;
+  max-width: var(--pm-sug-max);
+  height: 36px;
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: transparent;
+  overflow: visible;
+  filter: drop-shadow(0 1px 2px rgba(18, 20, 16, 0.06))
+    drop-shadow(0 6px 14px rgba(18, 20, 16, 0.1));
+  transition: filter 180ms var(--pm-sug-ease), opacity 180ms var(--pm-sug-ease);
+}
+.pm-todo-suggest-bubble-shell.is-gap {
+  opacity: 0;
+  filter: none;
+  pointer-events: none;
+}
+.pm-todo-suggest-bubble-clip {
+  display: block;
+  width: max-content;
+  max-width: var(--pm-sug-max);
+  height: 36px;
+  overflow: hidden; /* width shrink clips text + glass together */
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: var(--pm-sug-glass);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.45) inset;
+  color: var(--ze-green, var(--pm-green, #1a5e3d));
+  opacity: 1;
+  /* expand grows with typewriter (max-content); collapse sets explicit width → 0 */
+  transition: width 0.48s var(--pm-sug-collapse-ease),
+    max-width 0.48s var(--pm-sug-collapse-ease),
+    opacity 0.2s var(--pm-sug-ease),
+    border-color 0.2s var(--pm-sug-ease);
+}
+.pm-todo-suggest-bubble-clip.is-expand {
+  /* natural growth via typed text; soft fade-in only */
+  animation: pm-todo-suggest-fade-in 0.28s var(--pm-sug-expand-ease) both;
+}
+.pm-todo-suggest-bubble-clip.is-hold {
+  width: max-content;
+  max-width: var(--pm-sug-max);
+}
+.pm-todo-suggest-bubble-clip.is-collapse {
+  /* width driven by inline style (measured px → 0) */
+}
+.pm-todo-suggest-bubble-clip.is-gap {
+  width: 0 !important;
+  max-width: 0 !important;
+  opacity: 0;
+  border-color: transparent;
+  box-shadow: none;
+}
+@keyframes pm-todo-suggest-fade-in {
+  from {
+    opacity: 0.75;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.pm-todo-suggest-bubble-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  width: max-content;
+  max-width: var(--pm-sug-max);
+  padding: 0 14px 0 12px;
+  box-sizing: border-box;
+}
+.pm-todo-suggest-bubble.is-fanned:hover .pm-todo-suggest-bubble-shell,
+.pm-todo-suggest-host:not(.is-open)
+  .pm-todo-suggest-bubble.is-active:hover
+  .pm-todo-suggest-bubble-shell {
+  filter: drop-shadow(0 2px 4px rgba(18, 20, 16, 0.07))
+    drop-shadow(0 8px 18px rgba(18, 20, 16, 0.12));
+}
+.pm-todo-suggest-bubble.is-fanned:hover .pm-todo-suggest-bubble-clip,
+.pm-todo-suggest-host:not(.is-open)
+  .pm-todo-suggest-bubble.is-active:hover
+  .pm-todo-suggest-bubble-clip {
+  background: var(--pm-sug-glass-hot);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+.pm-todo-suggest-bubble:active .pm-todo-suggest-bubble-clip {
+  filter: brightness(0.99);
+}
+.pm-todo-suggest-bubble-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--ze-green, var(--pm-green, #1a5e3d));
+  opacity: 0.85;
+}
+.pm-todo-suggest-bubble-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: calc(var(--pm-sug-max) - 52px);
+  flex: 0 1 auto;
+  /* Premium prose face — larger, light, quiet tracking */
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: 14.5px;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--ze-green, var(--pm-green, #1a5e3d));
+  line-height: 1.2;
+}
+.pm-todo-suggest-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 0.9em;
+  margin-left: 1px;
+  vertical-align: -0.08em;
+  background: color-mix(in srgb, var(--ze-green, #1a5e3d) 70%, transparent);
+  animation: pm-todo-suggest-caret-blink 0.9s step-end infinite;
+}
+@keyframes pm-todo-suggest-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-todo-suggest-bubble,
+  .pm-todo-suggest-bubble-clip {
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
+  .pm-todo-suggest-caret {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 /* Scope chips (message stream toggles) — one row with + pinned right */
 .pm-timeline-scope-row {
   display: flex;

@@ -519,6 +519,14 @@ def list_todos(
     return service.list_todos(collection_id, done=done, chain_id=chain_id)
 
 
+@router.get("/{collection_id}/chains/{chain_id}/todo-suggestions")
+def get_chain_todo_suggestions(collection_id: str, chain_id: str):
+    """Cached smart to-do suggestions for a timeline chain (chain-end bubble)."""
+    from src.file_mgmt.todo_suggestions import get_todo_suggestions
+
+    return get_todo_suggestions(collection_id, chain_id)
+
+
 @router.post("/{collection_id}/todos", status_code=201)
 def create_todo(collection_id: str, req: TodoCreate):
     return service.create_todo(collection_id, req)

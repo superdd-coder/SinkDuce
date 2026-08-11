@@ -1801,6 +1801,12 @@ def create_node(
             ).fetchone()
 
         emit_event("node.created", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            schedule_todo_suggestion_refresh(collection_id, chain_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after create_node failed", exc_info=True)
         return _row_to_node(row)
     finally:
         conn.close()
@@ -1813,12 +1819,14 @@ def update_node(
 
     conn = _open_db(collection_id)
     try:
+        old_chain_id = None
         with conn:
             node = conn.execute(
                 "SELECT * FROM nodes WHERE node_id=?", (node_id,)
             ).fetchone()
             if not node:
                 raise HTTPException(404, f"Node '{node_id}' not found")
+            old_chain_id = node["chain_id"]
 
             if "group_id" in updates and updates["group_id"] is not None:
                 grp = conn.execute(
@@ -1860,6 +1868,15 @@ def update_node(
             ).fetchone()
 
         emit_event("node.updated", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            new_chain_id = row["chain_id"] if row else old_chain_id
+            schedule_todo_suggestion_refresh(collection_id, new_chain_id)
+            if old_chain_id and new_chain_id and old_chain_id != new_chain_id:
+                schedule_todo_suggestion_refresh(collection_id, old_chain_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after update_node failed", exc_info=True)
         return _row_to_node(row)
     finally:
         conn.close()
@@ -1993,6 +2010,13 @@ def delete_node(collection_id: str, node_id: str) -> dict | None:
                 result = {"affected_files": affected_files}
 
         emit_event("node.deleted", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            # chain_id still available from deleted node snapshot above
+            schedule_todo_suggestion_refresh(collection_id, node["chain_id"])
+        except Exception:
+            logger.debug("todo suggestion schedule after delete_node failed", exc_info=True)
         return result
     finally:
         conn.close()
@@ -2043,6 +2067,12 @@ def reorder_node(
             ).fetchall()
 
         emit_event("node.reordered", collection_id, {"node_id": node_id})
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_todo_suggestion_refresh
+
+            schedule_todo_suggestion_refresh(collection_id, chain_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after reorder_node failed", exc_info=True)
         return [_row_to_node(r) for r in rows]
     finally:
         conn.close()
@@ -5943,6 +5973,12 @@ def attach_file_to_node(
         # node upload (Add Node / node attach), so file detail allows all tabs.
         if upload_task_id:
             out.task_id = upload_task_id
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_for_node
+
+            schedule_for_node(collection_id, node_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after attach_file failed", exc_info=True)
         return out
     finally:
         conn.close()
@@ -6126,6 +6162,12 @@ def detach_file_from_node(
             collection_id,
             {"file_id": file_id, "node_id": node_id},
         )
+        try:
+            from src.file_mgmt.todo_suggestions import schedule_for_node
+
+            schedule_for_node(collection_id, node_id)
+        except Exception:
+            logger.debug("todo suggestion schedule after detach_file failed", exc_info=True)
     finally:
         conn.close()
 
@@ -6194,6 +6236,13 @@ def create_message(collection_id: str, req: MessageCreate) -> MessageOut:
             collection_id,
             {"message_id": message_id, "owner_type": req.owner_type, "owner_id": req.owner_id},
         )
+        if (req.owner_type or "").strip().lower() == "node":
+            try:
+                from src.file_mgmt.todo_suggestions import schedule_for_node
+
+                schedule_for_node(collection_id, req.owner_id)
+            except Exception:
+                logger.debug("todo suggestion schedule after create_message failed", exc_info=True)
         return _row_to_message(row, conn)
     finally:
         conn.close()
@@ -6275,6 +6324,13 @@ def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> M
             collection_id,
             {"message_id": message_id},
         )
+        if owner_type == "node":
+            try:
+                from src.file_mgmt.todo_suggestions import schedule_for_node
+
+                schedule_for_node(collection_id, msg["owner_id"])
+            except Exception:
+                logger.debug("todo suggestion schedule after update_message failed", exc_info=True)
         return _row_to_message(row, conn)
     finally:
         conn.close()
@@ -6300,6 +6356,13 @@ def delete_message(collection_id: str, message_id: str) -> None:
             collection_id,
             {"message_id": message_id},
         )
+        if (msg["owner_type"] or "").strip().lower() == "node":
+            try:
+                from src.file_mgmt.todo_suggestions import schedule_for_node
+
+                schedule_for_node(collection_id, msg["owner_id"])
+            except Exception:
+                logger.debug("todo suggestion schedule after delete_message failed", exc_info=True)
     finally:
         conn.close()
 
@@ -6682,8 +6745,23 @@ def create_todo(collection_id: str, req: TodoCreate) -> TodoOut:
             row = conn.execute(
                 "SELECT * FROM todos WHERE todo_id=?", (todo_id,)
             ).fetchone()
+        out = _row_to_todo(row, conn)
         emit_event("todo.created", collection_id, {"todo_id": todo_id})
-        return _row_to_todo(row, conn)
+        # Consume smart-suggestion after successful create
+        sid = (getattr(req, "suggestion_id", None) or "").strip()
+        if sid:
+            try:
+                from src.file_mgmt.todo_suggestions import consume_suggestion
+
+                consume_suggestion(collection_id, out.chain_id, sid)
+            except Exception:
+                logger.debug(
+                    "consume suggestion failed todo=%s sid=%s",
+                    todo_id,
+                    sid,
+                    exc_info=True,
+                )
+        return out
     finally:
         conn.close()
 

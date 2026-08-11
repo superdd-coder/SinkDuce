@@ -1463,3 +1463,50 @@ FORMATTING:
 - Use Markdown for readability (headers, lists, bold/italic).
 - Keep answers focused — this is a quick Q&A, not a research report.
 """
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Timeline — Smart To-do Suggestions
+# ═══════════════════════════════════════════════════════════════════════
+
+# TODO_SUGGEST_SYSTEM_PROMPT + TODO_SUGGEST_USER_PROMPT
+#   Purpose: Given an ordered timeline chain context (node titles, groups,
+#            plain-text messages, attachment short summaries) plus open todo
+#            titles already on that chain, propose 1–3 concrete next todos.
+#   Role: TODO_SUGGEST_SYSTEM_PROMPT → system
+#         TODO_SUGGEST_USER_PROMPT   → user
+#   Called by: src/file_mgmt/todo_suggestions.py → llm.generate()
+#   Template vars:
+#     {chain_context}     — formatted multi-node timeline text
+#     {open_todo_titles}  — bullet list of existing open todo titles (or "(none)")
+TODO_SUGGEST_SYSTEM_PROMPT = """You suggest process-aware next to-dos for a project timeline chain.
+
+Before writing the JSON, reason privately (do not output this reasoning):
+- What workflow is this chain on (e.g. due diligence, delivery, review), using chain/node titles, groups, messages, and attachment summaries.
+- Where the work is now after the latest nodes, and what the natural next step(s) in that workflow are.
+- Ground every suggestion in the chain; do not invent entities or facts not supported by the context.
+Do not put citations, "based on node…", or evidence lists in the output.
+
+Rules for the suggestions:
+- Propose 1–3 todos that continue this workflow — not generic project-management advice.
+- Prefer concrete, completable actions (including scheduling a meeting when that is the right next step: purpose and expected outcome).
+- Avoid duplicating or restating open todos already listed.
+- Each title: a few words, no trailing period.
+- Each body: a refinement of that todo only — how to carry it out, scope, key sub-steps or checks, and what done looks like. Short markdown, typically 3–5 sentences (or equivalent short bullets). Prefer a body on every item. Do not restate the title as the whole body.
+- Language: match the dominant language of the chain context. If the context mixes languages, write in English.
+- Output ONLY a JSON array (no markdown fences, no commentary, no reasoning preamble):
+  [{"title":"...","body":"..."}, ...]
+- If the chain has almost no signal, return a single high-level next step rather than an empty array.
+"""
+
+TODO_SUGGEST_USER_PROMPT = """## Timeline chain (oldest → newest)
+
+{chain_context}
+
+## Open todos already on this chain (do not duplicate)
+
+{open_todo_titles}
+
+Infer the workflow and current stage from the chain, then return 1–3 next-step todo suggestions as a JSON array.
+Each body should refine that todo (how / scope / done criteria), not cite sources.
+"""

@@ -16,6 +16,8 @@ import { TodoCard } from '@/components/database/todo-card'
 import { CreateTodoDialog } from '@/components/database/create-todo-dialog'
 import { triggerTodoRefresh } from '@/lib/todo-refresh'
 import { AddNodeTodoSplit } from './add-node-todo-split'
+import { TodoSuggestBubble } from './todo-suggest-bubble'
+import type { TodoSuggestionItem } from '@/types/file-mgmt'
 import {
   DndContext,
   closestCenter,
@@ -612,7 +614,15 @@ export function TimelineView({
   }, [desiredRailMode, railMode, selId])
 
   const ref=useCallback(()=>{fetch({silent:true});setDrk(k=>k+1)},[fetch])
-  const ncr=useCallback(()=>{setAddOpen(false);setAddTgt(null);fetch({silent:true})},[fetch])
+  const ncr=useCallback(()=>{
+    // Only close the Add Node dialog that just succeeded — do not touch other UI.
+    setAddOpen(false)
+    setAddTgt(null)
+    // Silent timeline refresh (no full-page loading). Suggestion bubble polls on its own.
+    fetch({silent:true})
+    // Soft nudge for suggestion poll after node+attachments+message fully committed.
+    window.setTimeout(() => setSuggestRefreshKey((k) => k + 1), 5200)
+  },[fetch])
   const ccr=useCallback(()=>{setCcOpen(false);setCcTgt(null);fetch({silent:true})},[fetch])
   const ecr=useCallback(()=>{setEcOpen(false);setEcTgt(null);fetch({silent:true})},[fetch])
   const addN=useCallback((cid:string,ao:number)=>{
@@ -621,12 +631,39 @@ export function TimelineView({
     setAddOpen(true)
   },[])
   const [timelineCreateTodoOpen, setTimelineCreateTodoOpen] = useState(false)
+  const [todoPrefill, setTodoPrefill] = useState<{
+    title: string
+    body: string | null
+    suggestionId: string | null
+  } | null>(null)
+  const [suggestRefreshKey, setSuggestRefreshKey] = useState(0)
   const addTodoOnChain=useCallback((cid:string)=>{
     // Drop node focus so Todo rail is visible; create via modal (not inline)
     setSelId(null)
     setTodoDefaultChainId(cid)
+    setTodoPrefill(null)
     setTimelineCreateTodoOpen(true)
   },[])
+  const addTodoFromSuggestion = useCallback(
+    (cid: string, item: TodoSuggestionItem) => {
+      setSelId(null)
+      setTodoDefaultChainId(cid)
+      const body =
+        (item.body && String(item.body).trim()) ||
+        // tolerate alternate field if present on older payloads
+        (typeof (item as { description?: string }).description === "string"
+          ? String((item as { description?: string }).description).trim()
+          : "") ||
+        null
+      setTodoPrefill({
+        title: (item.title || "").trim(),
+        body,
+        suggestionId: item.suggestion_id || null,
+      })
+      setTimelineCreateTodoOpen(true)
+    },
+    []
+  )
   const cc=useCallback(async(pCid:string,pNid:string)=>{try{const mcd2=chainData.get(pCid);const pn=mcd2?.nodes.find(n=>n.node_id===pNid);if(chains.filter(bc=>bc.parent_node_id===pNid&&!bc.has_end_node).length>0){toast.error("Node already has an active branch");return}const title=pn?.title||"Branch";await createChain(collectionId,{parent_chain_id:pCid,parent_node_id:pNid,title});await updateNode(collectionId,pNid,{node_type:"start",version:pn?.version??1});toast.success("Branch "+title+" created");fetch({silent:true})}catch(e){toast.error("Failed: "+String(e))}},[collectionId,chainData,fetch,chains])
   const confirmDeleteBranchTitle = useMemo(() => {
     if (!confirmDeleteBranchId) return 'Empty branch'
@@ -2045,6 +2082,9 @@ export function TimelineView({
                     onNodeClick={clk}
                     onAddNode={msgMode ? () => {} : addN}
                     onAddTodo={msgMode ? undefined : addTodoOnChain}
+                    onPickSuggestion={msgMode ? undefined : addTodoFromSuggestion}
+                    collectionId={collectionId}
+                    suggestRefreshKey={suggestRefreshKey}
                     onMergeBranch={msgMode ? undefined : () => mergeBranch(bi.bc.chain_id)}
                     onCreateChain={msgMode ? () => {} : cc}
                     groups={groups}
@@ -2268,6 +2308,9 @@ export function TimelineView({
                     onNodeClick={clk}
                     onAddNode={msgMode ? () => {} : addN}
                     onAddTodo={msgMode ? undefined : addTodoOnChain}
+                    onPickSuggestion={msgMode ? undefined : addTodoFromSuggestion}
+                    collectionId={collectionId}
+                    suggestRefreshKey={suggestRefreshKey}
                     onCreateChain={msgMode ? () => {} : cc}
                     groups={groups}
                     focusGroupId={focusGroupId}
@@ -2386,11 +2429,19 @@ export function TimelineView({
         open={timelineCreateTodoOpen}
         onOpenChange={(o) => {
           setTimelineCreateTodoOpen(o)
-          if (!o) setTodoSidebarKey((k) => k + 1)
+          if (!o) {
+            setTodoSidebarKey((k) => k + 1)
+            setTodoPrefill(null)
+          }
         }}
         defaultChainId={todoChainDefault}
+        initialTitle={todoPrefill?.title || ''}
+        initialBody={todoPrefill?.body ?? null}
+        suggestionId={todoPrefill?.suggestionId ?? null}
         onCreated={() => {
           setTodoSidebarKey((k) => k + 1)
+          setSuggestRefreshKey((k) => k + 1)
+          setTodoPrefill(null)
           triggerTodoRefresh({
             collectionId,
             reason: 'create',
@@ -2478,6 +2529,10 @@ interface CRP {
   onAddNode: (cid: string, after: number) => void
   /** Add todo linked to this chain (timeline hover split). */
   onAddTodo?: (cid: string) => void
+  /** Smart suggestion click → prefill create-todo. */
+  onPickSuggestion?: (cid: string, item: TodoSuggestionItem) => void
+  collectionId?: string
+  suggestRefreshKey?: number
   /** Last branch node hover: merge / end chain */
   onMergeBranch?: () => void
   onCreateChain: (pCid: string, pNid: string) => void
@@ -2546,17 +2601,23 @@ function ChainEndAddButton({
   chainId,
   onAdd,
   onAddTodo,
+  collectionId,
+  suggestRefreshKey,
+  onPickSuggestion,
 }: {
   chainId: string
   onAdd: () => void
   onAddTodo?: () => void
+  collectionId?: string
+  suggestRefreshKey?: number
+  onPickSuggestion?: (item: TodoSuggestionItem) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: endDropId(chainId) })
   return (
     <div
       ref={setNodeRef}
       className={cn(
-        'overflow-visible rounded-[var(--pm-r-sm)]',
+        'flex flex-row items-center overflow-visible rounded-[var(--pm-r-sm)]',
         isOver && 'ring-2 ring-[color-mix(in_srgb,var(--pm-green)_22%,transparent)]',
       )}
     >
@@ -2564,6 +2625,14 @@ function ChainEndAddButton({
         onAddNode={onAdd}
         onAddTodo={onAddTodo ?? onAdd}
       />
+      {collectionId && onPickSuggestion ? (
+        <TodoSuggestBubble
+          collectionId={collectionId}
+          chainId={chainId}
+          refreshKey={suggestRefreshKey}
+          onPick={onPickSuggestion}
+        />
+      ) : null}
     </div>
   )
 }
@@ -2576,6 +2645,9 @@ function ChainRow({
   onNodeClick,
   onAddNode,
   onAddTodo,
+  onPickSuggestion,
+  collectionId,
+  suggestRefreshKey = 0,
   onMergeBranch,
   onCreateChain,
   groups,
@@ -2916,6 +2988,13 @@ function ChainRow({
                   onAddNode(chainId, l ? l.order : 0)
                 }}
                 onAddTodo={() => onAddTodo?.(chainId)}
+                collectionId={collectionId}
+                suggestRefreshKey={suggestRefreshKey}
+                onPickSuggestion={
+                  onPickSuggestion
+                    ? (item) => onPickSuggestion(chainId, item)
+                    : undefined
+                }
               />
             </div>
           ) : useEqualGrid ? (
@@ -2934,6 +3013,13 @@ function ChainRow({
                   onAddNode(chainId, l ? l.order : 0)
                 }}
                 onAddTodo={() => onAddTodo?.(chainId)}
+                collectionId={collectionId}
+                suggestRefreshKey={suggestRefreshKey}
+                onPickSuggestion={
+                  onPickSuggestion
+                    ? (item) => onPickSuggestion(chainId, item)
+                    : undefined
+                }
               />
             </div>
           ) : (
@@ -2950,6 +3036,14 @@ function ChainRow({
                   }}
                   onAddTodo={() => onAddTodo?.(chainId)}
                 />
+                {collectionId && onPickSuggestion ? (
+                  <TodoSuggestBubble
+                    collectionId={collectionId}
+                    chainId={chainId}
+                    refreshKey={suggestRefreshKey}
+                    onPick={(item) => onPickSuggestion(chainId, item)}
+                  />
+                ) : null}
               </div>
             </>
           )

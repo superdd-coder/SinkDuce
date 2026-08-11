@@ -35,6 +35,11 @@ interface CreateTodoDialogProps {
   onOpenChange: (open: boolean) => void
   /** Initial chain selection (null = main). User can change in the dialog. */
   defaultChainId?: string | null
+  /** Prefill from smart suggestion or other callers. */
+  initialTitle?: string
+  initialBody?: string | null
+  /** When set, sent on create so the server can consume that suggestion. */
+  suggestionId?: string | null
   onCreated?: (todo: TodoItem) => void
 }
 
@@ -48,6 +53,9 @@ export function CreateTodoDialog({
   open,
   onOpenChange,
   defaultChainId = null,
+  initialTitle = "",
+  initialBody = null,
+  suggestionId = null,
   onCreated,
 }: CreateTodoDialogProps) {
   const [title, setTitle] = useState("")
@@ -61,6 +69,11 @@ export function CreateTodoDialog({
   const descEditorRef = useRef<Editor | null>(null)
   /** Remount editor when dialog opens so TipTap starts clean */
   const [editorKey, setEditorKey] = useState(0)
+  /** After seed effect runs — avoid mounting TipTap with empty body before prefill applies */
+  const [descReady, setDescReady] = useState(false)
+  const activeSuggestionId = suggestionId?.trim() || null
+  const seedTitle = (initialTitle || "").trim()
+  const seedBody = (initialBody || "").trim()
 
   /** Click empty pad under last line → caret at end so any host area is typeable */
   const focusDescEnd = useCallback((e: ReactMouseEvent) => {
@@ -93,11 +106,18 @@ export function CreateTodoDialog({
   )
 
   useEffect(() => {
-    if (!open || !collectionId) return
-    setTitle("")
-    setBody("")
+    if (!open) {
+      setDescReady(false)
+      return
+    }
+    if (!collectionId) return
+    // Seed form from props *before* mounting MarkdownEditor (TipTap only
+    // reads initial content on mount; empty first paint would stick).
+    setTitle(seedTitle)
+    setBody(seedBody)
     setDdl("")
     setEditorKey((k) => k + 1)
+    setDescReady(true)
     setLoadingChains(true)
     listChains(collectionId)
       .then((list) => {
@@ -120,7 +140,7 @@ export function CreateTodoDialog({
         setSelectedChainId("")
       })
       .finally(() => setLoadingChains(false))
-  }, [open, collectionId, defaultChainId])
+  }, [open, collectionId, defaultChainId, seedTitle, seedBody])
 
   /* Focus title after silk enter so open fade isn’t interrupted */
   useEffect(() => {
@@ -157,6 +177,7 @@ export function CreateTodoDialog({
         body: body.trim() || null,
         ddl: ddl.trim() || null,
         target_chain_id: isMain ? null : selectedChainId,
+        suggestion_id: activeSuggestionId,
       })
       toast.success("Todo added")
       onCreated?.(todo)
@@ -271,10 +292,10 @@ export function CreateTodoDialog({
               className="pm-todo-md-host"
               onMouseDown={focusDescEnd}
             >
-              {open && (
+              {open && descReady && (
                 <MarkdownEditor
-                  key={editorKey}
-                  value={body}
+                  key={`${editorKey}:${seedBody.slice(0, 48)}`}
+                  value={body || seedBody}
                   onChange={setBody}
                   enableSlash={false}
                   showToolbar

@@ -351,7 +351,19 @@ export function AddNodeDialog({
   const showSelectPreview = selectOpen
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      // Focus trap: timeline chrome (suggestion bubble) mounts outside this tree.
+      modal
+      disablePointerDismissal={submitting}
+      onOpenChange={(next, details) => {
+        // Never abort while node + files + message are still being written.
+        if (!next && submitting) return
+        // Suggestion bubble / silent poll must not close mid-edit via focus loss.
+        if (!next && details.reason === "focus-out") return
+        onOpenChange(next)
+      }}
+    >
       <DialogContent
         showCloseButton={false}
         overlayClassName="pm-dialog-overlay--silk"
@@ -361,6 +373,7 @@ export function AddNodeDialog({
           previewSettled && "is-preview-settled",
           "!animate-none data-open:!animate-none data-closed:!animate-none"
         )}
+        finalFocus={false}
       >
         <div className="pm-add-node-shell">
           {/*

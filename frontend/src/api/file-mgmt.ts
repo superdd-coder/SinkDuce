@@ -29,6 +29,7 @@ import type {
   TodoCreateRequest,
   TodoUpdateRequest,
   TodoLinkNodeRequest,
+  TodoSuggestionsResponse,
 } from "@/types/file-mgmt"
 
 const BASE = "/api/file-mgmt"
@@ -586,6 +587,15 @@ export const listTodos = (
   const q = qs.toString()
   return req<TodoItem[]>(`/${collectionId}/todos${q ? `?${q}` : ""}`)
 }
+
+/** Smart next-todo suggestions for a chain (cached; poll while pending/generating). */
+export const getChainTodoSuggestions = (
+  collectionId: string,
+  chainId: string
+) =>
+  req<TodoSuggestionsResponse>(
+    `/${collectionId}/chains/${chainId}/todo-suggestions`
+  )
 
 export const createTodo = (collectionId: string, body: TodoCreateRequest) =>
   req<TodoItem>(`/${collectionId}/todos`, {
