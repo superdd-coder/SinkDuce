@@ -11,7 +11,9 @@ import { Copy, Check, ExternalLink, ArrowRight } from "lucide-react"
 import type { UpdateInfo } from "@/hooks/use-update-check"
 import { cn } from "@/lib/utils"
 
-const UPDATE_COMMAND = "git pull && \\\ndocker compose up -d --build"
+/** Default path: pull Hub image (docker-compose.yml). Source builds use docker-compose.build.yml. */
+const UPDATE_COMMAND =
+  "git pull && \\\ndocker compose pull && \\\ndocker compose up -d"
 
 interface UpdateDialogProps {
   open: boolean
@@ -59,7 +61,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
       <DialogContent
         className={cn(
           "pm-dialog pm-dialog--silk pm-update-dialog",
-          "sm:max-w-lg max-h-[min(85vh,36rem)]",
+          "sm:max-w-lg min-h-[min(70vh,32rem)] max-h-[min(90vh,44rem)]",
           "flex flex-col gap-0 overflow-hidden p-0",
           "!animate-none data-open:!animate-none data-closed:!animate-none",
         )}
@@ -91,7 +93,10 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
           </div>
 
           {releaseNotes ? (
-            <section className="pm-update-card" aria-label="Release notes">
+            <section
+              className="pm-update-card pm-update-card--notes"
+              aria-label="Release notes"
+            >
               <h3 className="pm-update-card-label">What&rsquo;s new</h3>
               <div className="pm-update-notes">{releaseNotes}</div>
             </section>
@@ -126,11 +131,20 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
             <p className="pm-update-help">
               On the server,{" "}
               <code className="pm-update-inline-code">cd</code> into the project
-              directory, then run:
+              directory (where{" "}
+              <code className="pm-update-inline-code">docker-compose.yml</code>{" "}
+              lives), then run:
             </p>
             <div className="pm-update-cmd">
               <pre className="pm-update-cmd-pre">{UPDATE_COMMAND}</pre>
             </div>
+            <p className="pm-update-help" style={{ marginTop: "0.65rem" }}>
+              Building from source instead? Use{" "}
+              <code className="pm-update-inline-code">
+                docker compose -f docker-compose.build.yml up -d --build
+              </code>
+              .
+            </p>
           </section>
         </div>
 

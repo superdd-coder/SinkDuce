@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import shutil
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,20 @@ from src.services import services
 from src.tasks.task_manager import task_manager, Task, TaskStatus
 
 logger = logging.getLogger(__name__)
+
+# Serialize per-section todo extract (allocate bg + GET refresh must not double-hit LLM)
+_todo_extract_locks: dict[str, threading.Lock] = {}
+_todo_extract_locks_guard = threading.Lock()
+
+
+def _todo_extract_lock(meeting_id: str, tab_id: str) -> threading.Lock:
+    key = f"{meeting_id}:{tab_id}"
+    with _todo_extract_locks_guard:
+        lock = _todo_extract_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _todo_extract_locks[key] = lock
+        return lock
 
 
 def _resolve_meeting_llm() -> "LLMProvider":
@@ -2566,7 +2581,7 @@ class MeetingService:
             entry = idx.get(file_id, {})
             source = entry.get("source", "") or ""
 
-            # Detach from meeting timeline anchor before purging file rows
+            # Detach from meeting timeline anchor(s) before purging file rows
             if detach_anchor and meeting_id and file_id:
                 try:
                     from src.file_mgmt.service import (
@@ -2579,14 +2594,22 @@ class MeetingService:
                     ref = meeting_external_ref(meeting_id)
                     conn = _open_db(collection)
                     try:
-                        node = conn.execute(
-                            "SELECT node_id FROM nodes WHERE external_ref=?",
-                            (ref,),
-                        ).fetchone()
-                        node_id = node["node_id"] if node else None
+                        nodes = conn.execute(
+                            """SELECT n.node_id FROM file_nodes fn
+                               JOIN nodes n ON n.node_id = fn.node_id
+                               WHERE fn.file_id=? AND n.external_ref=?""",
+                            (file_id, ref),
+                        ).fetchall()
+                        # Fallback: any attach of this file
+                        if not nodes:
+                            nodes = conn.execute(
+                                "SELECT node_id FROM file_nodes WHERE file_id=?",
+                                (file_id,),
+                            ).fetchall()
+                        node_ids = [r["node_id"] for r in nodes]
                     finally:
                         conn.close()
-                    if node_id:
+                    for node_id in node_ids:
                         try:
                             detach_file_from_node(collection, node_id, file_id)
                         except Exception:
@@ -2676,21 +2699,29 @@ class MeetingService:
             return False
 
     async def allocate_section_to_collection(
-        self, meeting_id: str, tab_id: str, collection_id: str,
+        self,
+        meeting_id: str,
+        tab_id: str,
+        collection_id: str,
+        *,
+        chain_id: str | None = None,
     ) -> tuple[Meeting, dict]:
         """Allocate a section into a collection (file-mgmt + optional timeline).
 
         Returns ``(meeting, bridge)`` where *bridge* has
-        ``file_id``, ``task_id``, ``node_id``, ``source``.
+        ``file_id``, ``task_id``, ``node_id``, ``source``, ``chain_id``.
         """
         import re as _re
 
         from src.collections.store import get_collection_meta
         from src.file_mgmt.service import (
             attach_file_to_node,
+            detach_file_from_node,
             ensure_meeting_anchor_node,
             register_ingested_source_file,
             upload_file_version,
+            _open_db,
+            _main_chain_id,
         )
         from src.tasks.task_manager import task_manager
 
@@ -2711,27 +2742,17 @@ class MeetingService:
         old_fid = (tab_meta.get("allocated_file_id") or "").strip()
         old_col = (tab_meta.get("associated_collection_id") or "").strip()
 
-        # Read + process content
+        # Read + process content (same snapshot as todo-candidate LLM extract)
         raw_md = store.get_section_md(meeting_id, tab_id)
         if not raw_md:
             raise ValueError(f"No content for tab '{tab_id}'")
         # Fingerprint raw editor content (not the processed upload blob)
         ingested_hash = store.section_content_hash(raw_md)
 
-        content = raw_md
         speaker_names: dict[str, str] = getattr(meeting, "speaker_names", None) or {}
-        for spk_id, name in speaker_names.items():
-            content = content.replace(f"[spk:{spk_id}]", name)
-            content = _re.sub(rf"\bSpeaker {_re.escape(spk_id)}\b", name, content)
+        from src.meeting.todo_candidates import prepare_section_todo_snapshot
 
-        content = _re.sub(
-            r"\[(?:ref:)?\s*(?:stt_\d+(?:\s*[-–]\s*\d+)?"
-            r"(?:\s*,\s*stt_\d+(?:\s*[-–]\s*\d+)?)*)\s*\]",
-            "", content,
-        )
-        content = _re.sub(r"\bstt_\d{4}\b", "", content)
-        content = _re.sub(r"\n{3,}", "\n\n", content)
-        content = content.strip()
+        content = prepare_section_todo_snapshot(raw_md, speaker_names)
 
         section_label = tab_meta.get("name", tab_id)
         full_content = f"# {section_label}\n\n{content}"
@@ -2821,7 +2842,9 @@ class MeetingService:
                 version_id = None
 
             try:
-                task = task_manager.create_task(
+                # Await enqueue so upload can dequeue immediately (do not block
+                # the event loop with sync LLM after create_task).
+                task = await task_manager.create_task_async(
                     filename=storage_name,
                     task_type="upload",
                     file_path=str(file_path),
@@ -2862,17 +2885,67 @@ class MeetingService:
                     version_id=version_id,
                 )
 
-        # Timeline anchor + attach
+        # Resolve target chain (default main)
+        resolved_chain_id: str | None = (chain_id or "").strip() or None
         try:
+            conn_ch = _open_db(collection_id)
+            try:
+                main_id = _main_chain_id(conn_ch)
+                if not resolved_chain_id or resolved_chain_id == main_id:
+                    resolved_chain_id = main_id
+                else:
+                    ch_ok = conn_ch.execute(
+                        "SELECT 1 FROM chains WHERE chain_id=?",
+                        (resolved_chain_id,),
+                    ).fetchone()
+                    if not ch_ok:
+                        raise ValueError(f"Chain '{resolved_chain_id}' not found")
+            finally:
+                conn_ch.close()
+        except ValueError:
+            raise
+        except Exception:
+            logger.warning(
+                "Chain resolve failed col=%s; using main", collection_id, exc_info=True
+            )
+            resolved_chain_id = None
+
+        # Timeline anchor + attach (detach from prior nodes if chain/file moved)
+        try:
+            conn_det = _open_db(collection_id)
+            try:
+                prior = conn_det.execute(
+                    "SELECT node_id FROM file_nodes WHERE file_id=?",
+                    (alloc_file_id,),
+                ).fetchall()
+                prior_ids = [r["node_id"] for r in prior]
+            finally:
+                conn_det.close()
+            for pid in prior_ids:
+                try:
+                    detach_file_from_node(collection_id, pid, alloc_file_id)
+                except Exception:
+                    logger.debug(
+                        "pre-attach detach skipped file=%s node=%s",
+                        alloc_file_id[:12],
+                        pid[:12],
+                        exc_info=True,
+                    )
+
             node_id = ensure_meeting_anchor_node(
                 collection_id,
                 meeting_id,
                 title=meeting_title,
                 event_time=meeting_date,
+                chain_id=resolved_chain_id,
             )
             attach_file_to_node(
                 collection_id, node_id, file_id=alloc_file_id
             )
+            # Drop empty anchors left on other chains after move
+            from src.file_mgmt.service import delete_meeting_anchor_if_empty
+
+            delete_meeting_anchor_if_empty(collection_id, meeting_id)
         except Exception:
             logger.warning(
                 "Meeting anchor attach failed meeting=%s col=%s file=%s",
@@ -2883,7 +2956,10 @@ class MeetingService:
             )
             node_id = None
 
-        # ── Update tab metadata ─────────────────────────────────
+        # ── Update tab metadata (do NOT wait on todo LLM) ───────
+        # Keep prior candidates until background extract finishes so
+        # Create todos still has something if user opens mid-refresh.
+        prior_candidates = list(tab_meta.get("todo_candidates") or [])
         col_meta = get_collection_meta(collection_id)
         col_name = col_meta.get("name", collection_id) if col_meta else collection_id
 
@@ -2896,6 +2972,9 @@ class MeetingService:
                 td["allocated_file_id"] = alloc_file_id
                 td["needs_reingest"] = False
                 td["ingested_content_hash"] = ingested_hash
+                td["allocated_chain_id"] = resolved_chain_id or ""
+                td["allocated_node_id"] = node_id or ""
+                td["todo_candidates"] = prior_candidates
             updated_tabs.append(td)
 
         store.update_meeting(meeting_id, tabs=updated_tabs)
@@ -2907,6 +2986,10 @@ class MeetingService:
             allocated_file_ids=alloc_fids,
         )
 
+        # Todo candidates: fire-and-forget (daemon thread) so allocate +
+        # upload queue are never blocked by Meeting-model LLM latency.
+        self.schedule_section_todo_extract(meeting_id, tab_id)
+
         updated = store.get_meeting(meeting_id)
         assert updated is not None
 
@@ -2916,17 +2999,231 @@ class MeetingService:
             "node_id": node_id,
             "source": section_source,
             "collection_id": collection_id,
+            "chain_id": resolved_chain_id,
+            "todo_candidate_count": len(prior_candidates),
+            "todo_candidates_pending": True,
         }
         logger.info(
-            "Allocated section %s/%s → col=%s file=%s task=%s node=%s",
+            "Allocated section %s/%s → col=%s file=%s task=%s node=%s chain=%s "
+            "todos_prior=%d (extract scheduled bg)",
             meeting_id,
             tab_id,
             collection_id,
             alloc_file_id[:12],
             task_id,
             (node_id or "")[:12],
+            (resolved_chain_id or "")[:12],
+            len(prior_candidates),
         )
         return updated, bridge
+
+    def schedule_section_todo_extract(
+        self,
+        meeting_id: str,
+        tab_id: str,
+        *,
+        use_llm: bool = True,
+    ) -> None:
+        """Run todo-candidate extract in a daemon thread (non-blocking)."""
+
+        def _run() -> None:
+            try:
+                items = self.extract_section_todo_candidates(
+                    meeting_id,
+                    tab_id,
+                    persist=True,
+                    use_llm=use_llm,
+                )
+                logger.info(
+                    "Background todo extract done meeting=%s tab=%s count=%d",
+                    meeting_id,
+                    tab_id,
+                    len(items),
+                )
+            except Exception:
+                logger.warning(
+                    "Background todo extract failed meeting=%s tab=%s",
+                    meeting_id,
+                    tab_id,
+                    exc_info=True,
+                )
+
+        threading.Thread(
+            target=_run,
+            name=f"todo-extract-{meeting_id[:8]}-{tab_id}",
+            daemon=True,
+        ).start()
+
+    def extract_section_todo_candidates(
+        self,
+        meeting_id: str,
+        tab_id: str,
+        *,
+        persist: bool = True,
+        use_llm: bool = True,
+        enrich_ddl: bool | None = None,
+    ) -> list[dict]:
+        """Extract todos from section MD (ingest snapshot + one LLM call).
+
+        Snapshot matches library allocate: resolve speaker display names and
+        strip stt_ref tags. LLM returns short title, body, priority, ddl.
+        Falls back to deterministic ``## Todo`` parse if LLM is unavailable.
+
+        Used when:
+        - allocate/re-ingest (background thread, non-blocking for allocate)
+        - GET candidates when none stored (legacy allocate)
+        """
+        # Back-compat: old callers passed enrich_ddl=
+        if enrich_ddl is not None:
+            use_llm = bool(enrich_ddl) or use_llm
+
+        lock = _todo_extract_lock(meeting_id, tab_id)
+        with lock:
+            return self._extract_section_todo_candidates_locked(
+                meeting_id,
+                tab_id,
+                persist=persist,
+                use_llm=use_llm,
+            )
+
+    def _extract_section_todo_candidates_locked(
+        self,
+        meeting_id: str,
+        tab_id: str,
+        *,
+        persist: bool,
+        use_llm: bool,
+    ) -> list[dict]:
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+
+        tab_meta: dict | None = None
+        for t in (meeting.tabs or []):
+            td = t if isinstance(t, dict) else t.model_dump()
+            if td.get("tab_id") == tab_id:
+                tab_meta = td
+                break
+        if tab_meta is None:
+            raise ValueError(f"Tab '{tab_id}' not found")
+
+        raw_md = store.get_section_md(meeting_id, tab_id) or ""
+        speaker_names: dict[str, str] = (
+            getattr(meeting, "speaker_names", None) or {}
+        )
+
+        # Same LLM as section summary / blueprint: Settings → Enrichment → Meeting model
+        # (falls back to default LLM when meeting_model is empty).
+        llm = None
+        if use_llm:
+            try:
+                llm = _resolve_meeting_llm()
+            except Exception:
+                logger.debug(
+                    "No meeting LLM for todo extract; will fall back to parse",
+                    exc_info=True,
+                )
+                llm = None
+
+        from src.meeting.todo_candidates import extract_todo_candidates
+
+        candidates = extract_todo_candidates(
+            raw_md,
+            speaker_names=speaker_names,
+            meeting_created_at=getattr(meeting, "created_at", None),
+            llm=llm,
+            use_llm=use_llm and llm is not None,
+        )
+
+        # Preserve prior created_todo_id / ddl when candidate_id matches
+        prev_by_id: dict[str, dict] = {}
+        for old in tab_meta.get("todo_candidates") or []:
+            if not isinstance(old, dict):
+                continue
+            cid = str(old.get("candidate_id") or "").strip()
+            if cid:
+                prev_by_id[cid] = old
+        for c in candidates:
+            cid = str(c.get("candidate_id") or "").strip()
+            prev = prev_by_id.get(cid)
+            if not prev:
+                continue
+            if prev.get("created_todo_id"):
+                c["created_todo_id"] = prev["created_todo_id"]
+            if prev.get("ddl") and not c.get("ddl"):
+                c["ddl"] = prev["ddl"]
+
+        if persist:
+            # Re-read meeting so concurrent tab field updates are not wiped
+            latest = store.get_meeting(meeting_id) or meeting
+            updated_tabs: list[dict] = []
+            for t in (latest.tabs or []):
+                td = t if isinstance(t, dict) else t.model_dump()
+                if td.get("tab_id") == tab_id:
+                    td["todo_candidates"] = candidates
+                updated_tabs.append(td)
+            store.update_meeting(meeting_id, tabs=updated_tabs)
+
+        return candidates
+
+    def mark_todo_candidates_created(
+        self,
+        meeting_id: str,
+        items: list[dict],
+    ) -> Meeting:
+        """Write ``created_todo_id`` onto matching section todo candidates.
+
+        *items*: ``{tab_id, candidate_id, todo_id}`` (tab_id optional when unique).
+        Used after confirm-create so the same candidate is not offered again.
+        """
+        meeting = store.get_meeting(meeting_id)
+        if meeting is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found")
+
+        # (tab_id|*, candidate_id) → todo_id
+        by_key: dict[tuple[str, str], str] = {}
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            cid = str(it.get("candidate_id") or "").strip()
+            tid = str(it.get("todo_id") or "").strip()
+            tab = str(it.get("tab_id") or "").strip()
+            if not cid or not tid:
+                continue
+            by_key[(tab or "*", cid)] = tid
+
+        if not by_key:
+            return meeting
+
+        updated_tabs: list[dict] = []
+        for t in (meeting.tabs or []):
+            td = t if isinstance(t, dict) else t.model_dump()
+            tab_id = str(td.get("tab_id") or "")
+            cands = list(td.get("todo_candidates") or [])
+            changed = False
+            new_cands: list[dict] = []
+            for c in cands:
+                if not isinstance(c, dict):
+                    new_cands.append(c)
+                    continue
+                c = dict(c)
+                cid = str(c.get("candidate_id") or "").strip()
+                todo_id = (
+                    by_key.get((tab_id, cid))
+                    or by_key.get(("*", cid))
+                )
+                if todo_id:
+                    c["created_todo_id"] = todo_id
+                    changed = True
+                new_cands.append(c)
+            if changed:
+                td["todo_candidates"] = new_cands
+            updated_tabs.append(td)
+
+        store.update_meeting(meeting_id, tabs=updated_tabs)
+        updated = store.get_meeting(meeting_id)
+        assert updated is not None
+        return updated
 
     async def delete_section_allocation(
         self, meeting_id: str, tab_id: str,
@@ -2962,6 +3259,9 @@ class MeetingService:
                 td["allocated_file_id"] = ""
                 td["needs_reingest"] = False
                 td["ingested_content_hash"] = ""
+                td["allocated_chain_id"] = ""
+                td["allocated_node_id"] = ""
+                td["todo_candidates"] = []
             updated_tabs.append(td)
 
         store.update_meeting(meeting_id, tabs=updated_tabs)

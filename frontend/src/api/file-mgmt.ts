@@ -30,6 +30,7 @@ import type {
   TodoUpdateRequest,
   TodoLinkNodeRequest,
   TodoSuggestionsResponse,
+  NodeMeetingTodoCandidatesResponse,
 } from "@/types/file-mgmt"
 
 const BASE = "/api/file-mgmt"
@@ -418,9 +419,25 @@ export const getNodeDetail = (collectionId: string, nodeId: string) =>
   req<NodeDetail>(`/${collectionId}/nodes/${nodeId}`)
 
 /** Resolve timeline node by external_ref (e.g. meeting:{meetingId}). */
-export const getNodeByExternalRef = (collectionId: string, ref: string) =>
-  req<Node>(
-    `/${collectionId}/nodes/by-external-ref?ref=${encodeURIComponent(ref)}`
+export const getNodeByExternalRef = (
+  collectionId: string,
+  ref: string,
+  chainId?: string | null,
+) => {
+  const qs = new URLSearchParams({ ref })
+  if (chainId) qs.set("chain_id", chainId)
+  return req<Node>(
+    `/${collectionId}/nodes/by-external-ref?${qs.toString()}`
+  )
+}
+
+/** Meeting section todo candidates attached to a timeline node. */
+export const getNodeMeetingTodoCandidates = (
+  collectionId: string,
+  nodeId: string,
+) =>
+  req<NodeMeetingTodoCandidatesResponse>(
+    `/${collectionId}/nodes/${nodeId}/meeting-todo-candidates`
   )
 
 // ── Node Messages ──

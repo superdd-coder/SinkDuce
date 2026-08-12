@@ -15,6 +15,7 @@ import {
   Clock,
   Loader2,
   Trash2,
+  Video,
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -35,6 +36,7 @@ import {
   detachFileFromNode,
 } from "@/api/file-mgmt"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
+import { useAppStore } from "@/stores/app-store"
 import { NodeFileAttach } from "./node-file-attach"
 import { MessageEditorDialog } from "../folder-view/message-editor-dialog"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
@@ -78,6 +80,16 @@ function toDateInputValue(raw: string | null | undefined): string {
   const mo = String(d.getMonth() + 1).padStart(2, "0")
   const day = String(d.getDate()).padStart(2, "0")
   return `${y}-${mo}-${day}`
+}
+
+/** Meeting-ingest anchors use external_ref = `meeting:{meetingId}`. */
+function meetingIdFromExternalRef(
+  ref: string | null | undefined,
+): string | null {
+  const raw = (ref || "").trim()
+  if (!raw.startsWith("meeting:")) return null
+  const id = raw.slice("meeting:".length).split(":")[0]?.trim()
+  return id || null
 }
 
 interface NodeDetailSidebarProps {
@@ -282,6 +294,20 @@ export function NodeDetailSidebar({
   const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const deleteBtnRef = useRef<HTMLButtonElement>(null)
 
+  const setActiveMeeting = useAppStore((s) => s.setActiveMeeting)
+  const setSidebarView = useAppStore((s) => s.setSidebarView)
+
+  const linkedMeetingId = useMemo(
+    () => meetingIdFromExternalRef(detail?.external_ref),
+    [detail?.external_ref],
+  )
+
+  const goToLinkedMeeting = useCallback(() => {
+    if (!linkedMeetingId) return
+    setActiveMeeting(linkedMeetingId)
+    setSidebarView("meeting")
+  }, [linkedMeetingId, setActiveMeeting, setSidebarView])
+
   const disarmDelete = useCallback(() => {
     setDeleteArmed(false)
     if (deleteArmTimerRef.current) {
@@ -323,17 +349,34 @@ export function NodeDetailSidebar({
     eventTime: string
   }
 
+  /** Latest collection / node — ignore stale loads after library switch. */
+  const collectionIdRef = useRef(collectionId)
+  collectionIdRef.current = collectionId
+  const nodeIdRef = useRef(nodeId)
+  nodeIdRef.current = nodeId
+
   /** Fetch only — does not write React state (commit happens after fade-out). */
   const loadNodeBundle = useCallback(
     async (id: string): Promise<LoadedNode | null> => {
+      const col = collectionId
       try {
-        const d = await getNodeDetail(collectionId, id)
-        const nodeMsgs = await getNodeMessages(collectionId, id)
+        const d = await getNodeDetail(col, id)
+        // Drop if user switched library / selection mid-flight
+        if (collectionIdRef.current !== col || nodeIdRef.current !== id) {
+          return null
+        }
+        const nodeMsgs = await getNodeMessages(col, id)
+        if (collectionIdRef.current !== col || nodeIdRef.current !== id) {
+          return null
+        }
         const fileMsgLists = await Promise.all(
           (d.attachments ?? []).map((a) =>
-            getFileMessages(collectionId, a.file_id).catch(() => [] as Message[])
+            getFileMessages(col, a.file_id).catch(() => [] as Message[])
           )
         )
+        if (collectionIdRef.current !== col || nodeIdRef.current !== id) {
+          return null
+        }
         const fileMsgs = fileMsgLists.flat()
         const merged = [...nodeMsgs, ...fileMsgs].sort((a, b) =>
           (b.created_at || "").localeCompare(a.created_at || "")
@@ -344,9 +387,16 @@ export function NodeDetailSidebar({
           eventTime: toDateInputValue(d.event_time),
         }
       } catch (err) {
-        toast.error(
-          `Failed to load node: ${err instanceof Error ? err.message : String(err)}`
-        )
+        // Library switch / deselection: never toast a ghost 404
+        if (collectionIdRef.current !== col || nodeIdRef.current !== id) {
+          return null
+        }
+        const msg = err instanceof Error ? err.message : String(err)
+        // Soft-fail missing node (stale selection) without scaring the user
+        if (/not found/i.test(msg)) {
+          return null
+        }
+        toast.error(`Failed to load node: ${msg}`)
         return null
       }
     },
@@ -834,6 +884,25 @@ export function NodeDetailSidebar({
                       title="Close"
                     >
                       <X className="h-4 w-4" />
+                    </button>
+                  )}
+                  {linkedMeetingId && (
+                    <button
+                      type="button"
+                      className="p-1 text-[var(--pm-faint)] hover:text-[var(--pm-green)] transition-colors rounded-[var(--pm-r-sm)]"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        goToLinkedMeeting()
+                      }}
+                      title="Open meeting"
+                      aria-label="Open linked meeting"
+                    >
+                      <Video
+                        className="h-3.5 w-3.5"
+                        strokeWidth={1.75}
+                        aria-hidden
+                      />
                     </button>
                   )}
                   <button

@@ -13,6 +13,7 @@ my-sinkduce/
 ```bash
 mkdir -p my-sinkduce/data && cd my-sinkduce
 # copy docker-compose.yml from the SinkDuce repo root, then:
+# Optional: docker login   # anonymous Hub pulls are often rate-limited; login is usually much faster
 docker compose pull
 docker compose up -d
 ```

@@ -356,10 +356,21 @@ BAD (used bare name when a speaker ID applies):
 Every action item, commitment, or deadline found in the ENTIRE meeting.
 One per bullet.
 
-Format when the doer is a meeting speaker:
-  "- [spk:ID] task description [priority: high|medium|low]"
-Format when the doer is only a named third party (not a [spk:ID]):
-  "- <Name as in transcript> task description [priority: …]"
+Each bullet has a SHORT title and optional detail (description):
+  "- [spk:ID] short title — detail [priority: high|medium|low]"
+  "- <Name as in transcript> short title — detail [priority: …]"
+
+TITLE RULES (critical):
+- Title is a brief action phrase only (about 4–10 words, prefer under
+  ~60 characters). Verb-first when natural ("Prepare Q3 budget report").
+- Put context, acceptance criteria, dates mentioned in dialogue,
+  scope notes, and constraints AFTER an em dash (—) as detail.
+- Prefer "short title — detail" over a long single sentence as title.
+- Do not pack the whole discussion into the title.
+
+When the doer is a meeting speaker, lead with [spk:ID].
+When the doer is only a named third party (not a [spk:ID]), lead with
+the name as in the transcript.
 
 Attribution rule — CRITICAL:
 Attribute each task to the person expected to DO it, NOT the person
@@ -372,9 +383,9 @@ Priority: append [priority: high], [priority: medium], or
 [priority: low] at the end of each bullet when urgency is indicated.
 
 Examples:
-- [spk:0] to prepare the Q3 budget report [priority: high]
-- [spk:1] to circulate the meeting notes [priority: medium]
-- Vendor Northline to send revised quotes by Friday [priority: medium]
+- [spk:0] Prepare Q3 budget report — Include YoY variance and draft for review by Friday [priority: high]
+- [spk:1] Circulate meeting notes [priority: medium]
+- Vendor Northline Send revised quotes — Cover equipment package A and B by Friday [priority: medium]
 
 ## Detail
 A condensed narrative of the entire meeting, preserving ALL
@@ -1118,11 +1129,23 @@ BAD (used bare name when a speaker ID applies):
 
 ## Todo
 Every action item, commitment, or deadline found in FOCUS sentences.
+One per bullet.
 
-Format when the doer is a meeting speaker:
-  "- [spk:ID] task description [priority: high|medium|low]"
-Format when the doer is only a named third party (not a [spk:ID]):
-  "- <Name as in transcript> task description [priority: …]"
+Each bullet has a SHORT title and optional detail (description):
+  "- [spk:ID] short title — detail [priority: high|medium|low]"
+  "- <Name as in transcript> short title — detail [priority: …]"
+
+TITLE RULES (critical):
+- Title is a brief action phrase only (about 4–10 words, prefer under
+  ~60 characters). Verb-first when natural ("Prepare Q3 budget report").
+- Put context, acceptance criteria, dates mentioned in dialogue,
+  scope notes, and constraints AFTER an em dash (—) as detail.
+- Prefer "short title — detail" over a long single sentence as title.
+- Do not pack the whole discussion into the title.
+
+When the doer is a meeting speaker, lead with [spk:ID].
+When the doer is only a named third party (not a [spk:ID]), lead with
+the name as in the transcript.
 
 Attribution rule — CRITICAL:
 Attribute each task to the person expected to DO it, NOT the person
@@ -1135,9 +1158,9 @@ Priority: append [priority: high], [priority: medium], or
 [priority: low] at the end of each bullet when urgency is indicated.
 
 Examples:
-- [spk:0] to prepare the Q3 budget report [priority: high]
-- [spk:1] to circulate the meeting notes [priority: medium]
-- Vendor Northline to send revised quotes by Friday [priority: medium]
+- [spk:0] Prepare Q3 budget report — Include YoY variance and draft for review by Friday [priority: high]
+- [spk:1] Circulate meeting notes [priority: medium]
+- Vendor Northline Send revised quotes — Cover equipment package A and B by Friday [priority: medium]
 
 ## Data & Facts
 Every data point, figure, metric, decision, and deadline found in
@@ -1510,3 +1533,76 @@ TODO_SUGGEST_USER_PROMPT = """## Timeline chain (oldest → newest)
 Infer the workflow and current stage from the chain, then return 1–3 next-step todo suggestions as a JSON array.
 Each body should refine that todo (how / scope / done criteria), not cite sources.
 """
+
+# ═══════════════════════════════════════════════════════════════════════
+# Meeting section todo candidates — single-shot structured extract
+# ═══════════════════════════════════════════════════════════════════════
+
+# MEETING_TODO_EXTRACT_SYSTEM_PROMPT + MEETING_TODO_EXTRACT_USER_PROMPT
+#   Purpose: From the ingest-style section snapshot (speakers already resolved
+#            to display names; stt_ref tags already stripped) + meeting time,
+#            extract checklist-ready todos with short title, description,
+#            priority, and optional deadline in one LLM call.
+#   Role: system / user
+#   Called by: src/meeting/todo_candidates.py → extract_todo_candidates_llm()
+#   Template vars (user):
+#     {meeting_created_at} — ISO timestamp anchor for relative dates
+#     {section_snapshot}   — full section markdown after name resolve + stt strip
+MEETING_TODO_EXTRACT_SYSTEM_PROMPT = """You extract action items from a meeting section summary snapshot.
+
+The snapshot already uses human speaker names (not [spk:ID] tags) and has
+transcript reference tags removed — treat it as the same text that was
+ingested into the project library.
+
+Output a structured checklist of todos for the product UI.
+
+Rules:
+- Prefer items that appear under a Todo / Action Items style heading when
+  present; also include clear commitments stated elsewhere in the snapshot
+  when they are real action items.
+- People / names (critical): never drop who is responsible.
+  When the snapshot names a doer, owner, or assignee (e.g. Alice, Bob,
+  a display name already resolved from a speaker), you MUST keep that
+  name in the output:
+  - Set assignee_label to that person's display name (one primary doer).
+  - Also put the name in the title in a short natural form, e.g.
+    "Alice: prepare Q3 budget" or "Alice prepare Q3 budget".
+  Prefer keeping the name in the title over a nameless verb-only title.
+  If several people share the work, name the primary doer in
+  assignee_label + title; put co-owners in body.
+  Do not invent people who are not in the snapshot.
+- Title: short (about 4–12 words, prefer under ~72 characters) including
+  the doer name when known. Verb-first after the name is fine. No long
+  clauses in the title.
+- Body (description): optional detail — scope, acceptance criteria,
+  context, constraints, co-owners. Put long detail here, not in the title.
+  If a name would make the title too long, keep a short name+verb title
+  and put remaining people/context in body — still never omit all names.
+- Priority: "high", "medium", or "low" when urgency is clear; otherwise null.
+- ddl: optional deadline. Prefer explicit calendar dates in the text.
+  Resolve relative phrases ("by Friday", "next week", "tomorrow", "EOD")
+  using the meeting timestamp as the anchor day. Vague horizon ("soon",
+  "asap") → null. Prefer not inventing unsupported deadlines.
+  Use YYYY-MM-DD when only a day is known.
+- Do not invent tasks that are not grounded in the snapshot.
+- Language of title/body: match the dominant language of the snapshot.
+- Output ONLY valid JSON (no markdown fences, no commentary):
+  {"items":[{"title":"...","body":"... or null","assignee_label":"... or null","priority":"high|medium|low|null","ddl":"YYYY-MM-DD or null"}, ...]}
+- If there are no action items, return {"items":[]}.
+"""
+
+MEETING_TODO_EXTRACT_USER_PROMPT = """## Meeting timestamp (anchor for relative deadlines)
+
+{meeting_created_at}
+
+## Section snapshot (speakers resolved, refs stripped — same as library ingest)
+
+{section_snapshot}
+
+Extract action-item todos as JSON. Keep every responsible person's name
+(assignee_label + title); do not strip names for brevity.
+"""
+
+# Legacy aliases so older imports do not crash
+MEETING_TODO_DDL_SYSTEM_PROMPT = MEETING_TODO_EXTRACT_SYSTEM_PROMPT
+MEETING_TODO_DDL_USER_PROMPT = MEETING_TODO_EXTRACT_USER_PROMPT

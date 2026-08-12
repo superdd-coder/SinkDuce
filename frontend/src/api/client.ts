@@ -839,6 +839,11 @@ export interface MeetingTab {
   needs_reingest?: boolean
   /** Hash of MD at last allocate — used to restore needs_reingest after reload */
   ingested_content_hash?: string
+  /** Timeline chain chosen at last allocate */
+  allocated_chain_id?: string
+  allocated_node_id?: string
+  /** Parsed ## Todo candidates from last allocate */
+  todo_candidates?: MeetingTodoCandidate[]
   md_file_path: string
   payload_ref: string[]
 }
@@ -1158,17 +1163,76 @@ export type AllocateSectionResult = Meeting & {
   node_id?: string | null
   source?: string
   collection_id?: string
+  chain_id?: string | null
+  todo_candidate_count?: number
 }
 
-export const allocateSection = (meetingId: string, tabId: string, collectionId: string) =>
+export const allocateSection = (
+  meetingId: string,
+  tabId: string,
+  collectionId: string,
+  chainId?: string | null,
+) =>
   request<AllocateSectionResult>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
     method: "POST",
-    body: JSON.stringify({ collection_id: collectionId }),
+    body: JSON.stringify({
+      collection_id: collectionId,
+      ...(chainId ? { chain_id: chainId } : {}),
+    }),
   })
 
 export const deleteSectionAllocation = (meetingId: string, tabId: string) =>
   request<Meeting>(`/meetings/${meetingId}/sections/${tabId}/allocate`, {
     method: "DELETE",
+  })
+
+export interface MeetingTodoCandidate {
+  candidate_id: string
+  title: string
+  body?: string | null
+  assignee_label?: string | null
+  priority?: string | null
+  ddl?: string | null
+  raw_line?: string
+  created_todo_id?: string | null
+  section_tab_id?: string
+  section_name?: string
+}
+
+export interface SectionTodoCandidatesResponse {
+  meeting_id: string
+  tab_id: string
+  section_name: string
+  collection_id: string
+  chain_id: string
+  node_id: string
+  candidates: MeetingTodoCandidate[]
+  error?: string
+}
+
+export const getSectionTodoCandidates = (
+  meetingId: string,
+  tabId: string,
+  opts?: { refresh?: boolean },
+) => {
+  const qs = opts?.refresh ? "?refresh=true" : ""
+  return request<SectionTodoCandidatesResponse>(
+    `/meetings/${meetingId}/sections/${tabId}/todo-candidates${qs}`,
+  )
+}
+
+/** Bind candidate_id → todo_id after checklist create (anti-duplicate). */
+export const markTodoCandidatesCreated = (
+  meetingId: string,
+  items: Array<{
+    tab_id?: string | null
+    candidate_id: string
+    todo_id: string
+  }>,
+) =>
+  request<Meeting>(`/meetings/${meetingId}/todo-candidates/mark-created`, {
+    method: "POST",
+    body: JSON.stringify({ items }),
   })
 
 export const getSectionMd = (meetingId: string, tabId: string) =>

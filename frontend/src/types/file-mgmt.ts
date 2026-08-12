@@ -234,7 +234,10 @@ export interface NodeAttachment {
   is_definitive: boolean
   /** True if file-level or path-level archived (unified UI). */
   archived: boolean
+  /** On-disk storage basename (e.g. tab_02.md). */
   filename: string
+  /** Prefer for UI labels (source_label / meeting title · section). */
+  display_name?: string
   /** File row version for optimistic locking (definitive toggle, etc.). */
   version?: number
 }
@@ -310,6 +313,9 @@ export interface TodoItem {
   created_at: string
   updated_at: string
   completed_at: string | null
+  source_meeting_id?: string | null
+  source_section_tab_id?: string | null
+  source_candidate_id?: string | null
 }
 
 export interface TodoCreateRequest {
@@ -319,6 +325,35 @@ export interface TodoCreateRequest {
   target_chain_id?: string | null
   /** When set, server removes this smart-suggestion after create. */
   suggestion_id?: string | null
+  source_meeting_id?: string | null
+  source_section_tab_id?: string | null
+  source_candidate_id?: string | null
+}
+
+export interface MeetingTodoCandidate {
+  candidate_id: string
+  title: string
+  body?: string | null
+  assignee_label?: string | null
+  priority?: string | null
+  ddl?: string | null
+  raw_line?: string
+  created_todo_id?: string | null
+  section_tab_id?: string
+  section_name?: string
+}
+
+export interface NodeMeetingTodoCandidatesResponse {
+  node_id: string
+  meeting_id?: string
+  collection_id?: string
+  chain_id?: string | null
+  groups: Array<{
+    tab_id: string
+    section_name: string
+    candidates: MeetingTodoCandidate[]
+  }>
+  candidates: MeetingTodoCandidate[]
 }
 
 export interface TodoSuggestionItem {

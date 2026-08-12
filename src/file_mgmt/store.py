@@ -150,7 +150,10 @@ _CREATE_TABLES = [
       sort_order        INTEGER,
       created_at        TEXT NOT NULL,
       updated_at        TEXT NOT NULL,
-      completed_at      TEXT
+      completed_at      TEXT,
+      source_meeting_id TEXT,
+      source_section_tab_id TEXT,
+      source_candidate_id TEXT
     )''',
     # Smart to-do suggestions cache (one row per chain)
     '''CREATE TABLE todo_suggestion_state (
@@ -167,8 +170,8 @@ _CREATE_TABLES = [
 _CREATE_INDEXES = [
     'CREATE INDEX idx_nodes_chain_order ON nodes(chain_id, "order")',
     'CREATE INDEX idx_nodes_group       ON nodes(group_id)',
-    # One timeline anchor per external identity (e.g. meeting:{id})
-    'CREATE UNIQUE INDEX idx_nodes_external_ref ON nodes(external_ref) WHERE external_ref IS NOT NULL',
+    # One meeting (or external) anchor per chain — design 2026-08-12
+    'CREATE UNIQUE INDEX idx_nodes_external_ref_chain ON nodes(external_ref, chain_id) WHERE external_ref IS NOT NULL',
     'CREATE INDEX idx_file_paths_folder ON file_paths(folder_id)',
     'CREATE INDEX idx_file_paths_file   ON file_paths(file_id)',
     'CREATE INDEX idx_file_paths_archived ON file_paths(folder_id, archived)',
@@ -181,6 +184,7 @@ _CREATE_INDEXES = [
     'CREATE INDEX idx_files_created_by  ON files(created_by)',
     'CREATE INDEX idx_todos_done_ddl    ON todos(done, ddl)',
     'CREATE INDEX idx_todos_chain       ON todos(target_chain_id)',
+    'CREATE INDEX idx_todos_source_section ON todos(source_meeting_id, source_section_tab_id)',
 ]
 
 # Table names for verification
@@ -191,13 +195,13 @@ EXPECTED_TABLES = {
 }
 
 EXPECTED_INDEXES = {
-    "idx_nodes_chain_order", "idx_nodes_group", "idx_nodes_external_ref",
+    "idx_nodes_chain_order", "idx_nodes_group", "idx_nodes_external_ref_chain",
     "idx_file_paths_folder", "idx_file_paths_file",
     "idx_file_paths_archived",
     "idx_file_nodes_node", "idx_file_nodes_file",
     "idx_messages_owner", "idx_files_archived",
     "idx_folders_parent", "idx_nodes_created_by", "idx_files_created_by",
-    "idx_todos_done_ddl", "idx_todos_chain",
+    "idx_todos_done_ddl", "idx_todos_chain", "idx_todos_source_section",
 }
 
 
@@ -350,7 +354,7 @@ def _ensure_folders_icon_columns(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_nodes_external_ref(conn: sqlite3.Connection) -> None:
-    """Add nodes.external_ref + unique index (meeting/timeline bridge)."""
+    """Add nodes.external_ref + unique (external_ref, chain_id) index."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(nodes)").fetchall()}
     if "external_ref" not in cols:
         try:
@@ -362,10 +366,20 @@ def _ensure_nodes_external_ref(conn: sqlite3.Connection) -> None:
     indexes = {
         row[1] for row in conn.execute("PRAGMA index_list(nodes)").fetchall()
     }
-    if "idx_nodes_external_ref" not in indexes:
+    # Migrate: global unique on external_ref → unique per (external_ref, chain_id)
+    if "idx_nodes_external_ref" in indexes:
+        try:
+            conn.execute("DROP INDEX IF EXISTS idx_nodes_external_ref")
+            logger.info("Dropped legacy idx_nodes_external_ref")
+        except sqlite3.OperationalError:
+            logger.debug("Could not drop idx_nodes_external_ref", exc_info=True)
+        indexes = {
+            row[1] for row in conn.execute("PRAGMA index_list(nodes)").fetchall()
+        }
+    if "idx_nodes_external_ref_chain" not in indexes:
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_external_ref "
-            "ON nodes(external_ref) WHERE external_ref IS NOT NULL"
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_external_ref_chain "
+            "ON nodes(external_ref, chain_id) WHERE external_ref IS NOT NULL"
         )
 
 
@@ -413,6 +427,28 @@ def _ensure_todos_table(conn: sqlite3.Connection) -> None:
     if "idx_todos_chain" not in indexes:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_todos_chain ON todos(target_chain_id)"
+        )
+    # Provenance for meeting-sourced todos (design 2026-08-12)
+    for col in (
+        "source_meeting_id",
+        "source_section_tab_id",
+        "source_candidate_id",
+    ):
+        if col not in cols:
+            try:
+                conn.execute(f"ALTER TABLE todos ADD COLUMN {col} TEXT")
+                logger.info("Added todos.%s column", col)
+            except sqlite3.OperationalError as e:
+                if not _is_duplicate_column_error(e):
+                    raise
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(todos)").fetchall()}
+    indexes = {
+        row[1] for row in conn.execute("PRAGMA index_list(todos)").fetchall()
+    }
+    if "idx_todos_source_section" not in indexes:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_todos_source_section "
+            "ON todos(source_meeting_id, source_section_tab_id)"
         )
 
 

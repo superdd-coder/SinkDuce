@@ -1597,15 +1597,22 @@ li.pm-toast[data-sonner-toast] {
   animation: sk-cursor-blink 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
-/* ── AI-COMP-010 · checkbox-diamond ── */
+/* ── AI-COMP-010 · checkbox-diamond (rounded diamond) ── */
 .sk-diamond {
   width: 6px;
   height: 6px;
   flex-shrink: 0;
-  border: 1px solid var(--line-section, oklch(0.42 0.04 160 / 0.55));
+  align-self: center;
+  display: block;
+  box-sizing: border-box;
+  border: 1.25px solid var(--line-section, oklch(0.42 0.04 160 / 0.55));
+  border-radius: 1.75px; /* soft rounded diamond after rotate(45deg) */
   background: transparent;
   transform: rotate(45deg);
+  transform-origin: 50% 50%;
   position: relative;
+  /* Optical nudge: rotated square sits high vs text cap-height */
+  top: 0.5px;
   transition: background var(--dur-base, 200ms) cubic-bezier(0.25, 1, 0.5, 1),
               border-color var(--dur-base, 200ms) cubic-bezier(0.25, 1, 0.5, 1),
               transform var(--dur-slow, 420ms) cubic-bezier(0.34, 1.56, 0.64, 1),
@@ -1624,6 +1631,7 @@ li.pm-toast[data-sonner-toast] {
   position: absolute;
   inset: -4px;
   border: 1px solid var(--ze-green);
+  border-radius: 2.5px;
   opacity: 0;
   pointer-events: none;
   animation: sk-check-ring 1.8s cubic-bezier(0.25, 1, 0.5, 1) infinite;
@@ -6857,10 +6865,27 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-update-card > .pm-update-card-label {
   margin-bottom: 8px;
+  flex-shrink: 0;
+}
+/* Long release notes scroll inside the card — do not grow the dialog */
+.pm-update-card--notes {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(11.5rem, 26vh);
+  overflow: hidden;
 }
 .pm-update-notes {
-  max-height: 9.5rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--pm-ink, #121410) 16%, transparent)
+    transparent;
   font: var(--pm-t-body, 300 13px/1.5 var(--pm-ff, system-ui, sans-serif));
   font-weight: 300;
   line-height: 1.55;
@@ -8598,6 +8623,14 @@ button.pm-rail-new:hover:not(:disabled) {
 }
 .pm-menu.pm-menu--soft.pm-menu--portal.is-align-end.is-open {
   transform: translateX(-100%) translateY(0) scale(1);
+}
+/* Right flyout submenu — open from parent menu's right edge (no translateX(-100%)) */
+.pm-menu.pm-menu--soft.pm-menu--portal.is-placement-right {
+  transform-origin: center left;
+  transform: translateX(-4px) scale(0.98);
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-placement-right.is-open {
+  transform: translateX(0) scale(1);
 }
 /* Format palette when portaled — no absolute offsets */
 .pm-menu.pm-menu--portal.pm-fmt-palette {
@@ -18223,8 +18256,8 @@ button.pm-ws-path-row {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  /* room for compact floating composer */
-  padding-bottom: 7.5rem;
+  /* room for floating composer + scroll-to-bottom chip */
+  padding-bottom: 9.5rem;
 }
 /* Session switch: opacity only — frozen content keeps height (no stage jitter) */
 .pm-chat-thread-fade {
@@ -18275,7 +18308,7 @@ button.pm-ws-path-row {
 .pm-chat-edge-fade--bottom {
   bottom: 0;
   height: 72px;
-  z-index: 11; /* above thread, under composer dock (15) + scroll btn (12) */
+  z-index: 11; /* above thread, under composer dock (15) + scroll btn (16) */
   background: linear-gradient(
     to top,
     var(--pm-float, #fdfbf7) 0%,
@@ -18312,34 +18345,50 @@ button.pm-ws-path-row {
   color: var(--pm-faint, #969c96);
 }
 .pm-chat-scroll-btn {
+  /* Sit above the floating composer (tools + field ~92–110px + dock pad) */
   position: absolute;
-  bottom: 6.25rem;
+  bottom: calc(7.75rem + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
-  z-index: 12;
+  z-index: 16; /* above composer dock (15) so it is never buried */
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  border: none;
+  padding: 7px 14px;
+  border: 1px solid color-mix(in srgb, #ffffff 55%, rgba(18, 20, 16, 0.08));
   border-radius: 999px;
   cursor: pointer;
   font: var(--pm-t-label);
   letter-spacing: 0.04em;
   color: var(--pm-muted, #6a706a);
-  background: color-mix(in srgb, #ffffff 88%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  box-shadow: var(--pm-shadow-sm);
+  /* Static glass tint only — no backdrop-filter (scroll flicker) */
+  background: color-mix(in srgb, #ffffff 72%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.55) inset,
+    0 4px 14px -4px rgba(0, 0, 0, 0.1),
+    0 1px 3px rgba(0, 0, 0, 0.04);
   transition:
     color 160ms var(--pm-chat-ease),
     background 160ms var(--pm-chat-ease),
+    border-color 160ms var(--pm-chat-ease),
+    box-shadow 160ms var(--pm-chat-ease),
     opacity 200ms var(--pm-chat-ease),
     transform 200ms var(--pm-chat-ease);
 }
 .pm-chat-scroll-btn:hover {
   color: var(--pm-green, #1a5e3d);
-  background: #ffffff;
+  background: color-mix(in srgb, #ffffff 62%, transparent);
+  border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.65) inset,
+    0 6px 18px -4px rgba(0, 0, 0, 0.12);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .pm-chat-scroll-btn {
+    background: color-mix(in srgb, #ffffff 88%, var(--pm-float, #fdfbf7));
+  }
 }
 .pm-chat-composer-dock {
   position: absolute;
@@ -18348,10 +18397,12 @@ button.pm-ws-path-row {
   bottom: 0;
   z-index: 15;
   pointer-events: none;
-  padding: 0 24px 14px;
+  padding: 0 24px calc(14px + env(safe-area-inset-bottom, 0px));
+  /* Soft stage veil only — frost is on a static plate inside the card */
   background: linear-gradient(
     to top,
-    color-mix(in srgb, var(--pm-float, #fdfbf7) 92%, transparent) 45%,
+    color-mix(in srgb, var(--pm-float, #fdfbf7) 42%, transparent) 0%,
+    color-mix(in srgb, var(--pm-float, #fdfbf7) 12%, transparent) 55%,
     transparent 100%
   );
   overflow: visible;
@@ -18361,12 +18412,12 @@ button.pm-ws-path-row {
 }
 
 /*
- * ── Composer: compact frosted glass + input-card breath (AI-COMP-070)
- * Layout: tools (1 row) → input|send (1 row) → disclaimer (meta line)
- * Stage must NOT use sk-reasoning-flow.
+ * ── Composer: simple frosted glass
+ * backdrop-filter: blur(12px) + light fill. Border breathe via sk-input-frame.
  */
 .pm-chat-composer,
 .pm-chat-composer.sk-input-frame {
+  position: relative;
   width: 100%;
   max-width: min(var(--pm-composer-col, 780px), 640px);
   margin: 0 auto;
@@ -18375,29 +18426,13 @@ button.pm-ws-path-row {
   flex-direction: column;
   gap: 6px;
   padding: 8px 12px 7px;
-  /* Beat .sk-input-frame { border-radius: 4px } */
   border-radius: 16px !important;
-  background:
-    linear-gradient(
-      165deg,
-      color-mix(in srgb, #ffffff 74%, transparent) 0%,
-      color-mix(in srgb, var(--pm-float, #fdfbf7) 60%, transparent) 100%
-    );
-  backdrop-filter: blur(16px) saturate(1.12);
-  -webkit-backdrop-filter: blur(16px) saturate(1.12);
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.65) inset,
-    0 -6px 22px -4px rgba(0, 0, 0, 0.04),
-    0 2px 8px -2px rgba(0, 0, 0, 0.03);
+  background: rgba(255, 255, 255, 0.58);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   overflow: visible;
   isolation: isolate;
   z-index: 1;
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .pm-chat-composer,
-  .pm-chat-composer.sk-input-frame {
-    background: color-mix(in srgb, #ffffff 92%, var(--pm-float, #fdfbf7));
-  }
 }
 .pm-chat-composer.sk-input-frame::before,
 .pm-chat-composer.sk-input-frame::after {
@@ -18420,6 +18455,13 @@ button.pm-ws-path-row {
   opacity: 1;
   animation: sk-input-breathe-focus 2s linear infinite;
 }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .pm-chat-composer,
+  .pm-chat-composer.sk-input-frame {
+    background: rgba(255, 255, 255, 0.88);
+  }
+}
+
 .pm-chat-composer-tools {
   display: flex;
   flex-wrap: wrap;
@@ -18588,6 +18630,17 @@ button.pm-ws-path-row {
   max-height: min(240px, 42vh);
   padding: 4px;
 }
+/* Selection mark spacing in collection multi-select */
+.pm-chat-pop--collections .pm-chat-pop-item-label {
+  padding-left: 10px;
+  gap: 11px;
+}
+.pm-chat-pop--collections .sk-diamond {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  top: 0;
+}
 .pm-chat-pop--collections .pm-chat-pop-scroll {
   max-height: min(232px, calc(42vh - 8px));
   overflow-x: hidden;
@@ -18755,6 +18808,33 @@ button.pm-ws-path-row {
 }
 .pm-chat-tool-chip--wipe.is-on:not(.is-menu-open) {
   color: var(--pm-green, #1a5e3d);
+}
+/* Collections chip: width locked to "All collections" (no jump when count changes) */
+.pm-chat-tool-chip--collections {
+  flex-shrink: 0;
+  max-width: none;
+  justify-content: center;
+}
+.pm-chat-tool-chip-label--fixed {
+  display: inline-grid;
+  justify-items: center;
+  align-items: center;
+  min-width: 0;
+}
+.pm-chat-tool-chip-label-sizer {
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+.pm-chat-tool-chip-label-text {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  max-width: 100%;
 }
 /* Input | Send row */
 .pm-chat-composer-main {
@@ -19084,8 +19164,11 @@ button.pm-ws-path-row {
   color: var(--pm-muted, #6a706a);
 }
 .pm-chat-trail-toggle .sk-diamond {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 1.75px;
+  /* Match uppercase label optical center (chev is 12×12) */
+  top: 0.5px;
 }
 .pm-chat-trail-sum {
   font: var(--pm-t-meta);
@@ -23553,6 +23636,554 @@ button.pm-ws-path-row {
   box-shadow: none;
   border: 1px dashed color-mix(in srgb, var(--pm-green, #1a5e3d) 40%, transparent);
   color: var(--pm-green, #1a5e3d);
+}
+
+/*
+ * Meeting ingest SoftMenus — silk open/close (symmetric).
+ * --pm-menu-ms is set from SoftMenu exitMs (inline) so unmount waits for the fade.
+ */
+.pm-meeting-ingest-menu {
+  --pm-menu-ms: 280ms;
+  --pm-menu-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  padding: 6px !important;
+  min-width: 0 !important; /* allow match-width to equal pill */
+  border-radius: var(--pm-r-md, 12px) !important;
+  border: 1px solid color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent) !important;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
+    0 12px 32px color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent) !important;
+  background: #ffffff !important;
+  /* Base soft portal already transitions opacity; reaffirm for all variants */
+  transition:
+    opacity var(--pm-menu-ms) var(--pm-menu-ease),
+    transform var(--pm-menu-ms) var(--pm-menu-ease),
+    filter calc(var(--pm-menu-ms) * 0.9) var(--pm-menu-ease) !important;
+  will-change: opacity, transform, filter;
+}
+/* Width matched to pill — open downward, no translateX shift */
+.pm-menu.pm-menu--soft.pm-menu--portal.is-match-width.pm-meeting-ingest-menu {
+  transform-origin: top center;
+  opacity: 0;
+  transform: translateY(-8px) scale(0.97);
+  filter: blur(0.4px);
+  pointer-events: none;
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-match-width.pm-meeting-ingest-menu.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  pointer-events: auto;
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-align-end.pm-meeting-ingest-menu {
+  opacity: 0;
+  transform: translateX(-100%) translateY(-8px) scale(0.96);
+  filter: blur(0.4px);
+  pointer-events: none;
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-align-end.pm-meeting-ingest-menu.is-open {
+  opacity: 1;
+  transform: translateX(-100%) translateY(0) scale(1);
+  filter: blur(0);
+  pointer-events: auto;
+}
+/* Scrollable collection list — keeps menu on-screen */
+.pm-meeting-ingest-menu-scroll {
+  max-height: min(280px, 42vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  margin: 0 -2px;
+  padding: 0 2px;
+  /* thin quiet scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--pm-ink, #121410) 18%, transparent)
+    transparent;
+}
+.pm-meeting-ingest-menu-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.pm-meeting-ingest-menu-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 14%, transparent);
+  border-radius: 999px;
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-placement-right.pm-meeting-ingest-menu {
+  min-width: 200px !important;
+  transform-origin: center left;
+  opacity: 0;
+  transform: translateX(-8px) scale(0.97);
+  filter: blur(0.4px);
+  pointer-events: none;
+}
+.pm-menu.pm-menu--soft.pm-menu--portal.is-placement-right.pm-meeting-ingest-menu.is-open {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  filter: blur(0);
+  pointer-events: auto;
+}
+.pm-meeting-ingest-menu-label {
+  padding: 6px 10px 5px;
+  font: var(--pm-t-label, 400 10px/1.3 var(--pm-ff, system-ui, sans-serif));
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pm-faint, #969c96);
+}
+.pm-meeting-ingest-menu-item {
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 9px 10px !important;
+  border-radius: calc(var(--pm-r-sm, 8px) - 1px) !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.01em;
+}
+.pm-meeting-ingest-menu-item svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.pm-meeting-ingest-menu-item.is-on {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent) !important;
+  color: var(--pm-green, #1a5e3d) !important;
+}
+.pm-meeting-ingest-menu-item.is-on svg {
+  opacity: 0.85;
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-meeting-ingest-menu-item.is-danger {
+  color: var(--pm-danger, #c43c3c) !important;
+}
+.pm-meeting-ingest-menu-item.is-danger svg {
+  opacity: 0.8;
+}
+.pm-meeting-ingest-menu-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  border: none;
+}
+.pm-meeting-ingest-menu-chevron {
+  margin-left: auto;
+  width: 14px;
+  height: 14px;
+  opacity: 0.35;
+  flex-shrink: 0;
+}
+.pm-meeting-ingest-menu-item.is-on .pm-meeting-ingest-menu-chevron {
+  opacity: 0.65;
+  color: var(--pm-green, #1a5e3d);
+}
+
+/*
+ * Create todos from summary — premium silk shell
+ * Canvas shell · nested white stage · soft-float rows · rounded rails
+ */
+.pm-meeting-todos-dialog.pm-dialog[data-slot="dialog-content"] {
+  --pm-meeting-todos-gutter: 16px;
+  padding: 26px 26px 18px !important;
+  overflow: hidden !important;
+  gap: 0 !important;
+  border-radius: 26px !important;
+  width: min(580px, calc(100vw - 1.75rem)) !important;
+  max-width: min(580px, calc(100vw - 1.75rem)) !important;
+  background: var(--pm-canvas, #f6f5f1) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
+    0 18px 48px color-mix(in srgb, var(--pm-ink, #121410) 10%, transparent),
+    0 4px 12px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent) !important;
+}
+.pm-meeting-todos-dialog-head {
+  flex: 0 0 auto;
+  padding-right: 32px; /* room for close */
+  gap: 4px !important;
+}
+.pm-meeting-todos-dialog-head [data-slot="dialog-kicker"] {
+  letter-spacing: 0.14em;
+}
+.pm-meeting-todos-dialog-head [data-slot="dialog-title"] {
+  letter-spacing: -0.01em;
+}
+.pm-meeting-todos-dialog-head [data-slot="dialog-description"] {
+  margin-top: 4px !important;
+  font-weight: 350 !important;
+  color: var(--pm-muted, #6a706a) !important;
+}
+.pm-meeting-todos-dialog-body {
+  margin-top: 14px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Soft-float air for nested stage shadow */
+  padding: 4px var(--pm-meeting-todos-gutter) 6px;
+  margin-inline: calc(-1 * var(--pm-meeting-todos-gutter));
+}
+/* Nested white stage — holds toolbar + list */
+.pm-meeting-todos-stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  background: #ffffff;
+  border-radius: 20px;
+  box-shadow: var(
+    --pm-shadow-sm,
+    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
+    0 6px 18px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent)
+  );
+  padding: 12px 12px 10px;
+  overflow: hidden;
+}
+.pm-meeting-todos-stage.is-empty {
+  min-height: 200px;
+  justify-content: center;
+  align-items: stretch;
+}
+.pm-meeting-todos-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px 10px;
+  flex-shrink: 0;
+  margin-bottom: 2px;
+}
+/* Soft segmented control — Select all | Clear */
+.pm-meeting-todos-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 88%, #ffffff);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+  min-width: 0;
+}
+.pm-meeting-todos-seg-btn {
+  appearance: none;
+  border: none;
+  margin: 0;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: transparent;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  color: var(--pm-muted, #6a706a);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color 150ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    background 150ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 150ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-meeting-todos-seg-btn:hover:not(:disabled) {
+  color: var(--pm-ink, #121410);
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent),
+    0 2px 6px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-meeting-todos-seg-btn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--pm-ink, #121410) 3%, #ffffff);
+  box-shadow: none;
+}
+.pm-meeting-todos-seg-btn:focus-visible {
+  outline: none;
+  color: var(--pm-green, #1a5e3d);
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent),
+    0 2px 6px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+}
+.pm-meeting-todos-seg-btn:disabled {
+  color: var(--pm-faint, #969c96);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* Soft pill counter */
+.pm-meeting-todos-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 3.5%, transparent);
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--pm-muted, #6a706a);
+  font-variant-numeric: tabular-nums;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+.pm-meeting-todos-count.is-active {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-meeting-todos-count-num {
+  font-weight: 600;
+  color: inherit;
+}
+.pm-meeting-todos-count-muted {
+  font-weight: 400;
+  opacity: 0.72;
+}
+.pm-meeting-todos-list {
+  max-height: min(400px, 50vh);
+  padding: 4px 4px 8px; /* air for card shadows — no edge mask fade */
+  margin: 0 -2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.pm-meeting-todos-group + .pm-meeting-todos-group {
+  margin-top: 14px;
+}
+.pm-meeting-todos-group-label {
+  font: var(--pm-t-label, 400 10px/1.3 var(--pm-ff, system-ui, sans-serif));
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--pm-faint, #969c96);
+  padding: 2px 10px 8px;
+}
+.pm-meeting-todos-ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/*
+ * Soft-float row — pure white + shadow only (no gray fill)
+ */
+.pm-meeting-todos-row {
+  position: relative;
+  display: flex;
+  align-items: stretch; /* stretch so select fills full card height */
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 10px 10px 10px 12px;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent),
+    0 4px 14px color-mix(in srgb, var(--pm-ink, #121410) 5.5%, transparent);
+  transition:
+    background 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    box-shadow 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    transform 180ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+/* Hover only when not selected — selected keeps green ring */
+.pm-meeting-todos-row:hover:not(.is-done):not(.is-on) {
+  background: #ffffff;
+  box-shadow:
+    0 2px 4px color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent),
+    0 8px 22px color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent);
+}
+.pm-meeting-todos-row.is-on {
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--pm-green, #1a5e3d) 32%, transparent),
+    0 2px 6px color-mix(in srgb, var(--pm-green, #1a5e3d) 8%, transparent),
+    0 8px 20px color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent);
+}
+/* Selected + hover: keep green border, slightly lift shadow */
+.pm-meeting-todos-row.is-on:hover:not(.is-done) {
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--pm-green, #1a5e3d) 40%, transparent),
+    0 3px 8px color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, transparent),
+    0 10px 24px color-mix(in srgb, var(--pm-green, #1a5e3d) 12%, transparent);
+}
+.pm-meeting-todos-row.is-done {
+  opacity: 0.46;
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--pm-ink, #121410) 3%, transparent);
+}
+/* Title area fills card height; no select-dot chrome */
+.pm-meeting-todos-select {
+  position: relative;
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.pm-meeting-todos-select:disabled {
+  cursor: not-allowed;
+}
+/* Portal tooltip — multi-line description (arrow off via showArrow={false}) */
+.pm-meeting-todos-tooltip[data-slot="tooltip-content"] {
+  max-width: min(320px, 70vw) !important;
+  white-space: pre-wrap !important;
+  word-break: break-word;
+  text-align: left;
+  line-height: 1.45 !important;
+  padding: 9px 12px !important;
+  border-radius: 12px !important;
+  font-weight: 400 !important;
+}
+.pm-meeting-todos-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.pm-meeting-todos-chip-text {
+  min-width: 0;
+  width: 100%;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0.005em;
+  color: var(--pm-ink, #121410);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  max-height: calc(1.4em * 2);
+  word-break: break-word;
+}
+/* Right rail: priority above DDL — vertically centered on the card */
+.pm-meeting-todos-side {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  align-self: center;
+  gap: 5px;
+  width: 138px;
+  min-width: 124px;
+}
+.pm-meeting-todos-pri {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  color: var(--pm-muted, #6a706a);
+}
+.pm-meeting-todos-pri.is-high {
+  background: color-mix(in srgb, var(--pm-danger, #c43c3c) 12%, transparent);
+  color: var(--pm-danger, #c43c3c);
+}
+.pm-meeting-todos-pri.is-medium {
+  background: color-mix(in srgb, #b8860b 13%, transparent);
+  color: #8a6810;
+}
+.pm-meeting-todos-pri.is-low {
+  background: color-mix(in srgb, var(--pm-green, #1a5e3d) 11%, transparent);
+  color: var(--pm-green, #1a5e3d);
+}
+.pm-meeting-todos-ddl-field {
+  flex: 0 0 auto;
+  width: 100%;
+}
+.pm-meeting-todos-ddl-field .pm-date-picker,
+.pm-meeting-todos-ddl-field .pm-date-trigger {
+  width: 100%;
+}
+/* Softer date trigger inside rows */
+.pm-meeting-todos-ddl-field .pm-date-trigger--sm {
+  min-height: 28px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+  font-weight: 400;
+}
+.pm-meeting-todos-ddl-field .pm-date-trigger--sm:hover:not(.is-disabled) {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent);
+}
+.pm-meeting-todos-done-tag {
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pm-faint, #969c96);
+  flex-shrink: 0;
+  padding: 1px 0;
+}
+.pm-meeting-todos-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 40px 24px;
+  text-align: center;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--pm-muted, #6a706a);
+}
+.pm-meeting-todos-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 4%, transparent);
+  color: var(--pm-faint, #969c96);
+}
+.pm-meeting-todos-code {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--pm-ink, #121410) 5%, transparent);
+  color: var(--pm-ink, #121410);
+}
+.pm-meeting-todos-dialog-foot {
+  flex: 0 0 auto;
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px !important;
+  margin-top: 12px !important;
+  padding-top: 4px !important;
+}
+.pm-meeting-todos-btn-ghost {
+  border-radius: 999px !important;
+  padding-inline: 14px !important;
+}
+.pm-meeting-todos-btn-primary {
+  border-radius: 999px !important;
+  min-width: 6.5rem;
+  padding-inline: 16px !important;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--pm-green, #1a5e3d) 22%, transparent);
 }
 
 /* Transcript segment — clean list rows (no per-line chip fill) */

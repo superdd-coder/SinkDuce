@@ -78,6 +78,46 @@ def test_ensure_meeting_anchor_idempotent():
         conn.close()
 
 
+def test_meeting_anchor_one_node_per_chain():
+    """Same meeting may have separate anchors on main vs branch chain."""
+    from src.file_mgmt.service import create_chain, list_chains
+    from src.file_mgmt.models import ChainCreate
+
+    coll = "bridge-anchor-multi"
+    _setup(coll)
+    mid = "meet_multi"
+    chains = list_chains(coll)
+    main = next(c for c in chains if c.is_main)
+    # create a branch chain off first main node or via API-like helper
+    # need a parent node on main for branch — use ensure meeting on main first
+    n_main = ensure_meeting_anchor_node(
+        coll, mid, title="Multi", chain_id=main.chain_id
+    )
+    branch = create_chain(
+        coll,
+        ChainCreate(
+            parent_chain_id=main.chain_id,
+            parent_node_id=n_main,
+            title="Branch A",
+        ),
+    )
+    n_branch = ensure_meeting_anchor_node(
+        coll, mid, title="Multi", chain_id=branch.chain_id
+    )
+    assert n_main != n_branch
+    assert get_node_by_external_ref(
+        coll, meeting_external_ref(mid), chain_id=main.chain_id
+    ).node_id == n_main
+    assert get_node_by_external_ref(
+        coll, meeting_external_ref(mid), chain_id=branch.chain_id
+    ).node_id == n_branch
+    # same chain still idempotent
+    assert (
+        ensure_meeting_anchor_node(coll, mid, title="Multi", chain_id=branch.chain_id)
+        == n_branch
+    )
+
+
 def test_register_meeting_folder_and_empty_anchor_delete():
     coll = "bridge-reg-1"
     _setup(coll)

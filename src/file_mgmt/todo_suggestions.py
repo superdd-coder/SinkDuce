@@ -292,6 +292,17 @@ def build_chain_context(collection_id: str, chain_id: str) -> dict[str, Any]:
             (chain_id,),
         ).fetchall()
 
+        # Prefer human labels for LLM (source_label / display_name), not tab_02.md
+        from src.file_mgmt.service import (
+            _attachment_display_fields,
+            _load_file_index,
+        )
+
+        try:
+            file_index = _load_file_index(collection_id)
+        except Exception:
+            file_index = {}
+
         node_list: list[dict[str, Any]] = []
         for n in nodes:
             ntype = (n["node_type"] or "event").lower()
@@ -326,12 +337,18 @@ def build_chain_context(collection_id: str, chain_id: str) -> dict[str, Any]:
             attachments = []
             for a in att_rows:
                 fid = a["file_id"]
-                fname = (a["storage_file_id"] or "").strip() or fid
+                names = _attachment_display_fields(
+                    collection_id,
+                    fid,
+                    a["storage_file_id"],
+                    index=file_index,
+                )
                 short = _file_short_summary(collection_id, fid)
                 attachments.append(
                     {
                         "file_id": fid,
-                        "filename": fname,
+                        "filename": names["filename"],
+                        "display_name": names["display_name"],
                         "short_summary": short,
                     }
                 )
@@ -391,7 +408,13 @@ def _format_context_for_prompt(ctx: dict[str, Any]) -> tuple[str, str, str]:
         if atts:
             block.append("Attachments:")
             for a in atts:
-                line = f"- {a.get('filename') or a.get('file_id')}"
+                # LLM needs semantic labels (meeting section titles), not storage basenames
+                label = (
+                    (a.get("display_name") or "").strip()
+                    or (a.get("filename") or "").strip()
+                    or a.get("file_id")
+                )
+                line = f"- {label}"
                 ss = (a.get("short_summary") or "").strip()
                 if ss:
                     line += f" — {ss}"

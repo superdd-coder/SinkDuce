@@ -25,8 +25,9 @@ import { EditorToolbar } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/react"
 import { cn } from "@/lib/utils"
 import {
-  Loader2, RefreshCw, Plus, Pencil, Sparkles, ChevronDown,
+  Loader2, RefreshCw, Plus, Pencil, Sparkles, ChevronDown, ChevronRight,
   FileText, FolderOpen, GitBranch, Trash2, Download, FileType2,
+  ListTodo,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -36,10 +37,13 @@ import {
   saveSectionMd, updateMeeting, getMeeting,
   allocateSection, deleteSectionAllocation, createCollection,
   generateSectionDescription, getSummaryTranslations, getActiveTranslations,
-  getTask,
+  getTask, getSectionTodoCandidates,
   type Meeting, type MeetingTab, type ExtractReceipt,
-  type TranscriptSegment,
+  type TranscriptSegment, type MeetingTodoCandidate,
 } from "@/api/client"
+import { listChains } from "@/api/file-mgmt"
+import type { Chain } from "@/types/file-mgmt"
+import { MeetingCreateTodosDialog } from "@/components/meeting/meeting-create-todos-dialog"
 import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
 import { useBlueprintStream } from "@/hooks/use-blueprint-stream"
@@ -458,6 +462,11 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   meetingId: string
   onMeetingUpdate: (m: Meeting) => void
   onIngestingChange?: (tabId: string, v: boolean) => void
+  /**
+   * Parent-tracked ingest for this tab (survives section switch).
+   * Local `ingesting` alone is lost when SectionMetadata remounts.
+   */
+  parentIngesting?: boolean
   hideTitle?: boolean
   /** Portal collection pill into title-row host; Choose a collection stays on description row. */
   ingestHostRef?: RefObject<HTMLDivElement | null>
@@ -468,6 +477,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   meetingId,
   onMeetingUpdate,
   onIngestingChange,
+  parentIngesting = false,
   hideTitle,
   ingestHostRef,
 }, ref) {
@@ -493,12 +503,24 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   const displayActive = ingested
   const displaySuggestion = hasSuggestion
 
-  const [ingesting, setIngesting] = useState(false)
+  /** Local only while this instance is mounted; parentIngesting survives tab switches. */
+  const [localIngesting, setLocalIngesting] = useState(false)
+  const ingesting = localIngesting || parentIngesting
+  // Parent notify ref — declared early so handleIngest can call it after unmount
+  const onIngestingChangeRef = useRef(onIngestingChange)
+  onIngestingChangeRef.current = onIngestingChange
   const [dropdownOpen, setDropdownOpen] = useState(false)
   /** Actions menu when already ingested (open file / files / timeline / remove). */
   const [actionsOpen, setActionsOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
-  const [switchTarget, setSwitchTarget] = useState<string | null>(null)
+  /**
+   * Switch confirm: after collection + chain chosen when already allocated elsewhere.
+   * `__new__` = create new collection (main chain only).
+   */
+  const [switchPending, setSwitchPending] = useState<{
+    colId: string
+    chainId: string | null
+  } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLElement>(null)
@@ -519,6 +541,66 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   const [pendingName, setPendingName] = useState<string | null>(null)
   /** Last bridge node_id from allocate (fallback: resolve via external_ref). */
   const lastNodeIdRef = useRef<string | null>(null)
+  /**
+   * Collection dropdown → chain flyout (right of parent menu).
+   * flyoutColId = collection row showing chains; chains cached per col.
+   */
+  const [flyoutColId, setFlyoutColId] = useState<string | null>(null)
+  const [chainsByCol, setChainsByCol] = useState<Record<string, Chain[]>>({})
+  const [chainFlyoutLoading, setChainFlyoutLoading] = useState(false)
+  const flyoutItemRef = useRef<HTMLButtonElement | null>(null)
+  const flyoutCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Explicit viewport coords for chain flyout (avoids broken anchor placement). */
+  const [flyoutCoords, setFlyoutCoords] = useState<{
+    top: number
+    left: number
+  } | null>(null)
+  /** Suggested-pill path: standalone chain menu when multi-chain */
+  const [pillChainOpen, setPillChainOpen] = useState(false)
+  const [pillChainOptions, setPillChainOptions] = useState<Chain[]>([])
+  const [pillChainColId, setPillChainColId] = useState<string | null>(null)
+  const [pillChainLoading, setPillChainLoading] = useState(false)
+  const [createTodosOpen, setCreateTodosOpen] = useState(false)
+  const [createTodosLoading, setCreateTodosLoading] = useState(false)
+  const [liveCandidates, setLiveCandidates] = useState<MeetingTodoCandidate[]>(
+    [],
+  )
+
+  /**
+   * Open Create todos — prefer stored candidates (from allocate).
+   * Re-parse only when none are stored (legacy allocate / never extracted).
+   * Does NOT re-generate on every open (stable list + created_todo_id).
+   */
+  const openCreateTodos = async () => {
+    setActionsOpen(false)
+    setCreateTodosOpen(true)
+    setCreateTodosLoading(true)
+    const cached = tab.todo_candidates || []
+    setLiveCandidates(cached)
+    try {
+      const needExtract = cached.length === 0
+      const res = await getSectionTodoCandidates(meetingId, tab.tab_id, {
+        refresh: needExtract,
+      })
+      const list = res.candidates || []
+      setLiveCandidates(list)
+      // Keep parent meeting in sync when we just persisted a first extract
+      if (needExtract) {
+        try {
+          const m = await getMeeting(meetingId)
+          onMeetingUpdate(m)
+        } catch {
+          /* candidates still shown via liveCandidates */
+        }
+      }
+    } catch (err) {
+      toast.error(
+        `Load todos failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    } finally {
+      setCreateTodosLoading(false)
+    }
+  }
 
   const showTopButton = hasAssociated || ingested || !!pendingName
   const topButtonLabel = ingesting
@@ -590,24 +672,177 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     if (dropdownOpen) {
       fetchCollections()
       setNewName(tab.name)
+    } else {
+      setFlyoutColId(null)
+      flyoutItemRef.current = null
+      setFlyoutCoords(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dropdownOpen, tab.name])
 
-  const handleSelectCollection = (colId: string) => {
-    // If already ingested to a different collection, confirm before switching
-    if (ingested && colId !== associatedId) {
-      setSwitchTarget(colId)
-      return
+  const clearFlyoutCloseTimer = () => {
+    if (flyoutCloseTimerRef.current) {
+      clearTimeout(flyoutCloseTimerRef.current)
+      flyoutCloseTimerRef.current = null
     }
-    doIngest(colId)
   }
 
-  const doIngest = async (colId: string) => {
+  const scheduleCloseFlyout = () => {
+    clearFlyoutCloseTimer()
+    flyoutCloseTimerRef.current = setTimeout(() => {
+      setFlyoutColId(null)
+      flyoutItemRef.current = null
+      setFlyoutCoords(null)
+    }, 180)
+  }
+
+  const measureFlyoutCoords = (itemEl: HTMLElement | null) => {
+    if (!itemEl || typeof window === "undefined") return null
+    const menuEl = itemEl.closest("[data-slot='menu']") as HTMLElement | null
+    const ir = itemEl.getBoundingClientRect()
+    const mr = menuEl?.getBoundingClientRect() ?? ir
+    const gap = 6
+    const estW = 220
+    const estH = 220
+    let left = mr.right + gap
+    let top = ir.top
+    if (left + estW > window.innerWidth - 8) {
+      left = Math.max(8, mr.left - estW - gap)
+    }
+    if (top + estH > window.innerHeight - 8) {
+      top = Math.max(8, window.innerHeight - estH - 8)
+    }
+    if (top < 8) top = 8
+    return { top, left }
+  }
+
+  const loadChainsForCol = async (colId: string): Promise<Chain[]> => {
+    const cached = chainsByCol[colId]
+    if (cached) return cached
+    setChainFlyoutLoading(true)
+    try {
+      const chains = await listChains(colId)
+      setChainsByCol((prev) => ({ ...prev, [colId]: chains }))
+      return chains
+    } finally {
+      setChainFlyoutLoading(false)
+    }
+  }
+
+  /**
+   * After collection + chain resolved:
+   * - switching to another collection → confirm dialog (with chain)
+   * - otherwise → ingest immediately
+   */
+  const commitCollectionAndChain = (
+    colId: string,
+    chainId: string | null,
+  ) => {
+    setFlyoutColId(null)
+    setFlyoutCoords(null)
     setDropdownOpen(false)
+    setPillChainOpen(false)
+    setPillChainColId(null)
+    if (ingested && colId !== associatedId) {
+      setSwitchPending({ colId, chainId })
+      return
+    }
+    void doIngest(colId, chainId)
+  }
+
+  const openChainFlyout = async (
+    colId: string,
+    itemEl: HTMLButtonElement | null,
+  ) => {
+    clearFlyoutCloseTimer()
+    flyoutItemRef.current = itemEl
+    // Position immediately from the row (before async load) so flyout never floats away
+    const coords = measureFlyoutCoords(itemEl)
+    if (coords) setFlyoutCoords(coords)
+    try {
+      const chains = await loadChainsForCol(colId)
+      // Main-only collections: never show the secondary flyout
+      const hasBranch = chains.some((c) => !c.is_main)
+      if (!hasBranch) {
+        setFlyoutColId((cur) => (cur === colId ? null : cur))
+        setFlyoutCoords(null)
+        return
+      }
+      // Re-measure after paint (menu may have scrolled / row highlight changed)
+      const again = measureFlyoutCoords(flyoutItemRef.current)
+      if (again) setFlyoutCoords(again)
+      setFlyoutColId(colId)
+    } catch (err) {
+      toast.error(
+        `Failed to load chains: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      setFlyoutColId((cur) => (cur === colId ? null : cur))
+      setFlyoutCoords(null)
+    }
+  }
+
+  /** Click a collection row: only-main → commit; multi → keep right flyout open. */
+  const handleSelectCollection = async (
+    colId: string,
+    itemEl?: HTMLButtonElement | null,
+  ) => {
+    try {
+      const chains = await loadChainsForCol(colId)
+      const hasBranch = chains.some((c) => !c.is_main)
+      if (!hasBranch) {
+        const main = chains.find((c) => c.is_main)
+        commitCollectionAndChain(colId, main?.chain_id ?? null)
+        return
+      }
+      await openChainFlyout(colId, itemEl ?? flyoutItemRef.current)
+    } catch (err) {
+      toast.error(
+        `Failed to load chains: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  /**
+   * Suggested collection pill: load chains; Main-only → ingest; multi → menu under pill.
+   */
+  const beginIngestWithChainPick = async (colId: string) => {
+    setActionsOpen(false)
+    setDropdownOpen(false)
+    setFlyoutColId(null)
+    setPillChainColId(colId)
+    setPillChainLoading(true)
+    setPillChainOpen(true)
+    try {
+      const chains = await listChains(colId)
+      setPillChainOptions(chains)
+      const hasBranch = chains.some((c) => !c.is_main)
+      if (!hasBranch) {
+        const main = chains.find((c) => c.is_main)
+        setPillChainOpen(false)
+        setPillChainColId(null)
+        toast.info("Ingesting to Main chain")
+        await doIngest(colId, main?.chain_id ?? null)
+        return
+      }
+    } catch (err) {
+      setPillChainOpen(false)
+      setPillChainColId(null)
+      toast.error(
+        `Failed to load chains: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    } finally {
+      setPillChainLoading(false)
+    }
+  }
+
+  const doIngest = async (colId: string, chainId?: string | null) => {
+    setDropdownOpen(false)
+    setFlyoutColId(null)
+    setFlyoutCoords(null)
+    setPillChainOpen(false)
+    setSwitchPending(null)
     const colMeta = collections.find((c) => c.id === colId)
     setPendingName(colMeta?.name || colId)
-    setSwitchTarget(null)
     try {
       // Delete old allocation first; fail fast — don't proceed if cleanup fails
       if (ingested && colId !== associatedId) {
@@ -619,7 +854,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       return
     }
     try {
-      await handleIngest(colId)
+      await handleIngest(colId, chainId)
       fetchCollections()
     } catch { /* error handled in parent */ }
     setPendingName(null)
@@ -627,9 +862,10 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
 
   const handleCreateAndSelect = async () => {
     if (!newName.trim() || !!pendingName) return
-    // If switching, confirm first
+    // If switching, confirm first (new collection → main chain only)
     if (ingested) {
-      setSwitchTarget("__new__")
+      setSwitchPending({ colId: "__new__", chainId: null })
+      setDropdownOpen(false)
       return
     }
     doCreateAndIngest()
@@ -638,7 +874,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   const doCreateAndIngest = async () => {
     setDropdownOpen(false)
     setPendingName(newName.trim())
-    setSwitchTarget(null)
+    setSwitchPending(null)
     // Delete old allocation first; fail fast
     if (ingested) {
       try {
@@ -654,7 +890,8 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       if (res.error) throw new Error(res.error)
       const colId = res.id
       if (!colId) throw new Error("No collection ID returned")
-      await handleIngest(colId)
+      // New collection only has main chain
+      await handleIngest(colId, null)
       await fetchCollections()
       setCreating(false)
       toast.success(`Created "${newName.trim()}" and ingested`)
@@ -664,11 +901,14 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     setPendingName(null)
   }
 
-  const handleIngest = async (colId: string) => {
-    if (ingesting) return
-    setIngesting(true)
+  const handleIngest = async (colId: string, chainId?: string | null) => {
+    // Capture tab id for this job — survives section switch / remount
+    const jobTabId = tab.tab_id
+    if (localIngesting || parentIngesting) return
+    setLocalIngesting(true)
+    onIngestingChangeRef.current?.(jobTabId, true)
     try {
-      const res = await allocateSection(meetingId, tab.tab_id, colId)
+      const res = await allocateSection(meetingId, jobTabId, colId, chainId)
       // Strip bridge fields before treating as Meeting meta
       const {
         file_id: bridgeFileId,
@@ -676,6 +916,8 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         node_id: bridgeNodeId,
         source: _bridgeSource,
         collection_id: _bridgeCol,
+        chain_id: _bridgeChain,
+        todo_candidate_count: _todoCount,
         ...meetingRest
       } = res
       if (bridgeNodeId) lastNodeIdRef.current = bridgeNodeId
@@ -728,8 +970,11 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       }
     } catch (err) {
       toast.error(`Ingest failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setLocalIngesting(false)
+      // Always clear the job's tab on parent (even if this instance unmounted)
+      onIngestingChangeRef.current?.(jobTabId, false)
     }
-    setIngesting(false)
   }
 
   const goToDatabase = (colId: string) => {
@@ -814,27 +1059,24 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       toast.error("Section is not ingested to a collection")
       return
     }
-    await handleIngest(colId)
+    await handleIngest(colId, tab.allocated_chain_id || null)
   }
 
-  // Notify parent of ingesting state without depending on unstable callback identity
-  const onIngestingChangeRef = useRef(onIngestingChange)
-  onIngestingChangeRef.current = onIngestingChange
-  useEffect(() => {
-    onIngestingChangeRef.current?.(tab.tab_id, ingesting)
-  }, [ingesting, tab.tab_id])
-
   const handleCancelIngest = async () => {
+    const jobTabId = tab.tab_id
     setCancelOpen(false)
-    setIngesting(true)
+    setLocalIngesting(true)
+    onIngestingChangeRef.current?.(jobTabId, true)
     try {
-      const m = await deleteSectionAllocation(meetingId, tab.tab_id)
+      const m = await deleteSectionAllocation(meetingId, jobTabId)
       onMeetingUpdate(m)
       toast.success("Ingestion cancelled")
     } catch (err) {
       toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setLocalIngesting(false)
+      onIngestingChangeRef.current?.(jobTabId, false)
     }
-    setIngesting(false)
   }
 
   const BUTTON_W = "w-[250px]"
@@ -871,7 +1113,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
 
   // SoftMenu click-outside — pill + choose may live in different DOM hosts
   useEffect(() => {
-    if (!dropdownOpen && !actionsOpen) return
+    if (!dropdownOpen && !actionsOpen && !pillChainOpen) return
     const handler = (e: MouseEvent) => {
       const t = e.target as Node
       const inPill = pillShellRef.current?.contains(t)
@@ -881,11 +1123,16 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         setDropdownOpen(false)
         setActionsOpen(false)
         setCreating(false)
+        setFlyoutColId(null)
+        setPillChainOpen(false)
+        setPillChainColId(null)
       }
     }
     document.addEventListener("mousedown", handler)
     return () => document.removeEventListener("mousedown", handler)
-  }, [dropdownOpen, actionsOpen])
+  }, [dropdownOpen, actionsOpen, pillChainOpen])
+
+  const flyoutChains = flyoutColId ? chainsByCol[flyoutColId] || [] : []
 
   const tabLabel = (() => {
     const sections = tabs.filter(t => t.type === "section" && t.md_file_path)
@@ -910,9 +1157,12 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         onClick={() => {
           if (displayActive) {
             setDropdownOpen(false)
+            setFlyoutColId(null)
+            setPillChainOpen(false)
             setActionsOpen((v) => !v)
-          } else {
-            void handleIngest(associatedId)
+          } else if (associatedId) {
+            setActionsOpen(false)
+            void beginIngestWithChainPick(associatedId)
           }
         }}
         title={
@@ -921,7 +1171,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             : displayActive
               ? "Open actions (file / files / timeline / remove)"
               : displaySuggestion
-                ? "Click to ingest"
+                ? "Click to choose chain and ingest"
                 : undefined
         }
         className={cn(
@@ -946,38 +1196,55 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         open={actionsOpen && displayActive}
         portal
         anchorRef={topPillRef}
-        align="end"
-        className="min-w-[180px]"
+        matchAnchorWidth
+        exitMs={MENU_SILK_MS}
+        className="pm-meeting-ingest-menu"
       >
+        <div className="pm-meeting-ingest-menu-label">Collection</div>
         {needsReingest && (
           <MenuItem
+            className="pm-meeting-ingest-menu-item"
             disabled={ingesting}
             onClick={() => void handleUpdateCollection()}
           >
-            <RefreshCw className="size-3 shrink-0" />
+            <RefreshCw strokeWidth={1.75} />
             Update collection
           </MenuItem>
         )}
-        <MenuItem onClick={handleOpenFile}>
-          <FileText className="size-3 shrink-0" />
+        <MenuItem className="pm-meeting-ingest-menu-item" onClick={handleOpenFile}>
+          <FileText strokeWidth={1.75} />
           Open file
         </MenuItem>
-        <MenuItem onClick={handleShowInFiles}>
-          <FolderOpen className="size-3 shrink-0" />
+        <MenuItem className="pm-meeting-ingest-menu-item" onClick={handleShowInFiles}>
+          <FolderOpen strokeWidth={1.75} />
           Show in Files
         </MenuItem>
-        <MenuItem onClick={() => void handleShowOnTimeline()}>
-          <GitBranch className="size-3 shrink-0" />
+        <MenuItem
+          className="pm-meeting-ingest-menu-item"
+          onClick={() => void handleShowOnTimeline()}
+        >
+          <GitBranch strokeWidth={1.75} />
           Show on Timeline
         </MenuItem>
         <MenuItem
+          className="pm-meeting-ingest-menu-item"
+          onClick={() => {
+            void openCreateTodos()
+          }}
+        >
+          <ListTodo strokeWidth={1.75} />
+          Create todos…
+        </MenuItem>
+        <div className="pm-meeting-ingest-menu-sep" role="separator" />
+        <MenuItem
+          className="pm-meeting-ingest-menu-item"
           destructive
           onClick={() => {
             setActionsOpen(false)
             setCancelOpen(true)
           }}
         >
-          <Trash2 className="size-3 shrink-0" />
+          <Trash2 strokeWidth={1.75} />
           Remove from collection
         </MenuItem>
       </SoftMenu>
@@ -1013,37 +1280,86 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           </span>
         </button>
       </div>
-      <SoftMenu open={dropdownOpen} portal anchorRef={buttonRef} align="end" className="min-w-[172px]">
-        {collections.length === 0 && (
-          <div className="px-3 py-2 pm-meta text-center">No collections yet</div>
-        )}
-        {collections.map((col) => (
-          <MenuItem
-            key={col.id}
-            active={col.id === associatedId}
-            disabled={!!pendingName}
-            onClick={() => handleSelectCollection(col.id)}
-          >
-            {col.name}
-          </MenuItem>
-        ))}
+      <SoftMenu
+        open={dropdownOpen}
+        portal
+        anchorRef={buttonRef}
+        matchAnchorWidth
+        exitMs={MENU_SILK_MS}
+        className="pm-meeting-ingest-menu"
+      >
+        <div className="pm-meeting-ingest-menu-label">Collections</div>
+        <div className="pm-meeting-ingest-menu-scroll">
+          {collections.length === 0 && (
+            <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
+              No collections yet
+            </div>
+          )}
+          {collections.map((col) => {
+            const cached = chainsByCol[col.id]
+            const multi =
+              cached != null && cached.some((c) => !c.is_main)
+            return (
+              <MenuItem
+                key={col.id}
+                active={col.id === associatedId || flyoutColId === col.id}
+                disabled={!!pendingName}
+                className="pm-meeting-ingest-menu-item"
+                onMouseEnter={(e) => {
+                  void openChainFlyout(col.id, e.currentTarget)
+                }}
+                onMouseLeave={scheduleCloseFlyout}
+                onClick={(e) => {
+                  void handleSelectCollection(col.id, e.currentTarget)
+                }}
+              >
+                <span className="truncate min-w-0 flex-1 text-left">
+                  {col.name}
+                </span>
+                {multi ? (
+                  <ChevronRight
+                    className="pm-meeting-ingest-menu-chevron"
+                    strokeWidth={1.75}
+                  />
+                ) : null}
+              </MenuItem>
+            )
+          })}
+        </div>
+        <div className="pm-meeting-ingest-menu-sep" role="separator" />
         {!creating ? (
           <MenuItem
             disabled={!!pendingName}
+            className="pm-meeting-ingest-menu-item"
             onClick={() => setCreating(true)}
+            onMouseEnter={() => {
+              clearFlyoutCloseTimer()
+              setFlyoutColId(null)
+              setFlyoutCoords(null)
+            }}
           >
-            <Plus className="size-3 shrink-0" />
-            {hasAssociated ? "Create new collection" : `+ ${tab.name}`}
+            <Plus strokeWidth={1.75} />
+            {hasAssociated ? "Create new collection" : `New · ${tab.name}`}
           </MenuItem>
         ) : (
-          <div className="px-2 py-2 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="px-2.5 py-2 flex items-center gap-1.5"
+            onClick={(e) => e.stopPropagation()}
+            onMouseEnter={() => {
+              clearFlyoutCloseTimer()
+              setFlyoutColId(null)
+              setFlyoutCoords(null)
+            }}
+          >
             <Input
-              className="h-7 flex-1"
+              className="h-8 flex-1 text-[13px] min-w-0"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Collection name"
               autoFocus
-              onKeyDown={(e) => { if (e.key === "Enter") handleCreateAndSelect() }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCreateAndSelect()
+              }}
             />
             <Button
               type="button"
@@ -1056,6 +1372,56 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             </Button>
           </div>
         )}
+      </SoftMenu>
+      {/* Chain flyout — explicit coords next to parent menu / hovered row */}
+      <SoftMenu
+        open={
+          dropdownOpen &&
+          !!flyoutColId &&
+          !!flyoutCoords &&
+          (chainsByCol[flyoutColId]?.some((c) => !c.is_main) ?? false)
+        }
+        portal
+        placement="right"
+        fixedCoords={flyoutCoords}
+        repositionKey={flyoutColId}
+        exitMs={MENU_SILK_MS}
+        className="pm-meeting-ingest-menu"
+        onMouseEnter={clearFlyoutCloseTimer}
+        onMouseLeave={scheduleCloseFlyout}
+      >
+        <div className="pm-meeting-ingest-menu-label">
+          {chainFlyoutLoading && !(flyoutColId && chainsByCol[flyoutColId])
+            ? "Loading…"
+            : "Timeline chain"}
+        </div>
+        {flyoutChains.map((ch) => (
+          <MenuItem
+            key={ch.chain_id}
+            className="pm-meeting-ingest-menu-item"
+            disabled={ingesting}
+            onClick={() => {
+              if (!flyoutColId) return
+              commitCollectionAndChain(flyoutColId, ch.chain_id)
+            }}
+          >
+            <GitBranch strokeWidth={1.75} />
+            <span className="truncate min-w-0">
+              {ch.is_main
+                ? ch.title?.trim()
+                  ? `Main · ${ch.title}`
+                  : "Main"
+                : ch.title?.trim() || "Branch"}
+            </span>
+          </MenuItem>
+        ))}
+        {!chainFlyoutLoading &&
+        flyoutColId &&
+        (chainsByCol[flyoutColId]?.length ?? 0) === 0 ? (
+          <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
+            No chains
+          </div>
+        ) : null}
       </SoftMenu>
     </div>
   )
@@ -1158,6 +1524,59 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         legacyIngestColumn
       )}
 
+      {/* Suggested-pill path: chain list under pill when multi-chain */}
+      <SoftMenu
+        open={pillChainOpen}
+        portal
+        anchorRef={topPillRef}
+        matchAnchorWidth
+        exitMs={MENU_SILK_MS}
+        className="pm-meeting-ingest-menu"
+      >
+        <div className="pm-meeting-ingest-menu-label">
+          {pillChainLoading ? "Loading…" : "Timeline chain"}
+        </div>
+        {pillChainOptions.map((ch) => (
+          <MenuItem
+            key={ch.chain_id}
+            className="pm-meeting-ingest-menu-item"
+            disabled={ingesting || pillChainLoading}
+            onClick={() => {
+              if (!pillChainColId) return
+              commitCollectionAndChain(pillChainColId, ch.chain_id)
+            }}
+          >
+            <GitBranch strokeWidth={1.75} />
+            <span className="truncate min-w-0">
+              {ch.is_main
+                ? ch.title?.trim()
+                  ? `Main · ${ch.title}`
+                  : "Main"
+                : ch.title?.trim() || "Branch"}
+            </span>
+          </MenuItem>
+        ))}
+      </SoftMenu>
+
+      <MeetingCreateTodosDialog
+        open={createTodosOpen}
+        onOpenChange={setCreateTodosOpen}
+        collectionId={associatedId}
+        chainId={tab.allocated_chain_id || null}
+        meetingId={meetingId}
+        defaultSectionTabId={tab.tab_id}
+        candidates={
+          liveCandidates.length > 0
+            ? liveCandidates
+            : tab.todo_candidates || []
+        }
+        loading={createTodosLoading}
+        title="Create todos from summary"
+        onCreated={(_n, meeting) => {
+          if (meeting) onMeetingUpdate(meeting)
+        }}
+      />
+
       {/* Cancel Ingestion Confirm Dialog */}
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <DialogContent
@@ -1179,8 +1598,13 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         </DialogContent>
       </Dialog>
 
-      {/* Switch Ingestion Confirm Dialog */}
-      <Dialog open={!!switchTarget} onOpenChange={(v) => { if (!v) setSwitchTarget(null) }}>
+      {/* Switch Ingestion Confirm Dialog — chain already chosen when multi-chain */}
+      <Dialog
+        open={!!switchPending}
+        onOpenChange={(v) => {
+          if (!v) setSwitchPending(null)
+        }}
+      >
         <DialogContent
           className="pm-dialog pm-dialog--silk sm:max-w-sm"
           showCloseButton={false}
@@ -1191,22 +1615,42 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             <DialogTitle>Switch collection?</DialogTitle>
             <DialogDescription>
               This section is already ingested to &ldquo;{associatedName}&rdquo;.{" "}
-              {switchTarget === "__new__" ? (
-                <>Creating a new collection will delete the existing file snapshot and re-ingest.</>
+              {switchPending?.colId === "__new__" ? (
+                <>
+                  Creating a new collection will delete the existing file
+                  snapshot and re-ingest.
+                </>
               ) : (
-                <>Switching to &ldquo;{collections.find(c => c.id === switchTarget)?.name || switchTarget}&rdquo; will delete the existing file snapshot and re-ingest.</>
+                <>
+                  Switching to &ldquo;
+                  {collections.find((c) => c.id === switchPending?.colId)
+                    ?.name || switchPending?.colId}
+                  &rdquo; will delete the existing file snapshot and re-ingest
+                  {switchPending?.chainId
+                    ? " onto the chain you selected"
+                    : " (Main chain)"}
+                  .
+                </>
               )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setSwitchTarget(null)}>Cancel</Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSwitchPending(null)}
+            >
+              Cancel
+            </Button>
             <Button
               type="button"
               variant="destructive-solid"
               size="sm"
               onClick={() => {
-                if (switchTarget === "__new__") doCreateAndIngest()
-                else if (switchTarget) doIngest(switchTarget)
+                if (!switchPending) return
+                if (switchPending.colId === "__new__") doCreateAndIngest()
+                else void doIngest(switchPending.colId, switchPending.chainId)
               }}
             >
               Switch
@@ -2756,6 +3200,7 @@ export function MeetingTabs({
                 metadata={
                   !isGeneral && selectedTab ? (
                     <SectionMetadata
+                      key={selectedTab.tab_id}
                       ref={sectionMetaRef}
                       tab={selectedTab}
                       blueprint={blueprint}
@@ -2764,6 +3209,7 @@ export function MeetingTabs({
                       onMeetingUpdate={onMeetingUpdate}
                       hideTitle
                       ingestHostRef={sectionIngestHostRef}
+                      parentIngesting={ingestingTabs.has(selectedTab.tab_id)}
                       onIngestingChange={(tabId, v) => {
                         setIngestingTabs((prev) => {
                           const has = prev.has(tabId)

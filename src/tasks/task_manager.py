@@ -127,7 +127,36 @@ class TaskManager:
         self._processors.clear()
 
     def create_task(self, filename: str, task_type: str = "upload", collection: str = "default", **kwargs) -> Task:
-        """Create and enqueue a new task.  Thread-safe: can be called from any thread."""
+        """Create and enqueue a new task.  Thread-safe: can be called from any thread.
+
+        Prefer :meth:`create_task_async` from async request handlers so the
+        enqueue is awaited on the running loop (avoids delayed dequeue when
+        the handler later blocks the loop).
+        """
+        task = self._make_task(filename, collection)
+        self._task_args[task.id] = (task_type, kwargs)
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._enqueue_task(task.id, task_type, kwargs), self._loop
+            )
+        else:
+            asyncio.create_task(self._enqueue_task(task.id, task_type, kwargs))
+        return task
+
+    async def create_task_async(
+        self,
+        filename: str,
+        task_type: str = "upload",
+        collection: str = "default",
+        **kwargs,
+    ) -> Task:
+        """Create and await enqueue on the current event loop (async-safe)."""
+        task = self._make_task(filename, collection)
+        self._task_args[task.id] = (task_type, kwargs)
+        await self._enqueue_task(task.id, task_type, kwargs)
+        return task
+
+    def _make_task(self, filename: str, collection: str) -> Task:
         task_id = str(uuid.uuid4())
         task = Task(
             id=task_id,
@@ -136,13 +165,6 @@ class TaskManager:
             message="Queued for processing",
         )
         self.tasks[task_id] = task
-        self._task_args[task_id] = (task_type, kwargs)
-        if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                self._enqueue_task(task_id, task_type, kwargs), self._loop
-            )
-        else:
-            asyncio.create_task(self._enqueue_task(task_id, task_type, kwargs))
         return task
 
     def cancel_task(self, task_id: str) -> bool:

@@ -690,7 +690,7 @@ export function MessageEditorDialog({
                                   strokeWidth={1.75}
                                 />
                                 <span className="truncate">
-                                  {a.filename || a.file_id}
+                                  {a.display_name || a.filename || a.file_id}
                                 </span>
                               </div>
                             </li>

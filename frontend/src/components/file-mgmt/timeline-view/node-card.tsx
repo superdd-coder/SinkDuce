@@ -6,6 +6,7 @@ import {
   GitBranchPlus,
   GitMerge,
   GripVertical,
+  ListTodo,
   Star,
 } from "lucide-react"
 import type { Node as NodeType, NodeGroup } from "@/types/file-mgmt"
@@ -29,6 +30,8 @@ interface NodeCardProps {
   onClick: () => void
   onCreateChain?: () => void
   onMergeBranch?: () => void
+  /** Meeting anchor: create todos from attached section summaries. */
+  onCreateMeetingTodos?: () => void
   /** Visual only — drag sensors are on the sortable wrapper (see timeline SW). */
   showDragGrip?: boolean
   isDragging?: boolean
@@ -45,9 +48,11 @@ export function NodeCard({
   onClick,
   onCreateChain,
   onMergeBranch,
+  onCreateMeetingTodos,
   showDragGrip = false,
   isDragging = false,
 }: NodeCardProps) {
+  const isMeetingAnchor = !!(node.external_ref || "").startsWith("meeting:")
   const source: GroupIconSource =
     groupSource ?? (groupName ? { name: groupName } : { name: "未分类" })
   const groupLabel =
@@ -199,6 +204,20 @@ export function NodeCard({
             </div>
           )}
         </div>
+
+        {isMeetingAnchor && onCreateMeetingTodos && (
+          <button
+            type="button"
+            className="pm-timeline-node-action relative opacity-0 group-hover/card:opacity-100 transition-opacity"
+            onClick={(e) => {
+              e.stopPropagation()
+              onCreateMeetingTodos()
+            }}
+            title="Create todos from meeting summary"
+          >
+            <ListTodo className="h-3.5 w-3.5" />
+          </button>
+        )}
 
         {onCreateChain && (
           <button

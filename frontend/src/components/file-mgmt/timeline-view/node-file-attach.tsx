@@ -412,11 +412,13 @@ export function NodeFileAttach({
                             <button
                               type="button"
                               className="flex-1 min-w-0 text-left break-words hover:text-[var(--pm-green)] transition-colors"
-                              title={att.filename}
+                              title={
+                                att.display_name || att.filename || att.file_id
+                              }
                               onClick={() => onOpenFile?.(att.file_id)}
                               disabled={isExit}
                             >
-                              {att.filename}
+                              {att.display_name || att.filename || att.file_id}
                             </button>
                             {att.archived && (
                               <span className="pm-meta shrink-0">archived</span>

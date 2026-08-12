@@ -911,15 +911,23 @@ async def regenerate_section(meeting_id: str, tab_id: str):
 async def allocate_section(meeting_id: str, tab_id: str, body: dict):
     """Allocate one section's content to a collection (speaker names resolved, refs stripped).
 
-    Response is the meeting dict plus bridge fields: file_id, task_id, node_id, source.
+    Body: collection_id (required), chain_id (optional — defaults to main).
+    Response is the meeting dict plus bridge fields: file_id, task_id, node_id, source, chain_id.
     """
     collection_id = body.get("collection_id", "")
     if not collection_id:
         return {"error": "collection_id is required"}
-    logger.info("[ALLOCATE_SECTION] Meeting %s tab=%s → collection=%s", meeting_id, tab_id, collection_id)
+    chain_id = (body.get("chain_id") or "").strip() or None
+    logger.info(
+        "[ALLOCATE_SECTION] Meeting %s tab=%s → collection=%s chain=%s",
+        meeting_id,
+        tab_id,
+        collection_id,
+        (chain_id or "")[:12],
+    )
     try:
         meeting, bridge = await meeting_service.allocate_section_to_collection(
-            meeting_id, tab_id, collection_id,
+            meeting_id, tab_id, collection_id, chain_id=chain_id,
         )
     except FileNotFoundError as exc:
         return {"error": str(exc)}
@@ -936,6 +944,80 @@ async def allocate_section(meeting_id: str, tab_id: str, body: dict):
     out = meeting.model_dump()
     out.update(bridge)
     return out
+
+
+@router.get("/meetings/{meeting_id}/sections/{tab_id}/todo-candidates")
+async def get_section_todo_candidates(
+    meeting_id: str,
+    tab_id: str,
+    refresh: bool = False,
+):
+    """Return todo candidates for a section.
+
+    If none stored (legacy allocate before this feature) or ``refresh=1``,
+    re-parse the current section MD, persist, and return.
+    """
+    meeting = store.get_meeting(meeting_id)
+    if meeting is None:
+        return {"error": "Meeting not found"}
+    tab_meta: dict | None = None
+    for t in meeting.tabs or []:
+        td = t if isinstance(t, dict) else t.model_dump()
+        if td.get("tab_id") == tab_id:
+            tab_meta = td
+            break
+    if tab_meta is None:
+        return {"error": f"Tab '{tab_id}' not found"}
+
+    cands = list(tab_meta.get("todo_candidates") or [])
+    if refresh or not cands:
+        try:
+            cands = meeting_service.extract_section_todo_candidates(
+                meeting_id,
+                tab_id,
+                persist=True,
+                use_llm=True,
+            )
+            # reload tab meta after persist
+            meeting = store.get_meeting(meeting_id) or meeting
+            for t in meeting.tabs or []:
+                td = t if isinstance(t, dict) else t.model_dump()
+                if td.get("tab_id") == tab_id:
+                    tab_meta = td
+                    break
+        except Exception as exc:
+            logger.warning(
+                "extract todo candidates failed %s/%s: %s",
+                meeting_id,
+                tab_id,
+                exc,
+            )
+
+    return {
+        "meeting_id": meeting_id,
+        "tab_id": tab_id,
+        "section_name": (tab_meta or {}).get("name") or tab_id,
+        "collection_id": (tab_meta or {}).get("associated_collection_id") or "",
+        "chain_id": (tab_meta or {}).get("allocated_chain_id") or "",
+        "node_id": (tab_meta or {}).get("allocated_node_id") or "",
+        "candidates": cands,
+    }
+
+
+@router.post("/meetings/{meeting_id}/todo-candidates/mark-created")
+async def mark_todo_candidates_created(meeting_id: str, body: dict):
+    """After checklist create, bind candidate_id → todo_id to prevent re-offer.
+
+    Body: ``{ "items": [ {"tab_id": "...", "candidate_id": "...", "todo_id": "..."}, ... ] }``
+    """
+    items = body.get("items") if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        return {"error": "items array is required"}
+    try:
+        meeting = meeting_service.mark_todo_candidates_created(meeting_id, items)
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+    return meeting.model_dump()
 
 
 @router.delete("/meetings/{meeting_id}/sections/{tab_id}/allocate")
