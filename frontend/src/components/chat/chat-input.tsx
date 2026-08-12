@@ -216,13 +216,17 @@ export function ChatInput() {
               setMenuTick((t) => t + 1)
             }}
             className={cn(
-              "pm-chat-tool-chip pm-chat-tool-chip--wipe",
+              "pm-chat-tool-chip pm-chat-tool-chip--wipe pm-chat-tool-chip--collections",
               selectedCollections.length > 0 && "is-on",
               showCollections && "is-menu-open",
             )}
           >
-            <span className="pm-chat-tool-chip-label whitespace-nowrap text-center">
-              {collectionLabel}
+            {/* Sizer locks width to "All collections" so N collections doesn't resize the chip */}
+            <span className="pm-chat-tool-chip-label pm-chat-tool-chip-label--fixed">
+              <span className="pm-chat-tool-chip-label-sizer" aria-hidden>
+                All collections
+              </span>
+              <span className="pm-chat-tool-chip-label-text">{collectionLabel}</span>
             </span>
             <span className="pm-chat-tool-chip-wipe" aria-hidden />
           </button>

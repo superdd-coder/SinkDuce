@@ -346,6 +346,10 @@ class TodoCreate(BaseModel):
     target_chain_id: str | None = None  # null = main chain
     # When set, remove this smart-suggestion item after successful create
     suggestion_id: str | None = None
+    # Meeting section provenance (design 2026-08-12)
+    source_meeting_id: str | None = None
+    source_section_tab_id: str | None = None
+    source_candidate_id: str | None = None
 
 
 class TodoSuggestionItem(BaseModel):
@@ -392,6 +396,9 @@ class TodoOut(BaseModel):
     created_at: str
     updated_at: str
     completed_at: str | None = None
+    source_meeting_id: str | None = None
+    source_section_tab_id: str | None = None
+    source_candidate_id: str | None = None
 
 
 # Resolve forward references for recursive models

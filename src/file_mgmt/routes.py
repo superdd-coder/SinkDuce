@@ -220,12 +220,96 @@ def reorder_node(collection_id: str, node_id: str, req: NodeReorder):
 
 
 @router.get("/{collection_id}/nodes/by-external-ref")
-def get_node_by_external_ref(collection_id: str, ref: str):
+def get_node_by_external_ref(
+    collection_id: str,
+    ref: str,
+    chain_id: Optional[str] = Query(None),
+):
     """Resolve a timeline node by external_ref (e.g. meeting:{meeting_id})."""
-    node = service.get_node_by_external_ref(collection_id, ref)
+    node = service.get_node_by_external_ref(collection_id, ref, chain_id=chain_id)
     if not node:
         raise HTTPException(404, f"No node with external_ref={ref!r}")
     return node
+
+
+@router.get("/{collection_id}/nodes/{node_id}/meeting-todo-candidates")
+def get_node_meeting_todo_candidates(collection_id: str, node_id: str):
+    """Todo candidates from all meeting sections attached to this node."""
+    from src.meeting import store as meeting_store
+
+    detail = service.get_node_detail(collection_id, node_id)
+    if not isinstance(detail, dict):
+        detail = detail.model_dump() if hasattr(detail, "model_dump") else {}
+    ext = (detail.get("external_ref") or "") or ""
+    if not str(ext).startswith("meeting:"):
+        return {"node_id": node_id, "groups": [], "candidates": []}
+    meeting_id = str(ext).split(":", 1)[1].strip()
+    if not meeting_id:
+        return {"node_id": node_id, "groups": [], "candidates": []}
+
+    file_ids: set[str] = set()
+    for att in detail.get("attachments") or []:
+        if isinstance(att, dict):
+            fid = att.get("file_id")
+        else:
+            fid = getattr(att, "file_id", None)
+        if fid:
+            file_ids.add(str(fid))
+
+    meeting = meeting_store.get_meeting(meeting_id)
+    if meeting is None:
+        return {
+            "node_id": node_id,
+            "meeting_id": meeting_id,
+            "groups": [],
+            "candidates": [],
+        }
+
+    groups: list[dict] = []
+    flat: list[dict] = []
+    for t in meeting.tabs or []:
+        td = t if isinstance(t, dict) else t.model_dump()
+        fid = (td.get("allocated_file_id") or "").strip()
+        if not fid or fid not in file_ids:
+            continue
+        if (td.get("associated_collection_id") or "").strip() != collection_id:
+            continue
+        tab_id = td.get("tab_id")
+        section_name = td.get("name") or tab_id
+        cands = list(td.get("todo_candidates") or [])
+        # Legacy allocate: no stored candidates — extract from section MD now
+        if not cands and tab_id:
+            try:
+                from src.meeting.service import meeting_service
+
+                cands = meeting_service.extract_section_todo_candidates(
+                    meeting_id,
+                    str(tab_id),
+                    persist=True,
+                    use_llm=True,
+                )
+            except Exception:
+                cands = []
+        for c in cands:
+            item = dict(c) if isinstance(c, dict) else {}
+            item["section_tab_id"] = tab_id
+            item["section_name"] = section_name
+            flat.append(item)
+        groups.append(
+            {
+                "tab_id": tab_id,
+                "section_name": section_name,
+                "candidates": cands,
+            }
+        )
+    return {
+        "node_id": node_id,
+        "meeting_id": meeting_id,
+        "collection_id": collection_id,
+        "chain_id": detail.get("chain_id"),
+        "groups": groups,
+        "candidates": flat,
+    }
 
 
 @router.get("/{collection_id}/nodes/{node_id}")

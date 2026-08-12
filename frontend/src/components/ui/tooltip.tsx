@@ -34,12 +34,16 @@ function TooltipContent({
   align = "center",
   alignOffset = 0,
   children,
+  showArrow = true,
   ...props
 }: TooltipPrimitive.Popup.Props &
   Pick<
     TooltipPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset"
-  >) {
+  > & {
+    /** Small rotated square under the bubble (default true). */
+    showArrow?: boolean
+  }) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Positioner
@@ -66,15 +70,17 @@ function TooltipContent({
           {...props}
         >
           {children}
-          <TooltipPrimitive.Arrow
-            className={cn(
-              "z-50 size-2.5 translate-y-[calc(-50%-2px)] rotate-45 rounded-[2px]",
-              "bg-[var(--pm-ink)] fill-[var(--pm-ink)]",
-              "data-[side=bottom]:top-1 data-[side=top]:-bottom-2.5",
-              "data-[side=left]:top-1/2! data-[side=left]:-right-1 data-[side=left]:-translate-y-1/2",
-              "data-[side=right]:top-1/2! data-[side=right]:-left-1 data-[side=right]:-translate-y-1/2"
-            )}
-          />
+          {showArrow ? (
+            <TooltipPrimitive.Arrow
+              className={cn(
+                "z-50 size-2.5 translate-y-[calc(-50%-2px)] rotate-45 rounded-[2px]",
+                "bg-[var(--pm-ink)] fill-[var(--pm-ink)]",
+                "data-[side=bottom]:top-1 data-[side=top]:-bottom-2.5",
+                "data-[side=left]:top-1/2! data-[side=left]:-right-1 data-[side=left]:-translate-y-1/2",
+                "data-[side=right]:top-1/2! data-[side=right]:-left-1 data-[side=right]:-translate-y-1/2"
+              )}
+            />
+          ) : null}
         </TooltipPrimitive.Popup>
       </TooltipPrimitive.Positioner>
     </TooltipPrimitive.Portal>

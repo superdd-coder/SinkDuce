@@ -10,7 +10,6 @@ import {
   Link2,
   Loader2,
   Plus,
-  X,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -39,6 +38,98 @@ interface TodoCardProps {
   /** Controlled create dialog (timeline can open it). */
   createOpen?: boolean
   onCreateOpenChange?: (open: boolean) => void
+}
+
+/**
+ * Two-step delete (× → DELETE) — same anti-mis-tap pattern as message-card
+ * and LogMsgDeleteButton (.pm-msg-delete).
+ */
+function TodoDeleteButton({
+  disabled,
+  onConfirm,
+}: {
+  disabled?: boolean
+  onConfirm: () => void
+}) {
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const deleteBtnRef = useRef<HTMLButtonElement>(null)
+
+  const disarmDelete = useCallback(() => {
+    setDeleteArmed(false)
+    if (deleteArmTimerRef.current) {
+      clearTimeout(deleteArmTimerRef.current)
+      deleteArmTimerRef.current = null
+    }
+  }, [])
+
+  const armDelete = useCallback(() => {
+    setDeleteArmed(true)
+    if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    deleteArmTimerRef.current = setTimeout(() => disarmDelete(), 4000)
+  }, [disarmDelete])
+
+  useEffect(() => {
+    if (!deleteArmed) return
+    const onPointerDown = (ev: Event) => {
+      const t = ev.target as globalThis.Node | null
+      if (t && deleteBtnRef.current?.contains(t)) return
+      disarmDelete()
+    }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") disarmDelete()
+    }
+    const t = window.setTimeout(() => {
+      document.addEventListener("pointerdown", onPointerDown, true)
+      document.addEventListener("keydown", onKey, true)
+    }, 0)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener("pointerdown", onPointerDown, true)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [deleteArmed, disarmDelete])
+
+  useEffect(() => {
+    return () => {
+      if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
+    }
+  }, [])
+
+  return (
+    <button
+      ref={deleteBtnRef}
+      type="button"
+      disabled={disabled}
+      className={cn(
+        "pm-msg-delete",
+        deleteArmed ? "is-confirm opacity-100" : "opacity-100",
+      )}
+      title={deleteArmed ? "Click again to delete" : "Delete todo"}
+      aria-label={deleteArmed ? "Confirm delete todo" : "Delete todo"}
+      aria-expanded={deleteArmed}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (disabled) return
+        if (!deleteArmed) {
+          armDelete()
+          return
+        }
+        disarmDelete()
+        onConfirm()
+      }}
+    >
+      {/* First click: × only. Confirm: text only (no icon). */}
+      {!deleteArmed ? (
+        <span className="pm-msg-delete-x" aria-hidden>
+          ×
+        </span>
+      ) : (
+        <span className="pm-msg-delete-label is-solo">Delete</span>
+      )}
+    </button>
+  )
 }
 
 export function TodoCard({
@@ -298,7 +389,12 @@ export function TodoCard({
           </div>
         </div>
         <div
-          className="flex items-center gap-0.5 shrink-0 self-center opacity-0 group-hover/todo:opacity-100 focus-within:opacity-100 transition-opacity"
+          className={cn(
+            "flex items-center gap-0.5 shrink-0 self-center transition-opacity",
+            // Stay visible while two-step delete is armed (same as message row)
+            "opacity-0 group-hover/todo:opacity-100 focus-within:opacity-100",
+            "has-[.pm-msg-delete.is-confirm]:opacity-100",
+          )}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -324,18 +420,12 @@ export function TodoCard({
               <Link2 className="size-3.5" strokeWidth={2} />
             </span>
           )}
-          <button
-            type="button"
-            title="Delete"
-            aria-label="Delete todo"
-            className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/8 border-none bg-transparent p-0 cursor-pointer"
-            onClick={(e) => {
-              e.stopPropagation()
+          <TodoDeleteButton
+            disabled={busy}
+            onConfirm={() => {
               void handleDelete(t)
             }}
-          >
-            <X className="size-3.5" strokeWidth={2} />
-          </button>
+          />
         </div>
       </li>
     )

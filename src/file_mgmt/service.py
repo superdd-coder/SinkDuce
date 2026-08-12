@@ -1504,14 +1504,23 @@ def _node_summary_row(
            WHERE fn.node_id=?""",
         (nid,),
     ).fetchall()
-    base["attachments"] = [
-        {
-            "file_id": a["file_id"],
-            "filename": a["storage_file_id"] or "",
-            "is_definitive": bool(a["is_definitive"]),
-        }
-        for a in att_rows
-    ]
+    file_index = _load_file_index(collection_id)
+    base["attachments"] = []
+    for a in att_rows:
+        names = _attachment_display_fields(
+            collection_id,
+            a["file_id"],
+            a["storage_file_id"],
+            index=file_index,
+        )
+        base["attachments"].append(
+            {
+                "file_id": a["file_id"],
+                "filename": names["filename"],
+                "display_name": names["display_name"],
+                "is_definitive": bool(a["is_definitive"]),
+            }
+        )
     if depth == "minimal":
         # Drop heavy-ish fields
         base.pop("attachments", None)
@@ -1838,6 +1847,41 @@ def update_node(
                         404, f"Group '{updates['group_id']}' not found"
                     )
 
+            # Branch fork/merge anchors must stay on the main chain. Moving them
+            # onto a branch detaches the chain from the timeline (parent_node no
+            # longer resolves on main) while list_chains still exposes the folder.
+            if "chain_id" in updates and updates["chain_id"] != old_chain_id:
+                main_id = _main_chain_id(conn)
+                new_chain_id = updates["chain_id"]
+                dest = conn.execute(
+                    "SELECT chain_id FROM chains WHERE chain_id=?",
+                    (new_chain_id,),
+                ).fetchone()
+                if not dest:
+                    raise HTTPException(
+                        404, f"Chain '{new_chain_id}' not found"
+                    )
+                is_parent_anchor = conn.execute(
+                    "SELECT 1 FROM chains WHERE parent_node_id=? LIMIT 1",
+                    (node_id,),
+                ).fetchone()
+                is_merge_anchor = conn.execute(
+                    "SELECT 1 FROM chains WHERE merge_node_id=? LIMIT 1",
+                    (node_id,),
+                ).fetchone()
+                if (is_parent_anchor or is_merge_anchor) and new_chain_id != main_id:
+                    raise HTTPException(
+                        400,
+                        "Branch start/merge anchors must stay on the main chain",
+                    )
+                # start/end typed nodes also belong on main topology
+                ntype = updates.get("node_type") or node["node_type"]
+                if ntype in ("start", "end") and new_chain_id != main_id:
+                    raise HTTPException(
+                        400,
+                        "Start/end nodes must stay on the main chain",
+                    )
+
             set_clauses: list[str] = []
             params: list = []
 
@@ -2109,6 +2153,7 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
                WHERE fn.node_id=?""",
             (node_id,),
         ).fetchall()
+        file_index = _load_file_index(collection_id)
         attachments = []
         has_definitive = False
         for a in att_rows:
@@ -2122,11 +2167,18 @@ def get_node_detail(collection_id: str, node_id: str) -> dict:
                     (a["file_id"],),
                 ).fetchone()
                 path_archived = pr is not None
+            names = _attachment_display_fields(
+                collection_id,
+                a["file_id"],
+                a["storage_file_id"],
+                index=file_index,
+            )
             attachments.append({
                 "file_id": a["file_id"],
                 "is_definitive": bool(a["is_definitive"]),
                 "archived": file_archived or path_archived,
-                "filename": a["storage_file_id"] or "",
+                "filename": names["filename"],
+                "display_name": names["display_name"],
                 "version": int(a["version"] or 1),
             })
             if a["is_definitive"]:
@@ -2261,6 +2313,31 @@ def _index_entry_display(entry: dict | None) -> tuple[str, str]:
         label = label[len("Note: ") :].strip()
     src = (entry.get("source") or "").strip()
     return label, src
+
+
+def _attachment_display_fields(
+    collection_id: str,
+    file_id: str,
+    storage_file_id: str | None,
+    *,
+    index: dict[str, dict] | None = None,
+) -> dict[str, str]:
+    """Names for node attachment rows: prefer human display_name over storage.
+
+    ``filename`` remains the on-disk storage basename (e.g. tab_02.md).
+    ``display_name`` is source_label when present (e.g. meeting title / section).
+    """
+    from pathlib import Path
+
+    storage = Path(storage_file_id or "").name if storage_file_id else ""
+    idx = index if index is not None else _load_file_index(collection_id)
+    entry = idx.get(file_id) if idx else None
+    label, _ = _index_entry_display(entry)
+    display = (label or "").strip() or storage or file_id
+    return {
+        "filename": storage or file_id,
+        "display_name": display,
+    }
 
 
 def _doc_kind_from_source(src: str) -> str:
@@ -3338,11 +3415,13 @@ def ensure_meeting_anchor_node(
     *,
     title: str,
     event_time: str | None = None,
+    chain_id: str | None = None,
 ) -> str:
-    """Get or create the timeline event node for a meeting in this collection.
+    """Get or create the timeline event node for a meeting on a given chain.
 
-    Identity: ``nodes.external_ref = meeting:{meeting_id}`` (unique).
-    Placed on main chain, system Meeting group.
+    Identity: ``external_ref = meeting:{meeting_id}`` + ``chain_id``
+    (unique pair; same meeting may have one node per chain).
+    Defaults to main chain when *chain_id* is None.
     """
     if not meeting_id:
         raise ValueError("meeting_id is required")
@@ -3351,8 +3430,17 @@ def ensure_meeting_anchor_node(
     conn = _open_db(collection_id)
     try:
         with conn:
+            main_id = _main_chain_id(conn)
+            target_chain = (chain_id or "").strip() or main_id
+            ch = conn.execute(
+                "SELECT chain_id FROM chains WHERE chain_id=?", (target_chain,)
+            ).fetchone()
+            if not ch:
+                raise HTTPException(404, f"Chain '{target_chain}' not found")
+
             existing = conn.execute(
-                "SELECT * FROM nodes WHERE external_ref=?", (ref,)
+                "SELECT * FROM nodes WHERE external_ref=? AND chain_id=?",
+                (ref, target_chain),
             ).fetchone()
             if existing:
                 if (existing["title"] or "") != node_title:
@@ -3367,7 +3455,24 @@ def ensure_meeting_anchor_node(
                     )
                 return existing["node_id"]
 
-            main_id = _main_chain_id(conn)
+            # Legacy: single global meeting ref (pre multi-chain) on this chain or any
+            if target_chain == main_id:
+                legacy = conn.execute(
+                    "SELECT * FROM nodes WHERE external_ref=?", (ref,)
+                ).fetchone()
+                if legacy and legacy["chain_id"] == main_id:
+                    if (legacy["title"] or "") != node_title:
+                        conn.execute(
+                            "UPDATE nodes SET title=?, version=version+1 WHERE node_id=?",
+                            (node_title, legacy["node_id"]),
+                        )
+                    if event_time and not legacy["event_time"]:
+                        conn.execute(
+                            "UPDATE nodes SET event_time=?, version=version+1 WHERE node_id=?",
+                            (event_time, legacy["node_id"]),
+                        )
+                    return legacy["node_id"]
+
             grp = conn.execute(
                 "SELECT group_id FROM node_groups WHERE name=? LIMIT 1",
                 ("Meeting",),
@@ -3376,7 +3481,7 @@ def ensure_meeting_anchor_node(
 
             max_row = conn.execute(
                 'SELECT COALESCE(MAX("order"), 0) AS m FROM nodes WHERE chain_id=?',
-                (main_id,),
+                (target_chain,),
             ).fetchone()
             order = (max_row["m"] or 0) + 1
             node_id = uuid.uuid4().hex
@@ -3390,7 +3495,7 @@ def ensure_meeting_anchor_node(
                        VALUES (?, ?, ?, 'event', ?, ?, ?, 'local', ?, 1, ?)""",
                     (
                         node_id,
-                        main_id,
+                        target_chain,
                         group_id,
                         node_title,
                         order,
@@ -3401,7 +3506,8 @@ def ensure_meeting_anchor_node(
                 )
             except Exception:
                 again = conn.execute(
-                    "SELECT node_id FROM nodes WHERE external_ref=?", (ref,)
+                    "SELECT node_id FROM nodes WHERE external_ref=? AND chain_id=?",
+                    (ref, target_chain),
                 ).fetchone()
                 if again:
                     return again["node_id"]
@@ -3410,7 +3516,7 @@ def ensure_meeting_anchor_node(
         emit_event(
             "node.created",
             collection_id,
-            {"node_id": node_id, "external_ref": ref},
+            {"node_id": node_id, "external_ref": ref, "chain_id": target_chain},
         )
         return node_id
     finally:
@@ -3418,20 +3524,55 @@ def ensure_meeting_anchor_node(
 
 
 def get_node_by_external_ref(
-    collection_id: str, external_ref: str
+    collection_id: str, external_ref: str, *, chain_id: str | None = None
 ) -> NodeOut | None:
-    """Lookup a node by ``external_ref`` (e.g. ``meeting:{id}``)."""
+    """Lookup a node by ``external_ref`` (e.g. ``meeting:{id}``).
+
+    When *chain_id* is set, match that chain. Otherwise return the first match
+    (prefer main chain if multiple).
+    """
     ref = (external_ref or "").strip()
     if not ref:
         return None
     conn = _open_db(collection_id)
     try:
-        row = conn.execute(
-            "SELECT * FROM nodes WHERE external_ref=?", (ref,)
-        ).fetchone()
-        if not row:
+        if chain_id:
+            row = conn.execute(
+                "SELECT * FROM nodes WHERE external_ref=? AND chain_id=?",
+                (ref, chain_id),
+            ).fetchone()
+            if not row:
+                return None
+            return _row_to_node(row)
+        main_id = _main_chain_id(conn)
+        rows = list(
+            conn.execute(
+                "SELECT * FROM nodes WHERE external_ref=?", (ref,)
+            ).fetchall()
+        )
+        if not rows:
             return None
-        return _row_to_node(row)
+        for r in rows:
+            if r["chain_id"] == main_id:
+                return _row_to_node(r)
+        return _row_to_node(rows[0])
+    finally:
+        conn.close()
+
+
+def list_nodes_by_external_ref(
+    collection_id: str, external_ref: str
+) -> list[NodeOut]:
+    """All nodes sharing an external_ref (e.g. meeting on multiple chains)."""
+    ref = (external_ref or "").strip()
+    if not ref:
+        return []
+    conn = _open_db(collection_id)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM nodes WHERE external_ref=?", (ref,)
+        ).fetchall()
+        return [_row_to_node(r) for r in rows]
     finally:
         conn.close()
 
@@ -3439,43 +3580,52 @@ def get_node_by_external_ref(
 def delete_meeting_anchor_if_empty(
     collection_id: str, meeting_id: str
 ) -> bool:
-    """Delete the meeting anchor node when it has no remaining attachments.
+    """Delete meeting anchor node(s) with no remaining attachments.
 
-    Returns True if the node was deleted.
+    A meeting may have one node per chain; each empty node is removed.
+    Returns True if at least one node was deleted.
     """
     if not meeting_id:
         return False
     ref = meeting_external_ref(meeting_id)
     conn = _open_db(collection_id)
     try:
-        row = conn.execute(
+        rows = conn.execute(
             "SELECT node_id FROM nodes WHERE external_ref=?", (ref,)
-        ).fetchone()
-        if not row:
-            return False
-        node_id = row["node_id"]
-        has_files = conn.execute(
-            "SELECT 1 FROM file_nodes WHERE node_id=? LIMIT 1", (node_id,)
-        ).fetchone()
-        if has_files:
-            return False
+        ).fetchall()
+        empty_ids: list[str] = []
+        for row in rows:
+            node_id = row["node_id"]
+            has_files = conn.execute(
+                "SELECT 1 FROM file_nodes WHERE node_id=? LIMIT 1", (node_id,)
+            ).fetchone()
+            if not has_files:
+                empty_ids.append(node_id)
     finally:
         conn.close()
 
-    try:
-        delete_node(collection_id, node_id)
-        logger.info(
-            "Deleted empty meeting anchor node=%s ref=%s col=%s",
-            node_id[:12],
-            ref,
-            collection_id,
-        )
-        return True
-    except Exception:
-        logger.warning(
-            "Failed deleting empty meeting anchor %s", ref, exc_info=True
-        )
+    if not empty_ids:
         return False
+
+    deleted_any = False
+    for node_id in empty_ids:
+        try:
+            delete_node(collection_id, node_id)
+            logger.info(
+                "Deleted empty meeting anchor node=%s ref=%s col=%s",
+                node_id[:12],
+                ref,
+                collection_id,
+            )
+            deleted_any = True
+        except Exception:
+            logger.warning(
+                "Failed deleting empty meeting anchor %s node=%s",
+                ref,
+                node_id[:12],
+                exc_info=True,
+            )
+    return deleted_any
 
 
 def _system_folder_id(conn, name: str) -> str | None:
@@ -6661,6 +6811,12 @@ def _row_to_todo(row, conn) -> TodoOut:
     keys = set(row.keys()) if hasattr(row, "keys") else set()
     body = row["body"] if "body" in keys else None
 
+    def _opt(col: str) -> str | None:
+        if col not in keys:
+            return None
+        v = row[col]
+        return (str(v).strip() or None) if v is not None else None
+
     return TodoOut(
         todo_id=row["todo_id"],
         title=row["title"],
@@ -6675,6 +6831,9 @@ def _row_to_todo(row, conn) -> TodoOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         completed_at=row["completed_at"],
+        source_meeting_id=_opt("source_meeting_id"),
+        source_section_tab_id=_opt("source_section_tab_id"),
+        source_candidate_id=_opt("source_candidate_id"),
     )
 
 
@@ -6735,12 +6894,27 @@ def create_todo(collection_id: str, req: TodoCreate) -> TodoOut:
             todo_id = uuid.uuid4().hex
             now = _now_iso()
             body = (req.body or "").strip() or None
+            src_m = (getattr(req, "source_meeting_id", None) or "").strip() or None
+            src_t = (getattr(req, "source_section_tab_id", None) or "").strip() or None
+            src_c = (getattr(req, "source_candidate_id", None) or "").strip() or None
             conn.execute(
                 """INSERT INTO todos
                    (todo_id, title, body, done, ddl, target_chain_id, completed_node_id,
-                    sort_order, created_at, updated_at, completed_at)
-                   VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, ?, ?, NULL)""",
-                (todo_id, title, body, req.ddl, target, now, now),
+                    sort_order, created_at, updated_at, completed_at,
+                    source_meeting_id, source_section_tab_id, source_candidate_id)
+                   VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?)""",
+                (
+                    todo_id,
+                    title,
+                    body,
+                    req.ddl,
+                    target,
+                    now,
+                    now,
+                    src_m,
+                    src_t,
+                    src_c,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM todos WHERE todo_id=?", (todo_id,)

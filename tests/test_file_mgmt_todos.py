@@ -100,6 +100,28 @@ def test_create_todo_defaults_to_main_chain():
     assert body["completed_node_id"] is None
 
 
+def test_create_todo_with_meeting_provenance():
+    coll = "todo-prov-1"
+    _setup_collection(coll)
+    client = _client()
+    resp = client.post(
+        f"/api/file-mgmt/{coll}/todos",
+        json={
+            "title": "Ship docs",
+            "ddl": "2026-08-20",
+            "source_meeting_id": "m1",
+            "source_section_tab_id": "tab_sec",
+            "source_candidate_id": "abc123",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["source_meeting_id"] == "m1"
+    assert body["source_section_tab_id"] == "tab_sec"
+    assert body["source_candidate_id"] == "abc123"
+    assert body["ddl"] == "2026-08-20"
+
+
 def test_completed_todo_cannot_edit_body():
     coll = "todo-ro-1"
     _setup_collection(coll)

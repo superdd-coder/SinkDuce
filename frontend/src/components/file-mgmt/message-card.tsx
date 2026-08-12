@@ -219,12 +219,14 @@ export async function enrichMessageSourceNames(
     ...[...fileIds].map(async (id) => {
       try {
         const f = await getFileDetail(collectionId, id)
-        const name = f?.filename?.trim()
+        // Prefer display_name (meeting/note title) over storage basename (tab_02.md)
+        const name = (f?.display_name || f?.filename || "").trim()
         if (name) {
           const base = name.includes("/")
             ? name.slice(name.lastIndexOf("/") + 1)
             : name
-          fileMap.set(id, base)
+          // For "Title / Section" display labels keep full string (not basename)
+          fileMap.set(id, f?.display_name?.trim() || base)
         }
       } catch {
         /* ignore */

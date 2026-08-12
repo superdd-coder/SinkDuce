@@ -14,6 +14,9 @@ import type { Chain, Node, NodeGroup } from '@/types/file-mgmt'
 import { listChains,listNodes,reorderNode,listGroups,reopenChain,createNode,updateNode,createChain,deleteChain } from "@/api/file-mgmt"
 import { TodoCard } from '@/components/database/todo-card'
 import { CreateTodoDialog } from '@/components/database/create-todo-dialog'
+import { MeetingCreateTodosDialog } from '@/components/meeting/meeting-create-todos-dialog'
+import { getNodeMeetingTodoCandidates } from '@/api/file-mgmt'
+import type { MeetingTodoCandidate } from '@/types/file-mgmt'
 import { triggerTodoRefresh } from '@/lib/todo-refresh'
 import { AddNodeTodoSplit } from './add-node-todo-split'
 import { TodoSuggestBubble } from './todo-suggest-bubble'
@@ -220,6 +223,7 @@ function SNC(p:{
   onClick:()=>void
   onCreateChain?:()=>void
   onMergeBranch?:()=>void
+  onCreateMeetingTodos?:()=>void
   showDragGrip?:boolean
   isDragging?:boolean
 }){
@@ -456,6 +460,40 @@ export function TimelineView({
   /** Last chain used for add node/todo — sidebar default for new todos. */
   const [todoDefaultChainId, setTodoDefaultChainId] = useState<string | null>(null)
   const [todoSidebarKey, setTodoSidebarKey] = useState(0)
+  const [meetingTodosOpen, setMeetingTodosOpen] = useState(false)
+  const [meetingTodosLoading, setMeetingTodosLoading] = useState(false)
+  const [meetingTodosCtx, setMeetingTodosCtx] = useState<{
+    meetingId: string
+    chainId: string | null
+    candidates: MeetingTodoCandidate[]
+  } | null>(null)
+
+  const openMeetingTodosForNode = useCallback(
+    async (node: Node) => {
+      const ref = (node.external_ref || "").trim()
+      if (!ref.startsWith("meeting:")) return
+      setMeetingTodosLoading(true)
+      try {
+        const res = await getNodeMeetingTodoCandidates(
+          collectionId,
+          node.node_id,
+        )
+        setMeetingTodosCtx({
+          meetingId: res.meeting_id || ref.slice("meeting:".length),
+          chainId: res.chain_id ?? node.chain_id,
+          candidates: res.candidates || [],
+        })
+        setMeetingTodosOpen(true)
+      } catch (err) {
+        toast.error(
+          `Load meeting todos failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      } finally {
+        setMeetingTodosLoading(false)
+      }
+    },
+    [collectionId],
+  )
   const [ccOpen,setCcOpen]=useState(false)
   const [ccTgt,setCcTgt]=useState<{parentChainId:string;parentNodeId:string}|null>(null)
   const [ecOpen,setEcOpen]=useState(false)
@@ -484,25 +522,54 @@ export function TimelineView({
   const railMotionGen = useRef(0)
   const RAIL_OUT_MS = 140
 
-  /** @param silent — skip full-page Loading (use after drag/reorder so connectors are not unmounted). */
-  const fetch=useCallback(async(opts?:{silent?:boolean})=>{
-    if(!opts?.silent) setLoading(true)
-    try{
-      const[cl,gl]=await Promise.all([listChains(collectionId),listGroups(collectionId)])
-      setChains(cl);setGroups(gl)
-      const m=new Map<string,CWN>()
-      for(const c of cl){try{m.set(c.chain_id,{chain:c,nodes:await listNodes(collectionId,c.chain_id)})}catch{m.set(c.chain_id,{chain:c,nodes:[]})}}
-      setChainData(m)
-    }catch{toast.error('Failed to load')}finally{if(!opts?.silent) setLoading(false)}
-  },[collectionId])
-  useEffect(()=>{fetch()},[fetch])
-  useEffect(()=>{if(drk>0)fetch({silent:true})},[drk,fetch])
-
   /**
    * Pending node id from folder mini-graph jump.
    * Cleared after camera has centered (selId only keeps card in-view; we need true center).
    */
   const navFocusRef = useRef<string | null>(null)
+
+  /**
+   * Library switch keeps TimelineView mounted (no remount). Drop selection +
+   * stale graph so we never call getNodeDetail(newCol, oldNodeId) — that was
+   * the "Failed to load node: … not found" toast loop.
+   */
+  const collectionLoadGen = useRef(0)
+  useEffect(() => {
+    collectionLoadGen.current += 1
+    setSelId(null)
+    setRailNodeId(null)
+    setRailMode('todo')
+    setMsgMode(false)
+    setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
+    setMsgFocus({ kind: 'main' })
+    setFocusGroupId(null)
+    navFocusRef.current = null
+    setChains([])
+    setChainData(new Map())
+    setGroups([])
+    setLoading(true)
+  }, [collectionId])
+
+  /** @param silent — skip full-page Loading (use after drag/reorder so connectors are not unmounted). */
+  const fetch=useCallback(async(opts?:{silent?:boolean})=>{
+    const gen = collectionLoadGen.current
+    if(!opts?.silent) setLoading(true)
+    try{
+      const[cl,gl]=await Promise.all([listChains(collectionId),listGroups(collectionId)])
+      if (gen !== collectionLoadGen.current) return
+      setChains(cl);setGroups(gl)
+      const m=new Map<string,CWN>()
+      for(const c of cl){try{m.set(c.chain_id,{chain:c,nodes:await listNodes(collectionId,c.chain_id)})}catch{m.set(c.chain_id,{chain:c,nodes:[]})}}
+      if (gen !== collectionLoadGen.current) return
+      setChainData(m)
+    }catch{
+      if (gen === collectionLoadGen.current) toast.error('Failed to load')
+    }finally{
+      if (gen === collectionLoadGen.current && !opts?.silent) setLoading(false)
+    }
+  },[collectionId])
+  useEffect(()=>{fetch()},[fetch])
+  useEffect(()=>{if(drk>0)fetch({silent:true})},[drk,fetch])
 
   // In-app nav from folder message mini-graph (same tab; no window.open / no new route)
   useEffect(() => {
@@ -1458,7 +1525,14 @@ export function TimelineView({
       let pidx = mns.findIndex(n => n.node_id === bc.parent_node_id)
       // Keep branch mounted if parent temporarily missing mid-drag
       if (pidx < 0 && frozenB) pidx = Math.min(frozenB.pidx, Math.max(0, mns.length - 1))
-      if (pidx < 0) continue
+      // Detached: parent_node not on main (moved onto a branch / nested / deleted).
+      // Still render — list_chains / ingest pickers show these folders; hiding them
+      // on the timeline made branches look "missing" while still selectable elsewhere.
+      // Fallback: first main slot (same idea as backend detached_branches).
+      if (pidx < 0) {
+        if (mns.length === 0) continue
+        pidx = 0
+      }
       let mergeIdx = bc.merge_node_id
         ? mns.findIndex(n => n.node_id === bc.merge_node_id)
         : -1
@@ -2087,6 +2161,9 @@ export function TimelineView({
                     suggestRefreshKey={suggestRefreshKey}
                     onMergeBranch={msgMode ? undefined : () => mergeBranch(bi.bc.chain_id)}
                     onCreateChain={msgMode ? () => {} : cc}
+                    onCreateMeetingTodos={
+                      msgMode ? undefined : (n) => void openMeetingTodosForNode(n)
+                    }
                     groups={groups}
                     focusGroupId={focusGroupId}
                     isNodeInFocus={isNodeInFocus}
@@ -2312,6 +2389,9 @@ export function TimelineView({
                     collectionId={collectionId}
                     suggestRefreshKey={suggestRefreshKey}
                     onCreateChain={msgMode ? () => {} : cc}
+                    onCreateMeetingTodos={
+                      msgMode ? undefined : (n) => void openMeetingTodosForNode(n)
+                    }
                     groups={groups}
                     focusGroupId={focusGroupId}
                     isNodeInFocus={isNodeInFocus}
@@ -2449,6 +2529,24 @@ export function TimelineView({
         }}
       />
 
+      <MeetingCreateTodosDialog
+        open={meetingTodosOpen}
+        onOpenChange={(o) => {
+          setMeetingTodosOpen(o)
+          if (!o) setMeetingTodosCtx(null)
+        }}
+        collectionId={collectionId}
+        chainId={meetingTodosCtx?.chainId ?? null}
+        meetingId={meetingTodosCtx?.meetingId ?? ''}
+        candidates={meetingTodosCtx?.candidates ?? []}
+        loading={meetingTodosLoading}
+        title="Create todos from meeting"
+        onCreated={() => {
+          setTodoSidebarKey((k) => k + 1)
+          setSuggestRefreshKey((k) => k + 1)
+        }}
+      />
+
       {/* Portaled dialogs (outside flex flow) */}
       <AddNodeDialog
         collectionId={collectionId}
@@ -2536,6 +2634,8 @@ interface CRP {
   /** Last branch node hover: merge / end chain */
   onMergeBranch?: () => void
   onCreateChain: (pCid: string, pNid: string) => void
+  /** Meeting anchor hover: create todos from section candidates */
+  onCreateMeetingTodos?: (node: Node) => void
   groups: NodeGroup[]
   focusGroupId: FocusGroupId | null
   isNodeInFocus: (n: Node) => boolean
@@ -2650,6 +2750,7 @@ function ChainRow({
   suggestRefreshKey = 0,
   onMergeBranch,
   onCreateChain,
+  onCreateMeetingTodos,
   groups,
   focusGroupId,
   isNodeInFocus,
@@ -2895,6 +2996,11 @@ function ChainRow({
                         ? onMergeBranch
                         : undefined
                     }
+                    onCreateMeetingTodos={
+                      !messageMode && onCreateMeetingTodos
+                        ? () => onCreateMeetingTodos(node)
+                        : undefined
+                    }
                     showDragGrip={!messageMode}
                     isDragging={dragging}
                   />
@@ -2951,6 +3057,11 @@ function ChainRow({
                         !isCompleted &&
                         node.node_type !== 'end'
                           ? () => onCreateChain(chainId, node.node_id)
+                          : undefined
+                      }
+                      onCreateMeetingTodos={
+                        !messageMode && onCreateMeetingTodos
+                          ? () => onCreateMeetingTodos(node)
                           : undefined
                       }
                       onMergeBranch={

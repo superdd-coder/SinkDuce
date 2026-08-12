@@ -328,6 +328,56 @@ def test_main_chain_protected():
     assert resp.status_code == 403
 
 
+def test_branch_start_anchor_cannot_move_off_main():
+    """Moving a branch parent_node onto the branch detaches timeline layout.
+
+    Guards the case where Section Summary ingest still lists the branch folder
+    but the timeline drops it (parent not on main).
+    """
+    from src.main import app
+
+    _setup_collection("p2-8b")
+    client = TestClient(app)
+
+    main_id = _get_main_chain_id(client, "p2-8b")
+    parent = _create_node(client, "p2-8b", main_id, "fork-here", order=1)
+
+    # mark as start + create branch
+    resp = client.patch(
+        f"/api/file-mgmt/p2-8b/nodes/{parent['node_id']}",
+        json={"node_type": "start", "version": parent["version"]},
+    )
+    assert resp.status_code == 200, resp.text
+    parent = resp.json()
+
+    resp = client.post(
+        "/api/file-mgmt/p2-8b/chains",
+        json={
+            "parent_chain_id": main_id,
+            "parent_node_id": parent["node_id"],
+            "title": "Side Branch",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    branch_id = resp.json()["chain_id"]
+
+    # create an event on the branch so it is a real chain
+    _create_node(client, "p2-8b", branch_id, "work", order=1)
+
+    # refuse to move the start anchor onto the branch
+    resp = client.patch(
+        f"/api/file-mgmt/p2-8b/nodes/{parent['node_id']}",
+        json={"chain_id": branch_id, "version": parent["version"]},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "main chain" in resp.json()["detail"].lower()
+
+    # parent still on main
+    resp = client.get(f"/api/file-mgmt/p2-8b/nodes/{parent['node_id']}")
+    assert resp.status_code == 200
+    assert resp.json()["chain_id"] == main_id
+
+
 # ── 9. Node CRUD ─────────────────────────────────────────────────
 
 

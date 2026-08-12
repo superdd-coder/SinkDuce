@@ -37,6 +37,27 @@ function SoftMenu({
   portal = false,
   anchorRef,
   align = "start",
+  /**
+   * Portaled placement relative to anchor:
+   * - bottom (default): under the anchor
+   * - right: flyout to the right of the parent menu (submenu)
+   */
+  placement = "bottom",
+  /**
+   * When this value changes while open, recompute fixed position
+   * (e.g. submenu moves between collection rows).
+   */
+  repositionKey,
+  /**
+   * Explicit fixed coords (viewport). When set, skips anchor-based placement.
+   * Use for submenus that already measured the parent menu + row.
+   */
+  fixedCoords,
+  /**
+   * Match menu width to the anchor element and left-align under it
+   * (e.g. choose-collection pill dropdown).
+   */
+  matchAnchorWidth = false,
   /** Unmount delay after close — match CSS transition (default MENU_MS). */
   exitMs = MENU_MS,
   style,
@@ -47,8 +68,12 @@ function SoftMenu({
   /** Portal to body with fixed position under anchor (toolbar submenus). */
   portal?: boolean
   anchorRef?: React.RefObject<HTMLElement | null>
-  /** Horizontal alignment relative to anchor when portaled */
+  /** Horizontal alignment relative to anchor when portaled (bottom placement). */
   align?: "start" | "center" | "end"
+  placement?: "bottom" | "right"
+  repositionKey?: string | number | null
+  fixedCoords?: { top: number; left: number } | null
+  matchAnchorWidth?: boolean
   exitMs?: number
 }) {
   const [mounted, setMounted] = useState(false)
@@ -57,6 +82,7 @@ function SoftMenu({
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(
     null
   )
+  const [anchorWidth, setAnchorWidth] = useState<number | null>(null)
 
   useEffect(() => {
     let exitTimer: ReturnType<typeof setTimeout> | null = null
@@ -65,12 +91,14 @@ function SoftMenu({
 
     if (open) {
       setMounted(true)
+      // Double rAF: mount at closed style, then paint, then open (symmetric silk)
       raf1 = requestAnimationFrame(() => {
         raf2 = requestAnimationFrame(() => {
           setShown(true)
         })
       })
     } else {
+      // Keep mounted + last coords so CSS can play close transition
       setShown(false)
       exitTimer = setTimeout(() => {
         setMounted(false)
@@ -85,38 +113,113 @@ function SoftMenu({
   }, [open, exitMs])
 
   useLayoutEffect(() => {
-    if (!open || !portal || !anchorRef?.current) {
-      if (!open) setCoords(null)
+    // While closing (open=false), keep last top/left/width so the exit animation
+    // does not jump to 0,0 or unstyled flow.
+    if (!open || !portal) {
+      return
+    }
+    // Explicit coords win (submenu measured by caller)
+    if (fixedCoords) {
+      setCoords(fixedCoords)
+      setAnchorWidth(null)
+      return
+    }
+    if (!anchorRef?.current) {
       return
     }
     const place = () => {
       const el = anchorRef.current
       if (!el) return
       const r = el.getBoundingClientRect()
+      const gap = 6
+      if (placement === "right") {
+        // Prefer the parent SoftMenu's right edge (full column), not just the row.
+        const parentMenu = el.closest(
+          '[data-slot="menu"]',
+        ) as HTMLElement | null
+        const pr = parentMenu?.getBoundingClientRect() ?? r
+        const fly = menuRef.current
+        const mw = fly?.offsetWidth || 200
+        const mh = fly?.offsetHeight || 200
+
+        let left = pr.right + gap
+        // Align top with hovered row; keep inside viewport
+        let top = r.top
+        if (left + mw > window.innerWidth - 8) {
+          // Flip to left of parent menu
+          left = Math.max(8, pr.left - mw - gap)
+        }
+        if (top + mh > window.innerHeight - 8) {
+          top = Math.max(8, window.innerHeight - mh - 8)
+        }
+        if (top < 8) top = 8
+        setCoords({ top, left })
+        setAnchorWidth(null)
+        return
+      }
+      // Match pill width + left-align under trigger (no translateX(-100%))
+      if (matchAnchorWidth) {
+        let top = r.bottom + gap
+        const mh = menuRef.current?.offsetHeight || 320
+        if (top + mh > window.innerHeight - 8) {
+          // Prefer drop-up if not enough room below
+          const up = r.top - gap - mh
+          if (up >= 8) top = up
+          else top = Math.max(8, window.innerHeight - mh - 8)
+        }
+        setCoords({ top, left: r.left })
+        setAnchorWidth(Math.round(r.width))
+        return
+      }
       let left = r.left
       if (align === "center") left = r.left + r.width / 2
       else if (align === "end") left = r.right
       setCoords({ top: r.bottom + 6, left })
+      setAnchorWidth(null)
     }
     place()
+    // Second pass after paint — flyout has real width/height for flip/clamp
+    const raf = requestAnimationFrame(() => place())
     window.addEventListener("scroll", place, true)
     window.addEventListener("resize", place)
     return () => {
+      cancelAnimationFrame(raf)
       window.removeEventListener("scroll", place, true)
       window.removeEventListener("resize", place)
     }
-  }, [open, portal, anchorRef, align, mounted])
+  }, [
+    open,
+    portal,
+    anchorRef,
+    align,
+    placement,
+    mounted,
+    repositionKey,
+    fixedCoords?.top,
+    fixedCoords?.left,
+    matchAnchorWidth,
+    children,
+  ])
 
   if (!mounted) return null
 
+  const resolved = fixedCoords ?? coords
   const portalStyle: React.CSSProperties | undefined =
-    portal && coords
+    portal && resolved
       ? {
           position: "fixed",
-          top: coords.top,
-          left: coords.left,
-          zIndex: 400,
+          top: resolved.top,
+          left: resolved.left,
+          zIndex: placement === "right" ? 420 : 400,
           margin: 0,
+          ...(matchAnchorWidth && anchorWidth
+            ? {
+                width: anchorWidth,
+                minWidth: anchorWidth,
+                maxWidth: anchorWidth,
+                boxSizing: "border-box" as const,
+              }
+            : null),
         }
       : undefined
 
@@ -124,20 +227,35 @@ function SoftMenu({
     <Menu
       ref={menuRef}
       data-menu-portal={portal ? "true" : undefined}
-      data-menu-align={portal ? align : undefined}
+      data-menu-align={
+        portal ? (matchAnchorWidth ? "start" : align) : undefined
+      }
+      data-menu-placement={portal ? placement : undefined}
+      data-menu-match-width={matchAnchorWidth ? "true" : undefined}
       className={cn(
         "pm-menu--soft",
         shown && "is-open",
         portal && "pm-menu--portal",
-        portal && align === "center" && "is-align-center",
-        portal && align === "end" && "is-align-end",
+        portal &&
+          placement === "bottom" &&
+          !matchAnchorWidth &&
+          align === "center" &&
+          "is-align-center",
+        portal &&
+          placement === "bottom" &&
+          !matchAnchorWidth &&
+          align === "end" &&
+          "is-align-end",
+        portal && matchAnchorWidth && "is-match-width",
+        portal && placement === "right" && "is-placement-right",
         className
       )}
       style={{
         ...portalStyle,
-        ...(exitMs !== MENU_MS
-          ? ({ ["--pm-menu-ms" as string]: `${exitMs}ms` } as React.CSSProperties)
-          : null),
+        // Keep CSS transition duration in lockstep with unmount delay
+        ...( {
+          ["--pm-menu-ms" as string]: `${exitMs}ms`,
+        } as React.CSSProperties),
         ...(style as React.CSSProperties | undefined),
       }}
       {...props}

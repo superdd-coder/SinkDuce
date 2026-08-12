@@ -11,7 +11,7 @@ $$\text{\textbf{Spark. Sink. Educe.}}$$
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg?style=flat-square)](https://www.python.org/)
 [![React](https://img.shields.io/badge/react-19-61dafb.svg?style=flat-square)](https://react.dev/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ed.svg?style=flat-square)](https://www.docker.com/)
-[![MCP](https://img.shields.io/badge/MCP-43_tools-6e47ff.svg?style=flat-square)](https://modelcontextprotocol.io/)
+[![MCP](https://img.shields.io/badge/MCP-56_tools-6e47ff.svg?style=flat-square)](https://modelcontextprotocol.io/)
 
 [Quick Start](#-quick-start) • [How It Works](#-how-it-works) • [Features](#-features) • [MCP Server](#-mcp-server) • [Architecture](#-architecture)
 
@@ -21,21 +21,37 @@ $$\text{\textbf{Spark. Sink. Educe.}}$$
 
 SinkDuce is a **high-fidelity cognitive filter** — not a document dump. It turns meetings, lectures, notes, and files into structured, context-isolated knowledge that you can query, distill, and federate across project boundaries. Every answer traces back to its source through three layers of provenance.
 
+**v1.1 highlights:** multi-arch Docker image (`jethrohou/sinkduce`); **Library** with folder view + **timeline chain/node graph**, messages, smart todos, file versions; **local ASR on ONNX** from GitHub Releases (no HuggingFace); **56 MCP tools** across 9 domains.
+
 ---
 
 ## 🚀 Quick Start
 
 **Prerequisites**: [Docker](https://docs.docker.com/get-docker/)
 
+Cloning the repo provides `docker-compose.yml` and a place for `./data`. More detail: [`deploy/README.md`](deploy/README.md).
+
+**Pull pre-built image** (recommended — no local compile):
+
 ```bash
 git clone https://github.com/superdd-coder/sinkduce.git
 cd sinkduce
-docker compose up -d --build
+# Optional: docker login   # anonymous pulls are often rate-limited; login is usually much faster
+docker compose pull
+docker compose up -d
 ```
 
-Open [http://localhost:18900](http://localhost:18900). On first launch:
+**Build from source** (developers / custom images only):
 
-1. Download local transcription models if you need offline STT (FunASR SenseVoiceSmall).
+```bash
+git clone https://github.com/superdd-coder/sinkduce.git
+cd sinkduce
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+Open [http://localhost:18900](http://localhost:18900). Then:
+
+1. If you need **offline STT**, use **Download local models** in the UI (Settings → Local Models). That downloads the official ONNX pack from this project’s GitHub Releases (not HuggingFace).
 2. Go to **Settings** → add an **LLM provider** (any OpenAI-compatible API works).
 3. Add an **Embedding provider** and create your first Collection.
 
@@ -56,10 +72,12 @@ Open [http://localhost:18900](http://localhost:18900). On first launch:
 ### Updating
 
 ```bash
-git pull && docker compose up -d --build
+git pull                    # refresh compose / docs if needed
+docker compose pull         # new app image from Docker Hub
+docker compose up -d
 ```
 
-Your `data/` directory (Qdrant database, config, history, meetings, notes, hot words) is preserved across rebuilds via the Docker volume mount.
+Your `data/` directory (Qdrant database, config, history, meetings, notes, hot words, local ONNX models) is preserved via the Docker volume mount. If you build from source instead, use `docker compose -f docker-compose.build.yml up -d --build`.
 
 ---
 
@@ -73,7 +91,7 @@ SinkDuce provides two independent capture entry points: **Meetings** for spoken 
 
 #### Meetings
 
-Record a meeting (capturing both mic and system audio) or upload an audio file. The **FunASR SenseVoiceSmall** model transcribes it locally for offline use. For higher accuracy, plug in DashScope or OpenAI-compatible cloud transcription models — the DashScope integration has been specifically optimized, and the recommended path is **OneShot Setting (DashScope API)** which configures LLM + Embedding + Reranker + Transcription in one step. Real-time **WebSocket streaming** shows live captions as you speak, automatically distinguishing partial from final results. Speaker diarization, VAD, and punctuation restoration further improve transcription quality.
+Record a meeting (capturing both mic and system audio) or upload an audio file. **Local offline STT** uses **FunASR ONNX** packs (SenseVoice for file ASR, Paraformer streaming for realtime, plus VAD / punctuation / speaker embedding). Download them once in the UI from this project’s **GitHub Release** (`onnx-models-v*`) — not from HuggingFace. For higher accuracy in the cloud, plug in DashScope or OpenAI-compatible transcription — **OneShot Setting (DashScope API)** configures LLM + Embedding + Reranker + Transcription in one step. Real-time **WebSocket streaming** shows live captions as you speak, automatically distinguishing partial from final results.
 
 After transcription, a **two-pass LLM pipeline** fires:
 
@@ -100,7 +118,26 @@ Notes can also be **ingested** into the Collection with one click — content is
 
 Everything lands in a **Collection** — an isolated Qdrant vector database. Each project, course, or domain gets its own Collection. Zero cross-contamination.
 
-Upload documents in any of **12 formats**: PDF (with OCR for scanned pages), DOCX, PPTX, XLSX, Markdown, HTML, CSV, JSON/JSONL, plain text, and images (OCR). An optional **MinerU cloud parser** provides higher-quality PDF/DOCX/PPTX/image extraction with layout preservation, formula recognition, and table structure detection.
+Inside a Collection, the **Library** is the working surface for files and knowledge artifacts (not a flat dump). Two complementary views:
+
+**Folder view** — classic library navigation:
+
+- **Folders & tree** — browse hierarchy; unique files can mount under multiple folders without duplicating storage.
+- **Versions** — update files over time; mark a **definitive** version for indexing and consolidation; inspect version history and blob availability.
+- **File detail** — preview content, chunks, messages, and version actions in a dedicated detail surface.
+- **Groups** — organize related files into named groups for scanning and bulk context.
+
+**Timeline view** — a visual **chain / node graph** of how work evolves:
+
+- **Chains** — parallel workstreams on the timeline (projects, tracks, or themes).
+- **Nodes** — milestones or steps on a chain; attach files, open previews, and link structure.
+- **Messages stream** — post messages at collection, folder, file, or node scope; sidebar stream keeps discussion next to the graph.
+- **Smart todos** — LLM-suggested todo items along a chain (frosted suggestion bubble); accept into a lightweight todo list on the timeline.
+- **Navigation** — pan/zoom the graph, focus a node to load its messages and attachments, jump between folder view and timeline without losing the Collection.
+
+**Ingest to vectors** — when ready, content is parsed, chunked, embedded, and indexed for RAG (Library organization and vector search stay aligned via definitive versions).
+
+Upload and parse **12 formats**: PDF (with OCR for scanned pages), DOCX, PPTX, XLSX, Markdown, HTML, CSV, JSON/JSONL, plain text, and images (OCR). An optional **MinerU cloud parser** provides higher-quality PDF/DOCX/PPTX/image extraction with layout preservation, formula recognition, and table structure detection.
 
 Each document is parsed, then chunked. The system splits intelligently at sentence boundaries (CJK-aware), merging paragraphs to a configurable token budget. Markdown chunking preserves heading hierarchy. Oversized tables are split by row with the header repeated on each sub-table; image blocks and distill blocks are never split. Both modes support **Parent-Child mode**: parents carry full context; retrieval matches smaller, more precise children but returns the full parent text.
 
@@ -127,17 +164,30 @@ Every answer comes with **3-layer source traceability**: click any source to dri
 
 A built-in **Recall Evaluation** suite auto-generates test cases, with the LLM as judge scoring each result with reasoning and providing a holistic "can_answer" judgment. Metrics include recall, MRR, and quality score.
 
-SinkDuce also ships with a built-in **MCP server** (43 atomic tools), so your curated memory doesn't stay locked in the Web UI. Connect Claude Code, Cursor, or any MCP-compatible client — your AI coding assistant can directly search your knowledge bases, manage documents, and operate on meetings and notes. **Your memory flows into every tool you already use.**
+SinkDuce also ships with a built-in **MCP server** (56 atomic tools), so your curated memory doesn't stay locked in the Web UI. Connect Claude Code, Cursor, or any MCP-compatible client — your AI coding assistant can directly search your knowledge bases, manage documents, and operate on meetings and notes. **Your memory flows into every tool you already use.**
 
 ---
 
 ## ✨ Features
 
+### Library & files
+
+| Feature | Description |
+|---------|-------------|
+| **Folder view** | Hierarchical library tree, multi-mount files, groups, and file-detail drawer (preview, versions, messages). |
+| **File versions** | Version history, blob availability, update-in-place; mark **definitive** for search & consolidation. |
+| **Timeline view** | Visual **chain + node graph**: parallel chains, milestone nodes, file attachments on nodes, pan/zoom navigation. |
+| **Messages stream** | Message threads scoped to collection / folder / file / node; compose and edit from the timeline sidebar. |
+| **Smart todos** | LLM suggests todos from chain context; frosted bubble UI to review and add todos on the timeline. |
+| **Node preview** | Quick sheet for a node’s attachments and linked context without leaving the graph. |
+| **Staging uploads** | Reliable upload path for large files (REST + MCP staging), then promote into the library. |
+| **MCP file-mgmt tools** | 13 atomic tools: library tree, timeline, folders/files, versions, chains/nodes/groups, uploads, definitive. |
+
 ### Meetings
 
 | Feature | Description |
 |---------|-------------|
-| **Audio Transcription** | File upload or WebSocket realtime streaming. FunASR runs locally offline; DashScope and OpenAI-compatible cloud models available for higher accuracy. Speaker diarization, VAD, and punctuation restoration supported. |
+| **Audio Transcription** | File upload or WebSocket realtime streaming. **Local FunASR ONNX** (SenseVoice file + Paraformer streaming + VAD/punc/speaker packs from GitHub Release). DashScope and OpenAI-compatible cloud ASR for higher accuracy. |
 | **Live Captions** | Real-time transcription pushed during recording, auto-distinguishing partial vs final text. Transcript scrolls in sync with audio playback. |
 | **Blueprint Auto-Sectioning** | LLM auto-detects topics using your existing Collection catalog as a classification taxonomy, decomposing the meeting into sections naturally aligned with your Collections. Custom sections can be added and regenerated. |
 | **Per-Section Deep Summaries** | Each section gets a focused Markdown summary (SSE-streamed), with the LLM pinpointing relevant sentences from the transcript. |
@@ -162,6 +212,7 @@ SinkDuce also ships with a built-in **MCP server** (43 atomic tools), so your cu
 | Feature | Description |
 |---------|-------------|
 | **12 Format Parsers** | PDF (with OCR for scanned pages), DOCX, PPTX, XLSX, Markdown, HTML, CSV, JSON/JSONL, plain text, images (OCR). Connect to **MinerU** for more powerful document parsing capabilities. |
+| **Library-first organization** | Files live in the Library (folders, versions, timeline) before or alongside vector ingest — not only a flat upload list. |
 | **Context-Isolated Collections** | Independent Qdrant vector databases. Configurable: chunk mode, parent strategy, chunk sizes, embedding dimensions, search mode, file type allowlist, contextual enrichment, agent, MinerU cloud parsing toggles. |
 | **Parent-Child Chunking** | Parents carry full context; retrieval matches smaller, more precise children but returns parent text. Three strategies: paragraph-based, heading-based, or fixed-token. |
 | **Contextual Retrieval** | LLM enriches each chunk with situating context to fill in missing global information. Large documents support async batch processing. |
@@ -186,17 +237,18 @@ SinkDuce also ships with a built-in **MCP server** (43 atomic tools), so your cu
 
 | Feature | Description |
 |---------|-------------|
-| **MCP Server** | 43 atomic tools across 8 domains. HTTP Streamable transport. Shared FastAPI process — no separate server needed. |
+| **MCP Server** | 56 atomic tools across 9 domains. HTTP Streamable transport. Shared FastAPI process — no separate server needed. |
 | **Pluggable Providers** | Unified adapter pattern for LLM, Embedding, Reranker, File Transcription, Realtime Transcription. Add new backends by implementing the interface and registering. |
 | **OneShot Setup** | DashScope and OpenRouter pre-configuration paths. Auto-fetches available models, classifies by type, creates providers, sets defaults. |
-| **Local-First, Cloud-Ready** | FunASR and Tesseract run locally. All providers can target Ollama/LM Studio/vLLM for fully air-gapped operation. |
+| **Local-First, Cloud-Ready** | FunASR **ONNX** packs + Tesseract run locally (models via in-app download from GitHub Releases). All providers can target Ollama/LM Studio/vLLM for fully air-gapped LLM/embedding. |
+| **Pre-built Docker image** | Multi-arch (`linux/amd64` + `linux/arm64`) image on Docker Hub; default compose pulls — no local compile required. |
 | **Async Task System** | Dual-queue architecture: upload queue + general pool with parallel processing. Cancellable and retryable tasks, live progress via SSE log stream. |
 
 ---
 
 ## 🔌 MCP Server
 
-SinkDuce exposes **43 atomic MCP tools** over HTTP (Streamable HTTP transport) on the same FastAPI process as the REST API. The MCP server reuses the app's services, task manager, and database connections — no separate process is spawned.
+SinkDuce exposes **56 atomic MCP tools** over HTTP (Streamable HTTP transport) on the same FastAPI process as the REST API. The MCP server reuses the app's services, task manager, and database connections — no separate process is spawned.
 
 ### Setup
 
@@ -221,6 +273,7 @@ Start the backend first (`docker compose up -d`). The MCP client connects to the
 |--------|-------|-----------------|
 | **Collections** | 5 | List all, get metadata+config, create (26 configurable parameters), update config (rejects destructive fields: `chunk_mode`, `embedding_*`), delete (refuses if last remaining) |
 | **Documents** | 6 | List with metadata, upload via staging token or server-local path, delete (cleans chunks + summaries + triggers sparse recalc), chunk inspection (paginated, parent/child filterable), full-text extraction (windowed), toggle definitive flag |
+| **File Management** | 13 | Library tree, timeline, folders/files, versions, chains/nodes/groups, staging uploads, set definitive |
 | **Search** | 3 | Direct retrieval (dense/sparse/hybrid, optional reranking, multi-collection), Agentic RAG (full pipeline, auto-discovers collections via catalog), query history (with optional detail expansion) |
 | **Tasks** | 5 | List (filterable by collection, status, type), get status with progress/error, cancel (cooperative), retry (re-enqueues failed), clear completed |
 | **Summaries** | 4 | Collection overview, per-document structured summary (Data/Facts/Insights), conflict list, trigger consolidation (async task) |
@@ -304,14 +357,16 @@ src/
     llm/              OpenAI-compatible (streaming, vision, batch API)
     reranker/         Cohere, DashScope/Qwen, OpenAI-compatible (native /rerank + logprobs fallback)
   meeting/            Meeting module: transcription, blueprint, section extraction
-    transcription/    File + Realtime providers (FunASR local, DashScope, OpenAI-compat)
+    transcription/    File + Realtime providers (FunASR ONNX, DashScope, OpenAI-compat)
+      onnx/           ONNX runtime pipeline (SenseVoice, Paraformer streaming, VAD, punc, CAM++)
+  file_mgmt/          Library: folders, files, versions, timeline, nodes, groups, messages
   notes/              Collection Notes: distill, propagate, injection block parsing
   hot_words/          Weighted vocabulary libraries for ASR
   tasks/              Dual-queue async task manager with cooperative cancellation
   mcp/                MCP server: 56 tools across 9 domains (incl. file-mgmt L1), HTTP Streamable transport
-  models/             HuggingFace/ModelScope model download manager
+  models/             Local ONNX pack install from GitHub Releases (no HF fallback)
 data/                 Runtime data (all gitignored): qdrant/, config.yaml, history/,
-                      meetings/, notes/, hot_words/, models/, collections/
+                      meetings/, notes/, hot_words/, models/onnx/, collections/
 tests/                pytest suite (asyncio_mode = auto)
 ```
 
@@ -325,9 +380,9 @@ tests/                pytest suite (asyncio_mode = auto)
 | **LLM/Embedding** | OpenAI-compatible protocol, multi-provider with per-collection override |
 | **Reranking** | Cohere (`rerank-multilingual-v3.0`), DashScope/Qwen (`qwen3-vl-rerank`), OpenAI-compatible (native `/rerank` endpoint → chat completions logprobs fallback) |
 | **Parsing** | pdfplumber (page-level text/tables/images + Tesseract OCR fallback), mammoth + python-docx, openpyxl, python-pptx, markdownify, BeautifulSoup, Tesseract, MinerU cloud API |
-| **Transcription** | FunASR (SenseVoiceSmall, Paraformer streaming, FSMN-VAD, CAM++ diarization, CT-Transformer punctuation), DashScope, OpenAI-compatible Whisper |
-| **MCP** | MCP SDK 1.0+, HTTP Streamable transport |
-| **Infrastructure** | Docker Compose (Qdrant + app), GitHub Actions CI (Docker build + pytest + tsc) |
+| **Transcription** | FunASR ONNX (SenseVoiceSmall, Paraformer streaming, FSMN-VAD, CAM++, CT-Punc) via GitHub Release packs; DashScope; OpenAI-compatible Whisper |
+| **MCP** | MCP SDK 1.x, HTTP Streamable transport, 56 tools |
+| **Infrastructure** | Docker Compose (Qdrant + app), multi-arch image publish to Docker Hub, GitHub Actions CI |
 
 ---
 

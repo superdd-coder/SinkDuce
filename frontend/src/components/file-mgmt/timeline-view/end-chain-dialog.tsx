@@ -108,7 +108,7 @@ export function EndChainDialog({
           const detail = await getNodeDetail(collectionId, n.node_id)
           const files = (detail.attachments ?? []).map((a) => ({
             file_id: a.file_id,
-            filename: a.filename,
+            filename: a.display_name || a.filename,
             is_definitive: a.is_definitive,
           }))
           results.push({ node: n, files })
