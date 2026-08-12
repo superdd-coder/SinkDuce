@@ -6865,10 +6865,27 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 }
 .pm-update-card > .pm-update-card-label {
   margin-bottom: 8px;
+  flex-shrink: 0;
+}
+/* Long release notes scroll inside the card — do not grow the dialog */
+.pm-update-card--notes {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(11.5rem, 26vh);
+  overflow: hidden;
 }
 .pm-update-notes {
-  max-height: 9.5rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--pm-ink, #121410) 16%, transparent)
+    transparent;
   font: var(--pm-t-body, 300 13px/1.5 var(--pm-ff, system-ui, sans-serif));
   font-weight: 300;
   line-height: 1.55;
