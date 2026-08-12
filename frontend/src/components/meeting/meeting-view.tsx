@@ -992,6 +992,24 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       toast.success("File transcription ready")
       return
     }
+    // Failed file-tx: backend sets status back to "created" + transcription_error.
+    // Must clear postLiveFileTx lock or Capture stays stuck on "transcribing" chrome.
+    if (
+      sameMeeting &&
+      prevStatus === "transcribing" &&
+      curr !== "transcribing" &&
+      curr !== "completed"
+    ) {
+      setPostLiveFileTxMeetingId((mid) => (mid === paintedId ? null : mid))
+      const err = (meeting?.transcription_error || "").trim()
+      const friendly = /ASR_RESPONSE_HAVE_NO_WORDS|no.?words/i.test(err)
+        ? "No speech detected in the audio. Check the recording or try another file."
+        : err
+          ? `Transcription failed: ${err}`
+          : "Transcription failed."
+      toast.error(friendly)
+      return
+    }
     // First land on completed for this meeting (prev different or meeting switch)
     if (curr === "completed" && (!sameMeeting || prevStatus !== "completed")) {
       // Don't clear live draft while we're bridging into auto file-tx after Live
@@ -1002,6 +1020,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   }, [
     meeting?.id,
     meeting?.status,
+    meeting?.transcription_error,
     activeMeeting,
     fetchTranscript,
     setSegments,

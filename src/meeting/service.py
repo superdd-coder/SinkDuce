@@ -253,7 +253,17 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
         result: TranscriptionResult = await provider.transcribe(source, hot_words=hot_words, language_hints=language_hints)
     except Exception as exc:
         logger.error("[TRANSCRIBE-HANDLER] Transcription FAILED for meeting %s: %s", meeting_id, exc, exc_info=True)
-        store.update_meeting(meeting_id, status=MeetingStatus.created, transcription_error=str(exc))
+        err_text = str(exc)
+        if "ASR_RESPONSE_HAVE_NO_WORDS" in err_text or "HAVE_NO_WORDS" in err_text:
+            err_text = (
+                "No speech detected in the audio (ASR_RESPONSE_HAVE_NO_WORDS). "
+                "Check that the recording has clear speech, then try again."
+            )
+        store.update_meeting(
+            meeting_id,
+            status=MeetingStatus.created,
+            transcription_error=err_text,
+        )
         raise
 
     logger.info("[TRANSCRIBE-HANDLER] Got %d segments, %d chars of text", len(result.segments), len(result.text))
