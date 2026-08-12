@@ -1267,9 +1267,10 @@ class MeetingService:
                 tabs=tabs,
                 processing_state=ProcessingState.idle.value,
             )
+            # Create-time title keeps date (routes / create dialog). After summary
+            # use LLM topic only — no datetime prefix (same as stream path).
             if parsed_title:
-                prefix = meeting.created_at.strftime("%Y-%m-%d %H:%M")
-                update_fields["title"] = f"{prefix} {parsed_title}"
+                update_fields["title"] = parsed_title.strip()
 
             store.update_meeting(meeting_id, **update_fields)
             logger.info(
