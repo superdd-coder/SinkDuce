@@ -188,8 +188,12 @@ class TestChatboxCore:
         assert resp.answer == "Second turn answer"
 
     def test_max_tool_rounds_limited(self, store, mock_llm, mock_agentic):
-        """After max tool rounds (5), the loop terminates."""
-        from src.chatbox.agent import ChatboxAgent
+        """Outer tool loop ends; agentic KB search capped separately at 5."""
+        from src.chatbox.agent import (
+            ChatboxAgent,
+            _MAX_AGENTIC_SEARCH_CALLS,
+            _MAX_TOOL_ROUNDS,
+        )
 
         # Always return tool calls
         mock_llm._client.chat.completions.create.return_value = _fake_llm_response(
@@ -207,8 +211,10 @@ class TestChatboxCore:
         s = store.create_session(title="test")
         resp = agent.chat(s.id, "Infinite loop query")
 
-        # Should terminate after 5 rounds
-        assert resp.tool_calls <= 5
+        # Outer loop budget
+        assert resp.tool_calls <= _MAX_TOOL_ROUNDS
+        # Agentic 查库 only runs this many times (rest get a stop message)
+        assert mock_agentic.run.call_count <= _MAX_AGENTIC_SEARCH_CALLS
 
 
 # ── TestChatboxSession ────────────────────────────────────────
