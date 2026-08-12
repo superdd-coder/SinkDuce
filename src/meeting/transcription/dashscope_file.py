@@ -57,6 +57,92 @@ def _retry_with_backoff(fn, description: str = "API call"):
     raise last_exc  # type: ignore[misc]
 
 
+def _file_id_from_upload(upload_result: Any) -> str:
+    """Pull file_id from Files.upload; never subscript a None output."""
+    status = getattr(upload_result, "status_code", None)
+    output = getattr(upload_result, "output", None)
+    code = getattr(upload_result, "code", None)
+    message = getattr(upload_result, "message", None)
+    if status != 200 or not isinstance(output, dict):
+        raise RuntimeError(
+            "DashScope file upload failed: "
+            f"status_code={status} code={code} message={message} output={output!r}"
+        )
+    files = output.get("uploaded_files") or []
+    first = files[0] if files else None
+    file_id = first.get("file_id") if isinstance(first, dict) else None
+    if not file_id:
+        raise RuntimeError(f"DashScope file upload returned no file_id: output={output!r}")
+    return file_id
+
+
+def _try_oss_url(file_info: Any) -> str | None:
+    output = getattr(file_info, "output", None)
+    if isinstance(output, dict):
+        url = output.get("url")
+        if url:
+            return str(url)
+    return None
+
+
+def _oss_url_from_file_info(file_info: Any) -> str:
+    """Pull OSS url from Files.get; never subscript a None output."""
+    url = _try_oss_url(file_info)
+    if not url:
+        output = getattr(file_info, "output", None)
+        raise RuntimeError(
+            "DashScope Files.get returned no url: "
+            f"status_code={getattr(file_info, 'status_code', None)} "
+            f"code={getattr(file_info, 'code', None)} "
+            f"message={getattr(file_info, 'message', None)} output={output!r}"
+        )
+    return url
+
+
+def wait_oss_url(
+    fetch,
+    *,
+    attempts: int = 16,
+    delay_sec: float = 0.4,
+    timeout_sec: float = 15.0,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> str:
+    """Poll Files.get until the object has a URL, or ``timeout_sec`` elapses."""
+    deadline = clock() + timeout_sec
+    last = None
+    delay = delay_sec
+    n = 0
+    while n < attempts:
+        last = fetch()
+        n += 1
+        url = _try_oss_url(last)
+        if url:
+            if n > 1:
+                logger.info("[DashScope] Files.get url ready after %d attempt(s)", n)
+            return url
+        remaining = deadline - clock()
+        logger.info(
+            "[DashScope] Files.get not ready (attempt %d, %.1fs left) status=%s code=%s",
+            n,
+            max(0.0, remaining),
+            getattr(last, "status_code", None),
+            getattr(last, "code", None),
+        )
+        if remaining <= 0 or n >= attempts:
+            break
+        sleep(min(delay, remaining))
+        delay = min(delay * 1.5, 2.0)
+    output = getattr(last, "output", None)
+    elapsed = timeout_sec - (deadline - clock())
+    raise RuntimeError(
+        "DashScope Files.get timed out after "
+        f"{elapsed:.1f}s ({n} attempt(s)): status_code={getattr(last, 'status_code', None)} "
+        f"code={getattr(last, 'code', None)} "
+        f"message={getattr(last, 'message', None)} output={output!r}"
+    )
+
+
 def _require_dashscope() -> None:
     if not _HAS_DASHSCOPE:
         raise ImportError(
@@ -325,13 +411,10 @@ class DashScopeFileTranscription(FileTranscriptionProvider):
                 lambda: Files.upload(file_path=file_path, purpose="inference"),
                 description="file upload",
             )
-            if upload_result.status_code != 200:
-                raise RuntimeError(f"DashScope file upload failed: {upload_result}")
-            file_id = upload_result.output["uploaded_files"][0]["file_id"]
+            file_id = _file_id_from_upload(upload_result)
             logger.info("File uploaded, file_id=%s", file_id)
 
-            file_info = Files.get(file_id=file_id)
-            oss_url = file_info.output["url"]
+            oss_url = wait_oss_url(lambda: Files.get(file_id=file_id))
             logger.info("Got OSS URL for file")
 
             return self._transcribe_from_url(oss_url, language_hints, hot_words)
