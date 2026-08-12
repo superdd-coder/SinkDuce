@@ -25,6 +25,39 @@ def _clean_text(text: str) -> str:
     return _SENSEVOICE_TAG_RE.sub("", text or "").strip()
 
 
+def normalize_vad_raw(raw: Any) -> list[tuple[int, int]]:
+    """Parse FSMN-VAD output into (start_ms, end_ms). Tolerate None holes."""
+    segs: list[tuple[int, int]] = []
+    if not raw:
+        return segs
+    level = raw
+    if isinstance(level, list) and level:
+        first = level[0]
+        if isinstance(first, list) and first:
+            head = first[0]
+            if isinstance(head, (list, tuple)):
+                level = first
+    if not isinstance(level, (list, tuple)):
+        return segs
+    for item in level:
+        if not item:
+            continue
+        if isinstance(item, (list, tuple)) and item and isinstance(item[0], (list, tuple)):
+            for pair in item:
+                if not pair or not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                    continue
+                if pair[0] is None or pair[1] is None:
+                    continue
+                segs.append((int(pair[0]), int(pair[1])))
+            continue
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        if item[0] is None or item[1] is None:
+            continue
+        segs.append((int(item[0]), int(item[1])))
+    return segs
+
+
 def _normalize_vad_config_dir(vad_dir: Path) -> None:
     """Ensure vad_dir/config.yaml has model_conf for funasr_onnx.Fsmn_vad.
 
@@ -316,29 +349,7 @@ class FunAsrOnnxFilePipeline:
 
     def _vad_segments_ms(self, waveform: np.ndarray) -> list[tuple[int, int]]:
         """Return list of (start_ms, end_ms) from FSMN-VAD."""
-        raw = self._vad(waveform)
-        # funasr-onnx returns nested lists of [beg_ms, end_ms]
-        segs: list[tuple[int, int]] = []
-        if not raw:
-            return segs
-        # raw often: [[[s,e], ...]] for batch
-        level = raw
-        if isinstance(level, list) and level and isinstance(level[0], list):
-            # unwrap batch
-            if level and level[0] and isinstance(level[0][0], (list, tuple)):
-                level = level[0]
-            elif level and isinstance(level[0][0], (int, float)):
-                pass
-        for item in level:
-            if not item:
-                continue
-            if isinstance(item[0], (list, tuple)):
-                for s, e in item:
-                    segs.append((int(s), int(e)))
-            else:
-                s, e = item[0], item[1]
-                segs.append((int(s), int(e)))
-        return segs
+        return normalize_vad_raw(self._vad(waveform))
 
     def _asr_segment(self, wav: np.ndarray, language: str = "auto") -> str:
         res = self._asr(wav, language=language)
