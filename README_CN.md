@@ -309,50 +309,6 @@ SinkDuce 在 FastAPI 进程内通过 HTTP（Streamable HTTP 协议）暴露 **56
 └──────────────────────────────────────────────────────────┘
 ```
 
-### 目录结构
-
-```
-frontend/            React 19 + Vite 6 + Tailwind CSS 4 + Zustand + Tiptap + Recharts
-src/
-  main.py            FastAPI 入口：lifespan、中间件、路由挂载、SPA 兜底
-  config.py           Pydantic AppConfig → data/config.yaml（含向后兼容迁移逻辑）
-  services.py         Services 单例：init_services() / reload_services()（失败自动回滚）
-  prompts.py          集中式 Prompt 注册表——所有 LLM prompt 统一存放
-  api/
-    schemas.py        共享 Pydantic 请求/响应模型（QueryRequest、SourceItem 等）
-    routes/           REST 端点：sessions、query、documents、collections、config、
-                      recall、logs、info、visual、meetings、notes、hot_words
-  rag/
-    agent.py          AgenticQueryService：分解 → 并行扇出 → 评分 → 合成
-    variant_fetcher.py 并行变体生成 + 单轮合并评分
-    decomposer.py     使用 Collection Catalog 元数据进行查询分解
-    aggregator.py     带 <sub_query> 包装器的上下文组装 + LLM 合成
-    retriever.py      Dense / Hybrid (RRF) / Sparse 检索
-    reranker.py       多提供商重排序编排
-    chunker.py        ParagraphChunker（句子边界感知，兼容中英文标点）
-    markdown_chunker.py Markdown 感知分块：标题面包屑、原子代码块/表格
-    contextual.py     上下文检索（Batch API + 并行回退）
-    summary_manager.py 文档/集合摘要、冲突检测、项目描述
-  parsers/            12 种格式解析器：PDF、DOCX、PPTX、XLSX、MD、HTML、CSV、
-                      JSON/JSONL、TXT、图片 (OCR)、MinerU 云端
-  providers/          LLM、Embedding、Reranker 适配器（Registry + ABC 模式）
-    embedding/        OpenAI 兼容（支持 Matryoshka/截断）
-    llm/              OpenAI 兼容（流式、Vision、Batch API）
-    reranker/         Cohere、DashScope/Qwen、OpenAI 兼容（原生 /rerank + logprobs 回退）
-  meeting/            会议模块：转写、Blueprint、章节提取
-    transcription/    文件 + 实时转写 Provider（FunASR ONNX、DashScope、OpenAI 兼容）
-      onnx/           ONNX 运行时管线（SenseVoice、Paraformer streaming、VAD、标点、CAM++）
-  file_mgmt/          Library：文件夹、文件、版本、时间线、节点、分组、消息
-  notes/              Collection Notes：蒸馏、传播、注入块解析
-  hot_words/          带权重的热词库管理（用于 ASR）
-  tasks/              双队列异步任务管理器，支持协作取消
-  mcp/                MCP 服务：56 个工具覆盖 9 个领域（含 file-mgmt L1），HTTP Streamable 传输
-  models/             本地 ONNX 包安装（GitHub Release，无 HF 回退）
-data/                 运行时数据（全部 gitignored）：qdrant/、config.yaml、history/、
-                      meetings/、notes/、hot_words/、models/onnx/、collections/
-tests/                pytest 测试套件（asyncio_mode = auto）
-```
-
 ### 技术栈
 
 | 层级 | 技术 |
