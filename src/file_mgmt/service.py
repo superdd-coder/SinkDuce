@@ -1455,9 +1455,11 @@ def _node_summary_row(
     conn,
     row,
     *,
+    collection_id: str,
     group_names: dict[str, str],
     child_branches_by_parent: dict[str, list[dict]],
     depth: str = "summary",
+    file_index: dict[str, dict] | None = None,
 ) -> dict:
     """Node dict with group_name, attachment/message counts, child branches.
 
@@ -1495,7 +1497,11 @@ def _node_summary_row(
     if children:
         base["child_branch_count"] = len(children)
 
-    # Always include short attachment list so agents need fewer get_node calls
+    if depth == "minimal":
+        # Skip attachment payload for lighter responses
+        return base
+
+    # Include short attachment list so agents need fewer get_node calls
     att_rows = conn.execute(
         """SELECT fn.file_id, f.is_definitive, fv.storage_file_id
            FROM file_nodes fn
@@ -1504,14 +1510,14 @@ def _node_summary_row(
            WHERE fn.node_id=?""",
         (nid,),
     ).fetchall()
-    file_index = _load_file_index(collection_id)
+    idx = file_index if file_index is not None else _load_file_index(collection_id)
     base["attachments"] = []
     for a in att_rows:
         names = _attachment_display_fields(
             collection_id,
             a["file_id"],
             a["storage_file_id"],
-            index=file_index,
+            index=idx,
         )
         base["attachments"].append(
             {
@@ -1521,10 +1527,6 @@ def _node_summary_row(
                 "is_definitive": bool(a["is_definitive"]),
             }
         )
-    if depth == "minimal":
-        # Drop heavy-ish fields
-        base.pop("attachments", None)
-        base.pop("message_count", None)
     return base
 
 
@@ -1633,6 +1635,10 @@ def build_timeline(
             warnings.append("No main chain (parent_chain_id IS NULL) found")
 
         nested_ids: set[str] = set()
+        # Load once for all nodes (attachments resolve display names via files.json)
+        file_index = (
+            _load_file_index(collection_id) if depth != "minimal" else None
+        )
 
         def chain_with_nodes(chain_id: str, *, detached: bool = False) -> dict:
             nested_ids.add(chain_id)
@@ -1647,9 +1653,11 @@ def build_timeline(
                 _node_summary_row(
                     conn,
                     r,
+                    collection_id=collection_id,
                     group_names=group_names,
                     child_branches_by_parent=child_branches_by_parent,
                     depth=depth,
+                    file_index=file_index,
                 )
                 for r in rows
             ]

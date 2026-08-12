@@ -63,28 +63,30 @@ logger = logging.getLogger(__name__)
 _MCP_INSTRUCTIONS = """
 SinkDuce MCP — use **collection IDs** (from list_collections), never display names.
 
-## Preferred tool map
+## Route by goal (pick the matching tool — do not default to list_library_tree)
 
-| Goal | Use first | Avoid / secondary |
-|------|-----------|-------------------|
-| Browse folders + files | **list_library_tree** | list_folders + N× list_files; list_documents (legacy) |
-| Flat unique file list + mounts | **list_files**(scope=all) | list_documents |
-| Timeline / node graph | **get_timeline** | list_chains + N× get_chain |
+| Goal | Use first | Avoid |
+|------|-----------|-------|
+| Content facts / "what does X say" | **search_direct_chunks** (simple) or **search_agentic_chunks** (multi-hop) | list_library_tree, get_timeline, list_documents as first step |
+| Collection overview | **get_collection_summary** | browsing whole tree |
+| Folder/file **layout** map | **list_library_tree** | search tools; list_folders + N× list_files; list_documents |
+| Flat unique file list + mounts | **list_files**(scope=all) | list_documents; list_library_tree when you only need a flat list |
+| Timeline / events / node graph | **get_timeline** | list_library_tree; list_chains + N× get_chain |
 | One node attachments/messages | **get_node** | — |
-| Read full document text | **get_document_text**(file_id=…) | inventing text from search only |
-| See what was indexed | **get_file_chunks**(file_id=…) | — |
-| Find files by question | **search_direct_chunks** (simple) / **search_agentic_chunks** (multi-hop) | browsing entire tree first when query is clear |
-| Version history + which history is readable | **list_file_versions** (blob_available) | calling get_document_text on every version blindly |
-| File paths / nodes / messages | **get_file** | — |
+| Known file full text | **get_document_text**(file_id=…) | inventing text; browsing tree first |
+| What was indexed for a file | **get_file_chunks**(file_id=…) | — |
+| Version history / blob_available | **list_file_versions** | get_document_text on every version blindly |
+| File paths + linked nodes/messages | **get_file** | — |
 
 ## Rules of thumb
 
-1. Always resolve collection **ID** with list_collections first.
-2. Prefer **file_id** over hand-built source strings. Canonical Qdrant source is ``__file__:{file_id}`` (``file:{id}`` is an accepted alias).
-3. list_library_tree: ``file_count`` is always real; ``files=[]`` + ``truncated=true`` means payload omitted, not empty folder.
-4. get_document_text: only pin version_id when list_file_versions shows blob_available=true; else extract_status=blob_missing. Chunks are the **current index only**.
-5. Multi-mount: one file_id can appear under several folders/nodes — not multiple copies.
-6. After MCP code deploy, restart this server and refresh the client tool schema.
+1. Resolve collection **ID** with list_collections when unknown.
+2. Content questions → **search first**. list_library_tree is only for library layout.
+3. Prefer **file_id** over hand-built source strings. Canonical Qdrant source is ``__file__:{file_id}`` (``file:{id}`` is an accepted alias).
+4. list_library_tree: ``file_count`` is always real; ``files=[]`` + ``truncated=true`` means payload omitted, not empty folder.
+5. get_document_text: only pin version_id when list_file_versions shows blob_available=true; else extract_status=blob_missing. Chunks are the **current index only**.
+6. Multi-mount: one file_id can appear under several folders/nodes — not multiple copies.
+7. After MCP code deploy, restart this server and refresh the client tool schema.
 
 Write tools (upload_*, delete_*, create_*) change data — confirm intent before destructive calls.
 """.strip()

@@ -85,16 +85,20 @@ async def search_direct_chunks(
     min_score: float = 0.0,
     include_images: bool = False,
 ) -> str:
-    """Direct chunk retrieval — no LLM answer generation, no agentic decomposition.
+    """PRIMARY for content facts: direct chunk retrieval (no answer generation).
 
     **When to use**
-    - User has a question but you do **not** know which file holds the answer.
+    - User asks what documents say / factual Q&A and you do **not** know which
+      file holds the answer.
     - Focused single-collection (or multi-id) lookup without rewrite/decompose.
+    - Prefer this over browsing ``list_library_tree`` or ``get_timeline`` for
+      content questions.
 
     **When not to use**
     - Already know ``file_id`` and need full text → ``get_document_text``.
     - Already know ``file_id`` and need its index slices → ``get_file_chunks``.
     - Complex multi-hop / rewrite needed → ``search_agentic_chunks``.
+    - Only need folder layout → ``list_library_tree``; timeline → ``get_timeline``.
 
     **After search:** each hit has ``source`` (prefer canonical
     ``__file__:{file_id}``). Prefer following up with ``file_id`` on
@@ -163,16 +167,21 @@ async def search_agentic_chunks(
     query: str,
     include_images: bool = False,
 ) -> str:
-    """Agentic RAG retrieval — full pipeline (rewrite → decompose → retrieve →
-    grade → aggregate), then return chunks without LLM answer generation.
+    """PRIMARY for complex content facts: agentic chunk retrieval (no answer gen).
+
+    Full pipeline (rewrite → decompose → retrieve → grade → aggregate), then
+    return chunks without LLM answer generation.
 
     **When to use**
-    - Complex / multi-hop questions where ``search_direct_chunks`` is not enough.
+    - Complex / multi-hop content questions where ``search_direct_chunks`` is
+      not enough.
     - Need automatic collection discovery (no collection id from the user).
+    - Prefer over browsing ``list_library_tree`` for "what do the docs say".
 
     **When not to use**
     - Simple focused lookup in a known collection → ``search_direct_chunks``.
     - Known file_id → ``get_document_text`` / ``get_file_chunks`` (cheaper).
+    - Library layout only → ``list_library_tree``; timeline → ``get_timeline``.
 
     Same chunk structure as ``search_direct_chunks``; agent formats the answer
     with its own LLM. No collection parameter — pipeline auto-discovers targets.
