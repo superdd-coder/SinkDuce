@@ -185,7 +185,13 @@ def _format_current_time() -> str:
 # ChatboxAgent
 # ═══════════════════════════════════════════════════════════════════
 
-_MAX_TOOL_ROUNDS = 5
+# Outer LLM↔tool loop (web + structure + KB + synthesis). Higher than the
+# agentic-search-only cap so HITL web / multi-tool turns still fit.
+_MAX_TOOL_ROUNDS = 15
+# Cap *search_knowledge_base* (Agentic 查库) per user message — separate from
+# outer rounds so web/structure tools do not burn the KB budget, and so the
+# model is pushed to answer after enough evidence instead of endless search.
+_MAX_AGENTIC_SEARCH_CALLS = 5
 # Legacy row cap (tests / callers may still reference). Context window uses dialogue turns.
 _MAX_HISTORY_MESSAGES = 50
 # LLM history: count user + final-assistant answers (tool rows ride with the turn).
@@ -538,6 +544,7 @@ class ChatboxAgent:
             meeting_id = session_id[len("meeting_"):]
             meeting_speaker_mapping = _build_speaker_mapping(meeting_id)
         total_tool_calls = 0
+        agentic_search_calls = 0  # search_knowledge_base only
 
         # Save user message
         self._store.add_message(session_id, "user", user_message)
@@ -668,6 +675,18 @@ class ChatboxAgent:
                         elif self._agentic is None:
                             logger.warning("Tool call requested but agentic_service is None")
                             tool_content = "Knowledge base search is not configured. Please enable Function Calling on an LLM model in Settings."
+                        elif (
+                            tool_name == "search_knowledge_base"
+                            and agentic_search_calls >= _MAX_AGENTIC_SEARCH_CALLS
+                        ):
+                            tool_content = (
+                                f"Agentic knowledge-base search limit reached "
+                                f"({_MAX_AGENTIC_SEARCH_CALLS} calls this turn). "
+                                "Do NOT call search_knowledge_base again. "
+                                "Synthesize the final answer now from tool results "
+                                "already in this conversation."
+                            )
+                            total_tool_calls += 1
                         else:
                             result = self._agentic.run(
                                 raw_query,
@@ -677,6 +696,8 @@ class ChatboxAgent:
                                 decompose=decompose,
                             )
                             total_tool_calls += 1
+                            if tool_name == "search_knowledge_base":
+                                agentic_search_calls += 1
                             is_multimodal = isinstance(result.answer, list) if result else False
                             if is_multimodal:
                                 tool_content = result.answer
@@ -831,6 +852,7 @@ class ChatboxAgent:
         if collections is None:
             collections = self._get_collections(session_id)
         total_tool_calls = 0
+        agentic_search_calls = 0  # search_knowledge_base only (see _MAX_AGENTIC_SEARCH_CALLS)
         thinking_aq_count = 0
         thinking_task_count = 0
         thinking_summary: dict = {"aq_count": 0, "task_count": 0, "tasks": []}
@@ -1416,13 +1438,34 @@ class ChatboxAgent:
                             else:
                                 tool_content = direct_data["context"]
 
-                    # ── Agentic search ──
+                    # ── Agentic search (search_knowledge_base / other search facades) ──
                     elif not _skip_exec and self._agentic is None:
                         tool_content = (
                             "Knowledge base search is not configured. "
                             "Please enable Function Calling on an LLM model in Settings."
                         )
                         _ui_status = "error"
+                    elif not _skip_exec and (
+                        tool_name == "search_knowledge_base"
+                        and agentic_search_calls >= _MAX_AGENTIC_SEARCH_CALLS
+                    ):
+                        # Separate from outer _MAX_TOOL_ROUNDS: stop KB thrash,
+                        # leave budget for web / synthesis.
+                        tool_content = (
+                            f"Agentic knowledge-base search limit reached "
+                            f"({_MAX_AGENTIC_SEARCH_CALLS} calls this turn). "
+                            "Do NOT call search_knowledge_base again. "
+                            "Synthesize the final answer now from tool results "
+                            "already in this conversation."
+                        )
+                        _ui_status = "error"
+                        total_tool_calls += 1
+                        logger.info(
+                            "[Chatbox] Blocked search_knowledge_base "
+                            "(agentic_search_calls=%d/%d)",
+                            agentic_search_calls,
+                            _MAX_AGENTIC_SEARCH_CALLS,
+                        )
                     elif not _skip_exec:
                         generate_answer = args.get("generate_answer", False)
                         include_images = args.get("include_images", False)
@@ -1460,6 +1503,8 @@ class ChatboxAgent:
                             ),
                         )
                         total_tool_calls += 1
+                        if tool_name == "search_knowledge_base":
+                            agentic_search_calls += 1
                         all_thinking_events: list[dict] = []
                         while not future.done() or not step_queue.empty():
                             batch_new = False
