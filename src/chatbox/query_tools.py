@@ -21,20 +21,26 @@ _MAX_RESULT_CHARS = 96000
 _CHAT_DOC_DEFAULT_LIMIT = 32000
 _CHAT_DOC_MAX_LIMIT = 96000
 
-# ── Full-text policy (shared in schema descriptions) ───────────
+# ── Shared policy snippets (keep short — models overweight repeated prefixes) ─
 
 _FULL_TEXT_POLICY = (
-    "LOW PRIORITY. Prefer search tools for normal Q&A. "
-    "Call this ONLY when (1) the user explicitly asks to read a named file / "
-    "full text / a specific version, OR (2) you judge that retrieved chunks "
-    "are insufficient and the full body is required. "
-    "Do not call this 'just in case'."
+    "LOW PRIORITY full-text. Prefer search for normal Q&A. "
+    "Call ONLY when (1) user asks to read a named file / full text / a version, "
+    "OR (2) search chunks are clearly insufficient for continuous original text. "
+    "Do not call 'just in case' or as a substitute for search."
 )
 
-_STRUCTURE_POLICY = (
-    "Use for library navigation (what files/folders exist, where a file lives, "
-    "timeline/version layout). Prefer list_library_tree for a one-shot map. "
-    "For factual Q&A over content, prefer the search tool first."
+# Collection ID reminder only — do NOT recommend a specific structure tool here
+# (a blanket "prefer list_library_tree" made the model over-call that tool).
+_COL_NOTE = (
+    "collection must be a collection **ID** (from list_collections), never a display name."
+)
+
+# Routing one-liners used only on the tools they apply to
+_SEARCH_FIRST = (
+    "PRIMARY for content facts / document Q&A. "
+    "Do NOT call list_library_tree / get_timeline first when the need is what a "
+    "document says — search (or summary tools) first."
 )
 
 
@@ -73,19 +79,16 @@ _COL = {
 SEARCH_KNOWLEDGE_BASE_TOOL = _fn(
     "search_knowledge_base",
     (
-        "Search the private knowledge base (ingested documents). "
-        "You are an INFORMATION PLANNER — translate the user's question into "
-        "concrete information needs, then search.\n\n"
-        "PLANNING RULES:\n"
-        "1. If vague/ambiguous — ask user to clarify first.\n"
-        "2. For chitchat and common knowledge — answer directly.\n"
-        "3. DEFAULT: one call per round. Pack ALL information needs with "
-        "decompose=true (comparison, multi-entity, multi-facet).\n"
-        "4. EXCEPTION: multiple rounds ONLY for dependency chains "
-        "(round N+1 needs round N results).\n"
-        "5. Prefer this over get_document_text / get_file_chunks for normal Q&A.\n"
-        "6. Use structure tools (list_library_tree, etc.) when the user asks "
-        "what files/folders exist rather than content facts."
+        f"{_SEARCH_FIRST} "
+        "Search ingested document chunks across the private knowledge base.\n\n"
+        "PLANNING:\n"
+        "1. Vague/ambiguous question → clarify first.\n"
+        "2. Chitchat / common knowledge → answer without tools.\n"
+        "3. DEFAULT: one call/round; pack multi-facet needs with decompose=true.\n"
+        "4. Multiple rounds only for dependency chains (N+1 needs N results).\n"
+        "5. Prefer over get_document_text / get_file_chunks for normal Q&A.\n"
+        "6. Browse tools (list_library_tree / get_timeline / list_files) are for "
+        "library layout or project events — NOT for answering content questions."
     ),
     {
         "raw_query": {
@@ -123,10 +126,10 @@ SEARCH_KNOWLEDGE_BASE_TOOL = _fn(
 LOOKUP_COLLECTION_TOOL = _fn(
     "lookup_collection",
     (
-        "Search the **current** collection for relevant document chunks. "
-        "Use for factual questions about this collection's ingested content.\n"
-        "Prefer this over get_document_text / get_file_chunks for normal Q&A. "
-        "Use structure tools when asking what files/folders exist."
+        f"{_SEARCH_FIRST} "
+        "Search the **current** collection's ingested chunks for factual Q&A. "
+        "Prefer over get_document_text / get_file_chunks. "
+        "Do not open list_library_tree just to answer 'what does X say'."
     ),
     {
         "query": {
@@ -201,29 +204,40 @@ def build_request_web_search_tool(*, web_search_enabled: bool) -> dict[str, Any]
 REQUEST_WEB_SEARCH_TOOL = build_request_web_search_tool(web_search_enabled=True)
 
 # ── Structure / summary / full-text schemas ────────────────────
+# Each description is self-contained: WHEN + WHEN NOT. Avoid shared prefixes
+# that push one tool (especially list_library_tree) onto every call.
 
 STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "list_collections": _fn(
         "list_collections",
         (
-            f"{_STRUCTURE_POLICY} "
-            "List all collections with IDs and catalog metadata. "
-            "Call before tools that need a collection ID when the target is unknown."
+            "List all collections (id, name, points_count, catalog). "
+            "Call when you need a collection **ID** or do not know which "
+            "collection to use. Not a content search."
         ),
         {},
     ),
     "get_collection": _fn(
         "get_collection",
-        f"{_STRUCTURE_POLICY} Get metadata, config, and stats for one collection.",
+        (
+            f"One collection's metadata, config, and stats. {_COL_NOTE} "
+            "Not for browsing files or searching document content."
+        ),
         {"collection": _COL},
         required=["collection"],
     ),
     "list_library_tree": _fn(
         "list_library_tree",
         (
-            f"{_STRUCTURE_POLICY} "
-            "Default one-shot map of folders + files. Prefer over list_folders + list_files. "
-            "file_count is always real; empty files[] with truncated=true means payload omitted."
+            "Folder + file **layout map** for one collection (where files live). "
+            f"{_COL_NOTE}\n"
+            "WHEN: user asks what files/folders exist, where a file is mounted, "
+            "or for a library directory map.\n"
+            "WHEN NOT: factual Q&A / 'what does the doc say' → use search tools; "
+            "project events / timeline nodes → get_timeline; flat unique file list "
+            "with filters → list_files; chunk counts/legacy sources → list_documents.\n"
+            "Note: file_count is always real; files=[] with truncated=true means "
+            "payload omitted at that depth, not an empty folder."
         ),
         {
             "collection": _COL,
@@ -242,15 +256,23 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "list_folders": _fn(
         "list_folders",
-        f"{_STRUCTURE_POLICY} Folder tree only (no files). Prefer list_library_tree.",
+        (
+            "Folder tree **only** (no file rows). Rare. "
+            f"{_COL_NOTE} "
+            "Prefer list_library_tree when you also need files under folders."
+        ),
         {"collection": _COL},
         required=["collection"],
     ),
     "list_files": _fn(
         "list_files",
         (
-            f"{_STRUCTURE_POLICY} "
-            "Flat unique file list with mounts. Prefer list_library_tree for first map."
+            "Flat **unique** file list with mounts (folder_ids). "
+            f"{_COL_NOTE}\n"
+            "WHEN: need all files, filter by folder_id / scope, or multi-mount "
+            "detail without the folder tree.\n"
+            "WHEN NOT: hierarchical 'show me the library' map → list_library_tree; "
+            "content Q&A → search."
         ),
         {
             "collection": _COL,
@@ -268,7 +290,12 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "get_file": _fn(
         "get_file",
-        f"{_STRUCTURE_POLICY} Full file detail: paths, versions, linked nodes/messages.",
+        (
+            "Full detail for **one known file_id**: paths/mounts, versions, "
+            f"linked timeline nodes, messages. {_COL_NOTE}\n"
+            "WHEN NOT: only version/blob flags → list_file_versions; "
+            "only body text → get_document_text; discovery by question → search."
+        ),
         {
             "collection": _COL,
             "file_id": {"type": "string", "description": "Managed file id."},
@@ -278,8 +305,10 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "list_file_versions": _fn(
         "list_file_versions",
         (
-            f"{_STRUCTURE_POLICY} "
-            "Version history with blob_available. Check before get_document_text(version_id=…)."
+            "Version history for one file_id with blob_available flags. "
+            f"{_COL_NOTE} "
+            "Call before get_document_text(version_id=…) on non-current versions. "
+            "Not for content search."
         ),
         {
             "collection": _COL,
@@ -289,19 +318,33 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "get_timeline": _fn(
         "get_timeline",
-        f"{_STRUCTURE_POLICY} Full timeline / node graph for a collection (preferred one-shot).",
+        (
+            "Project **timeline / node graph** (events, branches, groups, "
+            f"node attachments). {_COL_NOTE}\n"
+            "WHEN: user asks about timeline, project events, meeting nodes, "
+            "branches, or what happened in this project.\n"
+            "WHEN NOT: folder/file library map → list_library_tree; "
+            "document content facts → search; one known node body → get_node.\n"
+            "Prefer this over list_chains + get_chain for a full graph."
+        ),
         {"collection": _COL},
         required=["collection"],
     ),
     "list_chains": _fn(
         "list_chains",
-        f"{_STRUCTURE_POLICY} List timeline chains. Prefer get_timeline for full graph.",
+        (
+            "Timeline chain **skeletons only** (no nodes). Rare. "
+            f"{_COL_NOTE} Prefer get_timeline for the full nested graph."
+        ),
         {"collection": _COL},
         required=["collection"],
     ),
     "get_chain": _fn(
         "get_chain",
-        f"{_STRUCTURE_POLICY} One chain with nodes. Prefer get_timeline when surveying all.",
+        (
+            "One timeline chain with its nodes (need chain_id). "
+            f"{_COL_NOTE} Prefer get_timeline when surveying the whole project."
+        ),
         {
             "collection": _COL,
             "chain_id": {"type": "string"},
@@ -310,7 +353,11 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "get_node": _fn(
         "get_node",
-        f"{_STRUCTURE_POLICY} One node detail (attachments/messages).",
+        (
+            "One timeline **node** with full attachments and messages "
+            f"(need node_id from get_timeline/get_chain). {_COL_NOTE} "
+            "Not a file-library browser."
+        ),
         {
             "collection": _COL,
             "node_id": {"type": "string"},
@@ -319,16 +366,21 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "list_groups": _fn(
         "list_groups",
-        f"{_STRUCTURE_POLICY} Timeline groups. Prefer get_timeline for order + groups together.",
+        (
+            "Timeline group labels only. Rare. "
+            f"{_COL_NOTE} Prefer get_timeline for order + groups + nodes together."
+        ),
         {"collection": _COL},
         required=["collection"],
     ),
     "list_documents": _fn(
         "list_documents",
         (
-            f"{_STRUCTURE_POLICY} "
-            "Legacy document index (chunk counts / source keys). "
-            "Prefer list_library_tree for file-mgmt collections."
+            "Legacy index: source keys + **chunk counts** (not folder mounts). "
+            f"{_COL_NOTE}\n"
+            "WHEN: need chunk counts or pre-file-mgmt collections.\n"
+            "WHEN NOT (file-mgmt): folder/file map → list_library_tree; "
+            "flat mounts → list_files. Not a content search."
         ),
         {"collection": _COL},
         required=["collection"],
@@ -337,22 +389,23 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "get_document_text",
         (
             f"{_FULL_TEXT_POLICY} "
-            "Read a **character window** of extractable plain text for a known "
-            "document (prefer file_id). NOT PDF page numbers.\n"
-            "Default limit=32000 chars per call (Chat hard-caps at 96000; no unlimited).\n"
+            "Read a **character window** of extractable plain text for a **known** "
+            "document (prefer file_id from search hits / library tools). "
+            "NOT PDF page numbers.\n"
+            "Default limit=32000 chars (Chat hard-caps at 96000; no unlimited).\n"
             "Returns has_more, next_offset, total_chars, truncated.\n"
-            "CONTINUATION (paging): if has_more and the current window is not enough "
-            "to answer (missing later sections, incomplete clause, etc.), call again "
-            "with offset=next_offset — treat this like turning pages until evidence is "
-            "sufficient. Prefer starting offset from a search hit's char_offset when "
-            "you already found a relevant passage. "
-            "Stop when the answer is complete; do not page through whole files by default."
+            "PAGING: if has_more and the window lacks enough evidence, call again "
+            "with offset=next_offset. Prefer starting from a search hit's char_offset. "
+            "Stop when the answer is complete; do not page whole files by default."
         ),
         {
             "collection": _COL,
             "file_id": {
                 "type": "string",
-                "description": "Preferred managed file id from list_library_tree / list_files / search context.",
+                "description": (
+                    "Preferred managed file id from search hits, list_files, "
+                    "or list_library_tree."
+                ),
             },
             "source": {
                 "type": "string",
@@ -385,7 +438,7 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "get_file_chunks",
         (
             f"{_FULL_TEXT_POLICY} "
-            "Indexed chunks for one known file (what was embedded). "
+            "Indexed chunks for **one known** file (what was embedded). "
             "Prefer search for discovery; prefer get_document_text for full body."
         ),
         {
@@ -400,8 +453,9 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "get_collection_summary": _fn(
         "get_collection_summary",
         (
-            "Get the LLM-generated overview of an ingested collection "
-            "(summarizes indexed documents). Not Collection Notes editor content."
+            "LLM-generated overview of an ingested collection (from doc summaries). "
+            "Useful for 'what is this collection about' before deep search. "
+            "Not Collection Notes editor content; not a file list."
         ),
         {"collection": _COL},
         required=["collection"],
@@ -409,8 +463,9 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "get_doc_summary": _fn(
         "get_doc_summary",
         (
-            "Structured summary of one ingested document. "
-            "Pass source/filename from list_documents or library tools."
+            "Structured summary of **one** ingested document (facts/data points). "
+            "Need source key from search / list_documents / library tools. "
+            "Not full body text (use get_document_text for that)."
         ),
         {
             "collection": _COL,
@@ -423,7 +478,10 @@ STRUCTURE_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "get_conflicts": _fn(
         "get_conflicts",
-        "Detected contradictions across ingested documents in a collection.",
+        (
+            "Detected contradictions across ingested documents in a collection. "
+            "Not a general search or file browser."
+        ),
         {"collection": _COL},
         required=["collection"],
     ),

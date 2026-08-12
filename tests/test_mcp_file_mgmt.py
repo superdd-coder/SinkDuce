@@ -31,8 +31,12 @@ class TestMcpServerAgentGuide:
         assert "get_document_text" in text
         assert "file_id" in text
         assert "blob_available" in text or "blob" in text
-        assert mcp.description
-        assert "list_library_tree" in (mcp.description or "")
+        # Routing should prefer search for content, not default to tree browse
+        assert "search_direct_chunks" in text or "search" in text.lower()
+        assert "do not default" in text.lower() or "Route by goal" in text
+        # FastMCP may expose description or only instructions depending on version
+        desc = getattr(mcp, "description", None) or text
+        assert "list_library_tree" in desc
 
 
 class TestFileMgmtMcpTools:

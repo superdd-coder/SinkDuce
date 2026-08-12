@@ -1,15 +1,16 @@
 """MCP tools for the file-management system (L1 + agent-efficiency fixes).
 
-**Agent defaults (read)**
-- Library map → :func:`list_library_tree` (not ``list_documents``)
-- Timeline → :func:`get_timeline` (not N× list_chains/get_chain)
-- Flat files + mounts → :func:`list_files`
+**Route by goal (read)** — do not default everything to list_library_tree:
+- Content facts / unknown file → search tools (``search_*_chunks``), not these
+- Folder/file **layout** map → :func:`list_library_tree` (not ``list_documents``)
+- Flat files + mounts/filters → :func:`list_files`
+- Timeline / events / nodes → :func:`get_timeline` (not N× list_chains/get_chain)
 - Versions + blob_available → :func:`list_file_versions`
 - One file graph (paths/nodes/messages) → :func:`get_file`
 - One node detail → :func:`get_node`
 
-**Also**
-- :func:`list_folders` / :func:`list_chains` / :func:`list_groups` — secondary
+**Secondary**
+- :func:`list_folders` / :func:`list_chains` / :func:`list_groups`
 
 **Write**
 - :func:`upload_file_from_staging` / :func:`upload_file_version_from_staging`
@@ -99,7 +100,7 @@ async def _await_result(fn) -> Any:
     return _mcp_result(data)
 
 
-# ── list_library_tree (preferred one-shot) ─────────────────────
+# ── list_library_tree (folder/file layout only) ────────────────
 
 
 async def list_library_tree(
@@ -109,18 +110,20 @@ async def list_library_tree(
     include_archived_files: bool = True,
     fields: str = "summary",
 ) -> Any:
-    """**Default entry** for browsing a collection's folders + files (one call).
+    """Folder + file **layout map** for one collection (where files live).
 
     **When to use**
-    - User asks what files/folders exist, where something lives, or for a map of the library.
-    - First navigation step after ``list_collections`` (file-mgmt collections).
+    - User asks what files/folders exist, where a file is mounted, or wants a
+      library directory map.
+    - Prefer over ``list_folders`` + N× ``list_files`` for hierarchical browse.
 
     **When not to use**
-    - Need only a flat unique file list with filters → ``list_files``.
-    - Need timeline/nodes → ``get_timeline``.
-    - Do **not** start with legacy ``list_documents`` for file-mgmt browsing.
-
-    Prefer this over ``list_folders`` + N× ``list_files``.
+    - Factual Q&A / "what does the document say" → ``search_direct_chunks`` /
+      ``search_agentic_chunks`` (do **not** browse the tree first).
+    - Project events / timeline nodes / branches → ``get_timeline``.
+    - Flat unique file list with filters/mounts → ``list_files``.
+    - Chunk counts / legacy source keys → ``list_documents``.
+    - Known ``file_id`` body text → ``get_document_text``.
 
     ``collection`` is a collection **ID** (not display name).
 
@@ -178,9 +181,9 @@ async def list_library_tree(
 async def list_folders(collection: str) -> dict[str, Any]:
     """List the folder tree only (**no files**).
 
-    **When to use:** rare — only need folder names/ids without file payloads.
-    **When not:** almost always prefer :func:`list_library_tree` (folders+files
-    in one call).
+    **When to use:** rare — only folder names/ids without file payloads.
+    **When not:** hierarchical library map with files → :func:`list_library_tree`;
+    content Q&A → search tools; timeline → :func:`get_timeline`.
 
     ``collection`` is a collection **ID**. Each folder has ``file_count``
     (unique files mounted in that folder — not multi-mount inflated).
@@ -212,16 +215,17 @@ async def list_files(
     is_definitive: str = "",
     scope: str = "all",
 ) -> Any:
-    """List files with **mounts** (where each unique file is attached).
+    """Flat **unique** file list with **mounts** (where each file is attached).
 
     **When to use**
-    - Need a flat unique file list, filters (archived / definitive), or
-      multi-mount detail without the folder tree.
-    - After ``list_library_tree`` when you need more rows under one folder_id.
+    - Need a flat unique file list, filters (archived / definitive), multi-mount
+      detail, or files under one ``folder_id`` without the full tree.
+    - Prefer over legacy ``list_documents`` when you need mounts.
 
     **When not to use**
-    - First map of “what is in this collection” → prefer ``list_library_tree``.
-    - Do not use legacy ``list_documents`` for mounts/timeline-aware listing.
+    - Hierarchical “show the library folders” map → ``list_library_tree``.
+    - Content facts / unknown which file → ``search_*_chunks``.
+    - Timeline / events → ``get_timeline``.
 
     ``collection`` is a collection **ID**.
 
@@ -415,23 +419,24 @@ async def list_file_versions(collection: str, file_id: str) -> dict[str, Any]:
     return await _await_result(_run)
 
 
-# ── get_timeline (preferred one-shot) ──────────────────────────
+# ── get_timeline (timeline/node graph only) ────────────────────
 
 
 async def get_timeline(
     collection: str,
     depth: str = "summary",
 ) -> Any:
-    """**Default entry** for the project timeline / node graph (one call).
+    """Project **timeline / node graph** (events, branches, groups) in one call.
 
     **When to use**
-    - User asks about events, meetings on the timeline, branches, or “what
-      happened in this project”.
-    - First call for any timeline question (prefer over list_chains + get_chain).
+    - User asks about timeline, project events, meeting nodes, branches, or
+      “what happened in this project”.
+    - Prefer over ``list_chains`` + N× ``get_chain`` for a full graph.
 
     **When not to use**
-    - Only need one node’s full attachments/messages → :func:`get_node`.
-    - Only need folder/file library map → :func:`list_library_tree`.
+    - Folder/file library layout → :func:`list_library_tree` / :func:`list_files`.
+    - Document content facts → ``search_direct_chunks`` / ``search_agentic_chunks``.
+    - One known node's full attachments/messages → :func:`get_node`.
 
     ``collection`` is a collection **ID**.
 

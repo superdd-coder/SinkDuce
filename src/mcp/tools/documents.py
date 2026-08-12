@@ -148,16 +148,18 @@ def _resolve_doc_identity(
 
 
 async def list_documents(collection: str) -> str:
-    """**Legacy** document index listing (file_index / chunk counts).
+    """**Legacy** document index listing (file_index / **chunk counts**).
 
     **When to use**
     - Need per-document **chunk counts** or old ``source`` keys without mounts.
     - Collections that predate file-management and have no folder tree.
 
-    **When not to use (file-mgmt collections)**
-    - Browsing folders/files → **list_library_tree** (default).
+    **When not to use**
+    - Content Q&A → ``search_direct_chunks`` / ``search_agentic_chunks``.
+    - File-mgmt folder/file layout → **list_library_tree**.
     - Flat list with mounts → **list_files**(scope=all).
-    - Do not use this as the primary navigation tool.
+    - Timeline → **get_timeline**.
+    - Do not use this as a primary navigation or search tool.
 
     ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
     NOT the display name. Use :func:`list_collections` first to get IDs.
@@ -603,16 +605,17 @@ async def get_document_text(
     - Preferred over stitching many search chunks when the target file is known.
 
     **When not to use**
-    - Unknown which file → ``search_direct_chunks`` / ``search_agentic_chunks`` first.
+    - Unknown which file → ``search_direct_chunks`` / ``search_agentic_chunks`` first
+      (do **not** call ``list_library_tree`` just to answer content questions).
     - Only check what was indexed → ``get_file_chunks``.
     - Historical version with ``blob_available=false`` (from list_file_versions)
       → will fail; do not invent body from chunks.
 
     **vs get_file_chunks vs search (pick one primary path)**
 
+    - ``search_*_chunks`` → discovery by query across the collection (default).
     - ``get_document_text`` → full extractable body (current or version_id).
     - ``get_file_chunks`` → indexed slices for one file (current index).
-    - ``search_*_chunks`` → discovery by query across the collection.
 
     ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
     NOT the display name.

@@ -33,13 +33,14 @@ def _get_summary_manager():
 
 
 async def get_collection_summary(collection: str) -> str:
-    """Get the LLM-generated overview of a collection (summarizes all docs).
+    """LLM-generated overview of a collection (from document summaries).
 
     ``collection`` must be a collection **ID** (e.g. ``"col_abc123"``),
     NOT the display name. Use :func:`list_collections` first to get IDs.
 
-    Use this to quickly understand what a collection contains before diving
-    into specific documents or running queries.
+    **When to use:** "what is this collection about" / high-level overview.
+    **When not:** factual lookups in source text → search tools; file layout →
+    ``list_library_tree``; timeline → ``get_timeline``. Not a file list.
     """
     def _run() -> dict[str, Any]:
         if e := require_collection(collection):

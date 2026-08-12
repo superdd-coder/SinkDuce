@@ -57,6 +57,26 @@ class TestAllowlists:
             desc = tools[name]["function"]["description"].upper()
             assert "LOW PRIORITY" in desc
 
+    def test_structure_tools_not_blanket_prefer_library_tree(self):
+        """list_library_tree must not be recommended on every structure tool."""
+        tools = {t["function"]["name"]: t for t in tools_for_mode("agentic")}
+        # Tools that must NOT push list_library_tree as the default action
+        for name in ("get_timeline", "get_collection", "list_file_versions", "get_conflicts"):
+            desc = tools[name]["function"]["description"].lower()
+            assert "prefer list_library_tree" not in desc, name
+        # list_library_tree itself should state when NOT to use (content/search)
+        lib = tools["list_library_tree"]["function"]["description"].lower()
+        assert "when not" in lib or "not:" in lib
+        assert "search" in lib or "content" in lib
+        # get_timeline should be for timeline/events, not library layout default
+        tl = tools["get_timeline"]["function"]["description"].lower()
+        assert "timeline" in tl
+        assert "when not" in tl or "list_library_tree" in tl
+        # Search is primary for content
+        sk = tools["search_knowledge_base"]["function"]["description"].lower()
+        assert "primary" in sk
+        assert "list_library_tree" in sk  # explicit anti-pattern mention
+
     def test_get_document_text_schema_documents_window_and_char_offset(self):
         tools = {t["function"]["name"]: t for t in tools_for_mode("agentic")}
         gdt = tools["get_document_text"]["function"]
@@ -67,7 +87,7 @@ class TestAllowlists:
         props = gdt["parameters"]["properties"]
         assert props["offset"]["default"] == 0
         assert props["limit"]["default"] == 32000
-        assert "page" in desc or "continuation" in desc
+        assert "page" in desc or "continuation" in desc or "paging" in desc
 
 
 # ── get_document_text Chat clamp ──────────────────────────────
