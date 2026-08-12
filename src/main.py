@@ -256,8 +256,14 @@ if FRONTEND_DIST.exists():
         ):
             return JSONResponse({"detail": f"Not Found: /{full_path}"}, status_code=404)
         file = FRONTEND_DIST / full_path
-        if file.is_file():
-            return FileResponse(file)
+        try:
+            from src.paths import confine
+
+            confined = confine(file, FRONTEND_DIST)
+        except ValueError:
+            return FileResponse(FRONTEND_DIST / "index.html")
+        if confined.is_file():
+            return FileResponse(confined)
         return FileResponse(FRONTEND_DIST / "index.html")
 
 

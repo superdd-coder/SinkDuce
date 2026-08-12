@@ -16,8 +16,9 @@ _SKIP_FILENAMES = frozenset({"_settings.json"})
 
 
 def _write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    from src.atomic_io import write_text_atomic
+
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def _read_json(path: Path) -> dict | None:
@@ -76,6 +77,9 @@ def create_library(
     description: str = "",
     words: list[HotWordItem] | list[dict] | None = None,
 ) -> HotWordsLibrary:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "hot_words.create", {})
     now = datetime.now(timezone.utc).isoformat()
     parsed_words: list[HotWordItem] = []
     if words:
@@ -125,6 +129,9 @@ def list_libraries() -> list[HotWordsLibrary]:
 
 
 def update_library(library_id: str, **fields) -> HotWordsLibrary:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "hot_words.update", {"library_id": library_id})
     lib = get_library(library_id)
     if lib is None:
         raise FileNotFoundError(f"Hot words library {library_id} not found")
@@ -139,6 +146,9 @@ def update_library(library_id: str, **fields) -> HotWordsLibrary:
 
 
 def delete_library(library_id: str) -> bool:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "hot_words.delete", {"library_id": library_id})
     path = HOTWORDS_DIR / f"{library_id}.json"
     if not path.exists():
         return False

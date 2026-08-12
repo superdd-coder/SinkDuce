@@ -125,8 +125,12 @@ async def get_collection(collection: str) -> str:
         meta = cstore.get_collection_meta(collection) or {
             "id": collection, "name": collection, "qdrant_name": collection,
         }
+        from src.secrets import redact_mapping
+
         config = services.db.get_collection_config(collection)
         config.pop("sparse_vocab", None)  # internal BM25 state, not useful to consumers
+        if isinstance(config, dict):
+            config = redact_mapping(config)
         try:
             info = services.db.get_collection_info(collection)
             points_count = info.get("points_count", 0)

@@ -171,7 +171,16 @@ async def upload_folder(
     if not services.db.collection_exists(collection_id):
         services.db.create_collection(collection_id, vector_size=services.embedding.dimensions)
 
-    folder = Path(path)
+    from src.config import DATA_DIR
+    from src.paths import confine
+
+    try:
+        folder = confine(Path(path), DATA_DIR / "collections" / collection_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Folder path must be under this collection's data directory",
+        )
     if not folder.is_dir():
         return {"error": f"Not a directory: {path}"}
 

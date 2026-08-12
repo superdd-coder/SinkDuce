@@ -75,3 +75,6 @@ DESIGN_SYSTEM.html
 
 # HyperFrames / local video renders (do not commit)
 videos/
+
+# Local contracts (enterprise IAM + frontend design). Not published with OSS.
+contracts/

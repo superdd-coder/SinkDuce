@@ -51,6 +51,7 @@ from src.file_mgmt.models import (
     TodoUpdate,
 )
 from src.file_mgmt.store import get_db
+from src.identity import get_actor, authorize
 
 logger = logging.getLogger("file_mgmt.service")
 
@@ -72,6 +73,16 @@ def _validate_collection(collection_id: str) -> None:
             status_code=404,
             detail=f"Collection '{collection_id}' not found",
         )
+
+
+def _actor_for(action: str, collection_id: str, **resource):
+    actor = get_actor()
+    authorize(actor, action, {"collection_id": collection_id, **resource})
+    return actor
+
+
+def _actor_id() -> str:
+    return get_actor().id
 
 
 # ── Name uniqueness (same parent folder / same directory) ──────
@@ -566,6 +577,7 @@ def get_folder_tree(collection_id: str) -> list[FolderTree]:
 
 
 def create_folder(collection_id: str, req: FolderCreate) -> FolderOut:
+    actor = _actor_for("folder.create", collection_id)
     kind = (req.kind or "plain")
     if kind != "plain":
         raise HTTPException(
@@ -604,11 +616,12 @@ def create_folder(collection_id: str, req: FolderCreate) -> FolderOut:
                    (folder_id, parent_folder_id, name, kind, is_system,
                     created_by, created_at, updated_at, version,
                     icon_type, icon_value, icon_color)
-                   VALUES (?, ?, ?, 'plain', 0, 'local', ?, ?, 1, ?, ?, ?)""",
+                   VALUES (?, ?, ?, 'plain', 0, ?, ?, ?, 1, ?, ?, ?)""",
                 (
                     folder_id,
                     parent_id,
                     name,
+                    actor.id,
                     now,
                     now,
                     req.icon_type,
@@ -629,6 +642,7 @@ def create_folder(collection_id: str, req: FolderCreate) -> FolderOut:
 def update_folder(
     collection_id: str, folder_id: str, req: FolderUpdate
 ) -> FolderOut:
+    _actor_for("folder.update", collection_id, folder_id=folder_id)
     updates = req.model_dump(exclude_unset=True)
 
     conn = _open_db(collection_id)
@@ -764,6 +778,7 @@ def update_folder(
 
 
 def delete_folder(collection_id: str, folder_id: str) -> None:
+    _actor_for("folder.delete", collection_id, folder_id=folder_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -817,6 +832,7 @@ def list_groups(collection_id: str) -> list[GroupOut]:
 
 
 def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
+    actor = _actor_for("group.create", collection_id)
     from src.file_mgmt.store import _ensure_node_groups_icon_columns
 
     conn = _open_db(collection_id)
@@ -867,8 +883,8 @@ def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
                     """INSERT INTO folders
                        (folder_id, parent_folder_id, name, kind, is_system,
                         created_by, created_at, updated_at, version)
-                       VALUES (?, NULL, ?, 'user_group', 0, 'local', ?, ?, 1)""",
-                    (folder_id, group_folder_name, now, now),
+                       VALUES (?, NULL, ?, 'user_group', 0, ?, ?, ?, 1)""",
+                    (folder_id, group_folder_name, actor.id, now, now),
                 )
 
             group_id = uuid.uuid4().hex
@@ -876,12 +892,13 @@ def create_group(collection_id: str, req: GroupCreate) -> GroupOut:
                 """INSERT INTO node_groups
                    (group_id, folder_id, name, description, created_by,
                     icon_type, icon_value, icon_color)
-                   VALUES (?, ?, ?, ?, 'local', ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     group_id,
                     folder_id,
                     req.name,
                     req.description,
+                    actor.id,
                     req.icon_type,
                     req.icon_value,
                     req.icon_color,
@@ -902,6 +919,7 @@ def update_group(
 ) -> GroupOut:
     from src.file_mgmt.store import _ensure_node_groups_icon_columns
 
+    _actor_for("group.update", collection_id, group_id=group_id)
     updates = req.model_dump(exclude_unset=True)
 
     conn = _open_db(collection_id)
@@ -1061,6 +1079,7 @@ def update_group(
 
 def delete_group(collection_id: str, group_id: str) -> None:
     """Delete a user group: unassign nodes, keep folder (kind → plain)."""
+    _actor_for("group.delete", collection_id, group_id=group_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -1134,6 +1153,7 @@ def list_chains(collection_id: str) -> list[ChainOut]:
 
 
 def create_chain(collection_id: str, req: ChainCreate) -> ChainOut:
+    actor = _actor_for("chain.create", collection_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -1196,8 +1216,8 @@ def create_chain(collection_id: str, req: ChainCreate) -> ChainOut:
                     """INSERT INTO folders
                        (folder_id, parent_folder_id, name, kind, is_system,
                         created_by, created_at, updated_at, version)
-                       VALUES (?, NULL, ?, 'branch', 0, 'local', ?, ?, 1)""",
-                    (folder_id, req.title, now, now),
+                       VALUES (?, NULL, ?, 'branch', 0, ?, ?, ?, 1)""",
+                    (folder_id, req.title, actor.id, now, now),
                 )
 
             chain_id = uuid.uuid4().hex
@@ -1205,9 +1225,9 @@ def create_chain(collection_id: str, req: ChainCreate) -> ChainOut:
                 """INSERT INTO chains
                    (chain_id, parent_chain_id, parent_node_id, folder_id,
                     title, created_by)
-                   VALUES (?, ?, ?, ?, ?, 'local')""",
+                   VALUES (?, ?, ?, ?, ?, ?)""",
                 (chain_id, req.parent_chain_id, req.parent_node_id,
-                 folder_id, req.title),
+                 folder_id, req.title, actor.id),
             )
             # Start anchor lives on main — mount branch folder for its attachments
             _sync_node_derived_paths(conn, req.parent_node_id)
@@ -1224,6 +1244,7 @@ def create_chain(collection_id: str, req: ChainCreate) -> ChainOut:
 def update_chain(
     collection_id: str, chain_id: str, req: ChainUpdate
 ) -> ChainOut:
+    _actor_for("chain.update", collection_id, chain_id=chain_id)
     updates = req.model_dump(exclude_unset=True)
 
     conn = _open_db(collection_id)
@@ -1261,6 +1282,7 @@ def update_chain(
 
 
 def delete_chain(collection_id: str, chain_id: str) -> None:
+    _actor_for("chain.delete", collection_id, chain_id=chain_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -1312,6 +1334,7 @@ def reopen_chain(collection_id: str, chain_id: str) -> ChainOut:
         _ensure_chains_merge_node_id,
     )
 
+    _actor_for("chain.reopen", collection_id, chain_id=chain_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -1766,6 +1789,7 @@ def build_timeline(
 def create_node(
     collection_id: str, chain_id: str, req: NodeCreate
 ) -> NodeOut:
+    actor = _actor_for("node.create", collection_id, chain_id=chain_id)
     # System end markers may omit title; user event nodes must have a name
     if req.node_type == "event":
         if not req.title or not str(req.title).strip():
@@ -1809,9 +1833,9 @@ def create_node(
                 """INSERT INTO nodes
                    (node_id, chain_id, group_id, node_type, title,
                     "order", event_time, created_by, created_at, version)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'local', ?, 1)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
                 (node_id, chain_id, req.group_id, req.node_type,
-                 req.title, order, req.event_time, now),
+                 req.title, order, req.event_time, actor.id, now),
             )
             row = conn.execute(
                 "SELECT * FROM nodes WHERE node_id=?", (node_id,)
@@ -1832,6 +1856,7 @@ def create_node(
 def update_node(
     collection_id: str, node_id: str, req: NodeUpdate
 ) -> NodeOut:
+    _actor_for("node.update", collection_id, node_id=node_id)
     updates = req.model_dump(exclude_unset=True)
 
     conn = _open_db(collection_id)
@@ -1947,6 +1972,7 @@ def delete_node(collection_id: str, node_id: str) -> dict | None:
 
     Returns None for simple deletes, or dict with affected_files for the UI to handle.
     """
+    _actor_for("node.delete", collection_id, node_id=node_id)
     conn = _open_db(collection_id)
     try:
         affected_files: list[dict] = []
@@ -2077,6 +2103,7 @@ def delete_node(collection_id: str, node_id: str) -> dict | None:
 def reorder_node(
     collection_id: str, node_id: str, req: NodeReorder
 ) -> list[NodeOut]:
+    _actor_for("node.reorder", collection_id, node_id=node_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -3149,6 +3176,7 @@ def list_archived_files(collection_id: str) -> list[FileSummary]:
 def add_file_path(
     collection_id: str, file_id: str, folder_id: str, is_primary: bool = False
 ) -> FilePathOut:
+    actor = _actor_for("file_path.add", collection_id, file_id=file_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -3194,8 +3222,8 @@ def add_file_path(
             conn.execute(
                 """INSERT INTO file_paths
                    (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
-                   VALUES (?, ?, ?, ?, NULL, 'local')""",
-                (path_id, file_id, folder_id, 1 if is_primary else 0),
+                   VALUES (?, ?, ?, ?, NULL, ?)""",
+                (path_id, file_id, folder_id, 1 if is_primary else 0, actor.id),
             )
             row = conn.execute(
                 "SELECT * FROM file_paths WHERE path_id=?", (path_id,)
@@ -3209,6 +3237,7 @@ def add_file_path(
 
 
 def remove_file_path(collection_id: str, file_id: str, path_id: str) -> None:
+    _actor_for("file_path.remove", collection_id, file_id=file_id, path_id=path_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -3232,6 +3261,7 @@ def remove_file_path(collection_id: str, file_id: str, path_id: str) -> None:
 
 
 def promote_file_path(collection_id: str, file_id: str, path_id: str) -> FilePathOut:
+    _actor_for("file_path.promote", collection_id, file_id=file_id, path_id=path_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -3500,7 +3530,7 @@ def ensure_meeting_anchor_node(
                        (node_id, chain_id, group_id, node_type, title,
                         "order", event_time, created_by, created_at, version,
                         external_ref)
-                       VALUES (?, ?, ?, 'event', ?, ?, ?, 'local', ?, 1, ?)""",
+                       VALUES (?, ?, ?, 'event', ?, ?, ?, ?, ?, 1, ?)""",
                     (
                         node_id,
                         target_chain,
@@ -3508,6 +3538,7 @@ def ensure_meeting_anchor_node(
                         node_title,
                         order,
                         event_time,
+                        _actor_id(),
                         now,
                         ref,
                     ),
@@ -3673,6 +3704,7 @@ def register_ingested_source_file(
     - Drops older SQLite rows for the same ``source`` (re-ingest).
     Safe to call after files.json has been updated.
     """
+    _actor_for("file.register_ingested", collection_id, file_id=file_id)
     if not file_id or not source:
         return
     try:
@@ -3741,8 +3773,8 @@ def register_ingested_source_file(
                         """INSERT INTO file_versions
                            (version_id, file_id, version_no, storage_file_id,
                             archived, commit_message, created_by, created_at)
-                           VALUES (?, ?, 1, ?, 0, NULL, 'local', ?)""",
-                        (version_id, file_id, name, now),
+                           VALUES (?, ?, 1, ?, 0, NULL, ?, ?)""",
+                        (version_id, file_id, name, _actor_id(), now),
                     )
                     conn.execute(
                         "UPDATE files SET current_version_id=?, unsupported=0 "
@@ -3760,8 +3792,8 @@ def register_ingested_source_file(
                     conn.execute(
                         """INSERT INTO file_paths
                            (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
-                           VALUES (?, ?, ?, 1, NULL, 'local')""",
-                        (uuid.uuid4().hex, file_id, folder_id),
+                           VALUES (?, ?, ?, 1, NULL, ?)""",
+                        (uuid.uuid4().hex, file_id, folder_id, _actor_id()),
                     )
             else:
                 version_id = uuid.uuid4().hex
@@ -3769,15 +3801,15 @@ def register_ingested_source_file(
                     """INSERT INTO files
                        (file_id, current_version_id, is_definitive, archived,
                         unsupported, created_by, version)
-                       VALUES (?, NULL, 0, 0, 0, 'local', 1)""",
-                    (file_id,),
+                       VALUES (?, NULL, 0, 0, 0, ?, 1)""",
+                    (file_id, _actor_id()),
                 )
                 conn.execute(
                     """INSERT INTO file_versions
                        (version_id, file_id, version_no, storage_file_id,
                         archived, commit_message, created_by, created_at)
-                       VALUES (?, ?, 1, ?, 0, NULL, 'local', ?)""",
-                    (version_id, file_id, name, now),
+                       VALUES (?, ?, 1, ?, 0, NULL, ?, ?)""",
+                    (version_id, file_id, name, _actor_id(), now),
                 )
                 conn.execute(
                     "UPDATE files SET current_version_id=? WHERE file_id=?",
@@ -3786,8 +3818,8 @@ def register_ingested_source_file(
                 conn.execute(
                     """INSERT INTO file_paths
                        (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
-                       VALUES (?, ?, ?, 1, NULL, 'local')""",
-                    (uuid.uuid4().hex, file_id, folder_id),
+                       VALUES (?, ?, ?, 1, NULL, ?)""",
+                    (uuid.uuid4().hex, file_id, folder_id, _actor_id()),
                 )
 
         logger.info(
@@ -4028,7 +4060,7 @@ def _ingest_file_to_qdrant(
         "archived": False,
         "version_id": version_id,
         "is_current": True,
-        "created_by": "local",
+        "created_by": _actor_id(),
         "source_label": source_label or filename,
     }
     chunks = chunker.chunk_with_metadata(
@@ -4272,6 +4304,7 @@ def upload_file_to_folder(
     ``on_name_conflict``: ``"error"`` (default, 409 + suggested_name) or
     ``"auto_rename"`` (use ``report (1).pdf`` style without failing).
     """
+    _actor_for("file.upload", collection_id, folder_id=folder_id)
     if on_name_conflict not in ("error", "auto_rename"):
         raise HTTPException(400, "on_name_conflict must be 'error' or 'auto_rename'")
 
@@ -4331,8 +4364,8 @@ def upload_file_to_folder(
                 """INSERT INTO files
                    (file_id, current_version_id, is_definitive, archived,
                     unsupported, created_by, version)
-                   VALUES (?, NULL, 0, 0, ?, 'local', 1)""",
-                (file_id, unsupported),
+                   VALUES (?, NULL, 0, 0, ?, ?, 1)""",
+                (file_id, unsupported, _actor_id()),
             )
 
             # 5. Create file_versions (now files row exists)
@@ -4340,8 +4373,8 @@ def upload_file_to_folder(
                 """INSERT INTO file_versions
                    (version_id, file_id, version_no, storage_file_id,
                     archived, commit_message, created_by, created_at)
-                   VALUES (?, ?, 1, ?, 0, NULL, 'local', ?)""",
-                (version_id, file_id, safe_name, now),
+                   VALUES (?, ?, 1, ?, 0, NULL, ?, ?)""",
+                (version_id, file_id, safe_name, _actor_id(), now),
             )
 
             # 6. Update files.current_version_id (now version row exists)
@@ -4357,8 +4390,8 @@ def upload_file_to_folder(
                 conn.execute(
                     """INSERT INTO file_paths
                        (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
-                       VALUES (?, ?, ?, ?, ?, 'local')""",
-                    (path_id, file_id, folder_id, is_primary, source_node_id),
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (path_id, file_id, folder_id, is_primary, source_node_id, _actor_id()),
                 )
 
             # 7. Queue async ingest task via the existing upload pipeline
@@ -4394,8 +4427,8 @@ def upload_file_to_folder(
                    (message_id, owner_type, owner_id, source_node_id, body,
                     author_type, author_id, created_at, edited_at, edited_by, version)
                    VALUES (?, 'system_version', ?, NULL, 'Initial upload',
-                    'system', 'local', ?, NULL, NULL, 1)""",
-                (message_id, file_id, now),
+                    'system', ?, ?, NULL, NULL, 1)""",
+                (message_id, file_id, _actor_id(), now),
             )
 
             row = conn.execute(
@@ -4439,6 +4472,7 @@ def upload_folder(
         parent_folder_id: destination folder, or empty/None for collection root
         files_data: list of (bytes_content, relative_filename) tuples
     """
+    _actor_for("file.upload_folder", collection_id, folder_id=parent_folder_id)
     if isinstance(parent_folder_id, str):
         parent_folder_id = parent_folder_id.strip() or None
 
@@ -4505,8 +4539,8 @@ def upload_folder(
                             """INSERT INTO folders
                                (folder_id, parent_folder_id, name, kind, is_system,
                                 created_by, created_at, updated_at, version)
-                               VALUES (?, ?, ?, 'plain', 0, 'local', ?, ?, 1)""",
-                            (fid, current_parent, part, now, now),
+                               VALUES (?, ?, ?, 'plain', 0, ?, ?, ?, 1)""",
+                            (fid, current_parent, part, _actor_id(), now, now),
                         )
             finally:
                 conn2.close()
@@ -4555,6 +4589,7 @@ def upload_file_version(
     *document_source* / *source_label*: when set (e.g. note reingest),
     Qdrant/files.json keep ``__note__:{id}`` identity instead of ``__file__:{file_id}``.
     """
+    _actor_for("file.version_upload", collection_id, file_id=file_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -4599,8 +4634,8 @@ def upload_file_version(
                 """INSERT INTO file_versions
                    (version_id, file_id, version_no, storage_file_id,
                     archived, commit_message, created_by, created_at)
-                   VALUES (?, ?, ?, ?, 0, ?, 'local', ?)""",
-                (new_version_id, file_id, new_version_no, safe_name, commit_body, now),
+                   VALUES (?, ?, ?, ?, 0, ?, ?, ?)""",
+                (new_version_id, file_id, new_version_no, safe_name, commit_body, _actor_id(), now),
             )
 
             # 3. Archive old version in DB
@@ -4629,8 +4664,8 @@ def upload_file_version(
                    (message_id, owner_type, owner_id, source_node_id, body,
                     author_type, author_id, created_at, edited_at, edited_by, version)
                    VALUES (?, 'system_version', ?, NULL, ?,
-                    'system', 'local', ?, NULL, NULL, 1)""",
-                (message_id, file_id, commit_body, now),
+                    'system', ?, ?, NULL, NULL, 1)""",
+                (message_id, file_id, commit_body, _actor_id(), now),
             )
 
             # 6. Queue async ingest — same pipeline as folder upload (MinerU, chunk config, …)
@@ -4865,6 +4900,7 @@ def delete_file_version(
 
     Does **not** delete the managed file_id or other versions.
     """
+    _actor_for("file.version_delete", collection_id, file_id=file_id, version_id=version_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -5191,6 +5227,7 @@ def delete_file(collection_id: str, file_id: str) -> None:
        (after window, if no definitive remain → clear consolidate results)
     7. emit_event
     """
+    _actor_for("file.delete", collection_id, file_id=file_id)
     source = f"__file__:{file_id}"
     was_definitive = False
     pre_snapshot: dict | None = None
@@ -5324,6 +5361,7 @@ def update_file(
     Archive operations must use ``toggle_archive`` / PATCH .../archive
     so path-level and file-level stay consistent across views.
     """
+    _actor_for("file.update", collection_id, file_id=file_id)
     if "archived" in req:
         raise HTTPException(
             400,
@@ -5583,6 +5621,7 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
     5. Link chains.merge_node_id → merge node
     6. Persist merge archive snapshot on the chain (for reopen undo)
     """
+    _actor_for("chain.end", collection_id, node_id=node_id)
     import json
 
     from src.file_mgmt.store import (
@@ -5732,7 +5771,7 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                 """INSERT INTO nodes
                    (node_id, chain_id, group_id, node_type, title,
                     "order", event_time, created_by, created_at, version)
-                   VALUES (?, ?, ?, 'end', ?, ?, ?, 'local', ?, 1)""",
+                   VALUES (?, ?, ?, 'end', ?, ?, ?, ?, ?, 1)""",
                 (
                     merge_node_id,
                     parent_chain_id,
@@ -5740,6 +5779,7 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                     merge_title,
                     merge_order,
                     req.event_time,
+                    _actor_id(),
                     now,
                 ),
             )
@@ -5766,8 +5806,8 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                 conn.execute(
                     """INSERT INTO file_nodes
                        (file_id, node_id, version_id, greyed, added_by)
-                       VALUES (?, ?, ?, 0, 'local')""",
-                    (fid, merge_node_id, fr["current_version_id"]),
+                       VALUES (?, ?, ?, 0, ?)""",
+                    (fid, merge_node_id, fr["current_version_id"], _actor_id()),
                 )
 
             # Mount group + branch folder on merge (and heal all branch nodes)
@@ -5780,8 +5820,8 @@ def end_chain(collection_id: str, node_id: str, req: EndChainRequest) -> dict:
                     """INSERT INTO messages
                        (message_id, owner_type, owner_id, source_node_id, body,
                         author_type, author_id, created_at, edited_at, edited_by, version)
-                       VALUES (?, 'node', ?, NULL, ?, 'user', 'local', ?, NULL, NULL, 1)""",
-                    (msg_id, merge_node_id, req.message_body.strip(), now),
+                       VALUES (?, 'node', ?, NULL, ?, 'user', ?, ?, NULL, NULL, 1)""",
+                    (msg_id, merge_node_id, req.message_body.strip(), _actor_id(), now),
                 )
 
             # Branch end marker is only a dialog placeholder — the real close
@@ -6046,6 +6086,7 @@ def attach_file_to_node(
     - file_id != None: attach existing file
     - upload_file != None: upload new file, then attach via file_id path
     """
+    _actor_for("file.attach", collection_id, node_id=node_id, file_id=file_id)
     if file_id is None and upload_file is None:
         raise HTTPException(400, "Either file_id or upload_file must be provided")
     # Preserve async ingest task_id from upload path (row_to_file_out does not store it)
@@ -6113,8 +6154,8 @@ def attach_file_to_node(
                 conn.execute(
                     """INSERT INTO file_nodes
                        (file_id, node_id, version_id, greyed, added_by)
-                       VALUES (?, ?, ?, 0, 'local')""",
-                    (file_id, node_id, file_row["current_version_id"]),
+                       VALUES (?, ?, ?, 0, ?)""",
+                    (file_id, node_id, file_row["current_version_id"], _actor_id()),
                 )
 
             # Always sync derived paths (group + branch folder) — covers re-attach
@@ -6163,8 +6204,8 @@ def _upsert_derived_path(
     conn.execute(
         """INSERT INTO file_paths
            (path_id, file_id, folder_id, is_primary, source_node_id, created_by)
-           VALUES (?, ?, ?, 0, ?, 'local')""",
-        (path_id, file_id, folder_id, source_node_id),
+           VALUES (?, ?, ?, 0, ?, ?)""",
+        (path_id, file_id, folder_id, source_node_id, _actor_id()),
     )
 
 
@@ -6366,6 +6407,7 @@ def _row_to_file_version(row, collection_id: str | None = None) -> FileVersionOu
 def create_message(collection_id: str, req: MessageCreate) -> MessageOut:
     from src.file_mgmt.models import MessageCreate, MessageOut
 
+    _actor_for("message.create", collection_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -6375,13 +6417,14 @@ def create_message(collection_id: str, req: MessageCreate) -> MessageOut:
                 """INSERT INTO messages
                    (message_id, owner_type, owner_id, source_node_id, body,
                     author_type, author_id, created_at, edited_at, edited_by, version)
-                   VALUES (?, ?, ?, ?, ?, 'user', 'local', ?, NULL, NULL, 1)""",
+                   VALUES (?, ?, ?, ?, ?, 'user', ?, ?, NULL, NULL, 1)""",
                 (
                     message_id,
                     req.owner_type,
                     req.owner_id,
                     req.source_node_id,
                     req.body,
+                    _actor_id(),
                     now,
                 ),
             )
@@ -6409,6 +6452,7 @@ def create_message(collection_id: str, req: MessageCreate) -> MessageOut:
 def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> MessageOut:
     from src.file_mgmt.models import MessageUpdate, MessageOut
 
+    _actor_for("message.update", collection_id, message_id=message_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -6430,9 +6474,9 @@ def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> M
             )
             cursor = conn.execute(
                 """UPDATE messages
-                   SET body=?, edited_at=?, edited_by='local', version=version+1
+                   SET body=?, edited_at=?, edited_by=?, version=version+1
                    WHERE message_id=? AND version=?""",
-                (body, now, message_id, req.version),
+                (body, now, _actor_id(), message_id, req.version),
             )
             if cursor.rowcount == 0:
                 raise HTTPException(
@@ -6495,6 +6539,7 @@ def update_message(collection_id: str, message_id: str, req: MessageUpdate) -> M
 
 
 def delete_message(collection_id: str, message_id: str) -> None:
+    _actor_for("message.delete", collection_id, message_id=message_id)
     conn = _open_db(collection_id)
     try:
         with conn:
@@ -6880,6 +6925,7 @@ def list_todos(
 def create_todo(collection_id: str, req: TodoCreate) -> TodoOut:
     from src.file_mgmt.store import _ensure_todos_table
 
+    _actor_for("todo.create", collection_id)
     title = (req.title or "").strip()
     if not title:
         raise HTTPException(400, "Todo title is required")
@@ -6950,6 +6996,8 @@ def create_todo(collection_id: str, req: TodoCreate) -> TodoOut:
 
 def update_todo(collection_id: str, todo_id: str, req: TodoUpdate) -> TodoOut:
     from src.file_mgmt.store import _ensure_todos_table
+
+    _actor_for("todo.update", collection_id, todo_id=todo_id)
 
     conn = _open_db(collection_id)
     try:
@@ -7043,6 +7091,8 @@ def update_todo(collection_id: str, todo_id: str, req: TodoUpdate) -> TodoOut:
 
 def delete_todo(collection_id: str, todo_id: str) -> None:
     from src.file_mgmt.store import _ensure_todos_table
+
+    _actor_for("todo.delete", collection_id, todo_id=todo_id)
 
     conn = _open_db(collection_id)
     try:

@@ -17,6 +17,41 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _public_dump(obj) -> dict:
+    from src.secrets import redact_mapping
+
+    return redact_mapping(obj.model_dump())
+
+
+def _apply_live_overrides(provider_cfg, data: dict | None) -> None:
+    """Copy request fields onto a provider, ignoring masked/empty secrets."""
+    from src.secrets import skip_secret_write
+
+    if not data:
+        return
+    for key, value in data.items():
+        if not hasattr(provider_cfg, key) or not value:
+            continue
+        if skip_secret_write(key, value):
+            continue
+        if key in {"dimensions", "batch_size", "top_k"}:
+            value = int(value)
+        setattr(provider_cfg, key, value)
+
+
+def _request_api_key(data: dict | None, stored: str | None, *, providers=None, base_url: str | None = None) -> str:
+    from src.secrets import effective_secret, is_masked_secret
+
+    incoming = (data or {}).get("api_key")
+    if incoming and not is_masked_secret(incoming):
+        return incoming
+    if providers and base_url:
+        match = next((p for p in providers if getattr(p, "base_url", None) == base_url and p.api_key), None)
+        if match:
+            return match.api_key
+    return effective_secret(incoming, stored)
+
 # 模型列表缓存 (key: "section:base_url", value: {"models": [...], "timestamp": float})
 _model_cache: dict[str, dict] = {}
 MODEL_CACHE_TTL = 300  # 5分钟缓存
@@ -38,9 +73,11 @@ def _clean_error(e: Exception) -> str:
 
 @router.get("/config")
 def get_current_config():
+    from src.secrets import redact_mapping
+
     config = get_config()
     data = config.model_dump(exclude_none=True)
-    return data
+    return redact_mapping(data)
 
 
 @router.get("/config/provider-types")
@@ -118,8 +155,12 @@ async def update_config(req: ConfigUpdateRequest):
         "max_results", "confirm_timeout_sec",
     }
     _bool_fields = {"enabled", "is_ocr", "enable_formula", "enable_table", "use_reranker", "use_batch", "meeting_thinking"}
+    from src.secrets import skip_secret_write
+
     for key, value in req.data.items():
         if key not in allowed_keys:
+            continue
+        if skip_secret_write(key, value):
             continue
         if key in _int_fields and value is not None:
             value = int(value)
@@ -155,10 +196,7 @@ async def test_connection(section: str, data: dict | None = Body(default=None)):
                 if not providers:
                     return {"success": False, "error": "No LLM providers configured"}
                 provider_cfg = next((p for p in providers if p.is_default), providers[0])
-                if data:
-                    for key, value in data.items():
-                        if hasattr(provider_cfg, key) and value:
-                            setattr(provider_cfg, key, value)
+                _apply_live_overrides(provider_cfg, data)
 
                 from src.providers.llm import create_llm_provider
                 provider = create_llm_provider(provider_cfg)
@@ -170,12 +208,7 @@ async def test_connection(section: str, data: dict | None = Body(default=None)):
                 if not providers:
                     return {"success": False, "error": "No embedding providers configured"}
                 provider_cfg = next((p for p in providers if p.is_default), providers[0])
-                if data:
-                    for key, value in data.items():
-                        if hasattr(provider_cfg, key) and value:
-                            if key in {"dimensions", "batch_size"}:
-                                value = int(value)
-                            setattr(provider_cfg, key, value)
+                _apply_live_overrides(provider_cfg, data)
 
                 from src.providers.embedding import create_embedding_provider
                 provider = create_embedding_provider(provider_cfg)
@@ -190,12 +223,7 @@ async def test_connection(section: str, data: dict | None = Body(default=None)):
                 if not providers:
                     return {"success": False, "error": "No rerank providers configured"}
                 provider_cfg = next((p for p in providers if p.is_default), providers[0])
-                if data:
-                    for key, value in data.items():
-                        if hasattr(provider_cfg, key) and value:
-                            if key == "top_k":
-                                value = int(value)
-                            setattr(provider_cfg, key, value)
+                _apply_live_overrides(provider_cfg, data)
 
                 from src.providers.reranker import create_reranker_provider
                 provider = create_reranker_provider(provider_cfg)
@@ -234,8 +262,9 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
             if data:
                 if "base_url" in data and data["base_url"]:
                     base_url = data["base_url"]
-                if "api_key" in data and data["api_key"]:
-                    api_key = data["api_key"]
+                api_key = _request_api_key(
+                    data, api_key, providers=providers, base_url=base_url
+                )
         elif section == "embedding":
             providers = config.embedding.providers
             if providers:
@@ -248,8 +277,9 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
             if data:
                 if "base_url" in data and data["base_url"]:
                     base_url = data["base_url"]
-                if "api_key" in data and data["api_key"]:
-                    api_key = data["api_key"]
+                api_key = _request_api_key(
+                    data, api_key, providers=providers, base_url=base_url
+                )
         elif section == "rerank":
             providers = config.rerank.providers
             if providers:
@@ -264,8 +294,9 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
             if data:
                 if "base_url" in data and data["base_url"]:
                     base_url = data["base_url"]
-                if "api_key" in data and data["api_key"]:
-                    api_key = data["api_key"]
+                api_key = _request_api_key(
+                    data, api_key, providers=providers, base_url=base_url
+                )
                 if "provider" in data and data["provider"]:
                     provider = data["provider"]
         else:
@@ -274,7 +305,7 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
             provider = ""
             if data:
                 base_url = data.get("base_url", "") or ""
-                api_key = data.get("api_key", "") or ""
+                api_key = _request_api_key(data, api_key)
                 provider = data.get("provider", "") or ""
 
         # 检查缓存 (key 包含 URL 和 API Key 的哈希)
@@ -358,8 +389,10 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
 def list_llm_providers():
     config = get_config()
     result = []
+    from src.secrets import redact_mapping
+
     for p in config.llm.providers:
-        d = p.model_dump()
+        d = redact_mapping(p.model_dump())
         d["is_builtin"] = False
         d["is_loaded"] = True
         result.append(d)
@@ -380,11 +413,15 @@ async def add_llm_provider(provider: LLMProviderConfig):
     save_config(config)
     reload_config()
     await async_reload_services()
-    return provider.model_dump()
+    from src.secrets import redact_mapping
+
+    return redact_mapping(provider.model_dump())
 
 
 @router.put("/llm/providers/{provider_id}")
 async def update_llm_provider(provider_id: str, update: dict = Body()):
+    from src.secrets import redact_mapping, skip_secret_write
+
     config = get_config()
     _int_fields: set[str] = set()
     _bool_fields = {"is_default"}
@@ -392,6 +429,8 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
         if p.id == provider_id:
             for key, value in update.items():
                 if key == "id":
+                    continue
+                if skip_secret_write(key, value):
                     continue
                 if hasattr(p, key):
                     if key in _int_fields and value is not None:
@@ -425,7 +464,7 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
             save_config(config)
             reload_config()
             await async_reload_services()
-            return config.llm.providers[i].model_dump()
+            return _public_dump(config.llm.providers[i])
     return {"error": f"Provider '{provider_id}' not found"}
 
 
@@ -519,7 +558,7 @@ def list_embedding_providers():
     config = get_config()
     result = []
     for p in config.embedding.providers:
-        d = p.model_dump()
+        d = _public_dump(p)
         d["is_builtin"] = False
         result.append(d)
     return result
@@ -539,11 +578,13 @@ async def add_embedding_provider(provider: EmbeddingProviderConfig):
     save_config(config)
     reload_config()
     await async_reload_services()
-    return provider.model_dump()
+    return _public_dump(provider)
 
 
 @router.put("/embedding/providers/{provider_id}")
 async def update_embedding_provider(provider_id: str, update: dict = Body()):
+    from src.secrets import skip_secret_write
+
     config = get_config()
     _int_fields = {"dimensions", "batch_size"}
     _bool_fields = {"is_default"}
@@ -551,6 +592,8 @@ async def update_embedding_provider(provider_id: str, update: dict = Body()):
         if p.id == provider_id:
             for key, value in update.items():
                 if key == "id":
+                    continue
+                if skip_secret_write(key, value):
                     continue
                 if hasattr(p, key):
                     if key in _int_fields and value is not None:
@@ -565,7 +608,7 @@ async def update_embedding_provider(provider_id: str, update: dict = Body()):
             save_config(config)
             reload_config()
             await async_reload_services()
-            return config.embedding.providers[i].model_dump()
+            return _public_dump(config.embedding.providers[i])
     return {"error": f"Provider '{provider_id}' not found"}
 
 
@@ -642,7 +685,7 @@ def list_rerank_providers():
     config = get_config()
     result = []
     for p in config.rerank.providers:
-        d = p.model_dump()
+        d = _public_dump(p)
         d["is_builtin"] = False
         d["is_loaded"] = True
         result.append(d)
@@ -663,11 +706,13 @@ async def add_rerank_provider(provider: RerankProviderConfig):
     save_config(config)
     reload_config()
     await async_reload_services()
-    return provider.model_dump()
+    return _public_dump(provider)
 
 
 @router.put("/rerank/providers/{provider_id}")
 async def update_rerank_provider(provider_id: str, update: dict = Body()):
+    from src.secrets import skip_secret_write
+
     config = get_config()
     _int_fields = {"top_k"}
     _bool_fields = {"is_default"}
@@ -675,6 +720,8 @@ async def update_rerank_provider(provider_id: str, update: dict = Body()):
         if p.id == provider_id:
             for key, value in update.items():
                 if key == "id":
+                    continue
+                if skip_secret_write(key, value):
                     continue
                 if hasattr(p, key):
                     if key in _int_fields and value is not None:
@@ -689,7 +736,7 @@ async def update_rerank_provider(provider_id: str, update: dict = Body()):
             save_config(config)
             reload_config()
             await async_reload_services()
-            return config.rerank.providers[i].model_dump()
+            return _public_dump(config.rerank.providers[i])
     return {"error": f"Provider '{provider_id}' not found"}
 
 
@@ -798,7 +845,7 @@ def list_file_transcription_providers():
     result = []
     # Built-in local provider
     local = config.transcription.get_local_file_provider()
-    d = local.model_dump()
+    d = _public_dump(local)
     downloaded = _check_models_downloaded(local.adapter, local.model)
     d["models_downloaded"] = downloaded
     # Memory load state (not the same as downloaded-on-disk)
@@ -812,7 +859,7 @@ def list_file_transcription_providers():
     for p in config.transcription.file_providers:
         if p.id.startswith("builtin-"):
             continue
-        d = p.model_dump()
+        d = _public_dump(p)
         from src.meeting.transcription import is_local_file_adapter
 
         if is_local_file_adapter(p.adapter):
@@ -840,11 +887,13 @@ async def add_file_transcription_provider(provider: TranscriptionProviderConfig)
     config.transcription.file_providers.append(provider.model_copy())
     save_config(config)
     reload_config()
-    return provider.model_dump()
+    return _public_dump(provider)
 
 
 @router.put("/transcription/file-providers/{provider_id}")
 async def update_file_transcription_provider(provider_id: str, update: dict = Body()):
+    from src.secrets import skip_secret_write
+
     config = get_config()
     _bool_fields = {"is_active"}
     invalidate_provider(f"file_trans:{provider_id}")
@@ -852,6 +901,8 @@ async def update_file_transcription_provider(provider_id: str, update: dict = Bo
         if p.id == provider_id:
             for key, value in update.items():
                 if key == "id":
+                    continue
+                if skip_secret_write(key, value):
                     continue
                 if hasattr(p, key):
                     if key in _bool_fields:
@@ -864,7 +915,7 @@ async def update_file_transcription_provider(provider_id: str, update: dict = Bo
                         other.is_active = False
             save_config(config)
             reload_config()
-            return config.transcription.file_providers[i].model_dump()
+            return _public_dump(config.transcription.file_providers[i])
     return {"error": f"Provider '{provider_id}' not found"}
 
 
@@ -1072,7 +1123,7 @@ def list_realtime_transcription_providers():
     result = []
     # Built-in local provider
     local = config.transcription.get_local_realtime_provider()
-    d = local.model_dump()
+    d = _public_dump(local)
     downloaded = _check_models_downloaded(local.adapter, local.model)
     d["models_downloaded"] = downloaded
     d["is_loaded"] = get_state("builtin-local-rt") == "loaded"
@@ -1085,7 +1136,7 @@ def list_realtime_transcription_providers():
     for p in config.transcription.realtime_providers:
         if p.id.startswith("builtin-"):
             continue
-        d = p.model_dump()
+        d = _public_dump(p)
         from src.meeting.transcription import is_local_realtime_adapter
 
         if is_local_realtime_adapter(p.adapter):
@@ -1113,11 +1164,13 @@ async def add_realtime_transcription_provider(provider: TranscriptionProviderCon
     config.transcription.realtime_providers.append(provider.model_copy())
     save_config(config)
     reload_config()
-    return provider.model_dump()
+    return _public_dump(provider)
 
 
 @router.put("/transcription/realtime-providers/{provider_id}")
 async def update_realtime_transcription_provider(provider_id: str, update: dict = Body()):
+    from src.secrets import skip_secret_write
+
     config = get_config()
     invalidate_provider(f"rt_trans:{provider_id}")
     _bool_fields = {"is_active"}
@@ -1125,6 +1178,8 @@ async def update_realtime_transcription_provider(provider_id: str, update: dict 
         if p.id == provider_id:
             for key, value in update.items():
                 if key == "id":
+                    continue
+                if skip_secret_write(key, value):
                     continue
                 if hasattr(p, key):
                     if key in _bool_fields:
@@ -1137,7 +1192,7 @@ async def update_realtime_transcription_provider(provider_id: str, update: dict 
                         other.is_active = False
             save_config(config)
             reload_config()
-            return config.transcription.realtime_providers[i].model_dump()
+            return _public_dump(config.transcription.realtime_providers[i])
     return {"error": f"Provider '{provider_id}' not found"}
 
 

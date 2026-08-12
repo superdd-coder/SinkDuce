@@ -647,10 +647,12 @@ async def _load_staged_bytes(
         path = Path(file_path)
         if not path.is_file():
             return err(f"File not found: {file_path}")
-        resolved = path.resolve()
-        allowed_roots = [Path("data").resolve(), Path("/tmp").resolve()]
-        if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
-            return err(f"File path must be under data/ or /tmp/. Got: {file_path}")
+        try:
+            from src.paths import assert_readable_data_file
+
+            assert_readable_data_file(path)
+        except ValueError:
+            return err(f"File path must be under data/ (not config, qdrant, or *.db). Got: {file_path}")
         try:
             raw = path.read_bytes()
         except Exception as exc:

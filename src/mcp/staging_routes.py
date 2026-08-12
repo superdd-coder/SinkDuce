@@ -388,25 +388,23 @@ async def stage_content(request: Request):
                 status_code=400,
                 content={"error": f"File not found: {file_path}"},
             )
-        # Only allow files under data/ or /tmp/ for safety
-        resolved = path.resolve()
-        allowed_roots = [
-            Path("data").resolve(),
-            Path("/tmp").resolve(),
-        ]
-        if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+        try:
+            from src.paths import assert_readable_data_file
+
+            resolved = assert_readable_data_file(path)
+        except ValueError:
             return JSONResponse(
                 status_code=400,
                 content={
                     "error": (
-                        f"File path must be under data/ or /tmp/. "
+                        f"File path must be under data/ (not config, qdrant, or *.db). "
                         f"Got: {file_path}"
                     ),
                 },
             )
-        filename = body.get("filename") or path.name
+        filename = body.get("filename") or resolved.name
         try:
-            raw = path.read_bytes()
+            raw = resolved.read_bytes()
         except Exception as exc:
             return JSONResponse(
                 status_code=400,

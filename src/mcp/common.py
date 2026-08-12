@@ -185,10 +185,7 @@ def safe_filename(name: str, max_len: int = 255) -> str:
     if "/" in name or "\\" in name or "\x00" in name:
         raise ValueError(f"Invalid filename: {name!r}")
     if not _FILENAME_RE.match(name):
-        # Reject anything outside the allowed character set (still passes
-        # through trailing dots, leading dots, etc. — the OS will reject
-        # truly illegal ones downstream).
-        logger.warning("Filename contains unusual characters: %r", name)
+        raise ValueError(f"Invalid filename: {name!r}")
     return name
 
 

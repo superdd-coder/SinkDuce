@@ -27,7 +27,9 @@ def _resolve_image_path(image_url: str) -> Path:
     relative = image_url.lstrip("/")
     if relative.startswith("api/"):
         relative = relative[4:]  # remove "api/"
-    return DATA_DIR / relative
+    from src.paths import confine
+
+    return confine(DATA_DIR / relative, DATA_DIR)
 
 
 def _get_mime_type(path: Path) -> str:

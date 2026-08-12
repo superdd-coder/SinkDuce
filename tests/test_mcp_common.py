@@ -124,6 +124,10 @@ class TestSafeFilename:
         with pytest.raises(ValueError, match="Invalid filename"):
             safe_filename("foo\x00bar")
 
+    def test_rejects_unusual_charset(self):
+        with pytest.raises(ValueError, match="Invalid filename"):
+            safe_filename("report;.pdf")
+
 
 # ── decode_base64_content ──────────────────────────────────────
 

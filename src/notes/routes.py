@@ -913,7 +913,13 @@ async def upload_note_image(collection: str, note_id: str, file: UploadFile = Fi
 @router.get("/notes/{collection}/{note_id}/images/{filename}")
 async def serve_note_image(collection: str, note_id: str, filename: str):
     """Serve an uploaded image for a note."""
-    image_path = store.NOTES_DIR / note_id / "images" / filename
+    from src.paths import assert_resource_id, confine
+
+    try:
+        assert_resource_id(note_id, name="note_id")
+        image_path = confine(store.NOTES_DIR / note_id / "images" / filename, store.NOTES_DIR / note_id / "images")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid image path")
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(str(image_path))

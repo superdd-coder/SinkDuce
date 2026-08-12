@@ -745,7 +745,10 @@ def _migrate_files_json_import(collection_id: str) -> None:
         conn.close()
 
 def _db_path(collection_id: str) -> Path:
-    return COLLECTIONS_DIR / collection_id / "meta.db"
+    from src.paths import assert_resource_id, confine
+
+    assert_resource_id(collection_id, name="collection_id")
+    return confine(COLLECTIONS_DIR / collection_id / "meta.db", COLLECTIONS_DIR)
 
 
 def get_db(collection_id: str) -> sqlite3.Connection:

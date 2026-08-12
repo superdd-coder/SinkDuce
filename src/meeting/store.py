@@ -64,7 +64,10 @@ def _get_lock(meeting_id: str) -> threading.Lock:
 
 
 def _meeting_dir(meeting_id: str) -> Path:
-    return MEETINGS_DIR / meeting_id
+    from src.paths import assert_resource_id, confine
+
+    assert_resource_id(meeting_id, name="meeting_id")
+    return confine(MEETINGS_DIR / meeting_id, MEETINGS_DIR)
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -103,6 +106,9 @@ def _dict_to_meeting(data: dict) -> Meeting:
 
 
 def create_meeting(title: str, mode: MeetingMode | None = None) -> Meeting:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "meeting.create", {})
     meeting_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
     meeting = Meeting(
@@ -146,6 +152,9 @@ def list_meetings() -> list[Meeting]:
 
 
 def update_meeting(meeting_id: str, **fields) -> Meeting:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "meeting.update", {"meeting_id": meeting_id})
     with _get_lock(meeting_id):
         meeting = get_meeting(meeting_id)
         if meeting is None:
@@ -158,6 +167,9 @@ def update_meeting(meeting_id: str, **fields) -> Meeting:
 
 
 def delete_meeting(meeting_id: str) -> bool:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "meeting.delete", {"meeting_id": meeting_id})
     directory = _meeting_dir(meeting_id)
     if not directory.exists():
         return False
