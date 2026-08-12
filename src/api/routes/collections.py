@@ -98,7 +98,11 @@ def create_collection(req: CollectionCreateRequest):
         chunk_config["embedding_model"] = req.embedding_model
     if req.embedding_base_url is not None:
         chunk_config["embedding_base_url"] = req.embedding_base_url
-    if req.embedding_api_key is not None:
+    from src.secrets import skip_secret_write
+
+    if req.embedding_api_key is not None and not skip_secret_write(
+        "embedding_api_key", req.embedding_api_key
+    ):
         chunk_config["embedding_api_key"] = req.embedding_api_key
     if req.embedding_batch_size is not None:
         chunk_config["embedding_batch_size"] = req.embedding_batch_size
@@ -108,7 +112,9 @@ def create_collection(req: CollectionCreateRequest):
         chunk_config["rerank_model"] = req.rerank_model
     if req.rerank_base_url is not None:
         chunk_config["rerank_base_url"] = req.rerank_base_url
-    if req.rerank_api_key is not None:
+    if req.rerank_api_key is not None and not skip_secret_write(
+        "rerank_api_key", req.rerank_api_key
+    ):
         chunk_config["rerank_api_key"] = req.rerank_api_key
     if req.allowed_file_types is not None:
         chunk_config["allowed_file_types"] = req.allowed_file_types
@@ -211,9 +217,11 @@ def get_collection_config(collection_id: str):
     if not meta:
         return {"error": f"Collection '{collection_id}' not found"}
 
+    from src.secrets import redact_mapping
+
     # Use collection_id as Qdrant name
     config = services.db.get_collection_config(collection_id)
-    return config
+    return redact_mapping(config) if isinstance(config, dict) else config
 
 
 @router.put("/collections/{collection_id}/config")
@@ -223,8 +231,14 @@ def update_collection_config(collection_id: str, req: CollectionConfigUpdateRequ
     if not meta:
         return {"error": f"Collection '{collection_id}' not found"}
 
+    from src.secrets import skip_secret_write
+
     # Use collection_id as Qdrant name
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    updates = {
+        k: v
+        for k, v in req.model_dump().items()
+        if v is not None and not skip_secret_write(k, v)
+    }
     if not updates:
         return {"message": "No changes provided"}
 

@@ -14,13 +14,17 @@ def emit_event(
     event_type: str,
     collection_id: str,
     payload: dict,
-    user_id: str = "local",
+    user_id: str | None = None,
 ) -> None:
     """Emit a file-management event.
 
     MVP implementation: no-op (debug log only).
     v2: hook WebSocket broadcast listener.
     """
+    if user_id is None:
+        from src.identity import get_actor
+
+        user_id = get_actor().id
     logger.debug(
         "event: %s collection=%s user=%s",
         event_type,

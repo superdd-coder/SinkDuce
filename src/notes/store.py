@@ -28,12 +28,16 @@ NOTES_DIR = Path("data").resolve() / "notes"
 
 def _note_dir(note_id: str) -> Path:
     """Return the directory for a note. Note IDs are globally unique UUIDs."""
-    return NOTES_DIR / note_id
+    from src.paths import assert_resource_id, confine
+
+    assert_resource_id(note_id, name="note_id")
+    return confine(NOTES_DIR / note_id, NOTES_DIR)
 
 
 def _write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    from src.atomic_io import write_text_atomic
+
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def _read_json(path: Path):
@@ -135,6 +139,9 @@ def clear_ingested_content_hash(note_id: str) -> None:
 
 
 def create_note(collection: str, title: str) -> Note:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "note.create", {"collection_id": collection})
     note_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
     note = Note(
@@ -180,6 +187,9 @@ def list_notes(collection: str | None = None) -> list[Note]:
 
 
 def update_note(note_id: str, **fields) -> Note:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "note.update", {"note_id": note_id})
     ndir = _find_note_dir(note_id)
     if ndir is None:
         raise FileNotFoundError(f"Note {note_id} not found")
@@ -195,6 +205,9 @@ def update_note(note_id: str, **fields) -> Note:
 
 
 def delete_note(note_id: str) -> bool:
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "note.delete", {"note_id": note_id})
     ndir = _find_note_dir(note_id)
     if ndir is None:
         return False

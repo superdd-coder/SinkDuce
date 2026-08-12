@@ -346,11 +346,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
 
 def save_config(config: AppConfig, path: str | Path | None = None) -> None:
+    from src.atomic_io import write_text_atomic
+
     save_path = Path(path) if path else CONFIG_PATH
-    save_path.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(exclude_none=True)
-    with open(save_path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    text = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    write_text_atomic(save_path, text)
     logger.info("Config saved: %s", save_path)
 
 

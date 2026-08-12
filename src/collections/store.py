@@ -17,12 +17,16 @@ COLLECTIONS_DIR = Path("data").resolve() / "collections"
 
 
 def _meta_path(collection_id: str) -> Path:
-    return COLLECTIONS_DIR / collection_id / "meta.json"
+    from src.paths import assert_resource_id, confine
+
+    assert_resource_id(collection_id, name="collection_id")
+    return confine(COLLECTIONS_DIR / collection_id / "meta.json", COLLECTIONS_DIR)
 
 
 def _write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    from src.atomic_io import write_text_atomic
+
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def _read_json(path: Path) -> dict | None:
@@ -38,6 +42,9 @@ def generate_id() -> str:
 
 def create_collection_meta(collection_id: str, name: str, qdrant_name: str = None) -> dict:
     """Create collection metadata."""
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "collection.create", {"collection_id": collection_id})
     meta = {
         "id": collection_id,
         "name": name,
@@ -64,6 +71,9 @@ def get_collection_meta(collection_id: str) -> dict | None:
 
 def update_collection_meta(collection_id: str, **kwargs) -> dict | None:
     """Update collection metadata."""
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "collection.update", {"collection_id": collection_id})
     meta = get_collection_meta(collection_id)
     if not meta:
         return None
@@ -92,6 +102,9 @@ def list_collections_meta() -> list[dict]:
 
 def delete_collection_meta(collection_id: str) -> bool:
     """Delete collection metadata."""
+    from src.identity import authorize, get_actor
+
+    authorize(get_actor(), "collection.delete", {"collection_id": collection_id})
     import shutil
     meta_dir = COLLECTIONS_DIR / collection_id
     if meta_dir.exists():
