@@ -18414,6 +18414,12 @@ button.pm-ws-path-row {
 /*
  * ── Composer: simple frosted glass
  * backdrop-filter: blur(12px) + light fill. Border breathe via sk-input-frame.
+ *
+ * IMPORTANT: do NOT set `isolation: isolate` on this same element.
+ * Isolation creates a backdrop root — blur only samples inside an empty
+ * group, so glass looks like a flat semi-white card (no frosted blur).
+ * Glow pseudos use filter:drop-shadow on the host instead of z-index:-1
+ * under isolation.
  */
 .pm-chat-composer,
 .pm-chat-composer.sk-input-frame {
@@ -18427,33 +18433,33 @@ button.pm-ws-path-row {
   gap: 6px;
   padding: 8px 12px 7px;
   border-radius: 16px !important;
-  background: rgba(255, 255, 255, 0.58);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.55);
+  /* Both prefixes — Lightning may drop one in minify; keep explicit */
   -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   overflow: visible;
-  isolation: isolate;
+  isolation: auto;
   z-index: 1;
+  /* Soft outer depth (replaces isolated z-index:-1 glow plate) */
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.06));
+  transition:
+    border-color 800ms cubic-bezier(0.23, 1, 0.32, 1),
+    filter 800ms cubic-bezier(0.23, 1, 0.32, 1);
 }
+/* Disable sk-input z-index:-1 glow plates — they needed isolation */
 .pm-chat-composer.sk-input-frame::before,
 .pm-chat-composer.sk-input-frame::after {
-  border-radius: inherit !important;
-  z-index: -1;
-}
-.pm-chat-composer.sk-input-frame::before {
-  animation: sk-input-breathe-idle 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  content: none !important;
+  display: none !important;
+  animation: none !important;
 }
 .pm-chat-composer.sk-input-frame:focus-within {
   border-color: var(--pm-green, #1a5e3d);
+  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--pm-green, #1a5e3d) 28%, transparent));
 }
 .pm-chat-composer.sk-input-frame.is-streaming {
   border-color: color-mix(in srgb, var(--pm-green, #1a5e3d) 45%, transparent);
-}
-.pm-chat-composer.sk-input-frame.is-streaming::before {
-  opacity: 0;
-}
-.pm-chat-composer.sk-input-frame.is-streaming::after {
-  opacity: 1;
-  animation: sk-input-breathe-focus 2s linear infinite;
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--pm-green, #1a5e3d) 32%, transparent));
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .pm-chat-composer,
