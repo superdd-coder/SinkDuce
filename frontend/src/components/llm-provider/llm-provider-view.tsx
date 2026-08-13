@@ -450,11 +450,7 @@ interface TranscriptionProviderCardProps {
 }
 
 function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
-  // Realtime DashScope still hardcodes streaming model; file DashScope uses config.model.
-  const modelLabel =
-    provider.adapter === "dashscope_funasr_realtime"
-      ? "qwen-audio-3.0-asr-flash-streaming"
-      : (provider.model || provider.adapter)
+  const modelLabel = provider.model || provider.adapter
 
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
   const [testing, setTesting] = useState(false)
@@ -949,6 +945,20 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         ...rtTransFields,
         { key: "base_url", label: "Base URL", placeholder: "https://api.openai.com/v1" },
         { key: "model", label: "Model", placeholder: "gpt-4o-realtime-preview" },
+        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+      ]
+    }
+    if (adapter === "dashscope_funasr_realtime") {
+      return [
+        ...rtTransFields,
+        {
+          key: "model",
+          label: "Model",
+          options: [
+            { value: "fun-asr-realtime", label: "fun-asr-realtime (FunASR cloud)" },
+            { value: "qwen-audio-3.0-asr-flash-streaming", label: "qwen-audio-3.0-asr-flash-streaming" },
+          ],
+        },
         { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
       ]
     }

@@ -720,18 +720,50 @@ class TestDashScopeTranscription:
         ]
         assert _build_precompiled_vocabulary_items(None) is None
 
-    def test_realtime_transcription_fixed_model(self):
-        """DashScopeRealtimeTranscription always uses fixed Qwen-Audio streaming model."""
-        from src.meeting.transcription.dashscope_realtime import DashScopeRealtimeTranscription
+    def test_realtime_transcription_honors_fun_asr_model(self):
+        """DashScope realtime uses config.model when it is fun-asr-realtime or Qwen."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_FUN_ASR_REALTIME,
+            MODEL_QWEN_REALTIME,
+        )
 
         with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True):
-            cfg = TranscriptionProviderConfig(api_key="sk-test", model="fun-asr-realtime")
-            provider = DashScopeRealtimeTranscription(cfg)
-            assert provider._model == "qwen-audio-3.0-asr-flash-streaming"
+            fun = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_FUN_ASR_REALTIME)
+            )
+            assert fun._model == MODEL_FUN_ASR_REALTIME
+            assert fun._uses_instant_vocabulary() is False
 
-    def test_realtime_start_uses_instant_vocab_and_semantic_punctuation(self):
-        """Realtime start passes instant vocabulary + semantic_punctuation_enabled."""
-        from src.meeting.transcription.dashscope_realtime import DashScopeRealtimeTranscription
+            qwen = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_QWEN_REALTIME)
+            )
+            assert qwen._model == MODEL_QWEN_REALTIME
+            assert qwen._uses_instant_vocabulary() is True
+
+    def test_realtime_unknown_model_falls_back_to_fun_asr(self):
+        """Empty / unknown realtime model falls back to fun-asr-realtime."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_FUN_ASR_REALTIME,
+        )
+
+        with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True):
+            empty = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=None)
+            )
+            assert empty._model == MODEL_FUN_ASR_REALTIME
+            bad = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model="not-a-real-model")
+            )
+            assert bad._model == MODEL_FUN_ASR_REALTIME
+
+    def test_realtime_start_qwen_uses_instant_vocab(self):
+        """Qwen realtime start passes instant vocabulary + semantic_punctuation_enabled."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_QWEN_REALTIME,
+        )
 
         mock_recognition = MagicMock()
         mock_recognition_cls = MagicMock(return_value=mock_recognition)
@@ -748,7 +780,7 @@ class TestDashScopeTranscription:
                  mock_ds,
                  create=True,
              ):
-            cfg = TranscriptionProviderConfig(api_key="sk-test")
+            cfg = TranscriptionProviderConfig(api_key="sk-test", model=MODEL_QWEN_REALTIME)
             provider = DashScopeRealtimeTranscription(cfg)
 
             import asyncio
@@ -757,16 +789,63 @@ class TestDashScopeTranscription:
                 await provider.start(
                     on_segment=lambda *a: None,
                     hot_words=[{"text": "SinkDuce", "weight": 4}],
-                    language_hints=["zh"],
+                    language_hints=["zh", "en"],
                 )
 
             asyncio.get_event_loop().run_until_complete(_run())
 
         mock_recognition_cls.assert_called_once()
         kwargs = mock_recognition_cls.call_args.kwargs
-        assert kwargs["model"] == "qwen-audio-3.0-asr-flash-streaming"
+        assert kwargs["model"] == MODEL_QWEN_REALTIME
         assert kwargs["semantic_punctuation_enabled"] is True
         assert kwargs["vocabulary"] == {"SinkDuce": 3}
+        assert "vocabulary_id" not in kwargs
+        mock_recognition.start.assert_called_once_with(language_hints=["zh", "en"])
+
+    def test_realtime_start_fun_asr_uses_precompiled_vocab_and_one_hint(self):
+        """Fun-ASR realtime uses vocabulary_id, not instant vocabulary; one language hint."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_FUN_ASR_REALTIME,
+        )
+
+        mock_recognition = MagicMock()
+        mock_recognition_cls = MagicMock(return_value=mock_recognition)
+        mock_ds = MagicMock()
+
+        with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True), \
+             patch(
+                 "src.meeting.transcription.dashscope_realtime.Recognition",
+                 mock_recognition_cls,
+                 create=True,
+             ), \
+             patch(
+                 "src.meeting.transcription.dashscope_realtime.dashscope",
+                 mock_ds,
+                 create=True,
+             ):
+            cfg = TranscriptionProviderConfig(
+                api_key="sk-test", model=MODEL_FUN_ASR_REALTIME
+            )
+            provider = DashScopeRealtimeTranscription(cfg)
+            provider._create_vocabulary = MagicMock(return_value="vocab-rt-1")
+
+            import asyncio
+
+            async def _run():
+                await provider.start(
+                    on_segment=lambda *a: None,
+                    hot_words=[{"text": "SinkDuce", "weight": 4}],
+                    language_hints=["zh", "en"],
+                )
+
+            asyncio.get_event_loop().run_until_complete(_run())
+
+        kwargs = mock_recognition_cls.call_args.kwargs
+        assert kwargs["model"] == MODEL_FUN_ASR_REALTIME
+        assert kwargs["semantic_punctuation_enabled"] is True
+        assert "vocabulary" not in kwargs
+        assert kwargs["vocabulary_id"] == "vocab-rt-1"
         mock_recognition.start.assert_called_once_with(language_hints=["zh"])
 
     def test_realtime_send_frame_before_start_raises(self):
@@ -1035,12 +1114,28 @@ class TestMeetingRoutes:
         updated = _make_meeting(title="New Title")
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.update_meeting.return_value = updated
+            mock_store.get_notes.return_value = None
             import asyncio
             result = asyncio.get_event_loop().run_until_complete(
                 update_meeting("abc123", {"title": "New Title"})
             )
 
         assert result["title"] == "New Title"
+
+    def test_update_meeting_response_includes_existing_notes(self):
+        """PUT must return notes_content so the UI does not drop live notes after summarize."""
+        from src.meeting.routes import update_meeting
+
+        updated = _make_meeting(title="Keep notes")
+        with patch("src.meeting.routes.store") as mock_store:
+            mock_store.update_meeting.return_value = updated
+            mock_store.get_notes.return_value = "Live notes from recording"
+            import asyncio
+            result = asyncio.get_event_loop().run_until_complete(
+                update_meeting("abc123", {"title": "Keep notes"})
+            )
+
+        assert result["notes_content"] == "Live notes from recording"
 
     def test_update_meeting_notes(self):
         """PUT /meetings/{id} with notes key saves notes to file."""
@@ -1050,12 +1145,14 @@ class TestMeetingRoutes:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = meeting
             mock_store.update_meeting.return_value = meeting
+            mock_store.get_notes.return_value = "New notes"
             import asyncio
             result = asyncio.get_event_loop().run_until_complete(
                 update_meeting("abc123", {"notes": "New notes"})
             )
 
         mock_store.save_notes.assert_called_once_with("abc123", "New notes")
+        assert result["notes_content"] == "New notes"
 
     def test_start_transcription_route(self):
         """POST /meetings/{id}/transcribe creates a task."""
@@ -1122,6 +1219,7 @@ class TestMeetingRoutes:
              patch("src.meeting.routes.task_manager") as mock_tm:
             mock_store.get_meeting.return_value = meeting
             mock_store.get_transcript.return_value = _make_transcript_result()
+            mock_store.get_notes.return_value = None
             mock_task = _make_task()
             mock_tm.create_task.return_value = mock_task
 
@@ -1130,7 +1228,8 @@ class TestMeetingRoutes:
                 generate_summary("abc123")
             )
 
-        assert result["message"] == "Generation started"
+        assert result["id"] == "abc123"
+        mock_tm.create_task.assert_called_once()
 
     def test_generate_summary_no_transcript(self):
         """POST /meetings/{id}/generate-summary fails when no transcript."""

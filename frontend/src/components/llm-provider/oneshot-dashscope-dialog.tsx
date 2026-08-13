@@ -23,10 +23,10 @@ interface OneShotDashscopeDialogProps {
 }
 
 const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-// File ASR is selectable in Settings (fun-asr | qwen-audio-3.0-asr-flash-filetrans).
-// OneShot defaults to fun-asr (precompiled hot words + stable batch path).
+// File / realtime ASR are selectable in Settings.
+// OneShot defaults to Fun-ASR (precompiled hot words + the same Recognition API).
 const FILE_TRANS_MODEL = "fun-asr"
-const RT_TRANS_MODEL = "qwen-audio-3.0-asr-flash-streaming"
+const RT_TRANS_MODEL = "fun-asr-realtime"
 
 export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotDashscopeDialogProps) {
   const [apiKey, setApiKey] = useState("")
@@ -64,10 +64,12 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
       for (const p of rerankList.filter((p) => p.is_default)) {
         await updateRerankProvider(p.id, { ...p, is_default: false })
       }
-      for (const p of fileTransList.filter((p) => p.is_active)) {
+      const existingFile = fileTransList.find((p) => p.adapter === "dashscope_funasr")
+      const existingRt = rtTransList.find((p) => p.adapter === "dashscope_funasr_realtime")
+      for (const p of fileTransList.filter((p) => p.is_active && p.id !== existingFile?.id)) {
         await updateFileTranscriptionProvider(p.id, { ...p, is_active: false })
       }
-      for (const p of rtTransList.filter((p) => p.is_active)) {
+      for (const p of rtTransList.filter((p) => p.is_active && p.id !== existingRt?.id)) {
         await updateRealtimeTranscriptionProvider(p.id, { ...p, is_active: false })
       }
 
@@ -106,20 +108,34 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           api_key: apiKey.trim(),
           is_default: true,
         }),
-        createFileTranscriptionProvider({
-          name: "Dashscope",
-          adapter: "dashscope_funasr",
-          model: FILE_TRANS_MODEL,
-          api_key: apiKey.trim(),
-          is_active: true,
-        }),
-        createRealtimeTranscriptionProvider({
-          name: "Dashscope",
-          adapter: "dashscope_funasr_realtime",
-          model: RT_TRANS_MODEL,
-          api_key: apiKey.trim(),
-          is_active: true,
-        }),
+        existingFile
+          ? updateFileTranscriptionProvider(existingFile.id, {
+              ...existingFile,
+              model: FILE_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            })
+          : createFileTranscriptionProvider({
+              name: "Dashscope",
+              adapter: "dashscope_funasr",
+              model: FILE_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            }),
+        existingRt
+          ? updateRealtimeTranscriptionProvider(existingRt.id, {
+              ...existingRt,
+              model: RT_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            })
+          : createRealtimeTranscriptionProvider({
+              name: "Dashscope",
+              adapter: "dashscope_funasr_realtime",
+              model: RT_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            }),
       ])
       // Set global model configs
       await updateConfig("default_chat_model", { default_chat_model: chatModel.trim() })

@@ -2136,12 +2136,17 @@ export function MeetingTabs({
   const notesSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevNotesContentRef = useRef(notesContent)
 
-  // Sync notes draft when parent content changes from external source
+  // Sync notes draft when parent content changes from external source.
+  // Empty/whitespace draft is not a real user edit — Tiptap's empty-doc
+  // onChange used to make draft !== baseline and block this until refresh.
   if (prevNotesContentRef.current !== notesContent) {
-    prevNotesContentRef.current = notesContent
-    if (notesDraft === notesBaselineRef.current) {
-      setNotesDraft(notesContent)
-      notesBaselineRef.current = notesContent
+    const incoming = notesContent ?? ""
+    const draftEmpty = !notesDraft.trim()
+    const baselineEmpty = !notesBaselineRef.current.trim()
+    prevNotesContentRef.current = incoming
+    if (notesDraft === notesBaselineRef.current || (draftEmpty && baselineEmpty)) {
+      setNotesDraft(incoming)
+      notesBaselineRef.current = incoming
     }
   }
 
@@ -2159,7 +2164,10 @@ export function MeetingTabs({
     setTranslations({})
     setAvailableLangs({})
     setIngestingTabs(new Set())
-  }, [meetingId])
+    setNotesDraft(notesContent)
+    notesBaselineRef.current = notesContent
+    prevNotesContentRef.current = notesContent
+  }, [meetingId]) // eslint-disable-line react-hooks/exhaustive-deps -- seed notes from first paint of this meeting
 
   const loadTabContent = useCallback(async (tabId: string) => {
     // Already loaded → skip

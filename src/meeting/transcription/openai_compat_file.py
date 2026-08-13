@@ -29,9 +29,10 @@ class OpenAICompatFileTranscription(FileTranscriptionProvider):
         {"code": "en", "label": "English"},
         {"code": "ja", "label": "Japanese"},
         {"code": "ko", "label": "Korean"},
-        {"code": "ms", "label": "Malay"},
+        {"code": "vi", "label": "Vietnamese"},
         {"code": "th", "label": "Thai"},
         {"code": "id", "label": "Indonesian"},
+        {"code": "ms", "label": "Malay"},
     ]
 
     def __init__(self, config: TranscriptionProviderConfig):

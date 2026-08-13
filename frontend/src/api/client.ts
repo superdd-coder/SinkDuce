@@ -1729,10 +1729,13 @@ export interface LanguageHintOption {
 export interface ActiveProviderSideInfo {
   supports_hot_words: boolean
   supported_language_hints: LanguageHintOption[]
+  /** Official language_hints cap for the active adapter+model (1 or 4). */
+  max_language_hints?: number
   /** Resolved adapter name, e.g. funasr_onnx / dashscope_funasr */
   adapter?: string | null
   id?: string | null
   name?: string | null
+  model?: string | null
   /** Registry display name for UI captions */
   display_name?: string | null
 }

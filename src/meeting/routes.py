@@ -20,6 +20,23 @@ from src.tasks.task_manager import task_manager
 logger = logging.getLogger("meeting")
 router = APIRouter()
 
+def _serialize_meeting(meeting, *, include_transcript: bool = False) -> dict:
+    """JSON for a meeting, including notes_content (GET-parity).
+
+    PUT/upload/summarize responses used to return ``model_dump()`` only. The
+    client then ``setMeeting(m)`` and dropped live notes until a full refresh.
+    """
+    data = meeting.model_dump(mode="json")
+    notes = store.get_notes(meeting.id)
+    if notes is not None:
+        data["notes_content"] = notes
+    if include_transcript:
+        transcript = store.get_transcript(meeting.id)
+        if transcript is not None:
+            data["transcript"] = transcript.model_dump(mode="json")
+    return data
+
+
 _AUDIO_MIME_TYPES = {
     "webm": "audio/webm",
     "ogg": "audio/ogg",
@@ -118,19 +135,11 @@ async def get_meeting(meeting_id: str):
         return {"error": "Meeting not found"}
     # Trust persisted needs_reingest / ingested_content_hash (set on save & allocate).
     # Do NOT re-hash every section MD here — that made GET/polling very slow.
-    data = meeting.model_dump(mode="json")
-    # Include notes content if available
-    notes = store.get_notes(meeting_id)
-    if notes is not None:
-        data["notes_content"] = notes
-    # Include transcript if available
-    transcript = store.get_transcript(meeting_id)
-    if transcript is not None:
-        data["transcript"] = transcript.model_dump(mode="json")
+    data = _serialize_meeting(meeting, include_transcript=True)
     logger.debug(
         "[GET] Meeting %s status=%s has_notes=%s has_transcript=%s audio_path=%s",
-        meeting_id, meeting.status.value, notes is not None,
-        transcript is not None, meeting.audio_path,
+        meeting_id, meeting.status.value, "notes_content" in data,
+        "transcript" in data, meeting.audio_path,
     )
     return data
 
@@ -187,7 +196,7 @@ async def discard_meeting_recording(meeting_id: str):
         logger.warning("[DISCARD] Meeting %s NOT FOUND", meeting_id)
         return {"error": str(exc)}
     logger.info("[DISCARD] Meeting %s discarded successfully", meeting_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.put("/meetings/{meeting_id}")
@@ -207,7 +216,7 @@ async def update_meeting(meeting_id: str, body: dict = Body()):
     else:
         meeting = store.get_meeting(meeting_id)
     logger.info("[UPDATE] Meeting %s updated, status=%s", meeting_id, meeting.status.value)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 # ── File Uploads ──────────────────────────────────────────────
@@ -242,7 +251,7 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
         **({} if meeting.status == MeetingStatus.completed else {"status": MeetingStatus.created}),
     )
     logger.info("[UPLOAD-AUDIO] Meeting %s updated: status=%s audio_path=%s", meeting_id, updated.status.value, updated.audio_path)
-    return updated.model_dump()
+    return _serialize_meeting(updated)
 
 
 @router.get("/meetings/{meeting_id}/audio")
@@ -327,22 +336,28 @@ async def get_active_provider_info():
     config = get_config()
 
     def _info(provider_cfg, registry, *, resolve_adapter):
+        from src.meeting.transcription.base import language_hint_limit
+
         empty = {
             "supports_hot_words": False,
             "supported_language_hints": [],
+            "max_language_hints": 1,
             "adapter": None,
             "id": None,
             "name": None,
             "display_name": None,
+            "model": None,
         }
         if not provider_cfg:
             return empty
         adapter_name = resolve_adapter(provider_cfg.adapter or "")
+        model = getattr(provider_cfg, "model", None)
         meta = {
             "adapter": adapter_name or provider_cfg.adapter or None,
             "id": provider_cfg.id or None,
             "name": provider_cfg.name or None,
             "display_name": None,
+            "model": model,
         }
         # If provider has custom language_hints_config, use it (openai_compatible etc.)
         custom = getattr(provider_cfg, "language_hints_config", None)
@@ -351,8 +366,10 @@ async def get_active_provider_info():
             if entry:
                 supports = cls_supports_hot_words(entry.cls)
                 meta["display_name"] = entry.display_name or entry.name
+                max_hints = language_hint_limit(entry.cls, model)
             else:
                 supports = False
+                max_hints = 1
             # Build hint list from custom config, ensuring "auto" is always first
             hints = [{"code": h.get("code", ""), "label": h.get("label", "")} for h in custom]
             if not any(h["code"] == "auto" for h in hints):
@@ -360,6 +377,7 @@ async def get_active_provider_info():
             return {
                 "supports_hot_words": supports,
                 "supported_language_hints": hints,
+                "max_language_hints": max_hints,
                 **meta,
             }
         entry = registry.get(adapter_name)
@@ -373,6 +391,7 @@ async def get_active_provider_info():
             "supported_language_hints": list(
                 getattr(adapter_cls, "SUPPORTED_LANGUAGE_HINTS", [])
             ),
+            "max_language_hints": language_hint_limit(adapter_cls, model),
             **meta,
         }
 
@@ -781,7 +800,7 @@ async def generate_summary(meeting_id: str):
     )
     logger.info("[SUMMARY] Task created for meeting %s: task_id=%s", meeting_id, task.id)
     updated = store.get_meeting(meeting_id)
-    return updated.model_dump()
+    return _serialize_meeting(updated) if updated else {"error": "Meeting not found"}
 
 
 def _sse_event(event: str, data: object) -> str:
@@ -873,7 +892,7 @@ async def start_extract(meeting_id: str, body: dict = Body()):
     except RuntimeError as exc:
         return {"error": str(exc)}
     logger.info("[EXTRACT] Started for meeting %s", meeting_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.delete("/meetings/{meeting_id}/sections/{tab_id}")
@@ -886,7 +905,7 @@ async def delete_section(meeting_id: str, tab_id: str):
         return {"error": str(exc)}
     except RuntimeError as exc:
         return {"error": str(exc)}
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.post("/meetings/{meeting_id}/sections/{tab_id}/regenerate")
@@ -904,7 +923,7 @@ async def regenerate_section(meeting_id: str, tab_id: str):
     except RuntimeError as exc:
         return {"error": str(exc)}
     logger.info("[REGENERATE] Started for meeting %s tab=%s", meeting_id, tab_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.post("/meetings/{meeting_id}/sections/{tab_id}/allocate")
@@ -941,7 +960,7 @@ async def allocate_section(meeting_id: str, tab_id: str, body: dict):
         bridge.get("task_id"),
         (bridge.get("node_id") or "")[:12],
     )
-    out = meeting.model_dump()
+    out = _serialize_meeting(meeting)
     out.update(bridge)
     return out
 
@@ -1017,7 +1036,7 @@ async def mark_todo_candidates_created(meeting_id: str, body: dict):
         meeting = meeting_service.mark_todo_candidates_created(meeting_id, items)
     except FileNotFoundError as exc:
         return {"error": str(exc)}
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.delete("/meetings/{meeting_id}/sections/{tab_id}/allocate")
@@ -1031,7 +1050,7 @@ async def delete_section_allocation(meeting_id: str, tab_id: str):
     except ValueError as exc:
         return {"error": str(exc)}
     logger.info("[DELETE_ALLOCATION] Done meeting %s tab=%s", meeting_id, tab_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.get("/meetings/{meeting_id}/sections/{tab_id}/md")
@@ -1093,7 +1112,7 @@ async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Bod
         len(content),
         needs_reingest,
     )
-    meeting_payload = meeting.model_dump(mode="json") if meeting else None
+    meeting_payload = _serialize_meeting(meeting) if meeting else None
     return {
         "ok": True,
         "path": path,

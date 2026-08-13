@@ -6,8 +6,12 @@ import {
 import { Languages } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { LanguageHintOption } from "@/api/client"
+import {
+  DEFAULT_LANGUAGE_HINTS,
+  toggleLanguageHint,
+} from "@/lib/language-hints"
 
-export const DEFAULT_LANGUAGE_HINTS = ["auto"]
+export { DEFAULT_LANGUAGE_HINTS, toggleLanguageHint }
 
 /** Short rotating tips — explicit language improves ASR accuracy */
 const LANG_HINT_MESSAGES = [
@@ -25,32 +29,6 @@ const HINT_MIN_INTERVAL = 2200
 const HINT_MAX_INTERVAL = 4800
 const HINT_EXIT_MS = 320
 
-/**
- * Toggle language hint selection with auto exclusivity:
- * - pick "auto" → only ["auto"]
- * - pick any language → drop "auto", multi-select languages
- * - deselect last language → fall back to ["auto"]
- */
-export function toggleLanguageHint(selected: string[], code: string): string[] {
-  const isAuto = code === "auto"
-  const isOn = selected.includes(code)
-
-  if (isAuto) {
-    // Selecting auto clears others; deselecting auto with nothing else → stay auto
-    return isOn ? ["auto"] : ["auto"]
-  }
-
-  if (isOn) {
-    const next = selected.filter((c) => c !== code && c !== "auto")
-    return next.length === 0 ? ["auto"] : next
-  }
-
-  // Add language, strip auto
-  const withoutAuto = selected.filter((c) => c !== "auto")
-  if (withoutAuto.includes(code)) return withoutAuto
-  return [...withoutAuto, code]
-}
-
 interface Props {
   selected: string[]
   onChange: (hints: string[]) => void
@@ -61,6 +39,8 @@ interface Props {
   disabled?: boolean
   /** Compact control (review footer) — no full-width stretch */
   compact?: boolean
+  /** Official cap for the active model (1 = single-select, 4 = Qwen). */
+  maxHints?: number
 }
 
 export function LanguageHintsSelector({
@@ -70,6 +50,7 @@ export function LanguageHintsSelector({
   showTipBubble = true,
   disabled = false,
   compact = false,
+  maxHints = 1,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [hintVisible, setHintVisible] = useState(false)
@@ -125,7 +106,7 @@ export function LanguageHintsSelector({
   }, [showTipBubble, open, disabled])
 
   const toggle = (code: string) => {
-    onChange(toggleLanguageHint(selected, code))
+    onChange(toggleLanguageHint(selected, code, maxHints))
   }
 
   const isAutoOnly =
@@ -206,8 +187,9 @@ export function LanguageHintsSelector({
             </DialogTitle>
           </DialogHeader>
           <p className="pm-meta -mt-1">
-            Languages that may appear in the audio. Choosing a language clears Auto;
-            Auto clears every language.
+            {maxHints <= 1
+              ? "This model accepts one language. Auto lets it detect the language."
+              : `This model accepts up to ${maxHints} languages. Auto lets it detect.`}
           </p>
           <div className="pm-lang-pills" role="group" aria-label="Language hints">
             {pills.map(({ code, label }) => {

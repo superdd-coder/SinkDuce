@@ -23,6 +23,23 @@ from src.rag.chunker import TextChunker, ParagraphChunker
 logger = logging.getLogger(__name__)
 
 
+_ASR_STAGGER_SEC = 3
+
+
+def _should_start_transcription_load(cfg) -> bool:
+    """True when a local ASR provider still needs a background load."""
+    if not cfg:
+        return False
+    from src.meeting.transcription import is_local_asr_adapter
+    from src.providers.load_state import get_state
+
+    if not is_local_asr_adapter(cfg.adapter):
+        return False
+    if get_state(cfg.id) in ("loaded", "loading"):
+        return False
+    return _is_builtin_model_downloaded(cfg.id)
+
+
 def _preload_transcription_providers(config):
     """Load local transcription providers at startup when they are the default.
 
@@ -30,6 +47,10 @@ def _preload_transcription_providers(config):
     global load semaphore before the second one tries, serializing the
     actual model loading to avoid OOM from loading two large FunASR models
     simultaneously.  The semaphore itself (Semaphore(1)) handles the rest.
+
+    The stagger sleep runs only when both a file load and a realtime load
+    are actually being started. Settings save / set-default must not pay
+    this cost when ASR is cloud-only or already in memory.
     """
     import time as _time
     from src.providers.cache import invalidate as cache_invalidate
@@ -40,21 +61,22 @@ def _preload_transcription_providers(config):
     def _trigger_load(cfg, providers, label):
         """Fire-and-forget load for one transcription provider."""
         if not cfg or not is_local_asr_adapter(cfg.adapter):
-            return
+            return False
         if not _is_builtin_model_downloaded(cfg.id):
             logger.info("Built-in %s transcription model not downloaded, deactivating", label)
             for p in providers:
                 if p.id == cfg.id:
                     p.is_active = False
             save_config(config)
-            return
+            return False
         if get_state(cfg.id) in ("loaded", "loading"):
             logger.info("Transcription provider %s already %s, skipping", cfg.id, get_state(cfg.id))
-            return
+            return False
         reload_provider(cfg.id, loading=True)
+        return True
 
     # --- File transcription (starts first) ---
-    _trigger_load(
+    file_started = _trigger_load(
         config.transcription.active_file_provider,
         config.transcription.file_providers,
         "file",
@@ -67,19 +89,21 @@ def _preload_transcription_providers(config):
                 cache_invalidate(key)
                 logger.info("Unloaded inactive local file transcription provider: %s", key)
 
-    # Stagger: let file model acquire the semaphore before realtime starts
-    _time.sleep(3)
+    rt_cfg = config.transcription.active_realtime_provider
+    # Stagger only when both loads will actually run.
+    if file_started and _should_start_transcription_load(rt_cfg):
+        _time.sleep(_ASR_STAGGER_SEC)
 
-    # --- Realtime transcription (starts 3s later, waits on semaphore) ---
+    # --- Realtime transcription (starts later, waits on semaphore) ---
     _trigger_load(
-        config.transcription.active_realtime_provider,
+        rt_cfg,
         config.transcription.realtime_providers,
         "realtime",
     )
     for key in list(_provider_cache_snapshot()):
         if key.startswith("rt_trans:"):
-            rt_cfg = config.transcription.active_realtime_provider
-            if not rt_cfg or not is_local_asr_adapter(rt_cfg.adapter):
+            active_rt = config.transcription.active_realtime_provider
+            if not active_rt or not is_local_asr_adapter(active_rt.adapter):
                 cache_invalidate(key)
                 logger.info("Unloaded inactive local realtime transcription provider: %s", key)
 
@@ -303,18 +327,18 @@ class Services:
 services = Services()
 
 
-def reload_services():
+def reload_services(*, preload_transcription: bool = True):
     """Reinitialize services after config change with rollback on failure."""
     global services
     old_services = services
     try:
-        init_services()
+        init_services(preload_transcription=preload_transcription)
     except Exception:
         services = old_services
         raise
 
 
-async def async_reload_services():
+async def async_reload_services(*, preload_transcription: bool = True):
     """Async version — runs init_services() in a thread to avoid blocking the event loop."""
     import asyncio
     loop = asyncio.get_running_loop()
@@ -324,7 +348,7 @@ async def async_reload_services():
     def _do_reload():
         nonlocal old_services
         old_services = services
-        init_services()
+        init_services(preload_transcription=preload_transcription)
 
     try:
         await loop.run_in_executor(None, _do_reload)
@@ -333,7 +357,131 @@ async def async_reload_services():
         raise
 
 
-def init_services():
+def _invalidate_enrichment_llm_cache() -> None:
+    from src.providers.cache import invalidate as _cache_invalidate
+
+    for _key in list(_provider_cache_snapshot()):
+        if _key.startswith("llm:enrich:"):
+            _cache_invalidate(_key)
+
+
+def _bind_llm_dependents() -> None:
+    """Wire RAG objects that hold an LLM instance."""
+    if services.llm and services.retriever:
+        services.direct_query = DirectQueryModule(
+            retriever=services.retriever,
+            db=services.db,
+            reranker=services.reranker,
+            llm=services.llm,
+        )
+        services.variant_fetcher = VariantFetcher(
+            direct_module=services.direct_query,
+            llm=services.llm,
+            reranker=services.reranker,
+        )
+        services.catalog = CollectionCatalog(
+            db=services.db,
+            llm=services.llm,
+        )
+        services.decomposer = Decomposer(llm=services.llm)
+        services.aggregator = Aggregator(llm=services.llm)
+        services.agentic_query = AgenticQueryService(
+            direct_module=services.direct_query,
+            variant_fetcher=services.variant_fetcher,
+            catalog=services.catalog,
+            decomposer=services.decomposer,
+            aggregator=services.aggregator,
+            llm=services.llm,
+        )
+        services.contextual = ContextualRetrieval(
+            llm=services.llm,
+            context_window=1,
+        )
+    else:
+        services.direct_query = None
+        services.variant_fetcher = None
+        services.catalog = None
+        services.decomposer = None
+        services.aggregator = None
+        services.agentic_query = None
+        services.contextual = None
+
+
+def _bind_chatbox_agent(config) -> None:
+    """Rebuild ChatboxAgent from current services + config."""
+    services.chatbox_agent = None
+    if services.agentic_query and services.session_store:
+        chat_llm = _resolve_chat_llm(config)
+        if chat_llm:
+            from src.chatbox.agent import ChatboxAgent
+            services.chatbox_agent = ChatboxAgent(
+                session_store=services.session_store,
+                chat_llm=chat_llm,
+                agentic_service=services.agentic_query,
+                direct_module=services.direct_query,
+            )
+            logger.info("ChatboxAgent initialized with model=%s",
+                        getattr(chat_llm, "_model", "unknown"))
+        else:
+            logger.warning(
+                "No chat LLM with function_call_model_ids configured — "
+                "chat endpoint will return 503. Enable Function Calling "
+                "on model(s) in LLM Settings and configure default_chat_model."
+            )
+
+
+def refresh_llm_runtime() -> None:
+    """Apply LLM Settings changes without reconnecting Qdrant or loading ASR.
+
+    Used by LLM add / update / set-default so the Settings UI is not blocked
+    on transcription stagger (3s) or a new Qdrant client handshake.
+    """
+    config = get_config()
+    snapshot = (
+        services.config,
+        services.llm,
+        services.direct_query,
+        services.variant_fetcher,
+        services.catalog,
+        services.decomposer,
+        services.aggregator,
+        services.agentic_query,
+        services.contextual,
+        services.chatbox_agent,
+    )
+    try:
+        services.config = config
+        _invalidate_enrichment_llm_cache()
+        if config.llm.providers:
+            services.llm = create_llm_provider(config.llm)
+            logger.info("LLM provider refreshed from user config")
+        else:
+            services.llm = None
+        _bind_llm_dependents()
+        _bind_chatbox_agent(config)
+    except Exception:
+        (
+            services.config,
+            services.llm,
+            services.direct_query,
+            services.variant_fetcher,
+            services.catalog,
+            services.decomposer,
+            services.aggregator,
+            services.agentic_query,
+            services.contextual,
+            services.chatbox_agent,
+        ) = snapshot
+        raise
+
+
+async def async_refresh_llm_runtime() -> None:
+    import asyncio
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, refresh_llm_runtime)
+
+
+def init_services(*, preload_transcription: bool = True):
     config = get_config()
     services.config = config
 
@@ -342,10 +490,7 @@ def init_services():
     # its provider instance to avoid per-upload cold-start (TCP+TLS handshake)
     # on the slow summary LLM call — without invalidation, a stale provider would
     # silently keep being used after the user updates Settings.
-    from src.providers.cache import invalidate as _cache_invalidate
-    for _key in list(_provider_cache_snapshot()):
-        if _key.startswith("llm:enrich:"):
-            _cache_invalidate(_key)
+    _invalidate_enrichment_llm_cache()
 
     services.db = QdrantManager(host=config.qdrant.host, port=config.qdrant.port)
 
@@ -397,70 +542,13 @@ def init_services():
     services.retriever = Retriever(db=services.db, embedding=services.embedding) if services.embedding else None
     services.reranker = Reranker(provider=services.reranker_provider, top_k=config.rag.rerank_top_k) if services.reranker_provider else None
 
-    # LLM + embedding dependent services
-    if services.llm and services.retriever:
-        services.direct_query = DirectQueryModule(
-            retriever=services.retriever,
-            db=services.db,
-            reranker=services.reranker,
-            llm=services.llm,
-        )
-        services.variant_fetcher = VariantFetcher(
-            direct_module=services.direct_query,
-            llm=services.llm,
-            reranker=services.reranker,
-        )
-        services.catalog = CollectionCatalog(
-            db=services.db,
-            llm=services.llm,
-        )
-        services.decomposer = Decomposer(llm=services.llm)
-        services.aggregator = Aggregator(llm=services.llm)
-        services.agentic_query = AgenticQueryService(
-            direct_module=services.direct_query,
-            variant_fetcher=services.variant_fetcher,
-            catalog=services.catalog,
-            decomposer=services.decomposer,
-            aggregator=services.aggregator,
-            llm=services.llm,
-        )
-        services.contextual = ContextualRetrieval(
-            llm=services.llm,
-            context_window=1,
-        )
-    else:
-        services.direct_query = None
-        services.variant_fetcher = None
-        services.catalog = None
-        services.decomposer = None
-        services.aggregator = None
-        services.agentic_query = None
-        services.contextual = None
+    _bind_llm_dependents()
 
-    # Clean up inactive transcription providers from cache
-    _preload_transcription_providers(config)
+    if preload_transcription:
+        _preload_transcription_providers(config)
 
     # Session store (sqlite3, zero new deps)
     from src.db.sessions import SessionStore
     services.session_store = SessionStore()
 
-    # ChatboxAgent — requires an LLM provider with function_call_model_ids
-    services.chatbox_agent = None
-    if services.agentic_query and services.session_store:
-        chat_llm = _resolve_chat_llm(config)
-        if chat_llm:
-            from src.chatbox.agent import ChatboxAgent
-            services.chatbox_agent = ChatboxAgent(
-                session_store=services.session_store,
-                chat_llm=chat_llm,
-                agentic_service=services.agentic_query,
-                direct_module=services.direct_query,
-            )
-            logger.info("ChatboxAgent initialized with model=%s",
-                        getattr(chat_llm, "_model", "unknown"))
-        else:
-            logger.warning(
-                "No chat LLM with function_call_model_ids configured — "
-                "chat endpoint will return 503. Enable Function Calling "
-                "on model(s) in LLM Settings and configure default_chat_model."
-            )
+    _bind_chatbox_agent(config)

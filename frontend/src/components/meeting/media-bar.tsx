@@ -47,6 +47,7 @@ interface MediaBarProps {
   languageHints?: string[]
   languageHintOptions?: LanguageHintOption[]
   onChangeLanguageHints?: (hints: string[]) => void
+  maxLanguageHints?: number
   showLanguageSelector?: boolean
   onTimeUpdate?: (time: number) => void
   recorderError?: string | null
@@ -88,6 +89,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   languageHints = [],
   languageHintOptions = [],
   onChangeLanguageHints,
+  maxLanguageHints = 1,
   showLanguageSelector,
   onTimeUpdate,
   recorderError,
@@ -744,6 +746,11 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                 align="end"
                 className="pm-lang-menu min-w-[220px]"
               >
+                <p className="pm-meta px-1 pb-1.5">
+                  {maxLanguageHints <= 1
+                    ? "One language for this model"
+                    : `Up to ${maxLanguageHints} languages`}
+                </p>
                 <div className="pm-lang-pills pm-lang-pills--menu" role="group" aria-label="Language hints">
                   {(() => {
                     const opts = languageHintOptions.some((o) => o.code === "auto")
@@ -762,7 +769,9 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                           className={cn("pm-lang-pill", isSelected ? "is-on" : "is-off")}
                           aria-pressed={isSelected}
                           onClick={() => {
-                            onChangeLanguageHints?.(toggleLanguageHint(languageHints, code))
+                            onChangeLanguageHints?.(
+                              toggleLanguageHint(languageHints, code, maxLanguageHints),
+                            )
                           }}
                         >
                           <span className="pm-lang-pill-label">{label}</span>

@@ -46,6 +46,7 @@ import {
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
 import { DEFAULT_LANGUAGE_HINTS, LanguageHintsSelector } from "./language-hints-selector"
+import { clipLanguageHints } from "@/lib/language-hints"
 import { HotWordsSelector } from "./hot-words-selector"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { LiveCaptureControlCard } from "./live-capture-control-card"
@@ -257,6 +258,19 @@ const CaptureMiniPlayer = forwardRef<
   )
 })
 
+/** Keep live notes when a mutation response omitted notes_content (PUT/upload). */
+function mergeMeetingUpdate(prev: Meeting | null, next: Meeting): Meeting {
+  if (
+    prev &&
+    prev.id === next.id &&
+    next.notes_content === undefined &&
+    prev.notes_content !== undefined
+  ) {
+    return { ...next, notes_content: prev.notes_content }
+  }
+  return next
+}
+
 export function MeetingView({ active = true }: { active?: boolean }) {
   const {
     activeMeeting,
@@ -279,6 +293,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [meeting, setMeeting] = useState<Meeting | null>(null)
+  const applyMeeting = useCallback((m: Meeting) => {
+    setMeeting((prev) => mergeMeetingUpdate(prev, m))
+  }, [])
+  const liveNotesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Draft notes while recording survive switching away and back */
+  const liveNotesDraftsRef = useRef<Map<string, string>>(new Map())
   const meetingContentRef = useRef<HTMLDivElement>(null)
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([])
 
@@ -309,6 +329,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const captureOwnerRef = useRef<string | null>(null)
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
+  const [maxLanguageHints, setMaxLanguageHints] = useState(1)
   /** Active adapter hot-words capability (from registry class flag) */
   const [fileSupportsHotWords, setFileSupportsHotWords] = useState(false)
   const [rtSupportsHotWords, setRtSupportsHotWords] = useState(false)
@@ -653,11 +674,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   // Per-meeting setter: persists to map + updates state
   const updateLanguageHints = (hints: string[]) => {
-    setLanguageHints(hints)
+    const next = clipLanguageHints(hints, maxLanguageHints)
+    setLanguageHints(next)
     if (activeMeeting) {
       perMeetingLanguageHints.current.set(
         `${activeMeeting}:${languagePathRef.current}`,
-        hints,
+        next,
       )
     }
   }
@@ -686,6 +708,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         languagePathRef.current = useRt ? "rt" : "file"
         setFileSupportsHotWords(!!info.file?.supports_hot_words)
         setRtSupportsHotWords(!!info.realtime?.supports_hot_words)
+        const side = useRt ? info.realtime : info.file
+        const maxHints = Math.max(1, side?.max_language_hints ?? 1)
+        setMaxLanguageHints(maxHints)
 
         const supportedCodes = new Set(hints.map((h) => h.code))
         const mid = opts?.meetingId ?? activeMeeting
@@ -697,7 +722,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         const stored = perMeetingLanguageHints.current.get(storeKey)
         const pick = (codes: string[]) => {
           const filtered = codes.filter((c) => supportedCodes.has(c))
-          if (filtered.length > 0) return filtered
+          if (filtered.length > 0) return clipLanguageHints(filtered, maxHints)
           if (supportedCodes.has("auto")) return ["auto"]
           return hints[0]?.code ? [hints[0].code] : [...DEFAULT_LANGUAGE_HINTS]
         }
@@ -760,13 +785,13 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       const m = await getMeeting(id)
       // Guard: if activeMeeting changed while fetching, discard stale result
       if (fetchMeetingIdRef.current !== id) return
-      setMeeting(m)
+      applyMeeting(m)
       // If a background task is in progress, resume polling.
       // Update meeting on every poll tick so children (MeetingTabs) stay in sync.
       // Polling for busy processing is started by the active-view effect below
       // (avoids network churn while Meeting sidebar is hidden).
     } catch { /* ignore */ }
-  }, [])
+  }, [applyMeeting])
 
   // Fetch transcript (stale-safe — never clear previous segments mid-switch)
   const fetchTranscript = useCallback(async (id: string) => {
@@ -1058,7 +1083,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         .then((m) => {
           // Only replace detail panel if user is still viewing that meeting
           if (fetchMeetingIdRef.current === uploadTo || activeMeeting === uploadTo) {
-            setMeeting(m)
+            applyMeeting(m)
             setAudioVersion((v) => v + 1)
           }
           toast.success("Audio uploaded")
@@ -1102,7 +1127,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (!activeMeeting) return
     try {
       const m = await uploadMeetingAudio(activeMeeting, file)
-      setMeeting(m)
+      applyMeeting(m)
       setAudioVersion((v) => v + 1)
       toast.success("Audio ready — review then Transcribe")
       fetchMeetings()
@@ -1179,6 +1204,19 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const handleStopRecording = useCallback(() => {
     // Keep captureOwnerRef for upload target even if user is viewing another meeting
     const owner = captureOwnerRef.current ?? recordingMeetingId
+    // Flush live notes immediately so Studio/Summarize does not mount on a stale empty field
+    if (liveNotesTimer.current) {
+      clearTimeout(liveNotesTimer.current)
+      liveNotesTimer.current = null
+    }
+    if (owner) {
+      const draft = liveNotesDraftsRef.current.get(owner)
+      if (draft !== undefined) {
+        updateMeeting(owner, { notes: draft })
+          .then((m) => applyMeeting(m))
+          .catch(() => {})
+      }
+    }
     // Lock Capture on "Transcribing" UI before realtime save sets status=completed
     // (otherwise speakers gate flashes until file-tx starts).
     if (owner && hasFileProvider) {
@@ -1195,6 +1233,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     clearRecordingOwner,
     recordingMeetingId,
     hasFileProvider,
+    applyMeeting,
   ])
 
   /** Uncommitted hot-words pick when a transcript already exists (cleared on leave / refresh). */
@@ -1217,7 +1256,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (draft !== undefined) {
       try {
         const m = await updateMeeting(activeMeeting, { hot_words_library_id: draft })
-        setMeeting(m)
+        applyMeeting(m)
         hotWordsDraftRef.current = undefined
       } catch (err) {
         toast.error(
@@ -1363,7 +1402,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
 
   const handleMeetingUpdate = useCallback((m: Meeting) => {
-    setMeeting(m)
+    applyMeeting(m)
     if (activeMeeting) {
       fetchMeetings()
       // If meeting just became busy (Summarize/Extract/Regenerate triggered),
@@ -1387,7 +1426,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (!activeMeeting || !titleDraft.trim()) { setEditingTitle(false); return }
     try {
       const m = await updateMeeting(activeMeeting, { title: titleDraft.trim() })
-      setMeeting(m)
+      applyMeeting(m)
       setEditingTitle(false)
       fetchMeetings()
     } catch (err) {
@@ -1399,7 +1438,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (!activeMeeting) return
     try {
       const m = await updateMeeting(activeMeeting, { hot_words_library_id: libraryId })
-      setMeeting(m)
+      applyMeeting(m)
     } catch (err) {
       toast.error(`Failed to update hot words: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -1605,7 +1644,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       const updated = { ...(meeting.speaker_names ?? {}), [speakerId]: name }
       updateMeeting(meeting.id, { speaker_names: updated })
         .then((m) => {
-          setMeeting(m)
+          applyMeeting(m)
           void import("@/components/ui/tiptap-editor").then((mod) => {
             mod.invalidateMeetingSpeakerCache(meeting.id)
           })
@@ -1619,9 +1658,6 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   const emptyUploadRef = useRef<HTMLInputElement>(null)
   const [liveNotes, setLiveNotes] = useState(meeting?.notes_content ?? "")
-  const liveNotesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** Draft notes while recording survive switching away and back */
-  const liveNotesDraftsRef = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     if (!meeting?.id) return
     const draft = liveNotesDraftsRef.current.get(meeting.id)
@@ -1634,7 +1670,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (liveNotesTimer.current) clearTimeout(liveNotesTimer.current)
     liveNotesTimer.current = setTimeout(() => {
       updateMeeting(activeMeeting, { notes: value })
-        .then((m) => setMeeting(m))
+        .then((m) => applyMeeting(m))
         .catch(() => {})
     }, 800)
   }
@@ -1720,6 +1756,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                         selected={languageHints}
                         onChange={updateLanguageHints}
                         options={supportedLanguageHints}
+                        maxHints={maxLanguageHints}
                       />
                     )}
                   </div>
@@ -1831,6 +1868,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                         selected={languageHints}
                         onChange={updateLanguageHints}
                         options={supportedLanguageHints}
+                        maxHints={maxLanguageHints}
                         showTipBubble
                       />
                     )}
@@ -1904,6 +1942,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                         selected={languageHints}
                         onChange={updateLanguageHints}
                         options={supportedLanguageHints}
+                        maxHints={maxLanguageHints}
                         disabled
                         showTipBubble={false}
                       />
@@ -2025,6 +2064,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                             selected={languageHints}
                             onChange={updateLanguageHints}
                             options={supportedLanguageHints}
+                            maxHints={maxLanguageHints}
                             compact
                             showTipBubble={false}
                           />
@@ -2069,6 +2109,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                           selected={languageHints}
                           onChange={updateLanguageHints}
                           options={supportedLanguageHints}
+                          maxHints={maxLanguageHints}
                           compact
                           showTipBubble={false}
                         />
@@ -2344,6 +2385,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                       languageHints={languageHints}
                       languageHintOptions={supportedLanguageHints}
                       onChangeLanguageHints={updateLanguageHints}
+                      maxLanguageHints={maxLanguageHints}
                       showLanguageSelector={!!meeting.audio_path}
                       onTimeUpdate={setPlaybackTime}
                       recorderError={recorder.error}

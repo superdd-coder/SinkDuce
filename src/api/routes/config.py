@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body
 
 from src.api.schemas import ConfigUpdateRequest
 from src.config import get_config, save_config, reload_config, LLMProviderConfig, EmbeddingProviderConfig, RerankProviderConfig, TranscriptionProviderConfig
-from src.services import async_reload_services
+from src.services import async_refresh_llm_runtime, async_reload_services
 from src.providers.cache import get_or_create as cached_provider, invalidate as invalidate_provider
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,85 @@ def _clean_error(e: Exception) -> str:
     if "<!doctype html>" in msg.lower() or "<html" in msg.lower():
         msg = msg.split("<html")[0].split("<!doctype")[0].strip()
     return msg[:500]
+
+
+def _add_to_provider_list(providers: list, provider, *, flag: str = "is_default"):
+    """Append a provider; exclusive *flag* is is_default or is_active."""
+    if not getattr(provider, "id", None):
+        provider.id = str(uuid.uuid4())
+    if getattr(provider, flag, False):
+        for p in providers:
+            setattr(p, flag, False)
+    elif not providers:
+        setattr(provider, flag, True)
+    copy = provider.model_copy()
+    providers.append(copy)
+    return copy
+
+
+def _apply_provider_update(
+    providers: list,
+    provider_id: str,
+    update: dict,
+    *,
+    int_fields: set[str] | frozenset[str] = frozenset(),
+    bool_fields: set[str] | frozenset[str] = frozenset(),
+    exclusive_flag: str = "is_default",
+):
+    """Patch one provider in *providers*. Returns it, or None if missing."""
+    from src.secrets import skip_secret_write
+
+    ints = set(int_fields)
+    bools = set(bool_fields)
+    for i, p in enumerate(providers):
+        if p.id != provider_id:
+            continue
+        for key, value in update.items():
+            if key == "id":
+                continue
+            if skip_secret_write(key, value):
+                continue
+            if hasattr(p, key):
+                if key in ints and value is not None:
+                    value = int(value)
+                elif key in bools:
+                    value = bool(value)
+                setattr(providers[i], key, value)
+        if update.get(exclusive_flag):
+            for j, other in enumerate(providers):
+                if j != i:
+                    setattr(other, exclusive_flag, False)
+        return providers[i]
+    return None
+
+
+def _remove_provider(
+    providers: list,
+    provider_id: str,
+    *,
+    exclusive_flag: str = "is_default",
+    promote: bool = False,
+):
+    """Remove by id. Returns (removed, remaining). removed is None if missing."""
+    target = next((p for p in providers if p.id == provider_id), None)
+    if not target:
+        return None, providers
+    rest = [p for p in providers if p.id != provider_id]
+    if promote and getattr(target, exclusive_flag, False) and rest:
+        setattr(rest[0], exclusive_flag, True)
+    return target, rest
+
+
+def _set_exclusive_flag(providers: list, provider_id: str, *, flag: str = "is_default"):
+    """Set *flag* on one provider and clear it on siblings. None if missing."""
+    found = None
+    for p in providers:
+        if p.id == provider_id:
+            setattr(p, flag, True)
+            found = p
+        else:
+            setattr(p, flag, False)
+    return found
 
 
 @router.get("/config")
@@ -402,70 +481,46 @@ def list_llm_providers():
 @router.post("/llm/providers")
 async def add_llm_provider(provider: LLMProviderConfig):
     config = get_config()
-    if not provider.id:
-        provider.id = str(uuid.uuid4())
-    if provider.is_default:
-        for p in config.llm.providers:
-            p.is_default = False
-    elif not config.llm.providers:
-        provider.is_default = True
-    config.llm.providers.append(provider.model_copy())
+    added = _add_to_provider_list(config.llm.providers, provider)
     save_config(config)
     reload_config()
-    await async_reload_services()
+    await async_refresh_llm_runtime()
     from src.secrets import redact_mapping
 
-    return redact_mapping(provider.model_dump())
+    return redact_mapping(added.model_dump())
 
 
 @router.put("/llm/providers/{provider_id}")
 async def update_llm_provider(provider_id: str, update: dict = Body()):
-    from src.secrets import redact_mapping, skip_secret_write
-
     config = get_config()
-    _int_fields: set[str] = set()
-    _bool_fields = {"is_default"}
-    for i, p in enumerate(config.llm.providers):
-        if p.id == provider_id:
-            for key, value in update.items():
-                if key == "id":
-                    continue
-                if skip_secret_write(key, value):
-                    continue
-                if hasattr(p, key):
-                    if key in _int_fields and value is not None:
-                        value = int(value)
-                    elif key in _bool_fields:
-                        value = bool(value)
-                    setattr(config.llm.providers[i], key, value)
-            # If setting this provider as default, clear default on all others
-            if update.get("is_default"):
-                for j, other in enumerate(config.llm.providers):
-                    if j != i:
-                        other.is_default = False
-            # If visual_model_ids changed, clean up stale visual_model_id config
-            if "visual_model_ids" in update:
-                all_visual = {
-                    m
-                    for prov in config.llm.providers
-                    for m in (prov.visual_model_ids or [])
-                }
-                if config.visual_model_id and config.visual_model_id not in all_visual:
-                    config.visual_model_id = None
-            # If function_call_model_ids changed, clean up stale default_chat_model
-            if "function_call_model_ids" in update:
-                all_chat = {
-                    m
-                    for prov in config.llm.providers
-                    for m in (prov.function_call_model_ids or [])
-                }
-                if config.default_chat_model and config.default_chat_model not in all_chat:
-                    config.default_chat_model = None
-            save_config(config)
-            reload_config()
-            await async_reload_services()
-            return _public_dump(config.llm.providers[i])
-    return {"error": f"Provider '{provider_id}' not found"}
+    found = _apply_provider_update(
+        config.llm.providers,
+        provider_id,
+        update,
+        bool_fields={"is_default"},
+    )
+    if not found:
+        return {"error": f"Provider '{provider_id}' not found"}
+    if "visual_model_ids" in update:
+        all_visual = {
+            m
+            for prov in config.llm.providers
+            for m in (prov.visual_model_ids or [])
+        }
+        if config.visual_model_id and config.visual_model_id not in all_visual:
+            config.visual_model_id = None
+    if "function_call_model_ids" in update:
+        all_chat = {
+            m
+            for prov in config.llm.providers
+            for m in (prov.function_call_model_ids or [])
+        }
+        if config.default_chat_model and config.default_chat_model not in all_chat:
+            config.default_chat_model = None
+    save_config(config)
+    reload_config()
+    await async_refresh_llm_runtime()
+    return _public_dump(found)
 
 
 def _provider_display_name(provider, fallback_id: str = "") -> str:
@@ -480,12 +535,11 @@ def _provider_display_name(provider, fallback_id: str = "") -> str:
 @router.delete("/llm/providers/{provider_id}")
 async def delete_llm_provider(provider_id: str):
     config = get_config()
-    target = next((p for p in config.llm.providers if p.id == provider_id), None)
+    target, rest = _remove_provider(config.llm.providers, provider_id)
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
     label = _provider_display_name(target, provider_id)
-    config.llm.providers = [p for p in config.llm.providers if p.id != provider_id]
-    # Clean up stale visual_model_id / default_chat_model
+    config.llm.providers = rest
     all_visual = {m for prov in config.llm.providers for m in (prov.visual_model_ids or [])}
     if config.visual_model_id and config.visual_model_id not in all_visual:
         config.visual_model_id = None
@@ -532,21 +586,14 @@ async def set_default_llm_provider(provider_id: str):
     _log = logging.getLogger("api.llm")
     _log.info("Set default LLM: %s", provider_id)
     config = get_config()
-    found = False
-    display_name = provider_id
-    for p in config.llm.providers:
-        if p.id == provider_id:
-            p.is_default = True
-            found = True
-            display_name = (p.name or "").strip() or provider_id
-        else:
-            p.is_default = False
+    found = _set_exclusive_flag(config.llm.providers, provider_id)
     if not found:
         _log.warning("Set default LLM failed: provider '%s' not found", provider_id)
         return {"error": f"Provider '{provider_id}' not found"}
+    display_name = _provider_display_name(found, provider_id)
     save_config(config)
     reload_config()
-    await async_reload_services()
+    await async_refresh_llm_runtime()
     return {"message": f"Provider '{display_name}' set as default"}
 
 
@@ -567,62 +614,41 @@ def list_embedding_providers():
 @router.post("/embedding/providers")
 async def add_embedding_provider(provider: EmbeddingProviderConfig):
     config = get_config()
-    if not provider.id:
-        provider.id = str(uuid.uuid4())
-    if provider.is_default:
-        for p in config.embedding.providers:
-            p.is_default = False
-    elif not config.embedding.providers:
-        provider.is_default = True
-    config.embedding.providers.append(provider.model_copy())
+    added = _add_to_provider_list(config.embedding.providers, provider)
     save_config(config)
     reload_config()
-    await async_reload_services()
-    return _public_dump(provider)
+    await async_reload_services(preload_transcription=False)
+    return _public_dump(added)
 
 
 @router.put("/embedding/providers/{provider_id}")
 async def update_embedding_provider(provider_id: str, update: dict = Body()):
-    from src.secrets import skip_secret_write
-
     config = get_config()
-    _int_fields = {"dimensions", "batch_size"}
-    _bool_fields = {"is_default"}
-    for i, p in enumerate(config.embedding.providers):
-        if p.id == provider_id:
-            for key, value in update.items():
-                if key == "id":
-                    continue
-                if skip_secret_write(key, value):
-                    continue
-                if hasattr(p, key):
-                    if key in _int_fields and value is not None:
-                        value = int(value)
-                    elif key in _bool_fields:
-                        value = bool(value)
-                    setattr(config.embedding.providers[i], key, value)
-            if update.get("is_default"):
-                for j, other in enumerate(config.embedding.providers):
-                    if j != i:
-                        other.is_default = False
-            save_config(config)
-            reload_config()
-            await async_reload_services()
-            return _public_dump(config.embedding.providers[i])
-    return {"error": f"Provider '{provider_id}' not found"}
+    found = _apply_provider_update(
+        config.embedding.providers,
+        provider_id,
+        update,
+        int_fields={"dimensions", "batch_size"},
+        bool_fields={"is_default"},
+    )
+    if not found:
+        return {"error": f"Provider '{provider_id}' not found"}
+    save_config(config)
+    reload_config()
+    await async_reload_services(preload_transcription=False)
+    return _public_dump(found)
 
 
 @router.delete("/embedding/providers/{provider_id}")
 async def delete_embedding_provider(provider_id: str):
     config = get_config()
-    target = next((p for p in config.embedding.providers if p.id == provider_id), None)
+    target, rest = _remove_provider(
+        config.embedding.providers, provider_id, promote=True
+    )
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
     label = _provider_display_name(target, provider_id)
-    config.embedding.providers = [p for p in config.embedding.providers if p.id != provider_id]
-    # If we deleted the default, auto-promote the first remaining
-    if target.is_default and config.embedding.providers:
-        config.embedding.providers[0].is_default = True
+    config.embedding.providers = rest
     save_config(config)
     reload_config()
     return {"message": f"Provider '{label}' deleted"}
@@ -659,21 +685,14 @@ async def set_default_embedding_provider(provider_id: str):
     _log = logging.getLogger("api.embedding")
     _log.info("Set default embedding: %s", provider_id)
     config = get_config()
-    found = False
-    display_name = provider_id
-    for p in config.embedding.providers:
-        if p.id == provider_id:
-            p.is_default = True
-            found = True
-            display_name = (p.name or "").strip() or provider_id
-        else:
-            p.is_default = False
+    found = _set_exclusive_flag(config.embedding.providers, provider_id)
     if not found:
         _log.warning("Set default embedding failed: provider '%s' not found", provider_id)
         return {"error": f"Provider '{provider_id}' not found"}
+    display_name = _provider_display_name(found, provider_id)
     save_config(config)
     reload_config()
-    await async_reload_services()
+    await async_reload_services(preload_transcription=False)
     return {"message": f"Provider '{display_name}' set as default"}
 
 
@@ -695,62 +714,39 @@ def list_rerank_providers():
 @router.post("/rerank/providers")
 async def add_rerank_provider(provider: RerankProviderConfig):
     config = get_config()
-    if not provider.id:
-        provider.id = str(uuid.uuid4())
-    if provider.is_default:
-        for p in config.rerank.providers:
-            p.is_default = False
-    elif not config.rerank.providers:
-        provider.is_default = True
-    config.rerank.providers.append(provider.model_copy())
+    added = _add_to_provider_list(config.rerank.providers, provider)
     save_config(config)
     reload_config()
-    await async_reload_services()
-    return _public_dump(provider)
+    await async_reload_services(preload_transcription=False)
+    return _public_dump(added)
 
 
 @router.put("/rerank/providers/{provider_id}")
 async def update_rerank_provider(provider_id: str, update: dict = Body()):
-    from src.secrets import skip_secret_write
-
     config = get_config()
-    _int_fields = {"top_k"}
-    _bool_fields = {"is_default"}
-    for i, p in enumerate(config.rerank.providers):
-        if p.id == provider_id:
-            for key, value in update.items():
-                if key == "id":
-                    continue
-                if skip_secret_write(key, value):
-                    continue
-                if hasattr(p, key):
-                    if key in _int_fields and value is not None:
-                        value = int(value)
-                    elif key in _bool_fields:
-                        value = bool(value)
-                    setattr(config.rerank.providers[i], key, value)
-            if update.get("is_default"):
-                for j, other in enumerate(config.rerank.providers):
-                    if j != i:
-                        other.is_default = False
-            save_config(config)
-            reload_config()
-            await async_reload_services()
-            return _public_dump(config.rerank.providers[i])
-    return {"error": f"Provider '{provider_id}' not found"}
+    found = _apply_provider_update(
+        config.rerank.providers,
+        provider_id,
+        update,
+        int_fields={"top_k"},
+        bool_fields={"is_default"},
+    )
+    if not found:
+        return {"error": f"Provider '{provider_id}' not found"}
+    save_config(config)
+    reload_config()
+    await async_reload_services(preload_transcription=False)
+    return _public_dump(found)
 
 
 @router.delete("/rerank/providers/{provider_id}")
 async def delete_rerank_provider(provider_id: str):
     config = get_config()
-    target = next((p for p in config.rerank.providers if p.id == provider_id), None)
+    target, rest = _remove_provider(config.rerank.providers, provider_id, promote=True)
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
     label = _provider_display_name(target, provider_id)
-    config.rerank.providers = [p for p in config.rerank.providers if p.id != provider_id]
-    # If we deleted the default, auto-promote the first remaining
-    if target.is_default and config.rerank.providers:
-        config.rerank.providers[0].is_default = True
+    config.rerank.providers = rest
     save_config(config)
     reload_config()
     return {"message": f"Provider '{label}' deleted"}
@@ -790,21 +786,14 @@ async def set_default_rerank_provider(provider_id: str):
     _log = logging.getLogger("api.rerank")
     _log.info("Set default reranker: %s", provider_id)
     config = get_config()
-    found = False
-    display_name = provider_id
-    for p in config.rerank.providers:
-        if p.id == provider_id:
-            p.is_default = True
-            found = True
-            display_name = (p.name or "").strip() or provider_id
-        else:
-            p.is_default = False
+    found = _set_exclusive_flag(config.rerank.providers, provider_id)
     if not found:
         _log.warning("Set default reranker failed: provider '%s' not found", provider_id)
         return {"error": f"Provider '{provider_id}' not found"}
+    display_name = _provider_display_name(found, provider_id)
     save_config(config)
     reload_config()
-    await async_reload_services()
+    await async_reload_services(preload_transcription=False)
     return {"message": f"Provider '{display_name}' set as default"}
 
 
@@ -876,62 +865,43 @@ def list_file_transcription_providers():
 @router.post("/transcription/file-providers")
 async def add_file_transcription_provider(provider: TranscriptionProviderConfig):
     config = get_config()
-    if not provider.id:
-        provider.id = str(uuid.uuid4())
-    if not config.transcription.file_providers:
-        provider.is_active = True
-    # Only one active provider at a time
-    if provider.is_active:
-        for p in config.transcription.file_providers:
-            p.is_active = False
-    config.transcription.file_providers.append(provider.model_copy())
+    added = _add_to_provider_list(
+        config.transcription.file_providers, provider, flag="is_active"
+    )
     save_config(config)
     reload_config()
-    return _public_dump(provider)
+    return _public_dump(added)
 
 
 @router.put("/transcription/file-providers/{provider_id}")
 async def update_file_transcription_provider(provider_id: str, update: dict = Body()):
-    from src.secrets import skip_secret_write
-
     config = get_config()
-    _bool_fields = {"is_active"}
     invalidate_provider(f"file_trans:{provider_id}")
-    for i, p in enumerate(config.transcription.file_providers):
-        if p.id == provider_id:
-            for key, value in update.items():
-                if key == "id":
-                    continue
-                if skip_secret_write(key, value):
-                    continue
-                if hasattr(p, key):
-                    if key in _bool_fields:
-                        value = bool(value)
-                    setattr(config.transcription.file_providers[i], key, value)
-            # Deactivate all other providers when activating this one
-            if update.get("is_active"):
-                for j, other in enumerate(config.transcription.file_providers):
-                    if j != i:
-                        other.is_active = False
-            save_config(config)
-            reload_config()
-            return _public_dump(config.transcription.file_providers[i])
-    return {"error": f"Provider '{provider_id}' not found"}
+    found = _apply_provider_update(
+        config.transcription.file_providers,
+        provider_id,
+        update,
+        bool_fields={"is_active"},
+        exclusive_flag="is_active",
+    )
+    if not found:
+        return {"error": f"Provider '{provider_id}' not found"}
+    save_config(config)
+    reload_config()
+    return _public_dump(found)
 
 
 @router.delete("/transcription/file-providers/{provider_id}")
 async def delete_file_transcription_provider(provider_id: str):
     config = get_config()
-    target = next(
-        (p for p in config.transcription.file_providers if p.id == provider_id), None
+    target, rest = _remove_provider(
+        config.transcription.file_providers, provider_id, exclusive_flag="is_active"
     )
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
     label = _provider_display_name(target, provider_id)
     invalidate_provider(f"file_trans:{provider_id}")
-    config.transcription.file_providers = [
-        p for p in config.transcription.file_providers if p.id != provider_id
-    ]
+    config.transcription.file_providers = rest
     save_config(config)
     reload_config()
     return {"message": f"Provider '{label}' deleted"}
@@ -1153,63 +1123,43 @@ def list_realtime_transcription_providers():
 @router.post("/transcription/realtime-providers")
 async def add_realtime_transcription_provider(provider: TranscriptionProviderConfig):
     config = get_config()
-    if not provider.id:
-        provider.id = str(uuid.uuid4())
-    if not config.transcription.realtime_providers:
-        provider.is_active = True
-    # Only one active provider at a time
-    if provider.is_active:
-        for p in config.transcription.realtime_providers:
-            p.is_active = False
-    config.transcription.realtime_providers.append(provider.model_copy())
+    added = _add_to_provider_list(
+        config.transcription.realtime_providers, provider, flag="is_active"
+    )
     save_config(config)
     reload_config()
-    return _public_dump(provider)
+    return _public_dump(added)
 
 
 @router.put("/transcription/realtime-providers/{provider_id}")
 async def update_realtime_transcription_provider(provider_id: str, update: dict = Body()):
-    from src.secrets import skip_secret_write
-
     config = get_config()
     invalidate_provider(f"rt_trans:{provider_id}")
-    _bool_fields = {"is_active"}
-    for i, p in enumerate(config.transcription.realtime_providers):
-        if p.id == provider_id:
-            for key, value in update.items():
-                if key == "id":
-                    continue
-                if skip_secret_write(key, value):
-                    continue
-                if hasattr(p, key):
-                    if key in _bool_fields:
-                        value = bool(value)
-                    setattr(config.transcription.realtime_providers[i], key, value)
-            # Deactivate all other providers when activating this one
-            if update.get("is_active"):
-                for j, other in enumerate(config.transcription.realtime_providers):
-                    if j != i:
-                        other.is_active = False
-            save_config(config)
-            reload_config()
-            return _public_dump(config.transcription.realtime_providers[i])
-    return {"error": f"Provider '{provider_id}' not found"}
+    found = _apply_provider_update(
+        config.transcription.realtime_providers,
+        provider_id,
+        update,
+        bool_fields={"is_active"},
+        exclusive_flag="is_active",
+    )
+    if not found:
+        return {"error": f"Provider '{provider_id}' not found"}
+    save_config(config)
+    reload_config()
+    return _public_dump(found)
 
 
 @router.delete("/transcription/realtime-providers/{provider_id}")
 async def delete_realtime_transcription_provider(provider_id: str):
     config = get_config()
-    target = next(
-        (p for p in config.transcription.realtime_providers if p.id == provider_id),
-        None,
+    target, rest = _remove_provider(
+        config.transcription.realtime_providers, provider_id, exclusive_flag="is_active"
     )
     if not target:
         return {"error": f"Provider '{provider_id}' not found"}
     label = _provider_display_name(target, provider_id)
     invalidate_provider(f"rt_trans:{provider_id}")
-    config.transcription.realtime_providers = [
-        p for p in config.transcription.realtime_providers if p.id != provider_id
-    ]
+    config.transcription.realtime_providers = rest
     save_config(config)
     reload_config()
     return {"message": f"Provider '{label}' deleted"}

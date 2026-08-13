@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { Send, Loader2, AlertTriangle, MessageCircle, BrushCleaning } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { parseMeetingRefGroups } from "@/lib/meeting-ref-chips"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
 
@@ -1102,13 +1103,12 @@ export function MeetingQuickChat({
 // clickable [HH:MM:SS] timestamp buttons styled like Summary refs.
 
 // ── Sentence-ref aware inline renderer ──
-// Matches Summary's renderInline approach: regex-based parsing with
-// clickable [N] ref buttons that convert N to stt_XXXX format.
+// Clickable [N] / [N-M] chips; ranges expand via parseMeetingRefGroups.
 
 function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) => void): ReactNode[] {
   const parts: ReactNode[] = []
-  // Supports [stt_XXXX,...], 【stt_XXXX,...】, [ref: stt_XXXX], and bare [7,7-10]
-  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|(\[(?:ref:)?\s*(stt_\d+(?:\s*[-–,]\s*stt_\d+)*)\s*\])|(【(?:ref:)?\s*(stt_\d+(?:\s*[-–,]\s*stt_\d+)*)\s*】)|(\[priority:\s*(high|medium|low)\s*\])|(【priority:\s*(high|medium|low)\s*】)|\[(\d+(?:\s*[-–,]\s*\d+)*)\]/gi
+  // [N] / [1-5] / [47, 78-86] / [stt_0001-stt_0005] and 【】 / [ref:] variants
+  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|((?:\[|【)(?:ref:)?\s*((?:stt_)?\d+(?:\s*[-–—,，、;；]\s*(?:stt_)?\d+)*)\s*(?:\]|】))|((?:\[|【)\s*priority:\s*(high|medium|low)\s*(?:\]|】))/gi
   let lastIdx = 0
   let match
   regex.lastIndex = 0
@@ -1122,37 +1122,22 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
       parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick)}</em>)
     } else if (match[5]) {
       parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
-    } else if (match[8] || match[10] || match[15]) {
-      // [stt_0044,...], 【stt_0044,...】, or bare [7,7-10]
-      const raw: string = (match[8] || match[10] || match[15])!
-      const ids = raw.split(/[,–-]/).map((s: string) => s.trim()).filter(Boolean)
-      const parsed = ids
-        .map((id) => ({ id, num: parseInt(id.replace(/^stt_0*/, "") || "0", 10) }))
-        .sort((a, b) => a.num - b.num)
-      let ri = 0
-      while (ri < parsed.length) {
-        const start = parsed[ri]
-        let end = start
-        let rj = ri + 1
-        while (rj < parsed.length && parsed[rj].num === end.num + 1) { end = parsed[rj]; rj++ }
-        const sl = start.id.replace(/^stt_0*/, "") || "0"
-        const el = end.id.replace(/^stt_0*/, "") || "0"
-        const label = start.id === end.id ? sl : sl + "-" + el
-        const sttIds = parsed.slice(ri, rj).map((p) => "stt_" + String(p.num).padStart(4, "0"))
+    } else if (match[8]) {
+      const groups = parseMeetingRefGroups(match[8])
+      for (const [gi, g] of groups.entries()) {
         parts.push(
           <button
-            key={`r${lastIdx}${ri}`}
+            key={`r${lastIdx}${gi}`}
             className="inline-flex items-center px-1 py-0 pm-meta rounded bg-[var(--pm-green-soft)] text-[var(--pm-green)] hover:bg-[var(--pm-green-wash)] t-mono-family align-baseline cursor-pointer mr-1"
-            onClick={(e) => { e.stopPropagation(); onRefClick?.(sttIds[0]) }}
-            title={`Sources: ${sttIds.join(", ")}`}
+            onClick={(e) => { e.stopPropagation(); if (g.ids[0]) onRefClick?.(g.ids[0]) }}
+            title={`Sources: ${g.ids.join(", ")}`}
           >
-            {label}
+            {g.label}
           </button>,
         )
-        ri = rj
       }
-    } else if (match[12] || match[14]) {
-      const level = (match[12] || match[14])!.toLowerCase()
+    } else if (match[10]) {
+      const level = match[10].toLowerCase()
       const colors: Record<string, { bg: string; fg: string }> = {
         high:    { bg: "rgba(140,46,46,0.12)",  fg: "#C06060" },
         medium:  { bg: "rgba(138,101,0,0.10)",   fg: "#B09030" },
