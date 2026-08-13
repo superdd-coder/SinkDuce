@@ -389,7 +389,7 @@ export function FileMgmtDetailDialog({
   /**
    * Source used for chunks / extracted text / doc summary.
    * Meeting & note payloads are keyed by __meeting__: / __note__:, NOT __file__:{id}.
-   * Prefer: explicit prop → detail.source (from files.json) → synthetic __file__:{id}.
+   * Prefer: explicit prop → detail.source (index / SQLite) → synthetic __file__:{id}.
    */
   const docSource = useMemo(() => {
     const prop = (sourceProp || "").trim()

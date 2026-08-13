@@ -177,7 +177,7 @@ export const deleteDocument = (collection: string, source: string) =>
 
 export interface FileListItem {
   source: string
-  /** Managed file-mgmt id (files.json key) when available */
+  /** Managed file-mgmt id (index / SQLite key) when available */
   file_id?: string
   chunk_count: number
   file_type?: string

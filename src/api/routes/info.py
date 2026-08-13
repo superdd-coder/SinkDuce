@@ -292,9 +292,9 @@ def get_collection_conflicts(collection: str):
     # Add human-readable labels via files.json WITHOUT mutating original source
     # (the original source is needed by the frontend to call preview/summary APIs).
     try:
-        from src.collections.file_index import load as load_file_index
+        from src.collections.file_index import load_for_read
         import re as _re_uuid
-        idx = load_file_index(collection_id)
+        idx = load_for_read(collection_id)
         # Build lookup tables. Conflict sources come from the LLM, which sometimes
         # uses the raw UUID or formats like "note (uuid)" / "file (uuid)" — match
         # those patterns too so labels resolve even for older conflict data.
@@ -487,11 +487,11 @@ async def generate_doc_summary(
             )
 
     # Validate source file exists via file index
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read
     from src.collections.file_index import COLLECTIONS_DIR as _COL_DIR
 
     file_path = None
-    idx = load_file_index(collection_id)
+    idx = load_for_read(collection_id)
     for fid, entry in idx.items():
         if entry.get("source") == source:
             # Prefer current version dir (v2 layout); fall back to flat legacy
@@ -677,8 +677,8 @@ def get_meeting_log(collection: str):
                 file_labels: dict[str, str] = {}
                 # Try to get display labels and source identifiers from files.json
                 try:
-                    from src.collections.file_index import load as load_file_index
-                    idx = load_file_index(collection_id)
+                    from src.collections.file_index import load_for_read
+                    idx = load_for_read(collection_id)
                     for col, fid in zip(alloc_collections, alloc_file_ids):
                         if col == collection_id:
                             entry = idx.get(fid, {})

@@ -1428,11 +1428,11 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     logger.info("[DOC_SUMMARY] Starting for collection=%s source=%s", collection, source)
 
     # Resolve file path via file index
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read
     from src.collections.file_index import COLLECTIONS_DIR as _COL_DIR
 
     file_path = None
-    idx = load_file_index(collection)
+    idx = load_for_read(collection)
     for fid, entry in idx.items():
         if entry.get("source") == source:
             try:

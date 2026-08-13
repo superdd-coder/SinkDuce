@@ -2327,8 +2327,8 @@ def _load_file_index(collection_id: str | None) -> dict[str, dict]:
     if not collection_id:
         return {}
     try:
-        from src.collections.file_index import load as load_file_index
-        return load_file_index(collection_id) or {}
+        from src.collections.file_index import load_for_read
+        return load_for_read(collection_id) or {}
     except Exception:
         logger.warning(
             "Failed to load files.json index for %s", collection_id, exc_info=True

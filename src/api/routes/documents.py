@@ -499,7 +499,7 @@ def _find_file_path(
     When *prefer_original* is True (Raw preview), never substitute ``parsed.txt``
     for Office binaries — File Viewer needs the real ``.docx`` / ``.xlsx`` / etc.
     """
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read as load_file_index
 
     # Explicit version pin — never fall through to current if missing.
     if (
@@ -931,7 +931,7 @@ def get_extracted_text(
         raise HTTPException(status_code=404, detail="File not found")
 
     # Get file_type from files.json index
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read as load_file_index
     fmt = "text"
     lookup_src = source_key
     if COLLECTIONS_DIR.is_dir():
@@ -1243,7 +1243,7 @@ async def list_files(collection: str):
 
     def _fetch():
         from src.collections.file_index import (
-            load as load_file_index,
+            load_for_read as load_file_index,
             resolve_display_name,
         )
 

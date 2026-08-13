@@ -32,7 +32,7 @@ def _files_dir(collection_id: str) -> Path:
 
 
 def load(collection_id: str) -> dict[str, dict]:
-    """Return the files index dict, or ``{}`` if missing."""
+    """Return the raw files.json dict (mutators / old-library cleanup only)."""
     path = _index_path(collection_id)
     try:
         if path.is_file():
@@ -40,6 +40,85 @@ def load(collection_id: str) -> dict[str, dict]:
     except (json.JSONDecodeError, OSError):
         logger.warning("[FileIndex] corrupt files.json for %s, resetting", collection_id)
     return {}
+
+
+def _sqlite_index_entries(collection_id: str) -> dict[str, dict]:
+    """Current files from meta.db, keyed by file_id. Empty if DB missing."""
+    if not collection_id:
+        return {}
+    db_path = COLLECTIONS_DIR / collection_id / "meta.db"
+    if not db_path.is_file():
+        return {}
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection_id)
+        try:
+            rows = conn.execute(
+                """SELECT f.file_id AS file_id,
+                          fv.storage_file_id AS storage_name
+                   FROM files f
+                   LEFT JOIN file_versions fv
+                     ON fv.version_id = f.current_version_id"""
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug(
+            "sqlite index overlay failed for %s", collection_id, exc_info=True
+        )
+        return {}
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        fid = str(row["file_id"] if hasattr(row, "keys") else row[0])
+        name = str(
+            (row["storage_name"] if hasattr(row, "keys") else row[1]) or ""
+        ).strip()
+        ext = Path(name).suffix.lower().lstrip(".") if name else ""
+        entry: dict = {
+            "source": f"__file__:{fid}",
+            "source_label": name,
+            "file_type": "file",
+        }
+        if ext:
+            entry["original_ext"] = ext
+        out[fid] = entry
+    return out
+
+
+def load_for_read(collection_id: str) -> dict[str, dict]:
+    """Display/list index: JSON fallback overlaid by SQLite current files.
+
+    Regular ``__file__:`` rows take the current storage name from SQLite.
+    ``__note__:`` / ``__meeting__:`` JSON source + label are kept.
+    Files that exist only in SQLite (post stop-write) appear here.
+    """
+    idx = dict(load(collection_id) or {})
+    for fid, sql in _sqlite_index_entries(collection_id).items():
+        prev = dict(idx.get(fid) or {})
+        src = (prev.get("source") or "").strip()
+        if src.startswith("__note__:") or src.startswith("__meeting__:"):
+            if not (prev.get("source_label") or "").strip() and sql.get("source_label"):
+                prev["source_label"] = sql["source_label"]
+            prev["source"] = src
+            if not prev.get("file_type"):
+                prev["file_type"] = "note" if src.startswith("__note__:") else "meeting"
+            if sql.get("original_ext") and not prev.get("original_ext"):
+                prev["original_ext"] = sql["original_ext"]
+        else:
+            prev["source"] = f"__file__:{fid}"
+            if sql.get("source_label"):
+                prev["source_label"] = sql["source_label"]
+            prev["file_type"] = prev.get("file_type") or "file"
+            if sql.get("original_ext"):
+                prev["original_ext"] = sql["original_ext"]
+        if "ingested_at" not in prev:
+            prev["ingested_at"] = 0
+        if "chunks" not in prev:
+            prev["chunks"] = prev.get("chunks", 0)
+        idx[fid] = prev
+    return idx
 
 
 def save(collection_id: str, data: dict[str, dict]) -> None:
@@ -296,7 +375,9 @@ def resolve_display_name(
     if not src:
         return payload or "Unknown"
 
-    idx = index if index is not None else (load(collection_id) if collection_id else {})
+    idx = index if index is not None else (
+        load_for_read(collection_id) if collection_id else {}
+    )
 
     # ── Managed files ──────────────────────────────────────────────
     if src.startswith("__file__:") or src.startswith("file:"):

@@ -388,10 +388,10 @@ def recall_search(req: RecallSearchRequest):
         )
         elapsed = int((time.time() - t0) * 1000)
         # Preload files.json once per collection (avoid N× disk reads)
-        from src.collections.file_index import load as load_file_index
+        from src.collections.file_index import load_for_read
 
         index_by_col: dict[str, dict] = {
-            c: load_file_index(c) for c in valid_collections
+            c: load_for_read(c) for c in valid_collections
         }
         default_col = valid_collections[0] if valid_collections else ""
         results = []
@@ -428,10 +428,10 @@ def recall_search(req: RecallSearchRequest):
     child_groups_map: dict[str, list[dict]] = dict(dq_result.child_groups)
 
     elapsed = int((time.time() - t0) * 1000)
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read
 
     index_by_col: dict[str, dict] = {
-        c: load_file_index(c) for c in valid_collections
+        c: load_for_read(c) for c in valid_collections
     }
     default_col = valid_collections[0] if valid_collections else ""
     results = []

@@ -65,8 +65,8 @@ def _files_dir(collection_id: str) -> Path:
 
 def _load_file_index(collection_id: str) -> dict[str, dict]:
     """Load the lightweight file metadata index (no Qdrant scroll)."""
-    from src.collections.file_index import load
-    return load(collection_id)
+    from src.collections.file_index import load_for_read
+    return load_for_read(collection_id)
 
 
 async def _await_mcp(fn) -> Any:

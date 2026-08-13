@@ -213,7 +213,7 @@ export function resolveRawFilename(
       continue
     }
     if (t.startsWith("__file__:")) continue
-    // Display labels from files.json import (no real extension)
+    // Display labels from index import (no real extension)
     if (/^note:\s*/i.test(t) || /^meeting:\s*/i.test(t)) {
       noteOrMeetingHint = true
       continue

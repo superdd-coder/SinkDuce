@@ -85,7 +85,7 @@ export interface FileSummary {
   updated_at?: string
   is_greyed: boolean
   task_id: string | null
-  /** Human label from files.json (e.g. "Meeting: Title / Section") */
+  /** Human label from the file index / SQLite (e.g. "Meeting: Title / Section") */
   display_name?: string
   /** Document source key (__file__:…, __meeting__:…, …) */
   source?: string
