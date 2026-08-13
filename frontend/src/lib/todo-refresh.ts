@@ -13,6 +13,8 @@ export type TodoRefreshDetail = {
     | "link-node"
     | "complete"
     | "manual"
+  /** Patch this row in place (complete) instead of re-fetching the sorted list. */
+  todo?: import("@/types/file-mgmt").TodoItem
 }
 
 export function triggerTodoRefresh(detail: TodoRefreshDetail) {

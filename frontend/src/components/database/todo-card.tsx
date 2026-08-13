@@ -16,6 +16,10 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { onTodoRefresh, triggerTodoRefresh } from "@/lib/todo-refresh"
 import {
+  mergeTodoUpdateInPlace,
+  splitTodoSections,
+} from "@/lib/todo-list-state"
+import {
   deleteTodo,
   FileMgmtApiError,
   linkTodoNode,
@@ -203,6 +207,18 @@ export function TodoCard({
   useEffect(() => {
     return onTodoRefresh((detail) => {
       if (detail.collectionId !== collection) return
+      // Re-fetch would apply server sort and send a just-checked row to the bottom.
+      if (detail.reason === "complete" && detail.todo) {
+        const updated = detail.todo
+        setTodos((prev) => mergeTodoUpdateInPlace(prev, updated))
+        setJustCompletedIds((prev) => {
+          const n = new Set(prev)
+          if (updated.done) n.add(updated.todo_id)
+          else n.delete(updated.todo_id)
+          return n
+        })
+        return
+      }
       void refresh({ silent: true })
     })
   }, [collection, refresh])
@@ -215,15 +231,7 @@ export function TodoCard({
   }, [collection])
 
   const { openRows, completedRows } = useMemo(() => {
-    const open: TodoItem[] = []
-    const completed: TodoItem[] = []
-    for (const t of todos) {
-      if (t.done && !justCompletedIds.has(t.todo_id)) {
-        completed.push(t)
-      } else {
-        open.push(t)
-      }
-    }
+    const { open, completed } = splitTodoSections(todos, justCompletedIds)
     return { openRows: open, completedRows: completed }
   }, [todos, justCompletedIds])
 
@@ -232,9 +240,7 @@ export function TodoCard({
     try {
       const next = !t.done
       const updated = await updateTodo(collection, t.todo_id, { done: next })
-      setTodos((prev) =>
-        prev.map((x) => (x.todo_id === t.todo_id ? updated : x))
-      )
+      setTodos((prev) => mergeTodoUpdateInPlace(prev, updated))
       if (next) {
         setJustCompletedIds((prev) => new Set(prev).add(t.todo_id))
       } else {
@@ -247,6 +253,7 @@ export function TodoCard({
       triggerTodoRefresh({
         collectionId: collection,
         reason: "complete",
+        todo: updated,
       })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
