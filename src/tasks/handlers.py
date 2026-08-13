@@ -1319,26 +1319,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         except Exception:
             logger.exception("[Coverage] trigger failed for %r", filename_param)
 
-        # Update file index — JSON load+save runs on a worker thread so the event
-        # loop stays responsive (avoids blocking other API calls like list_files
-        # when several uploads complete back-to-back).
         if file_id:
-            try:
-                from src.collections.file_index import add as add_file_index
-                # Preserve original extension for PDF/office files
-                original_ext = Path(file_path).suffix.lower().lstrip(".")
-                await loop.run_in_executor(
-                    None,
-                    lambda: add_file_index(
-                        collection, file_id, filename_param,
-                        source_label or filename_param,
-                        doc.file_type, len(chunks),
-                        original_ext if original_ext else None,
-                    ),
-                )
-            except Exception:
-                logger.warning("[%s] Failed to update files.json", filename_param, exc_info=True)
-
             # Definitive file version update / re-ingest:
             # Enrich path schedules consolidate when it stores a new summary.
             # When contextual is off (or enrich skipped), no new summary is

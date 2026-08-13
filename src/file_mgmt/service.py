@@ -4112,18 +4112,6 @@ def _ingest_file_to_qdrant(
         collection=collection_id, ids=ids, vectors=embeddings, payloads=payloads,
     )
 
-    # Update file index
-    try:
-        from src.collections.file_index import add as add_file_index
-        add_file_index(
-            collection_id, file_id, source,
-            source_label or filename,
-            doc.file_type, len(chunks),
-            file_path.suffix.lower().lstrip("."),
-        )
-    except Exception:
-        logger.warning("Failed to update files.json for %s", file_id, exc_info=True)
-
     return len(chunks)
 
 
@@ -4707,36 +4695,6 @@ def upload_file_version(
                         e,
                     )
 
-            # 6b. Always refresh files.json so display_name / original_ext match
-            # the new version immediately — including unsupported types that skip
-            # the upload task (which would otherwise leave the old label forever).
-            try:
-                from src.collections.file_index import add as add_file_index
-
-                orig_ext = Path(safe_name).suffix.lower().lstrip(".") or None
-                idx_type = (
-                    "note"
-                    if file_source.startswith("__note__:")
-                    else "meeting"
-                    if file_source.startswith("__meeting__:")
-                    else ("unsupported" if unsupported else file_type or "file")
-                )
-                add_file_index(
-                    collection_id,
-                    file_id,
-                    file_source,
-                    label,
-                    idx_type,
-                    0,  # chunk count; ingest overwrites when task completes
-                    orig_ext,
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to update files.json after version upload for %s",
-                    file_id,
-                    exc_info=True,
-                )
-
             row = conn.execute(
                 "SELECT * FROM files WHERE file_id=?", (file_id,)
             ).fetchone()
@@ -5038,45 +4996,7 @@ def rollback_file_version(
             collection_id, file_id, version_id
         )
 
-        # files.json display name → target blob name
-        try:
-            from src.collections.file_index import add as add_file_index
 
-            file_source = f"__file__:{file_id}"
-            # Preserve note/meeting source if present in index
-            idx = _load_file_index(collection_id)
-            entry = idx.get(file_id) or {}
-            existing_source = (entry.get("source") or "").strip()
-            if existing_source.startswith("__note__:") or existing_source.startswith(
-                "__meeting__:"
-            ):
-                file_source = existing_source
-            label = Path(target_storage).name if target_storage else target_storage
-            if not label:
-                label = (entry.get("source_label") or "").strip() or file_id
-            orig_ext = Path(label).suffix.lower().lstrip(".") or None
-            idx_type = (
-                "note"
-                if file_source.startswith("__note__:")
-                else "meeting"
-                if file_source.startswith("__meeting__:")
-                else (entry.get("file_type") or "file")
-            )
-            add_file_index(
-                collection_id,
-                file_id,
-                file_source,
-                label,
-                idx_type,
-                entry.get("chunks") or 0,
-                orig_ext,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to update files.json after rollback for %s",
-                file_id,
-                exc_info=True,
-            )
 
         emit_event(
             "file.version_rolled_back",
@@ -5432,28 +5352,6 @@ def update_file(
                     old_storage_for_disk,
                     new_base,
                 )
-                # Keep files.json label in lockstep (Recall / All Files / list_files)
-                try:
-                    from src.collections.file_index import update_source_label
-
-                    ext = Path(new_base).suffix.lower().lstrip(".") or None
-                    update_source_label(
-                        collection_id,
-                        file_id,
-                        new_base,
-                        original_ext=ext,
-                        source=f"__file__:{file_id}",
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to sync files.json source_label after rename "
-                        "col=%s file=%s → %s",
-                        collection_id,
-                        file_id,
-                        new_base,
-                        exc_info=True,
-                    )
-
             old_definitive = bool(file_row["is_definitive"])
             new_definitive = (
                 bool(req["is_definitive"]) if has_def else old_definitive

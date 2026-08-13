@@ -301,30 +301,18 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
     except Exception:
         logger.warning("[INGEST] Note %s: sparse encoding failed", note_id, exc_info=True)
 
-    # Update file index
-    try:
-        from src.collections.file_index import add as add_file_index
-        add_file_index(collection, file_id, source, f"Note: {note_title}", "note", len(chunks))
-    except Exception:
-        logger.warning("[INGEST] Note %s: failed to update files.json", note_id, exc_info=True)
-
     logger.info("[INGEST] Note %s: store done in %.1fs. Total: %.1fs",
                 note_id, time.time() - t_store, time.time() - t_start)
 
-    # Clean up old re-ingest snapshots (remove all except current file_id for this source)
+    # Disk only: drop old re-ingest snapshot dirs. files.json is no longer written.
     try:
-        from src.collections.file_index import load as load_file_index, save as save_file_index
+        from src.collections.file_index import load as load_file_index
         idx = load_file_index(collection)
-        dirty = False
         for fid, entry in list(idx.items()):
             if entry.get("source") == source and fid != file_id:
                 old_dir = snapshot_dir.parent / fid
                 if old_dir.exists():
                     shutil.rmtree(old_dir)
-                del idx[fid]
-                dirty = True
-        if dirty:
-            save_file_index(collection, idx)
     except Exception:
         logger.warning(
             "[INGEST] Note %s: failed cleaning old re-ingest snapshots",
