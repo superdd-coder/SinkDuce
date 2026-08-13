@@ -6,7 +6,9 @@ import {
   subscribeWebSearchConfirm,
   answerWebSearchConfirm,
   getWebSearchConfirmAnchor,
+  getWebSearchConfirmAnchorSnapshot,
   subscribeWebSearchConfirmAnchor,
+  shouldShowWebSearchConfirm,
 } from "@/lib/web-search-confirm"
 
 function ConfirmCard({ query }: { query: string }) {
@@ -66,9 +68,9 @@ function isUsableInlineHost(el: HTMLElement | null): el is HTMLElement {
 }
 
 /**
- * Web-search HITL — always visible when pending.
- * Prefer inline Quick Chat slot when that host is on-screen; otherwise fixed
- * on document.body above the composer (never silent-wait with no UI).
+ * Web-search HITL — only on the session that asked.
+ * Switching Chat / opening Quick Chat hides the card; the stream stays paused
+ * until the user comes back and answers (or the 120s timeout declines).
  */
 export function WebSearchConfirmDialog() {
   const state = useSyncExternalStore(
@@ -76,11 +78,10 @@ export function WebSearchConfirmDialog() {
     getWebSearchConfirmState,
     getWebSearchConfirmState,
   )
-  // Re-render when anchor changes
   useSyncExternalStore(
     subscribeWebSearchConfirmAnchor,
-    () => getWebSearchConfirmAnchor(),
-    () => null,
+    getWebSearchConfirmAnchorSnapshot,
+    getWebSearchConfirmAnchorSnapshot,
   )
 
   const [box, setBox] = useState<{ left: number; width: number; bottom: number } | null>(null)
@@ -128,7 +129,7 @@ export function WebSearchConfirmDialog() {
     }
   }, [state.open, state.confirmId])
 
-  if (!state.open) return null
+  if (!state.open || !shouldShowWebSearchConfirm()) return null
   if (typeof document === "undefined") return null
 
   const host = getWebSearchConfirmAnchor()

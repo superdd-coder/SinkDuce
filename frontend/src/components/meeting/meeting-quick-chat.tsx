@@ -3,7 +3,7 @@ import { Send, Loader2, AlertTriangle, MessageCircle, BrushCleaning } from "luci
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
-import { createSession, getSession, deleteSession } from "@/api/client"
+import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
 
 // ── Types ──
 
@@ -630,17 +630,16 @@ export function MeetingQuickChat({
     abortRef.current = controller
 
     try {
-      const resp = await fetch(`/api/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const resp = await postSessionMessage(
+        sessionId,
+        {
           content: text,
           thinking: true,
           collections: [],
           mode: "direct",
-        }),
-        signal: controller.signal,
-      })
+        },
+        controller.signal,
+      )
 
       if (!resp.ok) {
         const err = await resp.text()
@@ -648,36 +647,16 @@ export function MeetingQuickChat({
         return
       }
 
-      const reader = resp.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ""
       let sources: QAMessage["sources"] = []
-      // Survive across network chunks (do not reset each read)
-      let eventType = ""
       let gotDoneCount: number | null = null
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7).trim()
-          } else if (line.startsWith("data: ") && eventType) {
-            try {
-              const data = JSON.parse(line.slice(6))
+      if (resp.body) {
+        for await (const { event: eventType, data } of iterateSessionSse(resp.body)) {
               handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
               if (eventType === "done" && typeof data.message_count === "number") {
                 gotDoneCount = data.message_count
                 setMsgCount(data.message_count)
               }
-            } catch (e) {
-              console.error("[MeetingQuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
-            }
-            eventType = ""
-          }
         }
       }
 

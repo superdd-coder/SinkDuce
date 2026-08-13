@@ -38,7 +38,7 @@ Using the context provided, write a complete, well-structured answer.
 
 
 class DirectQueryModule:
-    """Atomic retrieval entry point used by RewriteLoop and direct endpoints."""
+    """Atomic retrieval entry point used by VariantFetcher and direct query."""
 
     def __init__(self, retriever, db, reranker=None, llm=None):
         self.retriever = retriever

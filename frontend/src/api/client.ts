@@ -1813,6 +1813,14 @@ export async function generateSessionTitle(id: string): Promise<{ title: string 
   return r.json()
 }
 
+export {
+  createSessionSseParser,
+  iterateSessionSse,
+  postSessionMessage,
+  type SessionMessagePayload,
+  type SessionSseMessage,
+} from "./session-sse"
+
 // ── Visual ──
 
 export const describeImage = (imageUrl: string) =>

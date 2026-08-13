@@ -40,7 +40,19 @@ const listeners = new Set<() => void>()
 
 /** DOM node of the active chat composer — dialog anchors just above it. */
 let confirmAnchor: HTMLElement | null = null
+let confirmAnchorSessionId = ""
+type AnchorSnapshot = { el: HTMLElement | null; sessionId: string }
+const EMPTY_ANCHOR: AnchorSnapshot = { el: null, sessionId: "" }
+let anchorSnapshot: AnchorSnapshot = EMPTY_ANCHOR
 const anchorListeners = new Set<() => void>()
+let pendingTimer: ReturnType<typeof setTimeout> | 0 = 0
+
+function clearPendingTimer() {
+  if (pendingTimer) {
+    clearTimeout(pendingTimer)
+    pendingTimer = 0
+  }
+}
 
 function notify() {
   snapshot = pending
@@ -65,15 +77,34 @@ export function subscribeWebSearchConfirm(listener: () => void): () => void {
   }
 }
 
-/** Register the composer root so the confirm card can sit flush above it. */
-export function setWebSearchConfirmAnchor(el: HTMLElement | null) {
-  if (confirmAnchor === el) return
+/** Register the on-screen composer and the session it belongs to. */
+export function setWebSearchConfirmAnchor(
+  el: HTMLElement | null,
+  sessionId?: string | null,
+) {
+  const sid = el ? (sessionId || "").trim() : ""
+  if (confirmAnchor === el && confirmAnchorSessionId === sid) return
   confirmAnchor = el
+  confirmAnchorSessionId = sid
+  anchorSnapshot = el ? { el, sessionId: sid } : EMPTY_ANCHOR
   anchorListeners.forEach((l) => l())
 }
 
 export function getWebSearchConfirmAnchor(): HTMLElement | null {
   return confirmAnchor
+}
+
+export function getWebSearchConfirmAnchorSnapshot(): AnchorSnapshot {
+  return anchorSnapshot
+}
+
+/** True only when a confirm is pending for the session currently on screen. */
+export function shouldShowWebSearchConfirm(): boolean {
+  return (
+    snapshot.open &&
+    !!snapshot.sessionId &&
+    snapshot.sessionId === confirmAnchorSessionId
+  )
 }
 
 export function subscribeWebSearchConfirmAnchor(listener: () => void): () => void {
@@ -161,6 +192,7 @@ export function promptWebSearchConfirm(
   if (pending) {
     const prev = pending
     pending = null
+    clearPendingTimer()
     notify()
     prev.resolve(false)
   }
@@ -169,7 +201,9 @@ export function promptWebSearchConfirm(
     pending = { query, confirmId, sessionId: sid, resolve }
     notify()
     // Safety: never leave stream hanging if UI fails to render (120s matches backend)
-    window.setTimeout(() => {
+    clearPendingTimer()
+    pendingTimer = setTimeout(() => {
+      pendingTimer = 0
       if (pending?.confirmId === confirmId) {
         console.warn(
           "[web-search-confirm] timed out waiting for user — auto-decline",
@@ -191,6 +225,7 @@ export function answerWebSearchConfirm(
   if (!pending) return
   const { resolve } = pending
   pending = null
+  clearPendingTimer()
   notify()
   resolve(approved)
 }

@@ -5,7 +5,11 @@ Run: pytest tests/test_cleanup.py -v --tb=short
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+
+_REPO = Path(__file__).resolve().parent.parent
 
 
 class TestCollectionConfigClean:
@@ -55,3 +59,15 @@ class TestDeletedFunctions:
         except ImportError:
             has_retrieve_standard = False
         assert not has_retrieve_standard, "retrieve_standard should not be importable"
+
+
+class TestEditorialPreviewRemoved:
+    """Unused editorial design kit + standalone preview entry must be gone."""
+
+    def test_editorial_tree_removed(self):
+        assert not (_REPO / "frontend" / "src" / "components" / "editorial").exists()
+
+    def test_preview_entry_removed(self):
+        assert not (_REPO / "frontend" / "src" / "main-preview.tsx").exists()
+        assert not (_REPO / "frontend" / "preview.html").exists()
+        assert not (_REPO / "frontend" / "vite.preview.config.ts").exists()

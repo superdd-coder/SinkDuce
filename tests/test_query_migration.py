@@ -1,15 +1,19 @@
-"""Session 2 Step 1: query.py migration tests."""
+"""Legacy query routes: 410 stubs stay; dead helpers and RewriteLoop must be gone."""
 
+from __future__ import annotations
+
+import importlib.util
 import json
+from pathlib import Path
+
 import pytest
-from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
-from src.rag.retriever import RetrievedChunk
-from src.rag.agentic_query import AgenticQueryResult
+GONE = {
+    "error": "Gone",
+    "message": "This endpoint is deprecated. Please migrate to POST /api/sessions/{id}/messages",
+}
 
-
-# ── helpers ──────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def client():
@@ -17,192 +21,78 @@ def client():
     return TestClient(app)
 
 
-def _mock_services(monkeypatch):
-    """Set up all required mocks on services."""
-    from src.services import services
-    mock_db = MagicMock()
-    mock_db.collection_exists.return_value = True
-    mock_db.get_collection_config.return_value = {"chunk_mode": "normal", "search_mode": "dense"}
-    monkeypatch.setattr(services, "db", mock_db)
+class TestDeprecatedQueryRoutes:
+    def test_post_query_returns_410_gone(self, client):
+        resp = client.post("/api/query", json={"question": "test", "collection": "test_col"})
+        assert resp.status_code == 410
+        body = resp.json()
+        assert body["error"] == GONE["error"]
+        assert body["message"] == GONE["message"]
+        assert resp.headers.get("deprecation") == "true"
 
-    mock_dq = MagicMock()
-    ck = RetrievedChunk(text="test chunk", score=0.9, metadata={"id": "c1", "source": "doc.md", "collection": "test_col"})
-    mock_dq.retrieve.return_value = MagicMock(chunks=[ck], child_groups={}, answer="test answer", context="test context")
-    monkeypatch.setattr(services, "direct_query", mock_dq)
-
-    mock_aq = MagicMock()
-    mock_aq.run.return_value = AgenticQueryResult(
-        answer="Agentic answer",
-        all_chunks=[ck],
-        tasks=[{"task_id": "t1", "task_query": "test", "sub_queries": []}],
-    )
-    monkeypatch.setattr(services, "agentic_query", mock_aq)
-
-    mock_llm = MagicMock()
-    mock_llm.generate.return_value = "Generated answer"
-    monkeypatch.setattr(services, "llm", mock_llm)
-
-    # config
-    from src.config import RAGConfig
-    mock_cfg = MagicMock()
-    mock_cfg.rag = RAGConfig()
-    mock_cfg.llm.providers = []
-    monkeypatch.setattr(services, "config", mock_cfg)
-
-    return services
-
-
-# ── TestQueryRouteDirect ──────────────────────────────────────────────────
-
-class TestQueryRouteDirect:
-    def test_direct_branch_uses_direct_module(self, client, monkeypatch):
-        svc = _mock_services(monkeypatch)
-
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": False,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
-
-    def test_direct_branch_returns_answer(self, client, monkeypatch):
-        _mock_services(monkeypatch)
-
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": False,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
-
-    def test_direct_branch_saves_history(self, client, monkeypatch):
-        _mock_services(monkeypatch)
-
-        with patch("src.api.routes.query._save_history") as mock_save:
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": False,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
-
-
-# ── TestQueryRouteAgentic ─────────────────────────────────────────────────
-
-class TestQueryRouteAgentic:
-    def test_agentic_branch_uses_service(self, client, monkeypatch):
-        svc = _mock_services(monkeypatch)
-
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": True,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
-
-    def test_agentic_branch_returns_answer_and_sources(self, client, monkeypatch):
-        _mock_services(monkeypatch)
-
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": True,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
-
-    def test_agentic_branch_streaming(self, client, monkeypatch):
-        svc = _mock_services(monkeypatch)
-
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query/stream", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": True,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
+    def test_post_query_stream_returns_410_gone(self, client):
+        resp = client.post(
+            "/api/query/stream",
+            json={"question": "test", "collection": "test_col", "use_agent": True},
+        )
+        assert resp.status_code == 410
         assert resp.json()["error"] == "Gone"
 
-
-# ── TestQueryRouteParams ──────────────────────────────────────────────────
-
-class TestQueryRouteParams:
-    def test_agent_enabled_config_ignored(self, client, monkeypatch):
-        svc = _mock_services(monkeypatch)
-        # old config field should be ignored
-        svc.db.get_collection_config.return_value = {
-            "chunk_mode": "normal", "search_mode": "dense",
-            "agent_enabled": True, "self_rag_enabled": True,
-        }
-
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                # use_agent=False overrides old config
-                resp = client.post("/api/query", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": False,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
-
-    def test_legacy_self_rag_config_ignored(self, client, monkeypatch):
-        svc = _mock_services(monkeypatch)
-        svc.db.get_collection_config.return_value = {
-            "chunk_mode": "normal", "search_mode": "dense",
-            "self_rag_enabled": True, "self_rag_max_iterations": 5,
-        }
-
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query", json={
-                    "question": "test", "collection": "test_col",
-                    "use_agent": False,
-                })
-
-        assert resp.status_code == 410  # Deprecated endpoint
-
-    def test_missing_services_returns_503(self, client, monkeypatch):
-        svc = _mock_services(monkeypatch)
-        monkeypatch.setattr(svc, "direct_query", None)
-        monkeypatch.setattr(svc, "agentic_query", None)
-
-        with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-            resp = client.post("/api/query", json={
-                "question": "test", "collection": "test_col",
-                "use_agent": False,
-            })
-
-        assert resp.status_code == 410  # Deprecated endpoint
+    def test_empty_question_still_410(self, client):
+        resp = client.post("/api/query", json={"question": "", "collection": "test_col"})
+        assert resp.status_code == 410
 
 
-# ── TestQueryRouteNoRegression ────────────────────────────────────────────
-
-class TestQueryRouteNoRegression:
-    def test_history_endpoint_still_works(self, client):
+class TestQueryHistory:
+    def test_history_returns_list(self, client):
         resp = client.get("/api/history")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
-    def test_empty_question_rejected(self, client, monkeypatch):
-        _mock_services(monkeypatch)
+    def test_history_reads_jsonl(self, client, tmp_path, monkeypatch):
+        (tmp_path / "history.jsonl").write_text(
+            json.dumps({"question": "q1", "answer": "a1", "timestamp": "t0"}) + "\n"
+            + json.dumps({"question": "q2", "answer": "a2", "timestamp": "t1"}) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("src.api.routes.query.HISTORY_DIR", tmp_path)
+        resp = client.get("/api/history", params={"limit": 1})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["question"] == "q2"
 
-        # Empty question should still work (FastAPI won't reject it by default)
-        # but we verify the endpoint doesn't crash
-        with patch("src.api.routes.query._save_history"):
-            with patch("src.api.routes.query.get_embedding_overrides", return_value={}):
-                resp = client.post("/api/query", json={
-                    "question": "", "collection": "test_col",
-                    "use_agent": False,
-                })
+    def test_history_missing_file_is_empty(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.api.routes.query.HISTORY_DIR", tmp_path)
+        resp = client.get("/api/history")
+        assert resp.status_code == 200
+        assert resp.json() == []
 
-        # Should return 410 Gone (deprecated)
-        assert resp.status_code == 410
+
+class TestDeadQueryHelpersRemoved:
+    def test_abandoned_helpers_are_gone(self):
+        from src.api.routes import query as query_mod
+
+        for name in (
+            "_col_display_name",
+            "_multi_collection_note",
+            "_save_history",
+            "_resolve_params",
+            "_resolve_sparse_llm_tokenize",
+            "_resolve_llm",
+            "_run_direct",
+            "_run_agentic",
+        ):
+            assert not hasattr(query_mod, name), name
+
+
+class TestRewriteLoopRemoved:
+    def test_rewrite_loop_module_is_gone(self):
+        assert importlib.util.find_spec("src.rag.rewrite_loop") is None
+        assert not Path("src/rag/rewrite_loop.py").exists()
+
+    def test_sse_event_name_rewrite_loop_done_kept(self):
+        from src.rag import variant_fetcher as vf
+
+        source = Path(vf.__file__).read_text(encoding="utf-8")
+        assert "rewrite_loop_done" in source
