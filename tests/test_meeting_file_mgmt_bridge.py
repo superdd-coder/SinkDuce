@@ -118,6 +118,66 @@ def test_meeting_anchor_one_node_per_chain():
     )
 
 
+def test_register_persists_meeting_display_label_without_json():
+    """After files.json stop-write, folder/attachment names use Meeting / Section."""
+    from src.collections.file_index import load as index_load, load_for_read
+    from src.file_mgmt.files import _attachment_display_fields, _row_to_file_out
+
+    coll = "bridge-label-1"
+    _setup(coll)
+    fid = "filelabel001"
+    source = "__meeting__:meet_x:tab_01"
+    register_ingested_source_file(
+        coll,
+        file_id=fid,
+        source=source,
+        storage_name="tab_01.md",
+        system_folder_name="Meeting",
+        source_label="Weekly / Decisions",
+    )
+
+    assert fid not in (index_load(coll) or {})
+    idx = load_for_read(coll)
+    assert idx[fid]["source"] == source
+    assert idx[fid]["source_label"] == "Weekly / Decisions"
+    assert idx[fid]["file_type"] == "meeting"
+
+    names = _attachment_display_fields(coll, fid, "tab_01.md", index=idx)
+    assert names["display_name"] == "Weekly / Decisions"
+    assert names["filename"] == "tab_01.md"
+
+    conn = get_db(coll)
+    try:
+        row = conn.execute("SELECT * FROM files WHERE file_id=?", (fid,)).fetchone()
+        assert _row_to_file_out(row, conn, coll, index=idx).display_name == "Weekly / Decisions"
+    finally:
+        conn.close()
+
+
+def test_unregister_finds_sqlite_source_without_json():
+    """Delete/re-ingest must find the file even when files.json was never written."""
+    from src.collections.file_index import load_for_read
+    from src.file_mgmt.service import unregister_files_for_source
+
+    coll = "bridge-unreg-1"
+    _setup(coll)
+    fid = "fileunreg001"
+    source = "__meeting__:meet_y:tab_02"
+    register_ingested_source_file(
+        coll,
+        file_id=fid,
+        source=source,
+        storage_name="tab_02.md",
+        system_folder_name="Meeting",
+        source_label="Standup / Action items",
+    )
+    assert fid in load_for_read(coll)
+
+    removed = unregister_files_for_source(coll, source, remove_disk=False)
+    assert fid in removed
+    assert fid not in load_for_read(coll)
+
+
 def test_register_meeting_folder_and_empty_anchor_delete():
     coll = "bridge-reg-1"
     _setup(coll)

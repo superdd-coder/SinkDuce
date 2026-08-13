@@ -2191,10 +2191,10 @@ export function FileMgmtDetailDialog({
                           <dd
                             className="truncate"
                             title={
-                              detail?.filename || detail?.display_name || ""
+                              detail?.display_name || detail?.filename || ""
                             }
                           >
-                            {detail?.filename || detail?.display_name || "—"}
+                            {detail?.display_name || detail?.filename || "—"}
                           </dd>
                           <dt>File ID</dt>
                           <dd

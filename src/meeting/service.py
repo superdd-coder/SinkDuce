@@ -2805,6 +2805,7 @@ class MeetingService:
                 source=section_source,
                 storage_name=storage_name,
                 system_folder_name="Meeting",
+                source_label=display_label,
             )
         else:
             # Different collection or first allocate — drop previous fully
@@ -2831,6 +2832,7 @@ class MeetingService:
                 source=section_source,
                 storage_name=storage_name,
                 system_folder_name="Meeting",
+                source_label=display_label,
             )
 
             # Resolve version_id created by register

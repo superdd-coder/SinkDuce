@@ -88,6 +88,32 @@ def test_load_for_read_keeps_note_source_from_json(isolated_col):
     assert idx[fid]["file_type"] == "note"
 
 
+def test_load_for_read_uses_sqlite_meeting_label_without_json(isolated_col):
+    """After files.json stop-write, meeting ingest stores source + label on files."""
+    from src.collections.file_index import load, load_for_read
+    from src.file_mgmt.store import get_db, init_collection_db
+
+    cid, _ = isolated_col
+    init_collection_db(cid)
+    fid = "filemeet555"
+    _insert_file(cid, fid, "tab_01.md")
+    conn = get_db(cid)
+    try:
+        conn.execute(
+            "UPDATE files SET source=?, source_label=? WHERE file_id=?",
+            (f"__meeting__:abc:{fid}", "Standup / Action items", fid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert fid not in load(cid)
+    idx = load_for_read(cid)
+    assert idx[fid]["source"].startswith("__meeting__:")
+    assert idx[fid]["source_label"] == "Standup / Action items"
+    assert idx[fid]["file_type"] == "meeting"
+
+
 def test_plain_load_stays_json_only(isolated_col):
     """Mutators still see JSON only — do not persist SQLite overlay."""
     from src.collections.file_index import load

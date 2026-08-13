@@ -54,13 +54,24 @@ def _sqlite_index_entries(collection_id: str) -> dict[str, dict]:
 
         conn = get_db(collection_id)
         try:
-            rows = conn.execute(
-                """SELECT f.file_id AS file_id,
-                          fv.storage_file_id AS storage_name
-                   FROM files f
-                   LEFT JOIN file_versions fv
-                     ON fv.version_id = f.current_version_id"""
-            ).fetchall()
+            try:
+                rows = conn.execute(
+                    """SELECT f.file_id AS file_id,
+                              fv.storage_file_id AS storage_name,
+                              f.source AS source,
+                              f.source_label AS source_label
+                       FROM files f
+                       LEFT JOIN file_versions fv
+                         ON fv.version_id = f.current_version_id"""
+                ).fetchall()
+            except Exception:
+                rows = conn.execute(
+                    """SELECT f.file_id AS file_id,
+                              fv.storage_file_id AS storage_name
+                       FROM files f
+                       LEFT JOIN file_versions fv
+                         ON fv.version_id = f.current_version_id"""
+                ).fetchall()
         finally:
             conn.close()
     except Exception:
@@ -76,9 +87,20 @@ def _sqlite_index_entries(collection_id: str) -> dict[str, dict]:
             (row["storage_name"] if hasattr(row, "keys") else row[1]) or ""
         ).strip()
         ext = Path(name).suffix.lower().lstrip(".") if name else ""
+        sql_src = ""
+        sql_label = ""
+        if hasattr(row, "keys"):
+            sql_src = str(row["source"] or "").strip() if "source" in row.keys() else ""
+            sql_label = (
+                str(row["source_label"] or "").strip()
+                if "source_label" in row.keys()
+                else ""
+            )
         entry: dict = {
-            "source": f"__file__:{fid}",
-            "source_label": name,
+            "source": sql_src or f"__file__:{fid}",
+            # Empty unless persist — do not treat storage basename as a title.
+            "source_label": sql_label,
+            "storage_name": name,
             "file_type": "file",
         }
         if ext:
@@ -97,10 +119,19 @@ def load_for_read(collection_id: str) -> dict[str, dict]:
     idx = dict(load(collection_id) or {})
     for fid, sql in _sqlite_index_entries(collection_id).items():
         prev = dict(idx.get(fid) or {})
-        src = (prev.get("source") or "").strip()
+        json_src = (prev.get("source") or "").strip()
+        sql_src = (sql.get("source") or "").strip()
+        storage = (sql.get("storage_name") or "").strip()
+        sql_label = (sql.get("source_label") or "").strip()
+        src = (
+            sql_src
+            if sql_src.startswith("__note__:") or sql_src.startswith("__meeting__:")
+            else json_src
+        )
         if src.startswith("__note__:") or src.startswith("__meeting__:"):
-            if not (prev.get("source_label") or "").strip() and sql.get("source_label"):
-                prev["source_label"] = sql["source_label"]
+            label = sql_label or (prev.get("source_label") or "").strip() or storage
+            if label:
+                prev["source_label"] = label
             prev["source"] = src
             if not prev.get("file_type"):
                 prev["file_type"] = "note" if src.startswith("__note__:") else "meeting"
@@ -108,8 +139,9 @@ def load_for_read(collection_id: str) -> dict[str, dict]:
                 prev["original_ext"] = sql["original_ext"]
         else:
             prev["source"] = f"__file__:{fid}"
-            if sql.get("source_label"):
-                prev["source_label"] = sql["source_label"]
+            prev["source_label"] = sql_label or storage or (
+                prev.get("source_label") or ""
+            ).strip()
             prev["file_type"] = prev.get("file_type") or "file"
             if sql.get("original_ext"):
                 prev["original_ext"] = sql["original_ext"]

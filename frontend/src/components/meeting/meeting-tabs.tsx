@@ -924,6 +924,16 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       onMeetingUpdate(meetingRest as Meeting)
       const wasUpdate = !!tab.allocated_file_id
 
+      // Node + Meeting folder row exist as soon as allocate returns.
+      // DatabaseView stays mounted across sidebar switches — refresh now.
+      try {
+        const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+        const store = useFileMgmtStore.getState()
+        await store.fetchFolderTree(colId)
+        await store.refreshFiles(colId, { silent: true })
+        store.bumpTimelineRefresh()
+      } catch { /* ignore store wiring */ }
+
       // allocate returns as soon as the file is registered; indexing is async.
       // Keep pill "Ingesting…" until the task finishes — don't toast "done" early.
       if (bridgeTaskId && bridgeFileId) {

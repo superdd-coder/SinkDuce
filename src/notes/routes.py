@@ -330,6 +330,7 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
             source=source,
             storage_name=f"{safe_title}.md",
             system_folder_name="Notes",
+            source_label=f"Note: {note_title}",
         )
     except Exception:
         logger.warning(

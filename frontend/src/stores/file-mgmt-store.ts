@@ -345,6 +345,12 @@ interface FileMgmtState {
   timelineNavRequest: { nodeId: string; chainId?: string } | null
   requestTimelineFocus: (nodeId: string, chainId?: string) => void
   clearTimelineNavRequest: () => void
+  /**
+   * Bumped after meeting/note ingest so a keep-mounted TimelineView
+   * silent-refetches (DatabaseView stays mounted across sidebar switches).
+   */
+  timelineRefreshEpoch: number
+  bumpTimelineRefresh: () => void
 
   /** Same-folder / sibling name conflict — rename dialog */
   nameConflict: NameConflictState | null
@@ -380,6 +386,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   messageIncludeNodes: false,
   viewMode: "folder",
   timelineNavRequest: null,
+  timelineRefreshEpoch: 0,
   uploadingTasks: new Set<string>(),
   ingestingFiles: {},
   perCollectionFolderCache: {},
@@ -1369,6 +1376,10 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   clearTimelineNavRequest: () => {
     set({ timelineNavRequest: null })
+  },
+
+  bumpTimelineRefresh: () => {
+    set((s) => ({ timelineRefreshEpoch: s.timelineRefreshEpoch + 1 }))
   },
 
   _startTaskPolling: (collectionId, taskId, fileId = null, opts) => {

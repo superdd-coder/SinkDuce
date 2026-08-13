@@ -385,6 +385,7 @@ export function TimelineView({
   const [selId,setSelId]=useState<string|null>(null)
   const timelineNavRequest = useFileMgmtStore((s) => s.timelineNavRequest)
   const clearTimelineNavRequest = useFileMgmtStore((s) => s.clearTimelineNavRequest)
+  const timelineRefreshEpoch = useFileMgmtStore((s) => s.timelineRefreshEpoch)
   // Canvas pan/zoom
   const [scale, setScale] = useState(1)
   const [tx, setTx] = useState(0)
@@ -571,6 +572,14 @@ export function TimelineView({
   useEffect(()=>{fetch()},[fetch])
   useEffect(()=>{if(drk>0)fetch({silent:true})},[drk,fetch])
 
+  const lastTimelineEpoch = useRef(timelineRefreshEpoch)
+  useEffect(() => {
+    if (timelineRefreshEpoch === lastTimelineEpoch.current) return
+    lastTimelineEpoch.current = timelineRefreshEpoch
+    void fetch({ silent: true })
+  }, [timelineRefreshEpoch, fetch])
+
+  const navMissRefetchRef = useRef<string | null>(null)
   // In-app nav from folder message mini-graph (same tab; no window.open / no new route)
   useEffect(() => {
     if (!timelineNavRequest || loading || chainData.size === 0) return
@@ -584,16 +593,24 @@ export function TimelineView({
       }
     }
     if (!found) {
+      // Keep-mounted TimelineView can be stale right after Meeting ingest.
+      if (navMissRefetchRef.current !== nodeId) {
+        navMissRefetchRef.current = nodeId
+        void fetch({ silent: true })
+        return
+      }
+      navMissRefetchRef.current = null
       clearTimelineNavRequest()
       return
     }
+    navMissRefetchRef.current = null
     setMsgMode(false)
     setMsgDetail({ open: false, sourceNodeIds: [], messageId: null })
     setFocusGroupId(null)
     setSelId(nodeId)
     navFocusRef.current = nodeId
     clearTimelineNavRequest()
-  }, [timelineNavRequest, loading, chainData, clearTimelineNavRequest])
+  }, [timelineNavRequest, loading, chainData, clearTimelineNavRequest, fetch])
 
   const clk = useCallback((id: string) => {
     if (msgMode) {

@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import inspect
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
 def test_file_mgmt_does_not_ship_a_second_ingest_pipeline():
+    from pathlib import Path
+
     import src.file_mgmt.service as svc
 
     assert not hasattr(svc, "_ingest_file_to_qdrant")
-    src = inspect.getsource(svc)
+    src = Path("src/file_mgmt/files.py").read_text()
     assert "upload_handler" in src or "create_task" in src
 
 
