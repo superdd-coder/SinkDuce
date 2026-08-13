@@ -1602,7 +1602,3 @@ MEETING_TODO_EXTRACT_USER_PROMPT = """## Meeting timestamp (anchor for relative 
 Extract action-item todos as JSON. Keep every responsible person's name
 (assignee_label + title); do not strip names for brevity.
 """
-
-# Legacy aliases so older imports do not crash
-MEETING_TODO_DDL_SYSTEM_PROMPT = MEETING_TODO_EXTRACT_SYSTEM_PROMPT
-MEETING_TODO_DDL_USER_PROMPT = MEETING_TODO_EXTRACT_USER_PROMPT
