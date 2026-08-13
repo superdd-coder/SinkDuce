@@ -35,11 +35,16 @@ _debounce: dict[str, dict] = {}  # collection_id -> {"timer": Timer, "snapshot":
 def source_is_definitive(collection_id: str, source: str) -> bool:
     """Whether this source participates in Collection Summary consolidate.
 
-    File-mgmt files (``__file__:{file_id}``): ``files.is_definitive``.
+    File-mgmt files (``__file__:{file_id}`` / ``file:{id}``): ``files.is_definitive``.
     Other sources (notes/meetings legacy): fall back to doc_summary.include_in_summary.
     """
-    if (source or "").startswith("__file__:"):
-        file_id = source[len("__file__:") :]
+    src = source or ""
+    file_id = None
+    if src.startswith("__file__:"):
+        file_id = src[len("__file__:") :]
+    elif src.startswith("file:"):
+        file_id = src[len("file:") :]
+    if file_id is not None:
         try:
             from src.file_mgmt.store import get_db
 
