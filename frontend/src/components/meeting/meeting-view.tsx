@@ -1320,11 +1320,31 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return
+    const target =
+      meetings.find((m) => m.id === deleteTarget) ||
+      (meeting?.id === deleteTarget ? meeting : null)
+    const colIds = new Set<string>()
+    for (const col of target?.allocated_collections || []) {
+      if (col) colIds.add(col)
+    }
+    for (const t of target?.tabs || []) {
+      const col = t.associated_collection_id
+      if (col) colIds.add(col)
+    }
     try {
       await deleteMeeting(deleteTarget)
       if (activeMeeting === deleteTarget) setActiveMeeting(null)
       setDeleteTarget(null)
       fetchMeetings()
+      if (colIds.size > 0) {
+        try {
+          const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+          const store = useFileMgmtStore.getState()
+          for (const col of colIds) {
+            await store.refreshLibrarySurfaces(col)
+          }
+        } catch { /* Database view may be unmounted */ }
+      }
       toast.success("Meeting deleted")
     } catch {
       toast.error("Delete failed")

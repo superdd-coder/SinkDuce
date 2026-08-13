@@ -395,44 +395,18 @@ async def delete_meeting(meeting_id: str) -> str:
 
     Removes:
     - the meeting directory (``data/meetings/{meeting_id}/``)
-    - any chunks ingested into allocated collections (via file_index lookup)
-    - corresponding file snapshots and ``files.json`` entries
+    - ingested SQLite rows + disk snapshots (``files.json`` leftover only)
+    - Qdrant chunks for those sources
     """
     def _run() -> dict[str, Any]:
         from src.meeting import store as mstore
-        from src.services import services
-        from src.collections.file_index import (
-            load as load_file_index,
-            remove as remove_file_index,
-            COLLECTIONS_DIR as _CDIR,
-        )
-        import shutil as _shutil
+        from src.meeting.service import meeting_service
 
         m = mstore.get_meeting(meeting_id)
         if not m:
             return err(f"Meeting '{meeting_id}' not found")
 
-        cleaned_allocations: list[dict[str, str]] = []
-        if m.allocated_collections and m.allocated_file_ids:
-            for col, fid in zip(m.allocated_collections, m.allocated_file_ids):
-                try:
-                    idx = load_file_index(col)
-                    entry = idx.get(fid, {})
-                    source = entry.get("source", "")
-                    if source:
-                        services.db.delete_by_filter(col, key="source", value=source)
-                        snap_dir = _CDIR / col / "files" / fid
-                        if snap_dir.exists():
-                            _shutil.rmtree(snap_dir)
-                        remove_file_index(col, fid)
-                        cleaned_allocations.append({
-                            "collection": col, "file_id": fid, "source": source,
-                        })
-                except Exception as e:
-                    logger.warning(
-                        "Failed to clean Qdrant points for meeting %s in %s: %s",
-                        meeting_id, col, e,
-                    )
+        cleaned_allocations = meeting_service.cleanup_meeting_allocations(m)
 
         deleted = mstore.delete_meeting(meeting_id)
         if not deleted:

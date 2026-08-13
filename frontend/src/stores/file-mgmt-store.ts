@@ -351,6 +351,8 @@ interface FileMgmtState {
    */
   timelineRefreshEpoch: number
   bumpTimelineRefresh: () => void
+  /** Folder tree + current folder + keep-mounted Timeline after remote ingest/cancel. */
+  refreshLibrarySurfaces: (collectionId: string) => Promise<void>
 
   /** Same-folder / sibling name conflict — rename dialog */
   nameConflict: NameConflictState | null
@@ -1380,6 +1382,14 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
 
   bumpTimelineRefresh: () => {
     set((s) => ({ timelineRefreshEpoch: s.timelineRefreshEpoch + 1 }))
+  },
+
+  refreshLibrarySurfaces: async (collectionId) => {
+    const colId = (collectionId || "").trim()
+    if (!colId) return
+    await get().fetchFolderTree(colId)
+    await get().refreshFiles(colId, { silent: true })
+    get().bumpTimelineRefresh()
   },
 
   _startTaskPolling: (collectionId, taskId, fileId = null, opts) => {

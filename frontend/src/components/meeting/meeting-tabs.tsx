@@ -74,6 +74,18 @@ import {
 
 const SAVE_DELAY = 800
 
+/** DatabaseView stays mounted — refresh Files / Timeline after ingest or cancel. */
+async function refreshKeepMountedLibrary(collectionId: string | null | undefined) {
+  const colId = (collectionId || "").trim()
+  if (!colId) return
+  try {
+    const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+    await useFileMgmtStore.getState().refreshLibrarySurfaces(colId)
+  } catch {
+    /* store / Database view may be unmounted */
+  }
+}
+
 interface Props {
   meetingId: string
   meeting: Meeting
@@ -846,7 +858,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     try {
       // Delete old allocation first; fail fast — don't proceed if cleanup fails
       if (ingested && colId !== associatedId) {
+        const oldCol = associatedId
         await deleteSectionAllocation(meetingId, tab.tab_id)
+        await refreshKeepMountedLibrary(oldCol)
       }
     } catch (err) {
       toast.error(`Failed to remove old allocation: ${err instanceof Error ? err.message : String(err)}`)
@@ -879,6 +893,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     if (ingested) {
       try {
         await deleteSectionAllocation(meetingId, tab.tab_id)
+        await refreshKeepMountedLibrary(associatedId)
       } catch (err) {
         toast.error(`Failed to remove old allocation: ${err instanceof Error ? err.message : String(err)}`)
         setPendingName(null)
@@ -926,13 +941,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
 
       // Node + Meeting folder row exist as soon as allocate returns.
       // DatabaseView stays mounted across sidebar switches — refresh now.
-      try {
-        const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
-        const store = useFileMgmtStore.getState()
-        await store.fetchFolderTree(colId)
-        await store.refreshFiles(colId, { silent: true })
-        store.bumpTimelineRefresh()
-      } catch { /* ignore store wiring */ }
+      await refreshKeepMountedLibrary(colId)
 
       // allocate returns as soon as the file is registered; indexing is async.
       // Keep pill "Ingesting…" until the task finishes — don't toast "done" early.
@@ -1078,8 +1087,10 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     setLocalIngesting(true)
     onIngestingChangeRef.current?.(jobTabId, true)
     try {
+      const colId = associatedId
       const m = await deleteSectionAllocation(meetingId, jobTabId)
       onMeetingUpdate(m)
+      await refreshKeepMountedLibrary(colId)
       toast.success("Ingestion cancelled")
     } catch (err) {
       toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -2108,7 +2119,11 @@ export function MeetingTabs({
       case "regenerate":
         // Delete old allocation AFTER successful regeneration
         if (action.hadAllocation) {
-          deleteSectionAllocation(meetingId, action.tabId).catch(() => { /* best effort */ })
+          const colId = meeting.tabs?.find((t) => t.tab_id === action.tabId)
+            ?.associated_collection_id
+          deleteSectionAllocation(meetingId, action.tabId)
+            .then(() => refreshKeepMountedLibrary(colId))
+            .catch(() => { /* best effort */ })
         }
         loadedTabsRef.current.delete(action.tabId)
         setTabMdContents((prev) => {
@@ -2404,9 +2419,12 @@ export function MeetingTabs({
     const tabId = deleteSectionTarget
     if (!tabId) return
     setDeleteSectionTarget(null)
+    const colId = meeting.tabs?.find((t) => t.tab_id === tabId)
+      ?.associated_collection_id
     try {
       const m = await deleteSection(meetingId, tabId)
       onMeetingUpdate(m)
+      await refreshKeepMountedLibrary(colId)
       if (selectedSummaryId === tabId) setSelectedSummaryId("tab_general")
       setTabMdContents((prev) => {
         const next = { ...prev }

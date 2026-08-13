@@ -1470,7 +1470,7 @@ def unregister_files_for_source(
 
     if not fids:
         logger.info(
-            "unregister_files_for_source: no files.json entries for %s in %s",
+            "unregister_files_for_source: no managed files for %s in %s",
             source,
             collection_id,
         )

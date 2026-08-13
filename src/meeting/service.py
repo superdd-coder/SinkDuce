@@ -2578,17 +2578,37 @@ class MeetingService:
         meeting_id: str | None = None,
         detach_anchor: bool = True,
     ) -> None:
-        """Delete an allocation: Qdrant, file-mgmt SQLite, disk, files.json.
+        """Delete an allocation: Qdrant, SQLite, disk; leftover files.json.
 
+        Source is read from ``files.source`` first, then old ``files.json``.
         When *meeting_id* is set and *detach_anchor*, detaches the file from
         the meeting timeline anchor and deletes the node if empty.
         """
         try:
-            from src.collections.file_index import load as load_file_index
+            source = ""
+            try:
+                from src.file_mgmt.service import _open_db
 
-            idx = load_file_index(collection) or {}
-            entry = idx.get(file_id, {})
-            source = entry.get("source", "") or ""
+                conn_src = _open_db(collection)
+                try:
+                    row = conn_src.execute(
+                        "SELECT source FROM files WHERE file_id=?", (file_id,)
+                    ).fetchone()
+                    if row and row["source"]:
+                        source = str(row["source"]).strip()
+                finally:
+                    conn_src.close()
+            except Exception:
+                logger.debug(
+                    "allocation source sqlite lookup skipped file=%s",
+                    file_id[:12] if file_id else "",
+                    exc_info=True,
+                )
+            if not source:
+                from src.collections.file_index import load as load_file_index
+
+                idx = load_file_index(collection) or {}
+                source = str((idx.get(file_id) or {}).get("source") or "").strip()
 
             # Detach from meeting timeline anchor(s) before purging file rows
             if detach_anchor and meeting_id and file_id:
@@ -2658,16 +2678,18 @@ class MeetingService:
                 except Exception as exc:
                     logger.warning("unregister_files_for_source failed: %s", exc)
             else:
-                # Fallback: no source in index — purge by file_id
+                # No source on SQLite or leftover JSON — still drop this file_id.
                 from src.collections.file_index import remove as remove_file_index
+                from src.file_mgmt.service import _open_db, _purge_file_sqlite_rows
 
                 file_dir = _files_dir(collection) / file_id
                 if file_dir.exists():
                     shutil.rmtree(file_dir, ignore_errors=True)
-                remove_file_index(collection, file_id)
                 try:
-                    from src.file_mgmt.service import _open_db, _purge_file_sqlite_rows
-
+                    remove_file_index(collection, file_id)
+                except Exception:
+                    logger.debug("legacy files.json remove skipped", exc_info=True)
+                try:
                     conn = _open_db(collection)
                     try:
                         with conn:
@@ -2688,6 +2710,44 @@ class MeetingService:
             )
         except Exception as exc:
             logger.warning("Failed to delete allocation file_id=%s: %s", file_id, exc)
+
+    def cleanup_meeting_allocations(self, meeting: Meeting) -> list[dict[str, str]]:
+        """Purge ingested files for a meeting (SQLite + disk; leftover JSON)."""
+        pairs: list[tuple[str, str]] = []
+        for t in meeting.tabs or []:
+            td = t if isinstance(t, dict) else t.model_dump()
+            col = (td.get("associated_collection_id") or "").strip()
+            fid = (td.get("allocated_file_id") or "").strip()
+            if col and fid:
+                pairs.append((col, fid))
+        for col, fid in zip(
+            meeting.allocated_collections or [],
+            meeting.allocated_file_ids or [],
+        ):
+            col_s = (col or "").strip()
+            fid_s = (fid or "").strip()
+            if col_s and fid_s:
+                pairs.append((col_s, fid_s))
+        seen: set[tuple[str, str]] = set()
+        cleaned: list[dict[str, str]] = []
+        for col, fid in pairs:
+            if (col, fid) in seen:
+                continue
+            seen.add((col, fid))
+            try:
+                self._delete_allocation(
+                    col, fid, meeting_id=meeting.id, detach_anchor=True
+                )
+                cleaned.append({"collection": col, "file_id": fid})
+            except Exception:
+                logger.warning(
+                    "Failed cleaning allocation col=%s file=%s meeting=%s",
+                    col,
+                    fid[:12],
+                    meeting.id,
+                    exc_info=True,
+                )
+        return cleaned
 
     @staticmethod
     def _managed_file_exists(collection_id: str, file_id: str) -> bool:
