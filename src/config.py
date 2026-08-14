@@ -101,7 +101,8 @@ class EnrichmentConfig(BaseModel):
     max_parallel_context: int = 50
     enrichment_model: str = ""  # provider id for enrichment LLM; "" = use default LLM
     meeting_model: str = ""     # provider id for meeting summary LLM; "" = use default LLM
-    meeting_thinking: bool = True  # enable thinking mode for meeting summary
+    meeting_thinking: bool = False  # meeting summary thinking (off by default)
+    meeting_thinking_effort: str = "low"  # low | medium | high (DeepSeek: low/high/max; DashScope token budget)
 
 
 class QdrantConfig(BaseModel):

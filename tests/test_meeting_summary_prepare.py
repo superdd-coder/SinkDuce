@@ -67,6 +67,19 @@ def test_prepare_fixes_backslash_and_keeps_spk():
     assert "[," not in out
 
 
+def test_prepare_keeps_bare_numeric_brackets():
+    """附件[1] is prose; only [ref:N] / [stt_N] are citations."""
+    out = prepare_meeting_summary_for_note(
+        "见附件[1] 方案[2] 区间[20-25] [ref:67] [stt_0010]",
+        {"0": "Alice"},
+    )
+    assert "附件[1]" in out
+    assert "方案[2]" in out
+    assert "[20-25]" in out
+    assert "ref:" not in out
+    assert "stt_" not in out
+
+
 def test_prepare_unescapes_markdown_brackets_keeps_spk():
     raw = r"\[spk:4\] said hello \[stt_0001,stt_0002\]"
     out = prepare_meeting_summary_for_note(raw, {"4": "Dana"})

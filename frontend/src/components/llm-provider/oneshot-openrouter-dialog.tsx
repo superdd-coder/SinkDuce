@@ -21,6 +21,7 @@ interface OneShotOpenRouterDialogProps {
 }
 
 const BASE_URL = "https://openrouter.ai/api/v1"
+const MEETING_MODEL = "deepseek/deepseek-v4-pro"
 
 const RERANK_MODELS: ORModel[] = [
   { id: "cohere/rerank-v3.5", name: "Cohere: Rerank 3.5", pricing: { prompt: "0.001", completion: "0" }, context_length: 0 },
@@ -157,12 +158,17 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
       for (const p of rerankList.filter((p: any) => p.is_default)) {
         await updateRerankProvider(p.id, { ...p, is_default: false })
       }
-      const selected = [...new Set([llmModel, chatModel, visualModel].filter(Boolean))]
-      await createLLMProvider({ name: "OpenRouter", provider: "openai_compatible", model: llmModel.trim(), base_url: BASE_URL, api_key: apiKey.trim(), is_default: true, selected_models: selected as any, default_model: llmModel.trim(), visual_model_ids: visualModel.trim() ? [visualModel.trim()] : [], function_call_model_ids: [chatModel.trim()] } as any)
+      const selected = [...new Set([llmModel, chatModel, visualModel, MEETING_MODEL].filter(Boolean))]
+      const llmCreated = await createLLMProvider({ name: "OpenRouter", provider: "openai_compatible", model: llmModel.trim(), base_url: BASE_URL, api_key: apiKey.trim(), is_default: true, selected_models: selected as any, default_model: llmModel.trim(), visual_model_ids: visualModel.trim() ? [visualModel.trim()] : [], function_call_model_ids: [chatModel.trim()] } as any)
       await createEmbeddingProvider({ name: "OpenRouter", provider: "openai_compatible", model: embModel.trim(), base_url: BASE_URL, api_key: apiKey.trim(), dimensions: 1536, batch_size: 10, is_default: true } as any)
       await createRerankProvider({ name: "OpenRouter", provider: "openai_compatible", model: rerankerModel.trim(), base_url: BASE_URL, api_key: apiKey.trim(), is_default: true } as any)
       await updateConfig("default_chat_model", { default_chat_model: chatModel.trim() })
       if (visualModel.trim()) await updateConfig("visual_model_id", { visual_model_id: visualModel.trim() })
+      if (llmCreated?.id) {
+        await updateConfig("enrichment", {
+          meeting_model: `${llmCreated.id}|${MEETING_MODEL}`,
+        })
+      }
       toast.success("OpenRouter configured")
       onSaved(); onOpenChange(false); setApiKey("")
     } catch (err) { toast.error(`Setup failed: ${err instanceof Error ? err.message : String(err)}`) }
@@ -271,6 +277,9 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
                       placeholder="None (skip)"
                     />
                   </div>
+                  <p className="pm-settings-dlg-card-hint">
+                    Meeting summary · <span className="font-mono">{MEETING_MODEL}</span>
+                  </p>
                   <div className="pm-settings-dlg-grid">
                     <div className="pm-settings-dlg-field">
                       <FieldLabel>Embedding</FieldLabel>

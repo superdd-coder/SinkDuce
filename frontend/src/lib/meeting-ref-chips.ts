@@ -1,9 +1,10 @@
 /**
  * Group meeting sentence citations into Summary-style chips.
  *
- * LLM output uses [N], [67,70], or ranges [67-70]. Summary expands ranges
- * on the backend; Quick Chat renders the raw markers and must expand here
- * so [1-5] is one chip, not buttons 1 and 5.
+ * LLM output uses [ref:N], [ref:67,70], or ranges [ref:67-70].
+ * parseMeetingRefGroups takes the inner text after the ref: prefix.
+ * Summary expands ranges on persist; Quick Chat expands here so
+ * [ref:1-5] is one chip, not buttons 1 and 5.
  */
 
 export type MeetingRefChip = {

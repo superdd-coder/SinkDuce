@@ -43,6 +43,57 @@ def _extract_json_from_raw(raw: str) -> str | None:
     return None
 
 
+# Qwen / DashScope thinking_budget (tokens).
+THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 8192, "max": 8192}
+
+# DeepSeek Chat Completions: reasoning_effort is a top-level create() kwarg
+# (not extra_body). Official values: low | high | max (default high).
+# Settings Low/Medium/High map onto those three official levels.
+DEEPSEEK_REASONING_EFFORT = {
+    "low": "low",
+    "medium": "high",
+    "high": "max",
+    "max": "max",
+    "xhigh": "high",
+}
+
+
+def map_deepseek_reasoning_effort(effort: str | None) -> str | None:
+    """Map Settings / config effort onto DeepSeek's official values."""
+    return DEEPSEEK_REASONING_EFFORT.get((effort or "").strip().lower())
+
+
+def build_thinking_extra_body(
+    is_dashscope: bool, thinking: bool, effort: str | None = None
+) -> dict:
+    """Provider extra_body for thinking on/off (and DashScope budget)."""
+    if is_dashscope:
+        extra: dict = {"enable_thinking": thinking}
+        budget = THINKING_BUDGETS.get((effort or "").strip().lower())
+        if thinking and budget:
+            extra["thinking_budget"] = budget
+        return extra
+    return {"thinking": {"type": "enabled" if thinking else "disabled"}}
+
+
+def thinking_create_kwargs(
+    is_dashscope: bool, thinking: bool, effort: str | None = None
+) -> dict:
+    """Kwargs to merge into chat.completions.create().
+
+    DeepSeek official shape::
+
+        reasoning_effort="high",
+        extra_body={"thinking": {"type": "enabled"}}
+    """
+    out: dict = {"extra_body": build_thinking_extra_body(is_dashscope, thinking, effort)}
+    if not is_dashscope and thinking:
+        mapped = map_deepseek_reasoning_effort(effort)
+        if mapped:
+            out["reasoning_effort"] = mapped
+    return out
+
+
 @llm_registry.register("openai_compatible", display_name="OpenAI-Compatible")
 class OpenAICompatLLM(LLMProvider):
     def __init__(self, config: LLMProviderConfig):
@@ -58,16 +109,17 @@ class OpenAICompatLLM(LLMProvider):
         # format (`enable_thinking`) instead of DeepSeek's native format.
         self._is_dashscope = "dashscope.aliyuncs.com" in self._base_url
 
-    def _build_thinking_extra(self, thinking: bool) -> dict:
-        """Return the correct ``extra_body`` dict for thinking mode.
+    def _build_thinking_extra(
+        self, thinking: bool, effort: str | None = None
+    ) -> dict:
+        return build_thinking_extra_body(self._is_dashscope, thinking, effort)
 
-        DashScope's OpenAI-compatible API expects ``{"enable_thinking": bool}``,
-        while DeepSeek's native API uses
-        ``{"thinking": {"type": "enabled" | "disabled"}}``.
-        """
-        if self._is_dashscope:
-            return {"enable_thinking": thinking}
-        return {"thinking": {"type": "enabled" if thinking else "disabled"}}
+    def _apply_thinking_kwargs(
+        self, kwargs: dict, thinking: bool | None, effort: str | None = None
+    ) -> None:
+        if thinking is None:
+            return
+        kwargs.update(thinking_create_kwargs(self._is_dashscope, thinking, effort))
 
     def _resolve_temperature(self, temperature: float | None) -> float:
         return temperature if temperature is not None else _DEFAULT_TEMPERATURE
@@ -79,11 +131,11 @@ class OpenAICompatLLM(LLMProvider):
             return self._default_max_tokens
         return 0
 
-    def generate(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None) -> str:
-        logger.info("LLM generate: model=%s prompt_len=%d max_tokens=%s thinking=%s json_mode=%s",
+    def generate(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None, thinking_effort: str | None = None) -> str:
+        logger.info("LLM generate: model=%s prompt_len=%d max_tokens=%s thinking=%s effort=%s json_mode=%s",
                     self._model, len(prompt),
                     max_tokens if max_tokens else (self._default_max_tokens or "none"),
-                    thinking, bool(response_format))
+                    thinking, thinking_effort, bool(response_format))
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -99,8 +151,7 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["max_tokens"] = resolved_mt
         if response_format:
             kwargs["response_format"] = response_format
-        if thinking is not None:
-            kwargs["extra_body"] = self._build_thinking_extra(thinking)
+        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
 
         response = self._client.chat.completions.create(**kwargs)
         if not response.choices:
@@ -187,6 +238,7 @@ class OpenAICompatLLM(LLMProvider):
         self, prompt: str, system: str = "",
         temperature: float | None = None, max_tokens: int | None = None,
         response_format: dict | None = None, thinking: bool | None = None,
+        thinking_effort: str | None = None,
     ) -> Generator[tuple[str, bool], None, None]:
         """Stream with thinking-mode awareness.
 
@@ -212,8 +264,7 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["max_tokens"] = resolved_mt
         if response_format:
             kwargs["response_format"] = response_format
-        if thinking is not None:
-            kwargs["extra_body"] = self._build_thinking_extra(thinking)
+        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
 
         stream = self._client.chat.completions.create(**kwargs)
         in_think = False
@@ -277,7 +328,7 @@ class OpenAICompatLLM(LLMProvider):
                         seen_non_think = True
                     yield (text, False)
 
-    def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None) -> Generator[str, None, None]:
+    def generate_stream(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None, thinking_effort: str | None = None) -> Generator[str, None, None]:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -294,8 +345,7 @@ class OpenAICompatLLM(LLMProvider):
             kwargs["max_tokens"] = resolved_mt
         if response_format:
             kwargs["response_format"] = response_format
-        if thinking is not None:
-            kwargs["extra_body"] = self._build_thinking_extra(thinking)
+        self._apply_thinking_kwargs(kwargs, thinking, thinking_effort)
 
         stream = self._client.chat.completions.create(**kwargs)
         in_think = False

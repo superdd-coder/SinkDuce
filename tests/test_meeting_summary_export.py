@@ -43,8 +43,10 @@ function prepare(md, speakerNames) {
   }
   s = s.replace(/\[spk:([^\]]+)\]/g, "Speaker $1");
   const citeToken = "(?:[A-Za-z0-9]{6,}_stt_\\d+|stt_\\d+|\\d+)";
+  const sttToken = "(?:[A-Za-z0-9]{6,}_)?stt_\\d+";
   const citeSep = "[\\s,，、;；\\-–—]+";
-  s = s.replace(new RegExp(`\\[(?:ref\\s*:)?\\s*${citeToken}(?:${citeSep}${citeToken})*\\s*\\]`, "gi"), "");
+  s = s.replace(new RegExp(`\\[ref\\s*:\\s*${citeToken}(?:${citeSep}${citeToken})*\\s*\\]`, "gi"), "");
+  s = s.replace(new RegExp(`\\[(?:ref\\s*:)?\\s*${sttToken}(?:${citeSep}${sttToken})*\\s*\\]`, "gi"), "");
   s = s.replace(/\b[A-Za-z0-9]{6,}_stt_\d+\b/gi, "");
   s = s.replace(/\bstt_\d+\b/gi, "");
   s = s.replace(/\[\s*priority\s*:\s*(?:high|medium|low)\s*\]/gi, "");

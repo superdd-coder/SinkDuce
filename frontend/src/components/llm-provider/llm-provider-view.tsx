@@ -615,7 +615,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const [ragTopK,setRagTopK]=useState("20");const [ragRerankTopK,setRagRerankTopK]=useState("5");const [ragMaxParallel,setRagMaxParallel]=useState("10");const [ragMaxIter,setRagMaxIter]=useState("8");const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState("25")
   const [dirTopK,setDirTopK]=useState("20");const [dirRerankTopK,setDirRerankTopK]=useState("5");const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState("25")
   const [enrichMaxParallel,setEnrichMaxParallel]=useState("50");const [enrichModel,setEnrichModel]=useState("")
-  const [meetingModel,setMeetingModel]=useState("");const [meetingThinking,setMeetingThinking]=useState(true);const [meetingThinkingConfirmOpen,setMeetingThinkingConfirmOpen]=useState(false)
+  const [meetingModel,setMeetingModel]=useState("")
   const [showAdvanced,setShowAdvanced]=useState(false)
   const [showModelConfig,setShowModelConfig]=useState(false)
   const _saveRag=(mode?:string)=>updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:mode??ragSearchMode,min_score:(parseInt(ragMinScore)||0)/100}).catch(()=>{})
@@ -841,7 +841,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
       if(c.rag){if(typeof c.rag.top_k==="number")setRagTopK(String(c.rag.top_k));if(typeof c.rag.rerank_top_k==="number")setRagRerankTopK(String(c.rag.rerank_top_k));if(typeof c.rag.max_parallel_queries==="number")setRagMaxParallel(String(c.rag.max_parallel_queries));if(typeof c.rag.max_iterations==="number")setRagMaxIter(String(c.rag.max_iterations));if(typeof c.rag.default_search_mode==="string")setRagSearchMode(c.rag.default_search_mode);if(typeof c.rag.min_score==="number")setRagMinScore(String(c.rag.min_score))}
       if(c.direct_rag){if(typeof c.direct_rag.top_k==="number")setDirTopK(String(c.direct_rag.top_k));if(typeof c.direct_rag.rerank_top_k==="number")setDirRerankTopK(String(c.direct_rag.rerank_top_k));if(typeof c.direct_rag.default_search_mode==="string")setDirSearchMode(c.direct_rag.default_search_mode);setDirRerankEnabled(c.direct_rag.use_reranker!==false);if(typeof c.direct_rag.min_score==="number")setDirMinScore(String(c.direct_rag.min_score))}
-      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(String(c.enrichment.max_parallel_context));if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model);if(typeof c.enrichment.meeting_model==="string")setMeetingModel(c.enrichment.meeting_model);if(typeof c.enrichment.meeting_thinking==="boolean")setMeetingThinking(c.enrichment.meeting_thinking)}
+      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(String(c.enrichment.max_parallel_context));if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model);if(typeof c.enrichment.meeting_model==="string")setMeetingModel(c.enrichment.meeting_model)}
       // Load MinerU config
       if (c.mineru) {
         setMineruEnabled(!!c.mineru.enabled)
@@ -1138,7 +1138,6 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           )}
                         </div>
 
-                        {/* Meeting summary model + Think pill */}
                         <div className="pm-settings-model-field">
                           <FieldLabel>Meeting summary model</FieldLabel>
                           {meetingModelOptions.length <= 1 ? (
@@ -1146,55 +1145,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                               <p className="pm-meta">No LLM providers configured.</p>
                             </div>
                           ) : (
-                            <div className="pm-settings-model-field-row">
-                              <div className="pm-settings-model-field-select">
-                                <DropdownSelect
-                                  value={meetingModel}
-                                  onChange={async (v) => {
-                                    setMeetingModel(v)
-                                    try {
-                                      await updateConfig("enrichment", {
-                                        meeting_model: v,
-                                        meeting_thinking: meetingThinking,
-                                      })
-                                      toast.success("Meeting model updated")
-                                    } catch {
-                                      toast.error("Failed to update")
-                                    }
-                                  }}
-                                  options={meetingModelOptions}
-                                  placeholder="Default"
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                className={cn(
-                                  "pm-chat-tool-chip pm-chat-tool-chip--flow shrink-0",
-                                  meetingThinking && "is-on",
-                                )}
-                                onClick={() => {
-                                  if (meetingThinking) setMeetingThinkingConfirmOpen(true)
-                                  else {
-                                    setMeetingThinking(true)
-                                    updateConfig("enrichment", {
-                                      meeting_model: meetingModel,
-                                      meeting_thinking: true,
-                                    }).catch(() => {
-                                      toast.error("Failed to update")
-                                      setMeetingThinking(false)
-                                    })
-                                  }
-                                }}
-                                title={
-                                  meetingThinking
-                                    ? "Deep thinking ON for meeting summary"
-                                    : "Deep thinking OFF for meeting summary"
+                            <DropdownSelect
+                              value={meetingModel}
+                              onChange={async (v) => {
+                                setMeetingModel(v)
+                                try {
+                                  await updateConfig("enrichment", {
+                                    meeting_model: v,
+                                  })
+                                  toast.success("Meeting model updated")
+                                } catch {
+                                  toast.error("Failed to update")
                                 }
-                              >
-                                <Sparkles className="size-3" />
-                                Think
-                              </button>
-                            </div>
+                              }}
+                              options={meetingModelOptions}
+                              placeholder="Default"
+                            />
                           )}
                         </div>
                       </div>
@@ -2565,47 +2531,6 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         }}
       />
 
-      <Dialog open={meetingThinkingConfirmOpen} onOpenChange={setMeetingThinkingConfirmOpen}>
-        <DialogContent
-          className={cn(
-            "pm-dialog pm-dialog--silk pm-dialog-confirm sm:max-w-sm",
-            "!animate-none data-open:!animate-none data-closed:!animate-none",
-          )}
-          overlayClassName="pm-dialog-overlay--silk"
-        >
-          <DialogHeader>
-            <DialogKicker>Meeting</DialogKicker>
-            <DialogTitle>Turn off deep thinking?</DialogTitle>
-            <DialogDescription>
-              Disabling thinking will significantly reduce the accuracy of Section breakdown and
-              section allocation. Blueprint extraction and content routing may also degrade.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setMeetingThinkingConfirmOpen(false)}>
-              Keep thinking on
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={async () => {
-                setMeetingThinkingConfirmOpen(false)
-                setMeetingThinking(false)
-                try {
-                  await updateConfig("enrichment", {
-                    meeting_model: meetingModel,
-                    meeting_thinking: false,
-                  })
-                } catch {
-                  toast.error("Failed to update")
-                  setMeetingThinking(true)
-                }
-              }}
-            >
-              Turn off anyway
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 

@@ -14,6 +14,8 @@ export interface BlueprintStreamState {
   isStreaming: boolean
   /** Blueprint data from early-completion emission (available before full meeting refresh). */
   earlyBlueprint: BlueprintItem[] | null
+  /** Cleaned General Summary from ``summary_done`` (available while blueprint still runs). */
+  settledSummaryMd: string
 }
 
 export interface BlueprintStreamControls {
@@ -30,6 +32,7 @@ const IDLE: BlueprintStreamState = {
   thinkingText: "",
   isStreaming: false,
   earlyBlueprint: null,
+  settledSummaryMd: "",
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -113,8 +116,16 @@ export function startStream(meetingId: string) {
       }
       notify()
     },
-    onSummaryDone: () => {
-      // State transitions via onState; no-op here.
+    onSummaryDone: (data) => {
+      const e = streams.get(meetingId)
+      if (!e) return
+      const md = (data?.general_md || "").trim()
+      e.state = {
+        ...e.state,
+        summaryGenState: "idle",
+        settledSummaryMd: md || e.state.streamingMd,
+      }
+      notify()
     },
     onBlueprintDone: (data) => {
       const e = streams.get(meetingId)
@@ -198,12 +209,18 @@ export function useBlueprintStream(
   }, [meetingId, onCompletedAway])
 
   // ── Detect completion while viewing ────────────────────────────
-  // When isStreaming transitions from true → false for the current
-  // meeting, trigger the completion callback immediately so the
-  // breakdown area refreshes without waiting for a tab switch.
+  // When isStreaming transitions from true → false for the *same*
+  // meeting, trigger the completion callback. Switching meetings
+  // must not look like a finish (keep-mounted MeetingTabs).
   const prevIsStreamingRef = useRef(false)
+  const prevStreamMeetingRef = useRef(meetingId)
   useEffect(() => {
-    const id = meetingIdRef.current
+    const id = meetingId
+    if (prevStreamMeetingRef.current !== id) {
+      prevStreamMeetingRef.current = id
+      prevIsStreamingRef.current = state.isStreaming
+      return
+    }
     const justCompleted = !state.isStreaming && prevIsStreamingRef.current
     prevIsStreamingRef.current = state.isStreaming
     if (id && justCompleted) {
@@ -212,7 +229,7 @@ export function useBlueprintStream(
       const tid = setTimeout(() => onCompletedAway?.(id), 0)
       return () => clearTimeout(tid)
     }
-  }, [state.isStreaming, onCompletedAway])
+  }, [state.isStreaming, onCompletedAway, meetingId])
 
   // ── Controls ──────────────────────────────────────────────────
   const start = useCallback(() => {

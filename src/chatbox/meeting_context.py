@@ -30,7 +30,7 @@ MEETING_TRANSCRIPT_UNAVAILABLE = (
     "transcript).\n"
     "Tell the user clearly that you do not have the meeting record yet. "
     "Do not invent topics, decisions, action items, speaker quotes, "
-    "placeholder names like [project], or citation numbers [N]."
+    "placeholder names like [project], or citation markers like [ref:N]."
 )
 
 

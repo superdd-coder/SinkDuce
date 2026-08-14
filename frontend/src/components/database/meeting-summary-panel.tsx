@@ -43,6 +43,11 @@ function protectCitationsForTiptap(md: string): string {
     /\[((?:ref:\s*)?stt_[^\]]+)\]/gi,
     `${CITE_OPEN}$1${CITE_CLOSE}`,
   )
+  // [ref:67] / [ref:67,70] / [ref:67-70] (pre-persist / streaming)
+  s = s.replace(
+    /\[(ref:\s*\d+(?:\s*[-–,]\s*\d+)*(?:\s*,\s*\d+(?:\s*[-–,]\s*\d+)*)*)\]/gi,
+    `${CITE_OPEN}$1${CITE_CLOSE}`,
+  )
   // [priority: high|medium|low]
   s = s.replace(
     /\[(\s*priority\s*:\s*(?:high|medium|low)\s*)\]/gi,
@@ -50,11 +55,6 @@ function protectCitationsForTiptap(md: string): string {
   )
   // [spk:ID]
   s = s.replace(/\[(spk:[^\]]+)\]/gi, `${CITE_OPEN}$1${CITE_CLOSE}`)
-  // Bare numeric citation lists common in meeting summaries: [12], [12,15], [12-15]
-  s = s.replace(
-    /\[(\d+(?:\s*[-–,]\s*\d+)*(?:\s*,\s*\d+(?:\s*[-–,]\s*\d+)*)*)\]/g,
-    `${CITE_OPEN}$1${CITE_CLOSE}`,
-  )
   return s
 }
 

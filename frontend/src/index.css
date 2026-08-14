@@ -22338,9 +22338,16 @@ button.pm-ws-path-row {
   height: 40px;
   filter: drop-shadow(0 1px 2px rgba(18, 20, 16, 0.12));
 }
-.pm-meeting-qc-fab-host .qc-float-group,
+.pm-meeting-qc-fab-host .qc-float-group {
+  animation: qc-float-bob 3s ease-in-out infinite;
+}
 .pm-meeting-qc-fab-host .qc-float-group--static {
   animation: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-meeting-qc-fab-host .qc-float-group {
+    animation: none !important;
+  }
 }
 .pm-meeting-stage-surface:not(.is-side-collapsed) .pm-meeting-side-body {
   padding-bottom: 8px;
@@ -23364,13 +23371,16 @@ button.pm-ws-path-row {
   line-height: 1.35;
 }
 .pm-meeting-summary-tiptap .ProseMirror h3 {
-  margin: 0.9em 0 0.35em;
+  margin: 1.5em 0 0.15em;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-size: 13px;
   font-weight: 400;
   font-variation-settings: "wght" 400;
   color: var(--pm-ink, #121410);
   line-height: 1.4;
+}
+.pm-meeting-summary-tiptap .ProseMirror h3 + p {
+  margin-top: 0.95em;
 }
 .pm-meeting-summary-tiptap .ProseMirror ul,
 .pm-meeting-summary-tiptap .ProseMirror ol {
@@ -23411,12 +23421,15 @@ button.pm-ws-path-row {
   line-height: 1.35;
 }
 .pm-meeting-md-h3 {
-  margin: 0.9em 0 0.35em;
+  margin: 1.5em 0 0.15em;
   font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
   font-size: 13px;
   font-weight: 400;
   color: var(--pm-ink, #121410);
   line-height: 1.4;
+}
+.pm-meeting-md-h3 + .pm-meeting-md-p {
+  margin-top: 0.95em;
 }
 /* Ref chips / priority inside ProseMirror (NodeView) */
 .pm-meeting-summary-tiptap .ProseMirror .pm-meeting-ref-group {

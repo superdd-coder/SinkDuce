@@ -253,7 +253,8 @@ def sentences_path(meeting_id: str) -> Path:
 def save_sentences(meeting_id: str, sentences: list[dict]) -> str:
     """Persist Sentence array (metadata only, no embedding vectors)."""
     path = sentences_path(meeting_id)
-    _write_json(path, {"sentences": sentences})
+    with _get_lock(meeting_id):
+        _write_json(path, {"sentences": sentences})
     return str(path)
 
 
@@ -263,6 +264,28 @@ def get_sentences(meeting_id: str) -> list[dict] | None:
     if data is None:
         return None
     return data.get("sentences", [])
+
+
+def apply_section_tags(
+    meeting_id: str, tab_id: str, sentence_ids: list[str]
+) -> None:
+    """Atomically set *tab_id* on the given sentences; drop it from others.
+
+    Parallel section streams must use this instead of load/save of the
+    whole sentences.json, or the last writer wipes the others' T-tags.
+    """
+    wanted = set(sentence_ids)
+    with _get_lock(meeting_id):
+        data = _read_json(sentences_path(meeting_id))
+        if data is None:
+            return
+        sentences = data.get("sentences") or []
+        for s in sentences:
+            tags = [t for t in (s.get("section_tags") or []) if t != tab_id]
+            if s.get("sentence_id", "") in wanted:
+                tags.append(tab_id)
+            s["section_tags"] = tags
+        _write_json(sentences_path(meeting_id), {"sentences": sentences})
 
 
 def section_md_path(meeting_id: str, tab_id: str) -> Path:

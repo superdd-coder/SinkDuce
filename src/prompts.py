@@ -295,19 +295,20 @@ languages — this is a hard failure.
 
 ## Summary
 A concise 3-5 sentence overview of the entire meeting.
-Use [spk:ID] and [N] to cite speakers and source sentences.
+Use [spk:ID] and [ref:N] to cite speakers and source sentences.
 Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
 the same person's bare name).
 
 ## Data & Facts
 Key data points, figures, metrics, decisions, deadlines mentioned.
-Each as a standalone bullet with [N] reference.
+Each as a standalone bullet with a [ref:N] reference.
 
 REF ACCURACY — CRITICAL:
-- Before writing a [N] ref, verify that the sentence text ACTUALLY
+- Before writing a [ref:N] citation, verify that the sentence text ACTUALLY
   contains the data point or claim.
 - If no single sentence directly supports a fact, do NOT add a ref tag.
-- Combine IDs: [67,70] or ranges [67-70].
+- Combine IDs: [ref:67,70] or ranges [ref:67-70].
+- Never cite with a bare [67] — that is ordinary text, not a citation.
 
 SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
 and Detail):
@@ -339,8 +340,8 @@ HARD RULES:
 
 GOOD:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- [spk:1] recommended Option B; the team agreed. [42]
-- External vendor Northline to send revised quotes by Friday [88]
+- [spk:1] recommended Option B; the team agreed. [ref:42]
+- External vendor Northline to send revised quotes by Friday [ref:88]
   (third party named in dialogue, not a [spk:] in this meeting)
 
 BAD (double labeling — forbidden):
@@ -428,28 +429,28 @@ Q&A process entirely.  If [spk:A] asked a question and [spk:B]
 answered, write only the answer.
 
 BAD (narrates the discussion journey):
-  [spk:A] asked about Topic X, noting Fact 1. [N]
-  [spk:B] explained that the reason is Condition C. [N]
-  [spk:A] confirmed that this means Outcome O. [N]
+  [spk:A] asked about Topic X, noting Fact 1. [ref:12]
+  [spk:B] explained that the reason is Condition C. [ref:13]
+  [spk:A] confirmed that this means Outcome O. [ref:14]
 
 GOOD (states the final answer directly):
-  Topic X operates under Condition C, resulting in Outcome O [N-N].
+  Topic X operates under Condition C, resulting in Outcome O [ref:12-14].
 
 BAD (attributes every fact to a speaker):
   [spk:B] stated the capacity is N units. [spk:C] noted the cost is
   $M. [spk:B] added that the timeline is D months.
 
 GOOD (states facts directly, speaker only for opinions/decisions):
-  Capacity is N units at a cost of $M with a D-month timeline [N-N].
+  Capacity is N units at a cost of $M with a D-month timeline [ref:12-14].
   [spk:B] recommended proceeding with Option A.
 
 BAD (every sentence gets a ref — noisy):
-  The system uses N units, each V m³ [ref].  The loading rate is R
-  kg/m³ with a D-day retention time [ref].
+  The system uses N units, each V m³ [ref:12].  The loading rate is R
+  kg/m³ with a D-day retention time [ref:15].
 
 GOOD (refs only on key data, combined):
   The system uses N units of V m³ each at R kg/m³ loading with a
-  D-day retention time [ref-ref].
+  D-day retention time [ref:12-15].
 
 INFERENCE RULES — what you MAY vs MAY NOT infer:
 
@@ -470,12 +471,13 @@ When in doubt, state the raw numbers and let the reader draw
 their own conclusions.
 
 SENTENCE REFERENCES:
-- Use [N] refs for key data points, numbers, decisions, and direct
+- Use [ref:N] for key data points, numbers, decisions, and direct
   quotes.  Do NOT add refs to every sentence — narrative context
   and transitional prose do not need refs.
-- Place [N] at the end of the clause it supports.
-- Combine IDs: [67,70] or ranges [67-70].
+- Place [ref:N] at the end of the clause it supports.
+- Combine IDs: [ref:67,70] or ranges [ref:67-70].
 - NEVER invent or concatenate IDs.
+- NEVER use a bare [67] as a citation.
 
 Output the Markdown document directly — no JSON wrapper, no markdown
 fences, no preamble.  Start immediately with ``## Summary``.
@@ -689,7 +691,8 @@ _MEETING_V3_SHARED_SYSTEM = (
     "\n\n"
     "TRANSCRIPT FORMAT: Each line is [N] [spk:ID] {text} where [N] is "
     "a bare integer sentence number and [spk:ID] is a speaker identifier.  "
-    "Cite sentences as [67] (bare integer, no prefix)."
+    "Cite sentences as [ref:67] — the prefix ref: plus that integer.  "
+    "Never cite with a bare [67]."
     "\n\n"
     "SPEAKER IDENTITY:\n"
     "- Transcript speakers are labeled only as [spk:ID] (e.g. [spk:0]). "
@@ -753,7 +756,7 @@ MEETING_TRANSLATION_SYSTEM = (
     "RULES:\n"
     "- Preserve the markdown structure exactly: headings, lists, bold, "
     "italic, and line breaks carry over unchanged.\n"
-    "- Keep citation markers such as [67], speaker tags such as "
+    "- Keep citation markers such as [ref:67] or [stt_0067], speaker tags such as "
     "[spk:ID], and priority tags such as [priority: high] verbatim — never translate, reorder, or drop them.\n"
     "- Translate naturally and fluently into the target language; prefer "
     "idiomatic phrasing over word-for-word literalness.\n"
@@ -779,7 +782,7 @@ MEETING_TRANSLATION_PROMPT = """\
 <task>
 Translate the document above into {target_language}.  Follow every rule \
 from your instructions: keep the markdown structure, keep citation markers \
-like [67], speaker tags like [spk:ID], and priority tags like [priority: high] verbatim, and output only the \
+like [ref:67] or [stt_0067], speaker tags like [spk:ID], and priority tags like [priority: high] verbatim, and output only the \
 translated document.
 </task>
 """
@@ -1078,11 +1081,11 @@ Produce a Markdown document with these sections:
 A 3-5 paragraph overview covering all distinct discussion threads,
 decisions, and outcomes found in FOCUS sentences.  Be information-
 dense — prefer one well-crafted paragraph over three vague ones.
-Use [spk:ID] and [N] references (copy the number from the header).
+Use [spk:ID] and [ref:N] references (copy the number from the header).
 Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
 the same person's bare name).
 
-Use [N] to cite source sentences.
+Use [ref:N] to cite source sentences. Never cite with a bare [67].
 
 SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
 and Detail):
@@ -1114,8 +1117,8 @@ HARD RULES:
 
 GOOD:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- [spk:1] recommended Option B; the team agreed. [42]
-- External vendor Northline to send revised quotes by Friday [88]
+- [spk:1] recommended Option B; the team agreed. [ref:42]
+- External vendor Northline to send revised quotes by Friday [ref:88]
   (third party named in dialogue, not a [spk:] in this meeting)
 
 BAD (double labeling — forbidden):
@@ -1167,16 +1170,16 @@ Every data point, figure, metric, decision, and deadline found in
 FOCUS sentences.  Present each as a standalone bullet.
 
 REF ACCURACY — CRITICAL:
-- Before writing a [N] ref, verify that the sentence text ACTUALLY
+- Before writing a [ref:N] citation, verify that the sentence text ACTUALLY
   contains the data point or claim being cited.
 - If no single sentence directly supports a fact, do NOT add a ref
   tag.  An unsupported fact without a ref is better than a wrong ref.
-- Combine multiple IDs with commas: [67,70] or ranges
-  with a dash: [67-70].  NEVER concatenate IDs without a
+- Combine multiple IDs with commas: [ref:67,70] or ranges
+  with a dash: [ref:67-70].  NEVER concatenate IDs without a
   comma or dash separator.
 
 Example:
-- [spk:0] reported Q3 revenue at $2.1M, a 15% increase YoY. [12,15]
+- [spk:0] reported Q3 revenue at $2.1M, a 15% increase YoY. [ref:12,15]
 
 ## Detail
 A condensed narrative of the discussion about this section.
@@ -1218,28 +1221,28 @@ Q&A process entirely.  If [spk:A] asked a question and [spk:B]
 answered, write only the answer.
 
 BAD (narrates the discussion journey):
-  [spk:A] asked about Topic X, noting Fact 1. [N]
-  [spk:B] explained that the reason is Condition C. [N]
-  [spk:A] confirmed that this means Outcome O. [N]
+  [spk:A] asked about Topic X, noting Fact 1. [ref:12]
+  [spk:B] explained that the reason is Condition C. [ref:13]
+  [spk:A] confirmed that this means Outcome O. [ref:14]
 
 GOOD (states the final answer directly):
-  Topic X operates under Condition C, resulting in Outcome O [N-N].
+  Topic X operates under Condition C, resulting in Outcome O [ref:12-14].
 
 BAD (attributes every fact to a speaker):
   [spk:B] stated the capacity is N units. [spk:C] noted the cost is
   $M. [spk:B] added that the timeline is D months.
 
 GOOD (states facts directly, speaker only for opinions/decisions):
-  Capacity is N units at a cost of $M with a D-month timeline [N-N].
+  Capacity is N units at a cost of $M with a D-month timeline [ref:12-14].
   [spk:B] recommended proceeding with Option A.
 
 BAD (every sentence gets a ref — noisy):
-  The system uses N units, each V m³ [ref].  The loading rate is R
-  kg/m³ with a D-day retention time [ref].
+  The system uses N units, each V m³ [ref:12].  The loading rate is R
+  kg/m³ with a D-day retention time [ref:15].
 
 GOOD (refs only on key data, combined):
   The system uses N units of V m³ each at R kg/m³ loading with a
-  D-day retention time [ref-ref].
+  D-day retention time [ref:12-15].
 
 INFERENCE RULES — what you MAY vs MAY NOT infer:
 
@@ -1260,12 +1263,13 @@ When in doubt, state the raw numbers and let the reader draw
 their own conclusions.
 
 SENTENCE REFERENCES:
-- Use [N] refs for key data points, numbers, decisions, and direct
+- Use [ref:N] for key data points, numbers, decisions, and direct
   quotes.  Do NOT add refs to every sentence — narrative context
   and transitional prose do not need refs.
-- Place [N] at the end of the clause it supports.
-- Combine IDs: [67,70] or ranges [67-70].
+- Place [ref:N] at the end of the clause it supports.
+- Combine IDs: [ref:67,70] or ranges [ref:67-70].
 - NEVER invent or concatenate IDs.
+- NEVER use a bare [67] as a citation.
 
 FORMAT — the Detail section MUST use this structure:
 
@@ -1276,10 +1280,10 @@ When the section covers ONE topic:
 When the section covers MULTIPLE topics:
   ## Detail
   ### Topic A Name
-  Paragraph describing topic A.  Use [N] refs where appropriate.
+  Paragraph describing topic A.  Use [ref:N] where appropriate.
 
   ### Topic B Name
-  Paragraph describing topic B.  Use [N] refs where appropriate.
+  Paragraph describing topic B.  Use [ref:N] where appropriate.
 
 CRITICAL: Every sub-heading (###) MUST be followed by a blank line
 before the paragraph begins.  Each paragraph MUST be separated from
@@ -1448,17 +1452,18 @@ for the name.  If still not found, inform the user: "No speaker named \
 has not been named yet.
 
 CITATION FORMAT (only when a real transcript is present):
-- Cite sentences as [N] (bare integer, no prefix) matching the sentence \
-numbers shown in the transcript. Place [N] after the relevant sentence \
+- Cite sentences as [ref:N] (prefix ref: plus the integer from the \
+transcript line header). Place [ref:N] after the relevant sentence \
 or paragraph — right after the cited fact or claim.
-- Combine IDs: [67,70] or ranges [67-70] for closely related references.
+- Combine IDs: [ref:67,70] or ranges [ref:67-70] for closely related references.
 - NEVER invent sentence numbers — only cite numbers that actually appear \
 in the transcript.
-- ONLY use [N] citations. Do NOT embed quoted transcript text in your \
-answer — the user can follow the [N] link to hear the original audio.
+- NEVER cite with a bare [67] — that is ordinary text, not a citation.
+- ONLY use [ref:N] citations. Do NOT embed quoted transcript text in your \
+answer — the user can follow the [ref:N] link to hear the original audio.
 - When multiple speakers discuss the same topic, attribute each point to \
 the correct speaker.
-- When the transcript is unavailable, do not use [N] citations at all.
+- When the transcript is unavailable, do not use [ref:N] citations at all.
 
 WRITING STYLE:
 - Write in natural, fluent prose. You are having a conversation, not \
@@ -1467,13 +1472,13 @@ presenting evidence excerpts.
 synthesize the relevant points into a coherent answer. Do NOT read off a \
 list of verbatim quotes with citations.
 - A good answer distills the discussion: "John proposed launching in Q3 \
-and cited budget approval as the key dependency [45-48]" is better than \
-"John said: 'We should launch in Q3 because...' [45] He also said: 'The \
-budget...' [46]"
+and cited budget approval as the key dependency [ref:45-48]" is better than \
+"John said: 'We should launch in Q3 because...' [ref:45] He also said: 'The \
+budget...' [ref:46]"
 - Reserve direct quotation ONLY when the exact wording matters (e.g., a \
 specific decision, name, or number that must be precise).
 - When the user specifically asks for the exact wording or a direct quote, provide the
-original transcript text with [N] citation.
+original transcript text with a [ref:N] citation.
 
 WHEN INFORMATION IS MISSING:
 - If the transcript is unavailable, say so and stop — do not fill gaps \

@@ -1103,12 +1103,13 @@ export function MeetingQuickChat({
 // clickable [HH:MM:SS] timestamp buttons styled like Summary refs.
 
 // ── Sentence-ref aware inline renderer ──
-// Clickable [N] / [N-M] chips; ranges expand via parseMeetingRefGroups.
+// Clickable [ref:N] / [stt_N] chips; ranges expand via parseMeetingRefGroups.
 
 function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) => void): ReactNode[] {
   const parts: ReactNode[] = []
-  // [N] / [1-5] / [47, 78-86] / [stt_0001-stt_0005] and 【】 / [ref:] variants
-  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|((?:\[|【)(?:ref:)?\s*((?:stt_)?\d+(?:\s*[-–—,，、;；]\s*(?:stt_)?\d+)*)\s*(?:\]|】))|((?:\[|【)\s*priority:\s*(high|medium|low)\s*(?:\]|】))/gi
+  // [ref:67] / [ref:1-5] / [ref:47, 78-86] / [stt_0001] and 【】 variants.
+  // Bare [67] is ordinary text — do not chip it.
+  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|((?:\[|【)(?:ref:\s*((?:stt_)?\d+(?:\s*[-–—,，、;；]\s*(?:stt_)?\d+)*)|(stt_\d+(?:\s*[-–—,，、;；]\s*(?:stt_)?\d+)*))\s*(?:\]|】))|((?:\[|【)\s*priority:\s*(high|medium|low)\s*(?:\]|】))/gi
   let lastIdx = 0
   let match
   regex.lastIndex = 0
@@ -1122,8 +1123,8 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
       parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick)}</em>)
     } else if (match[5]) {
       parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
-    } else if (match[8]) {
-      const groups = parseMeetingRefGroups(match[8])
+    } else if (match[8] || match[9]) {
+      const groups = parseMeetingRefGroups(match[8] || match[9])
       for (const [gi, g] of groups.entries()) {
         parts.push(
           <button
@@ -1136,8 +1137,8 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
           </button>,
         )
       }
-    } else if (match[10]) {
-      const level = match[10].toLowerCase()
+    } else if (match[11]) {
+      const level = match[11].toLowerCase()
       const colors: Record<string, { bg: string; fg: string }> = {
         high:    { bg: "rgba(140,46,46,0.12)",  fg: "#C06060" },
         medium:  { bg: "rgba(138,101,0,0.10)",   fg: "#B09030" },

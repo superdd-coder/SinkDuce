@@ -32,19 +32,23 @@ def normalize_brackets(md: str) -> str:
 
 
 def normalize_refs(md: str) -> str:
-    """Convert numeric refs [67] → [stt_0067] in LLM markdown."""
+    """Convert ``[ref:67]`` / ``[ref:67,70]`` / ``[ref:67-70]`` → ``[stt_…]``.
+
+    Bare ``[67]`` is left as prose so body numbers (附件[1], [20-25]°C)
+    are not treated as citations.
+    """
     def _convert(m: re.Match) -> str:
         inner = m.group(1)
         tokens = [t.strip() for t in inner.split(",") if t.strip()]
         converted: list[str] = []
         for token in tokens:
-            rm = re.match(r"^(\d+)\s*[-–]\s*(\d+)$", token)
+            rm = re.match(r"^(?:stt_)?(\d+)\s*[-–]\s*(?:stt_)?(\d+)$", token)
             if rm:
                 converted.append(
                     f"stt_{int(rm.group(1)):04d}-{int(rm.group(2)):04d}"
                 )
                 continue
-            nm = re.match(r"^(\d+)$", token)
+            nm = re.match(r"^(?:stt_)?(\d+)$", token)
             if nm:
                 converted.append(f"stt_{int(nm.group(1)):04d}")
                 continue
@@ -52,9 +56,11 @@ def normalize_refs(md: str) -> str:
         return "[" + ",".join(converted) + "]"
 
     return re.sub(
-        r"\[(\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*)\]",
+        r"\[ref:\s*((?:stt_)?\d+(?:\s*[-–]\s*(?:stt_)?\d+)?"
+        r"(?:\s*,\s*(?:stt_)?\d+(?:\s*[-–]\s*(?:stt_)?\d+)?)*)\s*\]",
         _convert,
         md,
+        flags=re.IGNORECASE,
     )
 
 
