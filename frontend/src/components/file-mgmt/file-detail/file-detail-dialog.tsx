@@ -14,7 +14,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react"
 import {
   Dialog,
@@ -46,21 +45,21 @@ import {
   ArchiveRestore,
   SearchX,
   Trash2,
-  ArrowUpRight,
-  PinOff,
-  FolderOpen,
-  GitBranch,
   Star,
   History,
   X,
 } from "lucide-react"
 import { cn, transformImageBlocks } from "@/lib/utils"
+import {
+  ActionMenuItem,
+  LogMsgDeleteButton,
+  NodeRow,
+  PathRow,
+  SummarySection,
+} from "./file-detail-parts"
 import { ChunkMd } from "@/components/shared/chunk-md"
 import {
   SoftMenu,
-  MenuItem,
-  MenuItemDescription,
-  MenuItemTitle,
 } from "@/components/ui/menu"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
@@ -97,7 +96,6 @@ import {
 } from "@/api/file-mgmt"
 import type {
   FileDetail,
-  FileNodeRef,
   FilePath,
   FileVersion,
   Message,
@@ -113,199 +111,21 @@ import {
   resolveRawFilename,
 } from "@/components/file-mgmt/raw-file-viewer"
 import { toast } from "sonner"
+import {
+  _genKey,
+  _generating,
+  _isMarked,
+  _markGenerating,
+  _unmarkGenerating,
+  buildTimeline,
+  fileSource,
+  formatTime,
+  isVersionUpdateMessage,
+  parseFileIdFromSource,
+  versionUpdateBody,
+} from "./file-detail-utils"
 
-// ── summary generation markers (module-level, same pattern as legacy dialog) ──
-
-const _generating = new Map<string, number>()
-
-function _genKey(collection: string, source: string) {
-  return `${collection}::${source}`
-}
-
-function _markGenerating(key: string) {
-  const now = Date.now()
-  _generating.set(key, now)
-  try {
-    localStorage.setItem(`wk:gen:${key}`, String(now))
-  } catch {
-    /* ignore */
-  }
-}
-
-function _unmarkGenerating(key: string) {
-  _generating.delete(key)
-  try {
-    localStorage.removeItem(`wk:gen:${key}`)
-  } catch {
-    /* ignore */
-  }
-}
-
-function _isMarked(key: string): boolean {
-  if (_generating.has(key)) return true
-  try {
-    const raw = localStorage.getItem(`wk:gen:${key}`)
-    if (raw) {
-      const ts = Number(raw)
-      if (Date.now() - ts < 300_000) {
-        _generating.set(key, ts)
-        return true
-      }
-      localStorage.removeItem(`wk:gen:${key}`)
-    }
-  } catch {
-    /* ignore */
-  }
-  return false
-}
-
-function fileSource(fileId: string) {
-  return `__file__:${fileId}`
-}
-
-/** Extract file_id from document source when it is a managed file. */
-export function parseFileIdFromSource(
-  source: string | null | undefined
-): string | null {
-  if (!source) return null
-  const s = source.trim()
-  if (!s) return null
-  if (s.startsWith("__file__:")) {
-    const id = s.slice("__file__:".length).trim()
-    return id || null
-  }
-  // Bare 32-char hex UUID (Info panel sometimes passes file_id without prefix)
-  if (/^[a-f0-9]{32}$/i.test(s)) return s.toLowerCase()
-  return null
-}
-
-function formatTime(iso: string | null | undefined): string {
-  if (!iso) return ""
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
-// ── timeline merge ──
-
-function isVersionUpdateMessage(m: Message): boolean {
-  return (m.owner_type || "").toLowerCase() === "system_version"
-}
-
-type TimelineItem =
-  | {
-      /** Legacy version row with no linked system_version message */
-      kind: "version"
-      id: string
-      created_at: string
-      version: FileVersion
-    }
-  | {
-      kind: "message"
-      id: string
-      created_at: string
-      message: Message
-      /** True for file version notes (owner_type=system_version) */
-      isVersionUpdate: boolean
-      version?: FileVersion
-    }
-
-function buildTimeline(
-  versions: FileVersion[],
-  messages: Message[],
-  filter: "all" | "versions"
-): TimelineItem[] {
-  const versionMsgs = messages.filter(isVersionUpdateMessage)
-  const userMsgs = messages.filter((m) => !isVersionUpdateMessage(m))
-
-  // Pair system_version messages with file_versions:
-  // 1) same created_at (upload writes both with one timestamp)
-  // 2) same commit_message / body
-  // 3) chronological index fallback
-  const versAsc = [...versions].sort((a, b) => a.version_no - b.version_no)
-  const msgsAsc = [...versionMsgs].sort((a, b) => {
-    const ta = new Date(a.created_at).getTime() || 0
-    const tb = new Date(b.created_at).getTime() || 0
-    return ta - tb
-  })
-  const usedVersionIds = new Set<string>()
-
-  const pickVersionForMessage = (m: Message, index: number): FileVersion | undefined => {
-    const byTime = versAsc.find(
-      (v) =>
-        !usedVersionIds.has(v.version_id) &&
-        v.created_at &&
-        m.created_at &&
-        v.created_at === m.created_at
-    )
-    if (byTime) return byTime
-    const body = (m.body || "").trim()
-    if (body) {
-      const byMsg = versAsc.find(
-        (v) =>
-          !usedVersionIds.has(v.version_id) &&
-          (v.commit_message || "").trim() === body
-      )
-      if (byMsg) return byMsg
-    }
-    const byIndex = versAsc[index]
-    if (byIndex && !usedVersionIds.has(byIndex.version_id)) return byIndex
-    return versAsc.find((v) => !usedVersionIds.has(v.version_id))
-  }
-
-  const versionUpdateItems: TimelineItem[] = msgsAsc.map((m, i) => {
-    const v = pickVersionForMessage(m, i)
-    if (v) usedVersionIds.add(v.version_id)
-    return {
-      kind: "message" as const,
-      id: `msg-${m.message_id}`,
-      created_at: m.created_at,
-      message: m,
-      isVersionUpdate: true,
-      version: v,
-    }
-  })
-
-  // Versions without a system_version message (older data) — display-only
-  const orphanVersions: TimelineItem[] = versAsc
-    .filter((v) => !usedVersionIds.has(v.version_id))
-    .map((v) => ({
-      kind: "version" as const,
-      id: `ver-${v.version_id}`,
-      created_at: v.created_at,
-      version: v,
-    }))
-
-  const userItems: TimelineItem[] = userMsgs.map((m) => ({
-    kind: "message" as const,
-    id: `msg-${m.message_id}`,
-    created_at: m.created_at,
-    message: m,
-    isVersionUpdate: false,
-  }))
-
-  const all =
-    filter === "versions"
-      ? [...versionUpdateItems, ...orphanVersions]
-      : [...versionUpdateItems, ...orphanVersions, ...userItems]
-
-  return all.sort((a, b) => {
-    const ta = new Date(a.created_at).getTime() || 0
-    const tb = new Date(b.created_at).getTime() || 0
-    return tb - ta
-  })
-}
-
-function versionUpdateBody(body: string | null | undefined): string {
-  const t = (body || "").trim()
-  return t || "version update"
-}
+export { parseFileIdFromSource } from "./file-detail-utils"
 
 // ── props ──
 
@@ -3066,312 +2886,5 @@ export function FileMgmtDetailDialog({
         />
       )}
     </>
-  )
-}
-
-// ── subcomponents ──
-
-/**
- * Two-step delete (× → DELETE) — same anti-mis-tap pattern as message sidebar
- * (message-card.tsx · .pm-msg-delete).
- */
-function LogMsgDeleteButton({
-  disabled,
-  onConfirm,
-}: {
-  disabled?: boolean
-  onConfirm: () => void
-}) {
-  const [deleteArmed, setDeleteArmed] = useState(false)
-  const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const deleteBtnRef = useRef<HTMLButtonElement>(null)
-
-  const disarmDelete = useCallback(() => {
-    setDeleteArmed(false)
-    if (deleteArmTimerRef.current) {
-      clearTimeout(deleteArmTimerRef.current)
-      deleteArmTimerRef.current = null
-    }
-  }, [])
-
-  const armDelete = useCallback(() => {
-    setDeleteArmed(true)
-    if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
-    deleteArmTimerRef.current = setTimeout(() => disarmDelete(), 4000)
-  }, [disarmDelete])
-
-  useEffect(() => {
-    if (!deleteArmed) return
-    const onPointerDown = (ev: Event) => {
-      const t = ev.target as Node | null
-      if (t && deleteBtnRef.current?.contains(t)) return
-      disarmDelete()
-    }
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") disarmDelete()
-    }
-    const t = window.setTimeout(() => {
-      document.addEventListener("pointerdown", onPointerDown, true)
-      document.addEventListener("keydown", onKey, true)
-    }, 0)
-    return () => {
-      window.clearTimeout(t)
-      document.removeEventListener("pointerdown", onPointerDown, true)
-      document.removeEventListener("keydown", onKey, true)
-    }
-  }, [deleteArmed, disarmDelete])
-
-  useEffect(() => {
-    return () => {
-      if (deleteArmTimerRef.current) clearTimeout(deleteArmTimerRef.current)
-    }
-  }, [])
-
-  return (
-    <button
-      ref={deleteBtnRef}
-      type="button"
-      disabled={disabled}
-      className={cn(
-        "pm-msg-delete",
-        deleteArmed ? "is-confirm opacity-100" : "opacity-0 group-hover:opacity-100",
-        "transition-opacity"
-      )}
-      title={deleteArmed ? "Click again to delete" : "Delete message"}
-      aria-label={
-        deleteArmed ? "Confirm delete message" : "Delete message"
-      }
-      aria-expanded={deleteArmed}
-      onClick={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        if (disabled) return
-        if (!deleteArmed) {
-          armDelete()
-          return
-        }
-        disarmDelete()
-        onConfirm()
-      }}
-    >
-      <span className="pm-msg-delete-x" aria-hidden>
-        ×
-      </span>
-      <span className="pm-msg-delete-label">Delete</span>
-    </button>
-  )
-}
-
-/** Dropdown row — shared Menu primitive. */
-function ActionMenuItem({
-  icon,
-  title,
-  description,
-  onClick,
-  destructive,
-}: {
-  icon: ReactNode
-  title: string
-  description: string
-  onClick: () => void
-  destructive?: boolean
-}) {
-  return (
-    <MenuItem destructive={destructive} onClick={onClick}>
-      <span
-        className={cn(
-          "mt-0.5 shrink-0",
-          destructive ? "text-[var(--pm-danger)]" : "text-[var(--pm-faint)]"
-        )}
-      >
-        {icon}
-      </span>
-      <span className="min-w-0">
-        <MenuItemTitle
-          className={destructive ? "text-[var(--pm-danger)]" : undefined}
-        >
-          {title}
-        </MenuItemTitle>
-        <MenuItemDescription>{description}</MenuItemDescription>
-      </span>
-    </MenuItem>
-  )
-}
-
-function SummarySection({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div>
-      <h5 className="pm-ws-section-label">
-        {title}
-      </h5>
-      <ul className="space-y-1">
-        {items.map((item, i) => (
-          <li key={i} className="pm-ws-prose-item">
-            {item}
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-function PathRow({
-  path,
-  sourceNodeTitle,
-  folderHasPinned = false,
-  canUnpin = false,
-  busy,
-  onNavigate,
-  onPromote,
-  onUnpin,
-}: {
-  path: FilePath
-  /** Display name of the timeline node that created this path (derived only). */
-  sourceNodeTitle?: string | null
-  /**
-   * True when any path for the same folder is pinned (source_node_id null).
-   * Sibling *derived* rows keep their “From node” label; Pin is hidden because
-   * the folder is already covered by the pin.
-   */
-  folderHasPinned?: boolean
-  /**
-   * True when demote can re-link to a node or drop a pin that has a derived
-   * sibling. Plain folder mounts (no node) must not show Unpin — that used to
-   * delete the only path row and make the card vanish.
-   */
-  canUnpin?: boolean
-  busy: boolean
-  onNavigate: () => void
-  onPromote: () => void
-  onUnpin: () => void
-}) {
-  /** Persistent path: source_node_id is null (pin or plain folder mount). */
-  const isPersistent = !path.source_node_id
-  /** Timeline pin that can be demoted (vs plain “in folder” mount). */
-  const isTimelinePin = isPersistent && canUnpin
-  const typeLabel = isPersistent
-    ? isTimelinePin
-      ? "Pinned to folder"
-      : "In folder"
-    : `From node · ${sourceNodeTitle || "Untitled node"}`
-  return (
-    <li
-      className={cn(
-        "pm-ws-path-row",
-        path.is_greyed && "opacity-50"
-      )}
-    >
-      <FolderOpen className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
-      <div className="flex-1 min-w-0">
-        <button
-          type="button"
-          className="text-left truncate w-full bg-transparent border-0 p-0 cursor-pointer hover:text-[var(--pm-green)] transition-colors"
-          onClick={onNavigate}
-          title={path.folder_path || path.folder_id || ""}
-          disabled={!path.folder_id}
-        >
-          {path.folder_path || path.folder_id || "(no folder)"}
-        </button>
-        <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
-          <span
-            className="pm-meta truncate"
-            title={typeLabel}
-          >
-            {typeLabel}
-          </span>
-          {path.is_primary && (
-            <Badge variant="outline" className="pm-meta h-4 shrink-0">
-              main
-            </Badge>
-          )}
-          {path.is_greyed && (
-            <span className="pm-meta text-[var(--pm-danger)] shrink-0">archived</span>
-          )}
-        </div>
-      </div>
-      {/* Right column: actions left-aligned with each other across rows */}
-      <div className="shrink-0 flex flex-col items-start justify-start pt-0.5 min-w-[7.5rem]">
-        {isTimelinePin ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="pm-ws-action !h-6 justify-start"
-            disabled={busy}
-            title="Unpin from folder. If a node-derived path exists for the same folder, only the pin is removed."
-            onClick={onUnpin}
-          >
-            <PinOff className="h-3 w-3 mr-0.5" />
-            Unpin
-          </Button>
-        ) : isPersistent ? (
-          // Plain folder mount — not a demotable timeline pin
-          <span
-            className="h-6 px-1.5 pm-meta leading-6 opacity-50"
-            title="Folder placement. Use Remove from folder in the footer to unlink."
-          >
-            —
-          </span>
-        ) : folderHasPinned ? (
-          // Derived sibling: folder already has a real pin — no second Pin action
-          <span
-            className="h-6 px-1.5 pm-meta leading-6 opacity-50"
-            title="This folder is already pinned. Use Unpin on the “Pinned to folder” row."
-          >
-            —
-          </span>
-        ) : (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="pm-ws-action !h-6 justify-start"
-            disabled={busy}
-            title="Pin this file to the folder even if the timeline node is removed or archived."
-            onClick={onPromote}
-          >
-            <ArrowUpRight className="h-3 w-3 mr-0.5" />
-            Pin to folder
-          </Button>
-        )}
-      </div>
-    </li>
-  )
-}
-
-function NodeRow({
-  node,
-  onClick,
-}: {
-  node: FileNodeRef
-  onClick: () => void
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          "pm-ws-path-row",
-          node.greyed && "opacity-50"
-        )}
-      >
-        <GitBranch className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
-        <div className="flex-1 min-w-0">
-          <p className="truncate pm-title">
-            {node.title || "Untitled node"}
-          </p>
-          <p className="pm-meta mt-0.5 truncate">
-            {[
-              node.group_name || (node.group_id ? "Group" : "No group"),
-              node.chain_title || (node.chain_id ? "Chain" : null),
-              node.node_type,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-            {node.greyed ? " · greyed" : ""}
-          </p>
-        </div>
-        <ChevronRight className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
-      </button>
-    </li>
   )
 }
