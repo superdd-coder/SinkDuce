@@ -86,7 +86,7 @@ export function isVersionUpdateMessage(m: Message): boolean {
   return (m.owner_type || "").toLowerCase() === "system_version"
 }
 
-type TimelineItem =
+export type TimelineItem =
   | {
       /** Legacy version row with no linked system_version message */
       kind: "version"
