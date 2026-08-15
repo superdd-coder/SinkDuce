@@ -47,13 +47,13 @@ export const updateHotWordsLibrary = (id: string, data: Partial<HotWordsLibrary>
   })
 
 export const deleteHotWordsLibrary = (id: string) =>
-  request<{ message?: string; error?: string }>(`/hot-words/${id}`, {
+  request<{ message?: string }>(`/hot-words/${id}`, {
     method: "DELETE",
   })
 
 /** Set or clear the default hot-words library (auto-selected on new meetings). */
 export const setDefaultHotWordsLibrary = (libraryId: string | null) =>
-  request<{ default_library_id: string | null; error?: string }>("/hot-words/default", {
+  request<{ default_library_id: string | null }>("/hot-words/default", {
     method: "PUT",
     body: JSON.stringify({ library_id: libraryId }),
   })
@@ -95,12 +95,12 @@ export async function importHotWordsLibrary(
   })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
+    const detail = body?.detail
     throw new Error(
-      typeof body?.error === "string"
-        ? body.error
+      typeof detail === "string"
+        ? detail
         : `API ${res.status}: import failed`,
     )
   }
-  if (body?.error) throw new Error(String(body.error))
   return body as HotWordsLibrary
 }

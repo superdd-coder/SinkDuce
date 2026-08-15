@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import ast
 import asyncio
+import json
 import logging
+import re
 import threading
 import time
 import uuid
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, HTTPException
 
 from src.api.schemas import ConfigUpdateRequest
 from src.config import get_config, save_config, reload_config, LLMProviderConfig, EmbeddingProviderConfig, RerankProviderConfig, TranscriptionProviderConfig
@@ -56,19 +59,107 @@ def _request_api_key(data: dict | None, stored: str | None, *, providers=None, b
 _model_cache: dict[str, dict] = {}
 MODEL_CACHE_TTL = 300  # 5分钟缓存
 
+_ERROR_CODE_RE = re.compile(r"Error code:\s*(\d+)\s*-\s*(\{.*\})\s*$", re.S)
+_API_KEY_ASSIGN_RE = re.compile(
+    r"(api[\s_-]?key|token|secret)\s*[:=]\s*['\"]?[^\s'\",}]+",
+    re.I,
+)
+_SK_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9_\-]{4,}\b")
+
+
+def _message_from_error_body(body: object) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error")
+    if isinstance(err, dict) and isinstance(err.get("message"), str):
+        return err["message"].strip()
+    if isinstance(err, str) and err.strip():
+        return err.strip()
+    if isinstance(body.get("message"), str):
+        return body["message"].strip()
+    return None
+
+
+def _parse_openai_error_blob(raw: str) -> tuple[int | None, dict | None]:
+    m = _ERROR_CODE_RE.search(raw.strip())
+    if not m:
+        return None, None
+    status = int(m.group(1))
+    blob = m.group(2)
+    for loader in (ast.literal_eval, json.loads):
+        try:
+            parsed = loader(blob)
+        except (ValueError, SyntaxError, json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict):
+            return status, parsed
+    return status, None
+
+
+def _redact_secrets_in_error(msg: str) -> str:
+    msg = _API_KEY_ASSIGN_RE.sub(r"\1", msg)
+    msg = _SK_TOKEN_RE.sub("sk-…", msg)
+    return msg
+
+
+def _friendly_provider_error(status: int | None, msg: str, *, err_type: str = "") -> str:
+    low = f"{msg} {err_type}".lower()
+    if status == 401 or "authentication" in low or "invalid api key" in low or "invalid_api_key" in low:
+        return "Invalid API key"
+    if status == 403 or "permission" in low:
+        return "Access denied — check API key permissions"
+    if status == 404:
+        return "Model or endpoint not found"
+    if status == 429 or "rate limit" in low:
+        return "Rate limited — try again later"
+    if status is not None and status >= 500:
+        return f"Provider server error (HTTP {status})"
+    return msg
+
+
 def _clean_error(e: Exception) -> str:
-    """Extract a user-friendly error message, stripping raw HTML from HTTP errors."""
+    """User-facing provider error: no HTML, no Python dict dumps, no API keys."""
+    status: int | None = getattr(e, "status_code", None)
+    if not isinstance(status, int):
+        status = None
+    extracted = _message_from_error_body(getattr(e, "body", None))
+    err_type = ""
+    body = getattr(e, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        err_type = str(body["error"].get("type") or "")
+
     try:
         import httpx
+
+        if isinstance(e, httpx.TimeoutException):
+            return "Provider timed out"
+        if isinstance(e, httpx.ConnectError):
+            return "Could not connect to the provider"
         if isinstance(e, httpx.HTTPStatusError):
-            return f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
+            status = e.response.status_code
+            try:
+                extracted = _message_from_error_body(e.response.json()) or extracted
+            except Exception:
+                extracted = extracted or (e.response.reason_phrase or "")
     except ImportError:
         pass
-    msg = str(e)  # intentionally str(), not _clean_error — we're inside _clean_error
-    # Trim raw HTML bodies from the message
+
+    raw = str(e)
+    parsed_status, parsed_body = _parse_openai_error_blob(raw)
+    if parsed_status is not None:
+        status = status or parsed_status
+    if extracted is None and parsed_body is not None:
+        extracted = _message_from_error_body(parsed_body)
+        if isinstance(parsed_body.get("error"), dict):
+            err_type = err_type or str(parsed_body["error"].get("type") or "")
+
+    msg = extracted or raw
     if "<!doctype html>" in msg.lower() or "<html" in msg.lower():
         msg = msg.split("<html")[0].split("<!doctype")[0].strip()
-    return msg[:500]
+    if not msg or msg.startswith("Error code:"):
+        msg = f"HTTP {status}" if status else "Connection failed"
+    msg = _redact_secrets_in_error(msg)
+    return _friendly_provider_error(status, msg, err_type=err_type)[:200]
 
 
 def _add_to_provider_list(providers: list, provider, *, flag: str = "is_default"):
@@ -224,7 +315,7 @@ async def update_config(req: ConfigUpdateRequest):
 
     section_data = getattr(config, req.section, None)
     if section_data is None:
-        return {"error": f"Unknown config section: {req.section}"}
+        raise HTTPException(400, f"Unknown config section: {req.section}")
 
     # Only allow setting declared Pydantic model fields
     allowed_keys = set(getattr(type(section_data), "model_fields", {}).keys())
@@ -500,7 +591,7 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
         bool_fields={"is_default"},
     )
     if not found:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     if "visual_model_ids" in update:
         all_visual = {
             m
@@ -537,7 +628,7 @@ async def delete_llm_provider(provider_id: str):
     config = get_config()
     target, rest = _remove_provider(config.llm.providers, provider_id)
     if not target:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     label = _provider_display_name(target, provider_id)
     config.llm.providers = rest
     all_visual = {m for prov in config.llm.providers for m in (prov.visual_model_ids or [])}
@@ -589,7 +680,7 @@ async def set_default_llm_provider(provider_id: str):
     found = _set_exclusive_flag(config.llm.providers, provider_id)
     if not found:
         _log.warning("Set default LLM failed: provider '%s' not found", provider_id)
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     display_name = _provider_display_name(found, provider_id)
     save_config(config)
     reload_config()
@@ -632,7 +723,7 @@ async def update_embedding_provider(provider_id: str, update: dict = Body()):
         bool_fields={"is_default"},
     )
     if not found:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     save_config(config)
     reload_config()
     await async_reload_services(preload_transcription=False)
@@ -646,7 +737,7 @@ async def delete_embedding_provider(provider_id: str):
         config.embedding.providers, provider_id, promote=True
     )
     if not target:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     label = _provider_display_name(target, provider_id)
     config.embedding.providers = rest
     save_config(config)
@@ -688,7 +779,7 @@ async def set_default_embedding_provider(provider_id: str):
     found = _set_exclusive_flag(config.embedding.providers, provider_id)
     if not found:
         _log.warning("Set default embedding failed: provider '%s' not found", provider_id)
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     display_name = _provider_display_name(found, provider_id)
     save_config(config)
     reload_config()
@@ -732,7 +823,7 @@ async def update_rerank_provider(provider_id: str, update: dict = Body()):
         bool_fields={"is_default"},
     )
     if not found:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     save_config(config)
     reload_config()
     await async_reload_services(preload_transcription=False)
@@ -744,7 +835,7 @@ async def delete_rerank_provider(provider_id: str):
     config = get_config()
     target, rest = _remove_provider(config.rerank.providers, provider_id, promote=True)
     if not target:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     label = _provider_display_name(target, provider_id)
     config.rerank.providers = rest
     save_config(config)
@@ -789,7 +880,7 @@ async def set_default_rerank_provider(provider_id: str):
     found = _set_exclusive_flag(config.rerank.providers, provider_id)
     if not found:
         _log.warning("Set default reranker failed: provider '%s' not found", provider_id)
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     display_name = _provider_display_name(found, provider_id)
     save_config(config)
     reload_config()
@@ -885,7 +976,7 @@ async def update_file_transcription_provider(provider_id: str, update: dict = Bo
         exclusive_flag="is_active",
     )
     if not found:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     save_config(config)
     reload_config()
     return _public_dump(found)
@@ -898,7 +989,7 @@ async def delete_file_transcription_provider(provider_id: str):
         config.transcription.file_providers, provider_id, exclusive_flag="is_active"
     )
     if not target:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     label = _provider_display_name(target, provider_id)
     invalidate_provider(f"file_trans:{provider_id}")
     config.transcription.file_providers = rest
@@ -921,7 +1012,7 @@ async def test_file_transcription_provider(provider_id: str):
         provider = config.transcription.get_local_file_provider()
     if not provider:
         _log.warning("Test file transcription: provider '%s' not found", provider_id)
-        return {"error": "Provider not found"}
+        raise HTTPException(404, "Provider not found")
     try:
         from src.meeting.transcription import create_file_transcription_provider
         from src.providers.cache import peek
@@ -1069,7 +1160,7 @@ async def set_active_file_transcription_provider(provider_id: str):
             _log.info("Activated builtin file transcription provider: %s", adapter)
         else:
             _log.warning("Set active file transcription failed: provider '%s' not found", provider_id)
-            return {"error": f"Provider '{provider_id}' not found"}
+            raise HTTPException(404, f"Provider '{provider_id}' not found")
     save_config(config)
     reload_config()
     _invalidate_transcription_caches(kind="file")
@@ -1143,7 +1234,7 @@ async def update_realtime_transcription_provider(provider_id: str, update: dict 
         exclusive_flag="is_active",
     )
     if not found:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     save_config(config)
     reload_config()
     return _public_dump(found)
@@ -1156,7 +1247,7 @@ async def delete_realtime_transcription_provider(provider_id: str):
         config.transcription.realtime_providers, provider_id, exclusive_flag="is_active"
     )
     if not target:
-        return {"error": f"Provider '{provider_id}' not found"}
+        raise HTTPException(404, f"Provider '{provider_id}' not found")
     label = _provider_display_name(target, provider_id)
     invalidate_provider(f"rt_trans:{provider_id}")
     config.transcription.realtime_providers = rest
@@ -1179,7 +1270,7 @@ async def test_realtime_transcription_provider(provider_id: str):
         provider = config.transcription.get_local_realtime_provider()
     if not provider:
         _log.warning("Test realtime transcription: provider '%s' not found", provider_id)
-        return {"error": "Provider not found"}
+        raise HTTPException(404, "Provider not found")
     try:
         from src.meeting.transcription import create_realtime_transcription_provider
         from src.providers.cache import peek
@@ -1287,7 +1378,7 @@ async def set_active_realtime_transcription_provider(provider_id: str):
             _log.info("Activated builtin realtime transcription provider: %s", adapter)
         else:
             _log.warning("Set active realtime transcription failed: provider '%s' not found", provider_id)
-            return {"error": f"Provider '{provider_id}' not found"}
+            raise HTTPException(404, f"Provider '{provider_id}' not found")
     save_config(config)
     reload_config()
     _invalidate_transcription_caches(kind="realtime")

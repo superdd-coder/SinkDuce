@@ -4,7 +4,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, Body, File, Form, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from src.hot_words import store
@@ -71,7 +71,7 @@ async def set_default_library(body: dict = Body()):
     try:
         default_id = store.set_default_library_id(str(raw).strip())
     except FileNotFoundError:
-        return {"error": "Hot words library not found"}
+        raise HTTPException(404, "Hot words library not found")
     return {"default_library_id": default_id}
 
 
@@ -85,21 +85,22 @@ async def import_library(
     filename = file.filename or "import.csv"
     raw = await file.read()
     if not raw:
-        return {"error": "Empty file"}
+        raise HTTPException(400, "Empty file")
 
     try:
         words, name_from_file, desc_from_file = parse_hot_words_file(filename, raw)
     except ValueError as e:
-        return {"error": str(e)}
+        raise HTTPException(400, str(e))
     except Exception as e:
         logger.exception("Hot words import parse failed: %s", e)
-        return {"error": f"Failed to parse file: {e}"}
+        raise HTTPException(400, f"Failed to parse file: {e}") from e
 
     if not words:
-        return {
-            "error": "No valid words found. Need a header row with text,weight,lang "
+        raise HTTPException(
+            400,
+            "No valid words found. Need a header row with text,weight,lang "
             "and at least one non-empty text cell.",
-        }
+        )
 
     stem = Path(filename).stem.strip() or "Imported library"
     lib_name = (name or "").strip() or name_from_file or stem
@@ -122,7 +123,7 @@ async def import_library(
 async def export_library_xlsx(library_id: str):
     lib = store.get_library(library_id)
     if lib is None:
-        return {"error": "Hot words library not found"}
+        raise HTTPException(404, "Hot words library not found")
     data = build_export_xlsx(lib.words, name=lib.name, description=lib.description)
     fname = _safe_filename(lib.name or "hot-words") + ".xlsx"
     return Response(
@@ -138,7 +139,7 @@ async def export_library_xlsx(library_id: str):
 async def get_library(library_id: str):
     lib = store.get_library(library_id)
     if lib is None:
-        return {"error": "Hot words library not found"}
+        raise HTTPException(404, "Hot words library not found")
     data = lib.model_dump()
     data["is_default"] = store.get_default_library_id() == lib.id
     return data
@@ -148,7 +149,7 @@ async def get_library(library_id: str):
 async def create_library(body: dict = Body()):
     name = body.get("name", "").strip()
     if not name:
-        return {"error": "Name is required"}
+        raise HTTPException(400, "Name is required")
     description = body.get("description", "")
     words = body.get("words")
     lib = store.create_library(name=name, description=description, words=words)
@@ -162,7 +163,7 @@ async def update_library(library_id: str, body: dict = Body()):
     try:
         lib = store.update_library(library_id, **body)
     except FileNotFoundError:
-        return {"error": "Hot words library not found"}
+        raise HTTPException(404, "Hot words library not found")
     data = lib.model_dump()
     data["is_default"] = store.get_default_library_id() == lib.id
     return data
@@ -172,5 +173,5 @@ async def update_library(library_id: str, body: dict = Body()):
 async def delete_library(library_id: str):
     deleted = store.delete_library(library_id)
     if not deleted:
-        return {"error": "Hot words library not found"}
+        raise HTTPException(404, "Hot words library not found")
     return {"message": "Hot words library deleted"}

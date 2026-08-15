@@ -152,24 +152,6 @@ def _build_multimodal_context(
 
     return multimodal if multimodal else [{"type": "text", "text": content}]
 
-_GENERATE_ANSWER_SYSTEM = """You are a helpful research assistant. Answer the user's question based on the provided context and retained information.
-
-Rules:
-1. Use only the provided information — do NOT fabricate
-2. Cite sources when possible
-3. Be clear about what information is incomplete or missing
-4. Use Markdown formatting for readability"""
-
-_GENERATE_ANSWER_USER = """Question: {question}
-
-Retained information:
-{retained_info}
-
-Relevant context:
-{context}
-
-Answer the question based on the above information."""
-
 
 class AgenticQueryService:
     """One-layer Agentic RAG: decompose → parallel VariantFetcher → group-aware aggregate.

@@ -15,30 +15,13 @@ import logging
 import math
 import re
 from collections import Counter
+
+from src.rag.agent_prompts import (
+    PREPROCESS_SPARSE_QUERY_SYSTEM,
+    PREPROCESS_SPARSE_QUERY_USER,
+)
+
 logger = logging.getLogger(__name__)
-
-# ── LLM prompt for sparse query preprocessing ──────────────────────────
-
-PREPROCESS_SPARSE_QUERY_SYSTEM = """\
-You are a keyword extraction engine for a BM25 (keyword-based) search system.
-Your ONLY job is to extract search-relevant keywords and phrases from a user query.
-
-Rules:
-1. Extract key concepts, entities, and technical terms from the query
-2. Add 2-4 synonyms or alternative phrasings for important concepts
-   (e.g., "ML" → also add "machine learning"; "AI" → also add "artificial intelligence")
-3. Strip question words (what, how, why, 怎么, 如何, 为什么), filler words, and
-   stop words (the, a, is, are, 的, 了, 是, 在)
-4. Output space-separated phrases — NOT full sentences
-5. Keep abbreviations AND their expansions (e.g., both "RAG" and "retrieval augmented generation")
-6. Handle both English and Chinese queries
-7. For Chinese queries, extract meaningful word compounds (2-4 characters), not single characters
-8. Preserve numbers, dates, and proper nouns exactly as they appear
-
-Respond with ONLY a JSON object (no markdown fences, no extra text):
-{"keywords": ["phrase1", "phrase2", "phrase3"]}"""
-
-PREPROCESS_SPARSE_QUERY_USER = """Query: {query}"""
 
 
 def preprocess_query_for_sparse(

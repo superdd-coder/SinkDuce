@@ -99,7 +99,7 @@ export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | 
   })
 
 export const deleteMeeting = (id: string) =>
-  request<{ message?: string; error?: string }>(`/meetings/${id}`, {
+  request<{ message?: string }>(`/meetings/${id}`, {
     method: "DELETE",
   })
 

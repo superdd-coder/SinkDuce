@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from src.config import AppConfig, TranscriptionConfig, TranscriptionProviderConfig
 from src.meeting.models import Meeting, MeetingMode, MeetingStatus, TranscriptionResult, TranscriptSegment
@@ -569,10 +570,12 @@ class TestMeetingService:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = None
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                generate_summary("missing")
-            )
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    generate_summary("missing")
+                )
+        assert ei.value.status_code == 404
+        assert "not found" in str(ei.value.detail).lower()
 
     @pytest.mark.skip(reason="v3: allocate_to_collection replaced by allocate_section_to_collection(meeting_id, tab_id, collection_id)")
     def test_allocate_to_collection(self):
@@ -1072,11 +1075,11 @@ class TestMeetingRoutes:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = None
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                get_meeting("missing")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    get_meeting("missing")
+                )
+        assert ei.value.status_code == 404
 
     def test_delete_meeting_route(self):
         """DELETE /meetings/{id} deletes the meeting."""
@@ -1101,11 +1104,11 @@ class TestMeetingRoutes:
             mock_store.get_meeting.return_value = None
             mock_store.delete_meeting.return_value = False
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                delete_meeting("missing")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    delete_meeting("missing")
+                )
+        assert ei.value.status_code == 404
 
     def test_update_meeting_route(self):
         """PUT /meetings/{id} updates meeting fields."""
@@ -1186,12 +1189,12 @@ class TestMeetingRoutes:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = meeting
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                start_transcription("abc123")
-            )
-
-        assert "error" in result
-        assert "No audio" in result["error"]
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    start_transcription("abc123")
+                )
+        assert ei.value.status_code == 400
+        assert "No audio" in str(ei.value.detail)
 
     def test_start_transcription_no_provider(self):
         """POST /meetings/{id}/transcribe fails when no provider configured."""
@@ -1204,11 +1207,11 @@ class TestMeetingRoutes:
             mock_store.update_meeting.return_value = meeting
             mock_svc.get_active_file_provider.return_value = None
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                start_transcription("abc123")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    start_transcription("abc123")
+                )
+        assert ei.value.status_code == 400
 
     def test_generate_summary_route(self):
         """POST /meetings/{id}/generate-summary creates a task (v3)."""
@@ -1241,11 +1244,11 @@ class TestMeetingRoutes:
             mock_store.get_transcript.return_value = None
 
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                generate_summary("abc123")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    generate_summary("abc123")
+                )
+        assert ei.value.status_code == 400
 
     @pytest.mark.skip(reason="v3: allocate_to_db replaced by allocate_section(meeting_id, tab_id, body)")
     def test_allocate_route(self):
@@ -1257,10 +1260,11 @@ class TestMeetingRoutes:
         from src.meeting.routes import allocate_section
 
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
-            allocate_section("abc123", "tab_01", {})
-        )
-        assert "error" in result
+        with pytest.raises(HTTPException) as ei:
+            asyncio.get_event_loop().run_until_complete(
+                allocate_section("abc123", "tab_01", {})
+            )
+        assert ei.value.status_code == 400
 
     def test_get_meeting_tasks_route(self):
         """GET /meetings/{id}/tasks returns matching tasks."""

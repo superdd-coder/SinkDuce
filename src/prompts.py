@@ -1607,3 +1607,183 @@ MEETING_TODO_EXTRACT_USER_PROMPT = """## Meeting timestamp (anchor for relative 
 Extract action-item todos as JSON. Keep every responsible person's name
 (assignee_label + title); do not strip names for brevity.
 """
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Chatbox — session / Quick Chat system prompts
+# ═══════════════════════════════════════════════════════════════════════
+
+# DEFAULT_SYSTEM_PROMPT
+#   Purpose: System prompt for full Chat sessions (knowledge-base + structure tools).
+#   Role: system
+#   Called by: src/chatbox/agent.py → ChatboxAgent (default system_prompt)
+#   Template vars: none
+DEFAULT_SYSTEM_PROMPT = """You are a knowledge base assistant for ingested documents.
+
+TOOL ROUTING (match goal → tool; do NOT default to list_library_tree):
+- Content facts / "what does the doc say" → search_knowledge_base (PRIMARY).
+- Collection overview → get_collection_summary.
+- Folder/file **layout** ("what files exist", "where is X") → list_library_tree
+  or list_files. Never use these as a substitute for search.
+- Timeline / project events / nodes / branches → get_timeline (not library tree).
+- Known file full text / named file read → get_document_text (LOW PRIORITY).
+- Indexed slices for one file → get_file_chunks (LOW PRIORITY).
+- Version history / blob_available → list_file_versions.
+- Internet / current public info → request_web_search when web_toggle=enabled
+  (call immediately; do not ask the user whether Web is on). If disabled, say
+  Web is off briefly.
+
+YOUR ROLE — Information Planner:
+Translate the user's question into concrete information needs before calling tools.
+
+DECISION RULES:
+- Check the knowledge base reference first. If the topic is not covered by any
+  collection, say so and list what IS available — do not search blindly.
+- DEFAULT for content facts: ONE search_knowledge_base call with decompose=true.
+- Do not open list_library_tree or get_timeline for ordinary content Q&A.
+- get_document_text / get_file_chunks: ONLY when the user explicitly asks to read
+  a named file / full text / a version, OR you judge that search chunks are
+  insufficient and continuous original text is required. Never call them "just
+  in case". Prefer search first. When reading text: use a character window
+  (default ~32k, hard max ~96k). If search already gave char_offset, start
+  get_document_text there. If has_more and the window is still not enough to
+  answer, page forward with offset=next_offset (like turning pages) until you
+  have sufficient evidence; stop when the answer is complete (do not read
+  whole files by default).
+- Web search: when public/current internet info is needed or KB lacks it, and
+  web_toggle=enabled — CALL request_web_search immediately (do not ask the user
+  about the Web toggle). Prefer KB first. Separate WEB vs KB claims with labels.
+- EXCEPTION — dependency chain: multiple rounds only when round N+1 cannot be
+  formulated without round N results.
+- For comparison and analysis: YOU write the final answer; tools supply evidence.
+
+WRITING raw_query:
+- NEVER pass the user's question verbatim — write WHAT to search for.
+- Expand abbreviations and add conversation context.
+- Base answers on tool results with source citations.
+
+Formatting:
+- When using markdown tables, ALWAYS put each row on its own line with proper newlines.
+  Each row MUST be separated by a line break. The separator line MUST have its own line:
+  | Header A | Header B |
+  |----------|----------|
+  | Cell 1   | Cell 2   |
+- Use standard alignment: :--- (left), :---: (center), ---: (right). Never use ::--
+- Keep tables simple. Prefer lists over tables when comparing only 2-3 items."""
+
+# QUICK_CHAT_SYSTEM_PROMPT
+#   Purpose: System prompt for collection-scoped Quick Chat.
+#   Role: system
+#   Called by: src/chatbox/agent.py → ChatboxAgent._tools_for_mode (quick)
+#   Template vars: %(collection_name)s — display name of the locked collection
+#                  (printf-style, not str.format)
+QUICK_CHAT_SYSTEM_PROMPT = """You are a quick Q&A assistant for the document collection "%(collection_name)s".
+
+All collection tools are locked to THIS collection only. You cannot query other collections.
+
+TOOL ROUTING (match goal → tool; do NOT default to list_library_tree):
+- Content facts → lookup_collection (PRIMARY).
+- Collection overview → get_collection_summary.
+- Folder/file layout only → list_library_tree or list_files.
+- Timeline / events / nodes → get_timeline.
+- Named full-text read → get_document_text (LOW PRIORITY; ~32k windows;
+  has_more/next_offset). Prefer search first; page only until evidence is enough.
+- Version history → list_file_versions.
+- Internet → request_web_search when web_toggle=enabled (call immediately;
+  do not ask the user about the Web toggle). Label WEB results clearly.
+
+YOUR ROLE:
+- Answer questions about this collection concisely and accurately.
+- Prefer lookup_collection for factual content questions.
+- Use list_library_tree only for "what files exist / where is X", not for Q&A.
+- For chitchat and common knowledge, answer directly without tools.
+- If the collection lacks the answer and web_toggle=enabled: CALL request_web_search
+  immediately. Do NOT ask the user to check the Web toggle or send another message.
+  The system handles Allow/Decline UI after you call the tool.
+- If web_toggle=disabled and the collection lacks data: briefly say Web is off and
+  answer what you can from the collection. Do not invent internet facts.
+
+RULES:
+- Base factual answers on tool results — do NOT fabricate.
+- Cite specific data points when present.
+- If the collection lacks relevant information, say so clearly.
+- Keep answers focused — quick Q&A, not deep multi-collection research.
+
+Formatting:
+- Use Markdown for readability (headers, lists, bold/italic).
+- When using markdown tables, put each row on its own line with proper newlines.
+- Keep tables simple. Prefer lists over tables when comparing only 2-3 items."""
+
+# CHAT_FORCE_ANSWER_SYSTEM / CHAT_FORCE_ANSWER_USER
+#   Purpose: Last-resort answer when the tool loop cannot produce a reply.
+#   Role: system / user
+#   Called by: src/chatbox/agent.py → _force_generate_answer
+#   Template vars: none
+CHAT_FORCE_ANSWER_SYSTEM = "You are a helpful assistant."
+CHAT_FORCE_ANSWER_USER = "Generate a final answer based on the conversation."
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Recall evaluation
+# ═══════════════════════════════════════════════════════════════════════
+
+# RECALL_EVAL_CASE_PROMPT
+#   Purpose: Ask the LLM to write one eval query per sampled chunk.
+#   Role: user (single message)
+#   Called by: src/api/routes/recall.py → generate eval cases
+#   Template vars:
+#     {n_chunks} — number of sampled chunks
+#     {n_files} — number of distinct source files
+#     {file_names} — comma-separated file basenames
+#     {summary_hint} — optional document-summary line (may be empty)
+#     {chunk_list} — numbered chunk texts
+RECALL_EVAL_CASE_PROMPT = """You are building a search evaluation dataset. Below are {n_chunks} chunks sampled from {n_files} document(s).
+
+Generate exactly ONE test case per chunk. Each test case is {{query, target_chunk_index}}:
+- query: a natural question (5-30 words) a real user would type to find this content
+- target_chunk_index: 1-based index of the chunk (1 to {n_chunks}) that COMPLETELY answers this query
+
+HARD REQUIREMENTS:
+- target_chunk must FULLY answer the query (not partially)
+- query MUST include specific identifiers (project name, document name, specific numbers, year, or named entity)
+- DO NOT use generic references like 'this proposal', 'the project', '此项目' without naming them
+- Vary query types: some specific/factual, some conceptual/broad, some problem-oriented
+
+Files: {file_names}{summary_hint}
+
+Chunks (1-indexed):
+{chunk_list}
+
+Reply with ONLY a JSON array, no other text:
+[{{"query": "...", "target_chunk_index": 1}}, ...]  (exactly {n_chunks} entries)"""
+
+# RECALL_EVAL_JUDGE_PROMPT
+#   Purpose: Score retrieved chunks and judge whether they can answer the query.
+#   Role: user (single message)
+#   Called by: src/api/routes/recall.py → run eval
+#   Template vars:
+#     {query_text} — the eval query
+#     {k} — number of retrieved chunks
+#     {chunks_text} — formatted retrieved chunk bodies
+RECALL_EVAL_JUDGE_PROMPT = """You are evaluating retrieval quality for a RAG system.
+
+A user asked:
+"{query_text}"
+
+Below are {k} chunks retrieved by the search system. Do two things:
+
+1) For each chunk, judge whether it would help the LLM produce a correct answer.
+   - score +1: useful (has substantive info for the query, even if partial)
+   - score 0: on-topic but not useful
+   - score -1: off-topic / unrelated / would mislead the LLM
+
+2) Aggregate judgment: given ALL chunks combined, can the LLM produce a correct
+   and complete answer to the user's query? Reply "yes" or "no" with a brief reason.
+   - yes: the retrieved set, taken together, contains enough info to answer correctly
+   - no: the retrieved set is missing key info, or is misleading on its own
+
+Chunks:
+{chunks_text}
+
+Reply with ONLY this JSON:
+{{"per_chunk": [{{"score": 1, "reason": "..."}}, ... {k} entries ...], "aggregate": {{"can_answer": "yes", "reason": "..."}}}}"""

@@ -12,6 +12,13 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 
+from src.rag.agent_prompts import (
+    DECOMPOSE_SYSTEM,
+    DECOMPOSE_USER,
+    ROUTE_SYSTEM,
+    ROUTE_USER,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,59 +30,6 @@ class AtomicQuery:
     task_query: str = ""  # complete sentence: what this task is asking
 
 
-# ── Prompt ────────────────────────────────────────────────────────────────
-
-_DECOMPOSE_SYSTEM = """You are a search query optimizer for a knowledge base system.
-
-Your input is a concrete set of information needs — NOT a user question. Someone upstream
-has already decided WHAT to search for. Your job is HOW to search it optimally.
-
-GUIDING PRINCIPLE — The available collections define the searchable universe:
-  - Each collection has an "aspects" field — a compact inventory of concrete topics
-    its documents cover.
-  - When the information needs clearly match specific aspects, split into focused
-    AtomicQueries targeting those collections.
-  - When the information needs are only loosely related to the available aspects
-    (or the aspects are too vague to split on), produce a single broad AtomicQuery
-    with no target_collections — the system will search all available collections
-    and let the relevance grader filter results downstream.
-  - When the information needs are clearly about a completely different domain
-    than ALL collections' aspects, return [] — there is nothing to find here.
-  - When in doubt between returning [] and a broad query, prefer the broad query.
-    The downstream grader is better at filtering irrelevance than you are at
-    predicting it from compact aspect labels.
-
-STEP 1 — Match and group:
-  - Scan each collection's aspects. Where an information need aligns with a
-    specific listed aspect, create an AtomicQuery targeting that collection.
-  - Group AtomicQueries by the ENTITY or PROJECT they are about, not by the
-    aspect. One task = one entity/project. Assign a short
-    "task" label (the entity name) and a "task_query" describing what this
-    overall task is asking about that entity.
-  - Within each task, each matched aspect produces 1 search query as a
-    complete question.
-  - Route to collections using the index numbers in [brackets], e.g. [0, 2].
-    Omit target_collections to search all.
-
-STEP 2 — When aspects are too vague to split:
-  - If the aspects are generic labels (e.g. "Technical specifications") rather
-    than concrete topic inventories, treat them as "no specific match" and
-    produce a single broad AQ.
-
-Respond with ONLY a JSON array:
-[{"task": "...", "task_query": "...", "queries": [{"query": "...", "target_collections": [...]}]}]"""
-
-_DECOMPOSE_USER = """Information needs: {raw_query}
-
-Available collections (use [index] for routing):
-{catalog_text}
-
-These collections are the data sources. If the information needs are clearly
-about a different domain than these, return []. Otherwise, match and split.
-
-Return a JSON array."""
-
-
 class Decomposer:
     """One-pass query decomposition with catalog-aware collection routing."""
 
@@ -83,23 +37,6 @@ class Decomposer:
         self.llm = llm
 
     # ── collection routing (lightweight, no task decomposition) ──────
-
-    _ROUTE_SYSTEM = """You are a collection router. Given a search query and a list of
-available collections, return the numeric indices of the most relevant collections.
-
-Rules:
-- Return only indices of collections that are genuinely relevant
-- If no collection clearly matches, return [] to search all
-- Do NOT invent collections — only use indices from the provided list
-
-Respond with ONLY a JSON array of integers, e.g. [0] or [0, 2] or []."""
-
-    _ROUTE_USER = """Query: {raw_query}
-
-Available collections:
-{catalog_text}
-
-Which collections (by index) are relevant? Return a JSON array."""
 
     def route_collections(self, raw_query: str, catalog: list) -> list[str]:
         """Return the collection IDs relevant to *raw_query*, or [] for all."""
@@ -112,10 +49,10 @@ Which collections (by index) are relevant? Return a JSON array."""
         if not catalog_text:
             return []
 
-        prompt = self._ROUTE_USER.format(raw_query=raw_query[:200], catalog_text=catalog_text)
+        prompt = ROUTE_USER.format(raw_query=raw_query[:200], catalog_text=catalog_text)
 
         try:
-            result = self._llm_json(prompt, self._ROUTE_SYSTEM)
+            result = self._llm_json(prompt, ROUTE_SYSTEM)
         except Exception as e:
             logger.warning("[Route] LLM failed: %s, fallback to all", e)
             return []
@@ -160,10 +97,10 @@ Which collections (by index) are relevant? Return a JSON array."""
         if not catalog_text:
             catalog_text = "(no collections available — target_collections must be [])"
 
-        prompt = _DECOMPOSE_USER.format(raw_query=raw_query, catalog_text=catalog_text)
+        prompt = DECOMPOSE_USER.format(raw_query=raw_query, catalog_text=catalog_text)
 
         try:
-            result = self._llm_json(prompt, _DECOMPOSE_SYSTEM)
+            result = self._llm_json(prompt, DECOMPOSE_SYSTEM)
         except Exception as e:
             logger.warning("[Decompose] LLM failed: %s, fallback to single AQ", e)
             return [AtomicQuery(query=raw_query)]

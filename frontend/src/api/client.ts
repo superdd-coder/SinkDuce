@@ -38,7 +38,7 @@ export const checkLatestRelease = async (repo: string): Promise<GitHubRelease | 
 // ── Visual ──
 
 export const describeImage = (imageUrl: string) =>
-  request<{ description: string; error?: string }>("/visual/describe", {
+  request<{ description: string }>("/visual/describe", {
     method: "POST",
     body: JSON.stringify({ image_url: imageUrl }),
   })

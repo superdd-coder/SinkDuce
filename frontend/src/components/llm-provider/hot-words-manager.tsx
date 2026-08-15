@@ -568,7 +568,6 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
     try {
       await flushSave()
       const res = await setDefaultHotWordsLibrary(next)
-      if (res.error) throw new Error(res.error)
       setDefaultLibraryId(res.default_library_id)
       await fetchList()
       toast.success(
