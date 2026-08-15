@@ -856,7 +856,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     enriching_llm = _get_enriching_llm(config)
     loop = asyncio.get_running_loop()
     raw = await loop.run_in_executor(
-        None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, thinking=True)
+        None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, thinking=False)
     )
     logger.info("[CONSOLIDATE] LLM returned %d chars", len(raw))
     collection_summary, conflicts = parse_consolidation_response(raw, alias_map=alias_map)
@@ -874,6 +874,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
             None, lambda: enriching_llm.generate(
                 PROJECT_DESCRIPTION_PROMPT.format(summaries=summaries_text, project_name=collection_name),
                 max_tokens=512,
+                thinking=False,
             )
         )
         project_desc = desc_raw.strip()
