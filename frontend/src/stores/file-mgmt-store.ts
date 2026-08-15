@@ -33,6 +33,7 @@ import {
   getFolder,
   getNameConflict,
   updateFile,
+  type NameConflictDetail,
 } from "@/api/file-mgmt"
 import { enrichMessageSourceNames } from "@/components/file-mgmt/message-card"
 import { toast } from "sonner"
@@ -57,6 +58,15 @@ export type NameConflictState = {
   message: string
   /** Called with the user-chosen name; should perform the original action. */
   retry: (newName: string) => Promise<void>
+}
+
+/** Wait for the Edit/Create silk dialog to finish closing before opening this one. */
+const NAME_CONFLICT_AFTER_DIALOG_MS = 360
+
+function queueNameConflict(payload: NameConflictState) {
+  window.setTimeout(() => {
+    useFileMgmtStore.setState({ nameConflict: payload })
+  }, NAME_CONFLICT_AFTER_DIALOG_MS)
 }
 
 /**
@@ -269,14 +279,14 @@ interface FileMgmtState {
       icon_value?: string | null
       icon_color?: string | null
     }
-  ) => Promise<void>
+  ) => Promise<NameConflictDetail | null>
   /** Rename display filename of a file (current version). */
   renameFile: (
     collectionId: string,
     fileId: string,
     filename: string,
     version: number
-  ) => Promise<void>
+  ) => Promise<NameConflictDetail | null>
   moveFolder: (collectionId: string, folderId: string, newParentId: string | null, version: number) => Promise<void>
   removeFolder: (collectionId: string, folderId: string) => Promise<void>
   toggleFolderSelection: (folderId: string) => void
@@ -616,14 +626,12 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     } catch (err) {
       const conflict = getNameConflict(err)
       if (conflict) {
-        set({
-          nameConflict: {
-            resource: "folder",
-            name: conflict.name,
-            suggestedName: conflict.suggested_name,
-            message: conflict.message,
-            retry: doCreate,
-          },
+        queueNameConflict({
+          resource: "folder",
+          name: conflict.name,
+          suggestedName: conflict.suggested_name,
+          message: conflict.message,
+          retry: doCreate,
         })
         return
       }
@@ -657,23 +665,16 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     }
     try {
       await doUpdate()
+      return null
     } catch (err) {
       const conflict = getNameConflict(err)
       if (conflict && patch.name !== undefined) {
-        set({
-          nameConflict: {
-            resource: "folder",
-            name: conflict.name,
-            suggestedName: conflict.suggested_name,
-            message: conflict.message,
-            retry: doUpdate,
-          },
-        })
-        return
+        return conflict
       }
       toast.error(
         `Failed to update folder: ${err instanceof Error ? err.message : String(err)}`
       )
+      return null
     }
   },
 
@@ -685,23 +686,14 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     }
     try {
       await doRename(filename)
+      return null
     } catch (err) {
       const conflict = getNameConflict(err)
-      if (conflict) {
-        set({
-          nameConflict: {
-            resource: "file",
-            name: conflict.name,
-            suggestedName: conflict.suggested_name,
-            message: conflict.message,
-            retry: doRename,
-          },
-        })
-        return
-      }
+      if (conflict) return conflict
       toast.error(
         `Failed to rename file: ${err instanceof Error ? err.message : String(err)}`
       )
+      return null
     }
   },
 

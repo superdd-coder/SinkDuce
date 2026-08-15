@@ -33,118 +33,20 @@ import type {
   NodeMeetingTodoCandidatesResponse,
 } from "@/types/file-mgmt"
 
-const BASE = "/api/file-mgmt"
+import {
+  FILE_MGMT_BASE,
+  FileMgmtApiError,
+  getNameConflict,
+  request,
+  type NameConflictDetail,
+} from "./http"
 
-/** Structured 409 body when a same-folder/sibling name already exists. */
-export type NameConflictDetail = {
-  code: "name_conflict"
-  resource: "folder" | "file"
-  name: string
-  suggested_name: string
-  message: string
-}
+export { FileMgmtApiError, getNameConflict, type NameConflictDetail }
 
-export class FileMgmtApiError extends Error {
-  status: number
-  detail: unknown
-  rawBody: string
-
-  constructor(status: number, rawBody: string) {
-    let detail: unknown = rawBody
-    try {
-      detail = JSON.parse(rawBody)
-    } catch {
-      /* keep raw string */
-    }
-    // FastAPI wraps as { detail: ... }
-    if (
-      detail &&
-      typeof detail === "object" &&
-      "detail" in (detail as Record<string, unknown>)
-    ) {
-      detail = (detail as { detail: unknown }).detail
-    }
-    const msg =
-      typeof detail === "string"
-        ? detail
-        : detail &&
-            typeof detail === "object" &&
-            "message" in (detail as object)
-          ? String((detail as { message: unknown }).message)
-          : `API ${status}: ${rawBody}`
-    super(msg)
-    this.name = "FileMgmtApiError"
-    this.status = status
-    this.detail = detail
-    this.rawBody = rawBody
-  }
-}
-
-export function getNameConflict(err: unknown): NameConflictDetail | null {
-  if (!(err instanceof FileMgmtApiError) || err.status !== 409) return null
-  const d = err.detail
-  if (
-    d &&
-    typeof d === "object" &&
-    (d as NameConflictDetail).code === "name_conflict" &&
-    typeof (d as NameConflictDetail).suggested_name === "string"
-  ) {
-    return d as NameConflictDetail
-  }
-  return null
-}
+const BASE = FILE_MGMT_BASE
 
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
-  const method = (options?.method ?? "GET").toUpperCase()
-  const headers = new Headers(options?.headers)
-  // Only set JSON content-type when sending a body (GET+application/json can
-  // confuse some proxies and is unnecessary).
-  if (
-    method !== "GET" &&
-    method !== "HEAD" &&
-    method !== "DELETE" &&
-    !headers.has("Content-Type")
-  ) {
-    headers.set("Content-Type", "application/json")
-  }
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    method,
-    headers,
-    cache: "no-store",
-  })
-  if (!res.ok) {
-    const body = await res.text()
-    throw new FileMgmtApiError(res.status, body)
-  }
-  // 204 No Content
-  if (res.status === 204) return undefined as unknown as T
-  const ct = res.headers.get("content-type") || ""
-  const text = await res.text()
-  // SPA / proxy mis-route often returns index.html with 200
-  if (
-    text.trimStart().startsWith("<!DOCTYPE") ||
-    text.trimStart().startsWith("<!doctype") ||
-    text.trimStart().startsWith("<html")
-  ) {
-    throw new FileMgmtApiError(
-      res.status,
-      `Expected JSON from ${BASE}${path} but got HTML (content-type: ${ct || "missing"}). ` +
-        `Hard-refresh the page (Cmd+Shift+R). If using Cloudflare, purge cache for /api/*. ` +
-        `Verify: curl -sS http://127.0.0.1:18900${BASE}${path}`
-    )
-  }
-  if (!text) return undefined as unknown as T
-  try {
-    return JSON.parse(text) as T
-  } catch {
-    throw new FileMgmtApiError(
-      res.status,
-      ct.includes("json")
-        ? `Invalid JSON from ${path}`
-        : `Non-JSON response from ${path}`
-    )
-  }
+  return request<T>(path, { ...options, flavor: "file-mgmt" })
 }
 
 // ── Folder ──

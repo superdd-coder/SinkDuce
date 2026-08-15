@@ -16,6 +16,7 @@ from src.file_mgmt.layout import (
     _assert_file_name_free,
     _assert_folder_name_free,
     _file_display_names_in_folder,
+    _raise_name_conflict,
     _row_to_folder,
     suggest_unique_name,
 )
@@ -2761,15 +2762,19 @@ def update_file(
                         stem = Path(new_base).stem if Path(new_base).suffix else new_base
                     stem = (stem or "").strip() or "unnamed"
                     new_base = stem + old_suffix
-                # Must be free in every folder this file is mounted in
+                # Must be free in every folder this file is mounted in.
+                # Root orphans have no file_paths row — still unique among orphans.
                 mounts = conn.execute(
                     "SELECT DISTINCT folder_id FROM file_paths WHERE file_id=?",
                     (file_id,),
                 ).fetchall()
-                for m in mounts:
+                folder_ids = [m["folder_id"] for m in mounts]
+                if not folder_ids:
+                    folder_ids = [None]
+                for fid in folder_ids:
                     _assert_file_name_free(
                         conn,
-                        m["folder_id"],
+                        fid,
                         new_base,
                         exclude_file_id=file_id,
                     )

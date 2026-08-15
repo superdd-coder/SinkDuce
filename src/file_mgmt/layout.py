@@ -64,9 +64,10 @@ def _sibling_folder_names(
     *,
     exclude_folder_id: str | None = None,
 ) -> set[str]:
-    if parent_folder_id is None:
+    if parent_folder_id is None or parent_folder_id == "":
         rows = conn.execute(
-            "SELECT folder_id, name FROM folders WHERE parent_folder_id IS NULL"
+            "SELECT folder_id, name FROM folders "
+            "WHERE parent_folder_id IS NULL OR parent_folder_id = ''"
         ).fetchall()
     else:
         rows = conn.execute(
