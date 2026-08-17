@@ -824,6 +824,14 @@ def ocr_classify_document_images(doc, *, write_content: bool = True) -> None:
     """
     if not doc.images:
         return
+    from src.parsers.rapid_ocr import (
+        OCR_ENGINE_COUNT,
+        backlog_add,
+        backlog_done,
+        target_engine_count,
+    )
+
+    jobs: list = []
     text_n = mixed_n = visual_n = table_n = 0
     for img in doc.images:
         if img.is_table_source:
@@ -832,11 +840,11 @@ def ocr_classify_document_images(doc, *, write_content: bool = True) -> None:
         if img.image_bytes is None:
             visual_n += 1
             continue
-        img_type, ocr_text = _classify_image(
-            img.image_bytes,
-            getattr(img, "image_format", "") or "",
-        )
-        img._ocr_kind = img_type  # text | mixed | visual
+        jobs.append(img)
+
+    def _apply(img, img_type: str, ocr_text: str) -> None:
+        nonlocal text_n, mixed_n, visual_n
+        img._ocr_kind = img_type
         usable = (ocr_text or "").strip() and not _ocr_text_is_garbage(ocr_text)
         if img_type == "text":
             img.ocr_text = ocr_text
@@ -845,11 +853,46 @@ def ocr_classify_document_images(doc, *, write_content: bool = True) -> None:
             img.ocr_text = ocr_text
             mixed_n += 1
         else:
-            # Still keep readable OCR on visual figures for embedding.
             img.ocr_text = ocr_text if usable else ""
             visual_n += 1
-        if write_content and img.ocr_text:
-            doc.content = _update_description_in_content(doc.content, img)
+
+    accounted = 0
+    if jobs:
+        pending = backlog_add(len(jobs))
+
+        def _work(img):
+            try:
+                kind, text = _classify_image(
+                    img.image_bytes,
+                    getattr(img, "image_format", "") or "",
+                )
+                return img, kind, text
+            finally:
+                backlog_done(1)
+
+        try:
+            workers = min(OCR_ENGINE_COUNT, target_engine_count(), len(jobs))
+            logger.info(
+                "[OCR] classify %d images with %d engine(s) (backlog=%d)",
+                len(jobs),
+                workers,
+                pending,
+            )
+            if workers <= 1:
+                results = [_work(img) for img in jobs]
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    results = list(pool.map(_work, jobs))
+            for img, kind, text in results:
+                accounted += 1
+                _apply(img, kind, text)
+                if write_content and img.ocr_text:
+                    doc.content = _update_description_in_content(doc.content, img)
+        finally:
+            leftover = len(jobs) - accounted
+            if leftover > 0:
+                backlog_done(leftover)
+
     logger.info(
         "[ImageProcess] OCR classification: %d text, %d mixed, %d visual, %d table-source",
         text_n, mixed_n, visual_n, table_n,

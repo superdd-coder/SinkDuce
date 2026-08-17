@@ -95,7 +95,7 @@ def test_ocr_skips_office_vector():
 def test_rapidocr_warmup_logs_ready(monkeypatch):
     from src.parsers import rapid_ocr
 
-    monkeypatch.setattr(rapid_ocr, "get_engine", lambda: object())
+    monkeypatch.setattr(rapid_ocr, "_ensure_pool", lambda: None)
     assert rapid_ocr.warmup() is True
 
 
@@ -105,7 +105,7 @@ def test_rapidocr_warmup_failure_is_nonfatal(monkeypatch):
     def _boom():
         raise RuntimeError("no weights")
 
-    monkeypatch.setattr(rapid_ocr, "get_engine", _boom)
+    monkeypatch.setattr(rapid_ocr, "_ensure_pool", _boom)
     assert rapid_ocr.warmup() is False
 
 
@@ -128,14 +128,222 @@ def test_rapidocr_downscales_large_array():
     assert max(out.shape[:2]) <= OCR_MAX_SIDE
 
 
+def _reset_ocr_pool():
+    import src.parsers.rapid_ocr as rapid_ocr
+
+    if getattr(rapid_ocr, "_shrink_timer", None) is not None:
+        rapid_ocr._shrink_timer.cancel()
+        rapid_ocr._shrink_timer = None
+    rapid_ocr._pool = None
+    rapid_ocr._created = 0
+    rapid_ocr._pending = 0
+
+
+def test_ocr_pool_is_three_engines():
+    from src.parsers.rapid_ocr import OCR_ENGINE_COUNT
+    from src.tasks import handlers
+
+    assert OCR_ENGINE_COUNT == 3
+    assert handlers._ocr_executor._max_workers == 3
+
+
+def test_target_engine_count_follows_backlog_tiers():
+    from src.parsers.rapid_ocr import target_engine_count
+
+    assert target_engine_count(0) == 1
+    assert target_engine_count(10) == 1
+    assert target_engine_count(11) == 2
+    assert target_engine_count(20) == 2
+    assert target_engine_count(21) == 3
+    assert target_engine_count(100) == 3
+
+
+def test_ocr_pool_starts_with_one_and_reuses_sequentially(monkeypatch):
+    from src.parsers import rapid_ocr
+
+    _reset_ocr_pool()
+    made = {"n": 0}
+
+    def _fake():
+        made["n"] += 1
+        return object()
+
+    monkeypatch.setattr(rapid_ocr, "_make_engine", _fake)
+    monkeypatch.setattr(rapid_ocr, "bundled_model_dir", lambda: "/tmp")
+    rapid_ocr.warmup()
+    assert made["n"] == 1
+    for _ in range(5):
+        with rapid_ocr._borrow_engine():
+            pass
+    assert made["n"] == 1
+    _reset_ocr_pool()
+
+
+def test_ocr_pool_stays_at_one_for_ten_queued(monkeypatch):
+    from src.parsers import rapid_ocr
+
+    _reset_ocr_pool()
+    made = {"n": 0}
+
+    def _fake():
+        made["n"] += 1
+        return object()
+
+    monkeypatch.setattr(rapid_ocr, "_make_engine", _fake)
+    monkeypatch.setattr(rapid_ocr, "bundled_model_dir", lambda: "/tmp")
+    rapid_ocr.warmup()
+    rapid_ocr.backlog_add(10)
+    assert made["n"] == 1
+    rapid_ocr.backlog_done(10)
+    _reset_ocr_pool()
+
+
+def test_ocr_pool_grows_on_backlog_tiers_not_waiters(monkeypatch):
+    import threading
+    from src.parsers import rapid_ocr
+
+    _reset_ocr_pool()
+    made = {"n": 0}
+
+    def _fake():
+        made["n"] += 1
+        return object()
+
+    monkeypatch.setattr(rapid_ocr, "_make_engine", _fake)
+    monkeypatch.setattr(rapid_ocr, "bundled_model_dir", lambda: "/tmp")
+    rapid_ocr.warmup()
+    held = threading.Event()
+    release = threading.Event()
+
+    def _hold():
+        with rapid_ocr._borrow_engine():
+            held.set()
+            release.wait(timeout=2)
+
+    t = threading.Thread(target=_hold)
+    t.start()
+    assert held.wait(timeout=1)
+    with rapid_ocr._borrow_engine():
+        pass
+    release.set()
+    t.join(timeout=2)
+    assert made["n"] == 1
+
+    rapid_ocr.backlog_add(11)
+    assert made["n"] == 2
+    rapid_ocr.backlog_add(10)
+    assert made["n"] == 3
+    rapid_ocr.backlog_add(40)
+    assert made["n"] == 3
+    rapid_ocr.backlog_done(61)
+    _reset_ocr_pool()
+
+
+def test_ocr_pool_shrinks_extras_after_idle(monkeypatch):
+    import time
+    from src.parsers import rapid_ocr
+
+    _reset_ocr_pool()
+    monkeypatch.setattr(rapid_ocr, "OCR_SHRINK_IDLE_SEC", 0.05)
+    made = {"n": 0}
+
+    def _fake():
+        made["n"] += 1
+        return object()
+
+    monkeypatch.setattr(rapid_ocr, "_make_engine", _fake)
+    monkeypatch.setattr(rapid_ocr, "bundled_model_dir", lambda: "/tmp")
+    rapid_ocr.backlog_add(21)
+    assert rapid_ocr._created == 3
+    rapid_ocr.backlog_done(21)
+    deadline = time.time() + 1.0
+    while rapid_ocr._created > 1 and time.time() < deadline:
+        time.sleep(0.02)
+    assert rapid_ocr._created == 1
+    assert rapid_ocr._pool is not None
+    assert rapid_ocr._pool.qsize() == 1
+    _reset_ocr_pool()
+
+
+def test_ocr_classify_scales_workers_to_backlog(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from src.parsers import rapid_ocr
+    from src.parsers.base import ParsedDocument
+    from src.parsers.image_utils import ocr_classify_document_images
+
+    _reset_ocr_pool()
+    monkeypatch.setattr(rapid_ocr, "_make_engine", lambda: object())
+    monkeypatch.setattr(rapid_ocr, "bundled_model_dir", lambda: "/tmp")
+    seen = {"workers": None}
+
+    def _wrap(*a, **k):
+        seen["workers"] = k.get("max_workers", a[0] if a else None)
+        return ThreadPoolExecutor(*a, **k)
+
+    monkeypatch.setattr("src.parsers.image_utils.ThreadPoolExecutor", _wrap)
+    monkeypatch.setattr(
+        "src.parsers.image_utils._classify_image",
+        lambda *_a, **_k: ("visual", ""),
+    )
+
+    def _run(n):
+        seen["workers"] = None
+        images = [_img(image_id=f"{i:032x}", image_bytes=b"x") for i in range(n)]
+        ocr_classify_document_images(ParsedDocument(content="", images=images))
+        return seen["workers"]
+
+    assert _run(5) is None
+    assert rapid_ocr._pending == 0
+    assert _run(11) == 2
+    assert _run(21) == 3
+    assert _run(30) == 3
+    assert rapid_ocr._pending == 0
+    _reset_ocr_pool()
+
+
+def test_looks_like_has_text_skips_flat_and_keeps_bars():
+    import numpy as np
+    from src.parsers.rapid_ocr import looks_like_has_text
+
+    flat = np.full((80, 120, 3), 40, dtype="uint8")
+    assert looks_like_has_text(flat) is False
+    bars = np.full((80, 160, 3), 245, dtype="uint8")
+    bars[20:28, 10:150] = 20
+    bars[40:48, 10:150] = 20
+    bars[60:68, 10:150] = 20
+    assert looks_like_has_text(bars) is True
+
+
+def test_ocr_array_skips_engine_when_no_text(monkeypatch):
+    from src.parsers import rapid_ocr
+
+    called = {"n": 0}
+
+    def _boom(*_a, **_k):
+        called["n"] += 1
+        raise AssertionError("engine must not run")
+
+    monkeypatch.setattr(rapid_ocr, "_borrow_engine", _boom)
+    text, conf = rapid_ocr.ocr_array(__import__("numpy").full((64, 64, 3), 30, dtype="uint8"))
+    assert text == ""
+    assert conf == 0.0
+    assert called["n"] == 0
+
+
 def test_ocr_array_uses_engine(monkeypatch):
     from src.parsers import rapid_ocr
+    from contextlib import contextmanager
 
     class _Out:
         txts = ("PUMP P-101",)
         scores = (0.97,)
 
-    monkeypatch.setattr(rapid_ocr, "get_engine", lambda: (lambda _img: _Out()))
+    @contextmanager
+    def _fake_borrow():
+        yield lambda _img: _Out()
+
+    monkeypatch.setattr(rapid_ocr, "looks_like_has_text", lambda _a: True)
+    monkeypatch.setattr(rapid_ocr, "_borrow_engine", _fake_borrow)
     text, conf = rapid_ocr.ocr_array(__import__("numpy").zeros((32, 32, 3), dtype="uint8"))
     assert text == "PUMP P-101"
     assert 96 <= conf <= 98

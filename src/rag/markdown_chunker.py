@@ -23,6 +23,7 @@ from src.rag.chunker import (
     _split_sentences,
     estimate_chunking_tokens,
 )
+from src.rag.html_tables import html_table_to_markdown
 
 
 # ── Note Content Preprocessing ──────────────────────────────────
@@ -306,6 +307,37 @@ def _parse_blocks(text: str) -> list[MarkdownBlock]:
     # Keep table-source :::image fences with the following table (never split)
     blocks = _merge_table_source_images(blocks)
     return blocks
+
+
+def _html_tables_to_gfm(blocks: list[MarkdownBlock]) -> list[MarkdownBlock]:
+    """Turn HTML table blocks into GFM so packing counts cell text, not tags.
+
+    Parse/display can keep the original HTML (merged cells in Tiptap). Chunk
+    text is what is embedded and shown to the LLM.
+    """
+    out: list[MarkdownBlock] = []
+    for block in blocks:
+        if block.block_type != "html_table":
+            out.append(block)
+            continue
+        fence, body = _strip_leading_image_fence(block.content)
+        md = html_table_to_markdown(body)
+        if "<table" in md.lower():
+            out.append(block)
+            continue
+        md = _prune_empty_table_columns(md)
+        content = (fence.rstrip() + "\n\n" + md) if fence else md
+        out.append(
+            MarkdownBlock(
+                block_type="table",
+                content=content,
+                start_offset=block.start_offset,
+                end_offset=block.end_offset,
+                heading_level=block.heading_level,
+                heading_path=list(block.heading_path),
+            )
+        )
+    return out
 
 
 def _is_image_fence_block(block: MarkdownBlock) -> bool:
@@ -916,10 +948,13 @@ def _split_fenced_div_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
 
 def _split_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBlock]:
     """Split an oversized block using type-appropriate strategy."""
+    if block.block_type == "html_table":
+        converted = _html_tables_to_gfm([block])[0]
+        if converted.block_type == "table":
+            return _split_table_block(converted, max_tokens)
+        return _split_html_table_block(block, max_tokens)
     if block.block_type == "table":
         return _split_table_block(block, max_tokens)
-    elif block.block_type == "html_table":
-        return _split_html_table_block(block, max_tokens)
     elif block.block_type == "code":
         return _split_code_block(block, max_tokens)
     elif block.block_type == "list":
@@ -958,7 +993,7 @@ class MarkdownChunker:
         """
         if is_note:
             text = _preprocess_note_content(text)
-        blocks = _parse_blocks(text)
+        blocks = _html_tables_to_gfm(_parse_blocks(text))
         if not blocks:
             return []
 
@@ -1012,7 +1047,7 @@ class MarkdownChunker:
         extra = {**(extra_metadata or {})}
         if extra.get("file_type") == "note":
             text = _preprocess_note_content(text)
-        blocks = _parse_blocks(text)
+        blocks = _html_tables_to_gfm(_parse_blocks(text))
         if not blocks:
             return []
 
@@ -1184,7 +1219,7 @@ class MarkdownParentChildChunker:
         extra = {**(extra_metadata or {})}
         if extra.get("file_type") == "note":
             text = _preprocess_note_content(text)
-        blocks = _parse_blocks(text)
+        blocks = _html_tables_to_gfm(_parse_blocks(text))
         if not blocks:
             return []
 
