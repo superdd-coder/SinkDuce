@@ -224,7 +224,7 @@ Bullet list for scanning (tables under **Details** below):
 | **MCP Server** | 56 atomic tools across 9 domains. HTTP Streamable transport. Shared FastAPI process — no separate server needed. |
 | **Pluggable Providers** | Unified adapter pattern for LLM, Embedding, Reranker, File Transcription, Realtime Transcription. Add new backends by implementing the interface and registering. |
 | **OneShot Setup** | DashScope and OpenRouter pre-configuration paths. Auto-fetches available models, classifies by type, creates providers, sets defaults. |
-| **Local-First, Cloud-Ready** | FunASR **ONNX** packs + Tesseract run locally (models via in-app download from GitHub Releases). All providers can target Ollama/LM Studio/vLLM for fully air-gapped LLM/embedding. |
+| **Local-First, Cloud-Ready** | FunASR **ONNX** packs (in-app download from GitHub Releases) + RapidOCR (PP-OCRv6 weights shipped in the image). All providers can target Ollama/LM Studio/vLLM for fully air-gapped LLM/embedding. |
 | **Pre-built Docker image** | Multi-arch (`linux/amd64` + `linux/arm64`) image on Docker Hub; default compose pulls — no local compile required. |
 | **Async Task System** | Dual-queue architecture: upload queue + general pool with parallel processing. Cancellable and retryable tasks, live progress via SSE log stream. |
 
@@ -319,7 +319,7 @@ Start the backend first (`docker compose up -d`). The MCP client connects to the
 | **Vector DB** | Qdrant v1.13+ (dense vectors + sparse BM25 vectors, RRF hybrid search) |
 | **LLM/Embedding** | OpenAI-compatible protocol, multi-provider with per-collection override |
 | **Reranking** | Cohere (`rerank-multilingual-v3.0`), DashScope/Qwen (`qwen3-vl-rerank`), OpenAI-compatible (native `/rerank` endpoint → chat completions logprobs fallback) |
-| **Parsing** | pdfplumber (page-level text/tables/images + Tesseract OCR fallback), mammoth + python-docx, openpyxl, python-pptx, markdownify, BeautifulSoup, Tesseract, MinerU cloud API |
+| **Parsing** | pdfplumber (page-level text/tables/images + RapidOCR fallback), mammoth + python-docx, openpyxl, python-pptx, markdownify, BeautifulSoup, RapidOCR, MinerU cloud API |
 | **Transcription** | FunASR ONNX (SenseVoiceSmall, Paraformer streaming, FSMN-VAD, CAM++, CT-Punc) via GitHub Release packs; DashScope; OpenAI-compatible Whisper |
 | **MCP** | MCP SDK 1.x, HTTP Streamable transport, 56 tools |
 | **Infrastructure** | Docker Compose (Qdrant + app), multi-arch image publish to Docker Hub, GitHub Actions CI |

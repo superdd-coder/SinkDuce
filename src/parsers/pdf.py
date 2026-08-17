@@ -54,11 +54,12 @@ def _table_data_to_markdown(data: list[list[str | None]]) -> str:
     return "\n".join(lines)
 
 
-def _ocr_page(page_image, lang: str = "chi_sim+eng") -> str:
-    """Extract text from a page image using Tesseract OCR."""
+def _ocr_page(page_image, lang: str = "") -> str:
+    """Extract text from a scanned page via bundled RapidOCR."""
     try:
-        import pytesseract
-        text = pytesseract.image_to_string(page_image, lang=lang)
+        from src.parsers.rapid_ocr import ocr_array
+
+        text, _conf = ocr_array(page_image)
         return text.strip()
     except Exception:
         return ""

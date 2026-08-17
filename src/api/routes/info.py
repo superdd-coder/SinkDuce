@@ -557,20 +557,10 @@ async def generate_doc_summary(
 
 
 def _get_enriching_llm(config: dict):
-    """Get LLM for enrichment from config."""
-    from src.providers.llm import create_llm_for_provider
-    from src.config import get_config
-    provider_id = config.get("enriching_llm_provider")
-    if provider_id:
-        for p in get_config().llm.providers:
-            if p.id == provider_id:
-                model = config.get("enriching_llm_model")
-                return create_llm_for_provider(p, model=model)
-    cfg = get_config()
-    if cfg.llm.providers:
-        default_p = next((p for p in cfg.llm.providers if p.is_default), cfg.llm.providers[0])
-        return create_llm_for_provider(default_p)
-    return services.llm
+    """Get LLM for enrichment from config (collection override → Settings → default)."""
+    from src.rag.contextual import get_enriching_llm
+
+    return get_enriching_llm(config)
 
 
 # ── Consolidation trigger ───────────────────────────────────

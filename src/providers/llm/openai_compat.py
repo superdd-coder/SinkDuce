@@ -131,11 +131,16 @@ class OpenAICompatLLM(LLMProvider):
             return self._default_max_tokens
         return 0
 
-    def generate(self, prompt: str, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None, thinking_effort: str | None = None) -> str:
-        logger.info("LLM generate: model=%s prompt_len=%d max_tokens=%s thinking=%s effort=%s json_mode=%s",
-                    self._model, len(prompt),
+    def generate(self, prompt: str | list, system: str = "", temperature: float | None = None, max_tokens: int | None = None, response_format: dict | None = None, thinking: bool | None = None, thinking_effort: str | None = None) -> str:
+        if isinstance(prompt, list):
+            prompt_len = sum(len(p.get("text", "")) for p in prompt if isinstance(p, dict))
+        else:
+            prompt_len = len(prompt or "")
+        logger.info("LLM generate: model=%s prompt_len=%d max_tokens=%s thinking=%s effort=%s json_mode=%s multimodal=%s",
+                    self._model, prompt_len,
                     max_tokens if max_tokens else (self._default_max_tokens or "none"),
-                    thinking, thinking_effort, bool(response_format))
+                    thinking, thinking_effort, bool(response_format),
+                    isinstance(prompt, list))
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -224,7 +229,10 @@ class OpenAICompatLLM(LLMProvider):
                 ],
             }
         ]
-        response = self._client.chat.completions.create(
+        # Chat uses a 1800s client timeout. One Vision hang must not occupy
+        # an ingest worker / limiter slot for that long.
+        client = self._client.with_options(timeout=httpx.Timeout(90, connect=15))
+        response = client.chat.completions.create(
             model=self._model,
             messages=messages,
             temperature=0.1,

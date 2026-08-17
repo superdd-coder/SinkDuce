@@ -45,7 +45,9 @@ def format_segments_for_chat(segments: list[dict[str, Any]]) -> str:
         if not text:
             continue
         spk = seg.get("speaker_id") or seg.get("speaker") or "unknown"
-        lines.append(f"[{i}] {spk}: {text}")
+        # [ref:N] matches MEETING_CHAT_SYSTEM_PROMPT so the model copies
+        # that form instead of bare [N] from a "[1] speaker:" header.
+        lines.append(f"[ref:{i}] {spk}: {text}")
     return "\n".join(lines)
 
 

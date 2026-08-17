@@ -165,6 +165,20 @@ export interface ChunkDetail {
   heading_path?: string
   note_id?: string
   meeting_id?: string
+  sheet_name?: string
+  label?: string
+  version_id?: string
+  archived?: boolean
+  file_id?: string
+  source?: string
+  source_label?: string
+  chunk_id?: string
+  total_chunks?: number
+  ingested_at?: number
+  created_by?: string
+  is_current?: boolean
+  meeting_date?: string
+  [key: string]: unknown
 }
 
 export const getFileChunks = (

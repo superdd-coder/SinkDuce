@@ -378,6 +378,21 @@ def get_file_detail(collection_id: str, file_id: str):
     return service.get_file_detail(collection_id, file_id)
 
 
+@router.get("/{collection_id}/files/{file_id}/ingest-trace")
+def get_ingest_trace(
+    collection_id: str,
+    file_id: str,
+    version_id: Optional[str] = Query(None),
+):
+    """Per-version ingest steps + LLM returns (ingest_trace.json sidecar)."""
+    from src.rag.ingest_trace import find_trace, normalize_ingest_trace
+
+    data, _directory = find_trace(collection_id, file_id, version_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="No ingest trace for this file/version")
+    return normalize_ingest_trace(data)
+
+
 @router.post("/{collection_id}/files/{file_id}/paths", status_code=201)
 def add_file_path(collection_id: str, file_id: str, body: dict):
     """Add a persistent path to a file. Body: {folder_id, is_primary?}."""

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react
 import { createPortal } from "react-dom"
 import { Send, Loader2, AlertTriangle, Globe, MessageCircle, BrushCleaning } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { humanSourceLabel } from "@/lib/source-display"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
 import {
@@ -144,7 +145,7 @@ interface QuickChatProps {
   onOpen: () => void
   onClose: () => void
   onSourceClick?: (source: string, chunkIndex?: number) => void
-  files?: { source: string; display_name?: string }[]
+  files?: { source: string; display_name?: string; file_id?: string }[]
   className?: string
   /**
    * When true, size the float card to the active right rail
@@ -681,11 +682,19 @@ export function QuickChat({
 
   const hasMessages = messages.length > 0
 
-  // Resolve source ID → display name
-  const getDisplayName = (sourceId: string) => {
-    const f = files?.find((f) => f.source === sourceId)
-    return f?.display_name || sourceId.split("/").pop() || sourceId
-  }
+  const getDisplayName = (
+    sourceId: string,
+    meta?: Record<string, unknown>,
+  ) =>
+    humanSourceLabel(
+      {
+        source: sourceId,
+        source_label: meta?.source_label,
+        filename: meta?.filename,
+        display_name: meta?.display_name,
+      },
+      files,
+    )
 
   // ── Panel content (Premium compact chat chrome) ──
 
@@ -882,9 +891,7 @@ export function QuickChat({
                                             url ||
                                             "Web"
                                         )
-                                      : src
-                                        ? getDisplayName(src)
-                                        : "Unknown"
+                                      : getDisplayName(src || "", s.metadata)
                                     return (
                                       <button
                                         type="button"

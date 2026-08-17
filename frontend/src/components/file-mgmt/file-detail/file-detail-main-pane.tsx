@@ -18,8 +18,11 @@ import {
   Loader2,
   Star,
 } from "lucide-react"
-import { cn, transformImageBlocks } from "@/lib/utils"
+import { cn, chunkHasImageFence, isImageOnlyChunk, transformImageBlocks } from "@/lib/utils"
 import { SummarySection } from "./file-detail-parts"
+import { ChunkInspect } from "./chunk-inspect"
+import { IngestTracePane } from "./ingest-trace-pane"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { ChunkMd } from "@/components/shared/chunk-md"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import type { Editor } from "@tiptap/core"
@@ -123,6 +126,9 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
     toggleChunkExpand,
   } = p
 
+  // Recreated each render so list order still shows the first table-source figure.
+  const seenChunkImageIds = new Set<string>()
+
   return (
               <div className="pm-ws-main pm-ws-card pm-ws-card--main">
                 <Tabs
@@ -211,6 +217,26 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           </span>
                         )}
                       </TabsTrigger>
+                      {fileId ? (
+                        <TabsTrigger
+                          value="ingest"
+                          disabled={isIngesting}
+                          title={
+                            isIngesting
+                              ? "Available after ingest finishes"
+                              : "Parse / vision / summary / context steps"
+                          }
+                          className={cn(
+                            "pm-vtab relative z-[1]",
+                            "!h-auto min-h-0",
+                            "data-[state=active]:shadow-none data-active:bg-transparent",
+                            "after:!opacity-0 after:!content-none",
+                            "disabled:opacity-40"
+                          )}
+                        >
+                          Ingest
+                        </TabsTrigger>
+                      ) : null}
                     </TabsList>
                     <div className="flex items-center gap-2 shrink-0">
                       {isHistoricalFocus && focusVersionId && fileId && (
@@ -499,6 +525,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                   >
                     <div className="pm-ws-doc-stage flex flex-col">
                       <ScrollArea className="flex-1 min-h-0">
+                        <TooltipProvider delay={320} closeDelay={80}>
                         <div className="p-3 space-y-2">
                           {chunksLoading ? (
                             <div className="pm-ws-loading py-12">
@@ -524,6 +551,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                             </div>
                           ) : groupedChunks ? (
                             groupedChunks.map((group) => {
+                              const seenChildImageIds = new Set<string>()
                               const isExpanded = expandedParents.has(
                                 group.parent.id
                               )
@@ -532,6 +560,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                   key={group.parent.id}
                                   className="pm-ws-tile !p-0 overflow-hidden"
                                 >
+                                  <ChunkInspect chunk={group.parent}>
                                   <button
                                     type="button"
                                     className="w-full text-left p-3 hover:bg-[var(--pm-green-wash)] transition-colors flex items-start gap-2 bg-transparent border-0 cursor-pointer"
@@ -583,7 +612,9 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                       </div>
                                       <div
                                         className={cn(
-                                          "line-clamp-3 overflow-hidden",
+                                          !isImageOnlyChunk(group.parent.text) &&
+                                            !chunkHasImageFence(group.parent.text) &&
+                                            "line-clamp-3 overflow-hidden",
                                           "text-[var(--pm-muted)]"
                                         )}
                                       >
@@ -596,45 +627,46 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                       </div>
                                     </div>
                                   </button>
+                                  </ChunkInspect>
                                   {isExpanded && (
                                     <div className="border-t border-[color-mix(in_srgb,var(--pm-ink)_7%,transparent)] bg-[color-mix(in_srgb,var(--pm-ink)_2%,transparent)] p-3 space-y-2 pl-8">
-                                      <ChunkMd
-                                        text={group.parent.text}
-                                        collection={collectionId}
-                                        fileId={fileId || undefined}
-                                        source={docSource || undefined}
-                                      />
                                       {group.children.map((child) => (
-                                        <div
+                                        <ChunkInspect
                                           key={child.id}
+                                          chunk={child}
                                           className="pm-ws-tile cursor-pointer"
-                                          onClick={() => handleLocate(child)}
-                                          role="button"
-                                          tabIndex={0}
-                                          onKeyDown={(e) => {
-                                            if (
-                                              e.key === "Enter" ||
-                                              e.key === " "
-                                            )
-                                              handleLocate(child)
-                                          }}
                                         >
-                                          <div className="flex items-center gap-2 mb-1">
-                                            <Badge
-                                              variant="secondary"
-                                              className="pm-meta"
-                                            >
-                                              Child #{child.chunk_index}
-                                            </Badge>
-                                            <Crosshair className="h-3 w-3 ml-auto text-[var(--pm-faint)]" />
+                                          <div
+                                            onClick={() => handleLocate(child)}
+                                            role="button"
+                                            tabIndex={0}
+                                            onKeyDown={(e) => {
+                                              if (
+                                                e.key === "Enter" ||
+                                                e.key === " "
+                                              )
+                                                handleLocate(child)
+                                            }}
+                                          >
+                                            <div className="flex items-center gap-2 mb-1">
+                                              <Badge
+                                                variant="secondary"
+                                                className="pm-meta"
+                                              >
+                                                Child #{child.chunk_index}
+                                              </Badge>
+                                              <Crosshair className="h-3 w-3 ml-auto text-[var(--pm-faint)]" />
+                                            </div>
+                                            <ChunkMd
+                                              text={child.text}
+                                              collection={collectionId}
+                                              fileId={fileId || undefined}
+                                              source={docSource || undefined}
+                                              skipImageIds={seenChildImageIds}
+                                              recordSeen
+                                            />
                                           </div>
-                                          <ChunkMd
-                                            text={child.text}
-                                            collection={collectionId}
-                                            fileId={fileId || undefined}
-                                            source={docSource || undefined}
-                                          />
-                                        </div>
+                                        </ChunkInspect>
                                       ))}
                                     </div>
                                   )}
@@ -645,9 +677,9 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                             chunks.map((chunk) => {
                               const expanded = expandedChunks.has(chunk.id)
                               return (
-                                <div
+                                <ChunkInspect
                                   key={chunk.id}
-                                  data-chunk-index={chunk.chunk_index}
+                                  chunk={chunk}
                                   className={cn(
                                     "pm-ws-tile transition-all",
                                     highlightedIdx === chunk.chunk_index
@@ -684,6 +716,8 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                     <div
                                       className={cn(
                                         !expanded &&
+                                          !isImageOnlyChunk(chunk.text) &&
+                                          !chunkHasImageFence(chunk.text) &&
                                           "line-clamp-4 overflow-hidden"
                                       )}
                                     >
@@ -692,6 +726,8 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                         collection={collectionId}
                                         fileId={fileId || undefined}
                                         source={docSource || undefined}
+                                        skipImageIds={seenChunkImageIds}
+                                        recordSeen
                                       />
                                     </div>
                                     {!expanded &&
@@ -701,13 +737,31 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                         </span>
                                       )}
                                   </button>
-                                </div>
+                                </ChunkInspect>
                               )
                             })
                           )}
                         </div>
+                        </TooltipProvider>
                       </ScrollArea>
                     </div>
+                  </TabsContent>
+
+                  <TabsContent
+                    value="ingest"
+                    className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+                  >
+                    {fileId ? (
+                      <IngestTracePane
+                        collectionId={collectionId}
+                        fileId={fileId}
+                        versionId={focusVersionId}
+                      />
+                    ) : (
+                      <div className="pm-ws-empty p-8">
+                        <p className="pm-meta">Ingest trace is only stored for managed files.</p>
+                      </div>
+                    )}
                   </TabsContent>
                 </Tabs>
               </div>

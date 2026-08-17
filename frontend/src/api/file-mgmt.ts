@@ -217,6 +217,44 @@ export const deleteFile = (collectionId: string, fileId: string) =>
 export const getFileDetail = (collectionId: string, fileId: string) =>
   req<FileDetail>(`/${collectionId}/files/${fileId}`)
 
+export interface IngestTraceStep {
+  id: string
+  title: string
+  status: string
+  at?: string
+  started_at?: string
+  ended_at?: string
+  started_ms?: number
+  ended_ms?: number
+  ms?: number
+  detail?: string
+  data?: Record<string, unknown>
+}
+
+export interface IngestTrace {
+  schema?: number
+  status: string
+  started_at?: string
+  finished_at?: string | null
+  duration_ms?: number | null
+  error?: string
+  file_id?: string
+  version_id?: string
+  filename?: string
+  collection?: string
+  config?: Record<string, unknown>
+  steps: IngestTraceStep[]
+}
+
+export const getIngestTrace = (
+  collectionId: string,
+  fileId: string,
+  versionId?: string | null,
+) => {
+  const q = versionId ? `?version_id=${encodeURIComponent(versionId)}` : ""
+  return req<IngestTrace>(`/${collectionId}/files/${fileId}/ingest-trace${q}`)
+}
+
 export const getFileMessages = (collectionId: string, fileId: string) =>
   req<Message[]>(`/${collectionId}/files/${fileId}/messages`)
 

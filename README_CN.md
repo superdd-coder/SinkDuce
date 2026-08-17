@@ -223,7 +223,7 @@ docker compose up -d
 | **MCP 服务** | 56 个原子工具，覆盖 9 个领域。HTTP Streamable 传输协议。复用 FastAPI 进程，无需额外服务。 |
 | **可插拔 Provider** | 统一适配器模式，覆盖 LLM、Embedding、Reranker、文件转写、实时转写。添加新后端只需实现接口并注册。 |
 | **一键配置** | DashScope 和 OpenRouter 预配置路径。自动拉取可用模型，按类型分类创建 Provider，设置默认值。 |
-| **本地优先，云端可选** | FunASR **ONNX** 包 + Tesseract 本地运行（模型经应用内从 GitHub Release 下载）。LLM/Embedding 可指向 Ollama/LM Studio/vLLM 实现离线。 |
+| **本地优先，云端可选** | FunASR **ONNX** 包（应用内从 GitHub Release 下载）+ RapidOCR（PP-OCRv6 权重随镜像发布）。LLM/Embedding 可指向 Ollama/LM Studio/vLLM 实现离线。 |
 | **预构建 Docker 镜像** | Docker Hub 多架构镜像（`linux/amd64` + `linux/arm64`）；默认 compose 拉取，无需本机编译。 |
 | **异步任务系统** | 双队列架构：上传队列 + 通用队列并行处理。支持取消和重试，SSE 日志流实时进度追踪。 |
 
@@ -318,7 +318,7 @@ SinkDuce 在 FastAPI 进程内通过 HTTP（Streamable HTTP 协议）暴露 **56
 | **向量数据库** | Qdrant v1.13+（稠密向量 + BM25 稀疏向量，RRF 混合搜索） |
 | **LLM/Embedding** | OpenAI 兼容协议，多 Provider 支持，可逐 Collection 覆盖 |
 | **重排序** | Cohere（`rerank-multilingual-v3.0`）、DashScope/Qwen（`qwen3-vl-rerank`）、OpenAI 兼容（原生 `/rerank` 端点 → Chat Completions logprobs 回退） |
-| **文档解析** | pdfplumber（页面级文本/表格/图片 + Tesseract OCR 回退）、mammoth + python-docx、openpyxl、python-pptx、markdownify、BeautifulSoup、Tesseract、MinerU 云端 API |
+| **文档解析** | pdfplumber（页面级文本/表格/图片 + RapidOCR 回退）、mammoth + python-docx、openpyxl、python-pptx、markdownify、BeautifulSoup、RapidOCR、MinerU 云端 API |
 | **语音转写** | FunASR ONNX（SenseVoiceSmall、Paraformer streaming、FSMN-VAD、CAM++、CT-Punc，GitHub Release 包）；DashScope；OpenAI 兼容 Whisper |
 | **MCP** | MCP SDK 1.x、HTTP Streamable、56 个工具 |
 | **基础设施** | Docker Compose（Qdrant + app）、多架构镜像发布到 Docker Hub、GitHub Actions CI |

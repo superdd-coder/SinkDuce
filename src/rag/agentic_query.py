@@ -88,12 +88,21 @@ def _stitch_images_from_chunks(chunks: list) -> dict[str, dict]:
 
 
 def _build_multimodal_context(
-    content: str, images: dict[str, dict]
+    content: str,
+    images: dict[str, dict],
+    skip_ids: set[str] | None = None,
+    *,
+    include_alt_text: bool = True,
 ) -> list[dict]:
     """Build a multimodal content array with images inline in text flow.
 
     Splits text around :::image blocks and replaces each block with an
     image_url part, preserving original text-image-text order.
+
+    When *include_alt_text* is False (ingest Summary/Context, model can see
+    images), a replaced figure is only the image — no OCR / description.
+    If the image cannot be attached, OCR / description are still emitted
+    as a text fallback.
 
     Returns a list suitable for OpenAI Vision API:
         [{"type":"text","text":"..."}, {"type":"image_url","image_url":{...}}, ...]
@@ -112,6 +121,7 @@ def _build_multimodal_context(
 
     img_id = ""
     ocr_text = ""
+    seen_ids: set[str] = set(skip_ids or [])
     for i, part in enumerate(parts):
         pos = i % 5
         if pos == 0:
@@ -126,28 +136,48 @@ def _build_multimodal_context(
         elif pos == 3:
             ocr_text = part or ""  # capture group 3: ocr_text (None in old format)
         elif pos == 4:
-            # capture group 4: description — insert image
+            # capture group 4: description — insert image once per image_id
+            if img_id and img_id in seen_ids:
+                multimodal.append({
+                    "type": "text",
+                    "text": f"[figure {img_id[:12]} already shown in the document above]",
+                })
+                ocr_text = ""
+                continue
+            desc = (part or "").strip()
             img_data = images.get(img_id) if img_id else None
             if img_data:
+                if img_id:
+                    seen_ids.add(img_id)
                 b64 = img_data.get("base64", "")
                 mime = img_data.get("mime", "image/png")
-                # If OCR extracted text from this image, include it as a text part
-                # so the vision LLM gets both the original text AND the image pixels
+                ocr = ocr_text.strip() if ocr_text else ""
+                if include_alt_text and ocr:
+                    multimodal.append({
+                        "type": "text",
+                        "text": f"[OCR text extracted from image]: {ocr}",
+                    })
+                if include_alt_text and desc:
+                    multimodal.append({
+                        "type": "text",
+                        "text": f"[figure description]: {desc}",
+                    })
+                multimodal.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                })
+            else:
                 ocr = ocr_text.strip() if ocr_text else ""
                 if ocr:
                     multimodal.append({
                         "type": "text",
                         "text": f"[OCR text extracted from image]: {ocr}",
                     })
-                multimodal.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{b64}"},
-                })
-            elif part.strip():
-                multimodal.append({
-                    "type": "text",
-                    "text": f"[Image: {part.strip()}]",
-                })
+                if desc:
+                    multimodal.append({
+                        "type": "text",
+                        "text": f"[Image: {desc}]",
+                    })
             ocr_text = ""
 
     return multimodal if multimodal else [{"type": "text", "text": content}]

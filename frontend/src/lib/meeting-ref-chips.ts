@@ -1,10 +1,10 @@
 /**
  * Group meeting sentence citations into Summary-style chips.
  *
- * LLM output uses [ref:N], [ref:67,70], or ranges [ref:67-70].
+ * Canonical cite form is [ref:N] / [ref:67,70] / [ref:67-70].
  * parseMeetingRefGroups takes the inner text after the ref: prefix.
- * Summary expands ranges on persist; Quick Chat expands here so
- * [ref:1-5] is one chip, not buttons 1 and 5.
+ * Summary persist rewrites to [stt_…] separately.
+ * Quick Chat chips [ref:…] only — bare [67] is ordinary text.
  */
 
 export type MeetingRefChip = {
@@ -58,6 +58,25 @@ function groupConsecutive(nums: number[]): MeetingRefChip[] {
     i = j + 1
   }
   return groups
+}
+
+/** Inner of a citation: 67 | 1-5 | 47, 78-86 | stt_0001 */
+export const MEETING_CITE_INNER =
+  String.raw`(?:stt_)?\d+(?:\s*[-–—,，、;；]\s*(?:stt_)?\d+)*`
+
+/** [ref:N] / [ref:1-5] / 【ref:67,70】. Bare [67] is not a cite. */
+export const MEETING_CITE_RE_SOURCE =
+  String.raw`(?:\[|【)ref:\s*(${MEETING_CITE_INNER})\s*(?:\]|】)`
+
+/** Citation inners in display order (`67`, `283-285,289`, `stt_0015`). */
+export function extractMeetingCiteInners(text: string): string[] {
+  const re = new RegExp(MEETING_CITE_RE_SOURCE, "gi")
+  const out: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    if (m[1]) out.push(m[1])
+  }
+  return out
 }
 
 /** Parse citation inner text (`1-5`, `47, 78-86`, `stt_0001-stt_0005`). */

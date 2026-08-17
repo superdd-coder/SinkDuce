@@ -127,11 +127,91 @@ If no conflicts, use an empty array: "conflicts": []"""
 # Contextual Enrichment (document indexing pipeline)
 # ═══════════════════════════════════════════════════════════════════════
 
+# INGEST_SYSTEM_PROMPT
+#   Purpose: Shared system message for ingest Summary and Context so the
+#            request prefix (system + full document) is identical.
+#   Role: system
+#   Called by: src/rag/contextual.py → ContextualRetrieval._ingest_generate()
+#   Template vars: none
+INGEST_SYSTEM_PROMPT = """You are helping build a search index for a document collection. Read the document carefully. Follow the task that comes after the document. Respond in the format the task requests."""
+
+# INGEST_SUMMARY_TASK
+#   Purpose: Task suffix after the full document — structured DATA/FACTS/INSIGHTS
+#            plus a short overview. The short overview is stored, not embedded.
+#   Role: user (appended after the document)
+#   Called by: src/rag/contextual.py → ContextualRetrieval._generate_summary()
+#   Template vars: none
+INGEST_SUMMARY_TASK = """Analyze the document above and produce two outputs.
+
+## Output 1 — Structured Summary
+Extract key information. Be extremely conservative — only extract facts that are EXPLICITLY stated. Do not infer, assume, or generalize.
+
+Output in this exact format:
+
+===DATA===
+(Numerical data that is EXPLICITLY stated in the document with clear context)
+- Example: The contract value for Project X is 5 million USD
+- Example: The system design capacity is 3,000 m3/day
+
+===FACTS===
+(Factual statements that are EXPLICITLY stated — not inferred)
+- Example: Company A is the contractor for Project X
+- Example: The project uses membrane type M
+
+===INSIGHTS===
+(Only include if there is STRONG direct evidence. If uncertain, write "- None identified")
+- Example: Based on the 3-month delay mentioned by the project manager, the Q3 deadline appears at risk
+
+Rules:
+- MAX 10 items per category. Quality over quantity.
+- ONLY extract what is explicitly written. Do not generalize from examples or discussions.
+- If a number or fact is mentioned in a hypothetical, example, or "what-if" scenario, do not treat it as a real data point.
+- If you are not sure whether something is a fact or an assumption, do not include it.
+- Each item MUST clearly state what it refers to. Do not use vague references like "the project" — name the specific project or entity.
+- If a category has nothing that meets these criteria, write "- None identified"
+- Do not use square brackets [] around words. Write plain sentences.
+- Pay attention to context: if someone says "let's model a 1000 m3/day project", that is a discussion about modeling, not a statement about an actual project's capacity.
+
+## Output 2 — Short Summary
+Write a brief 1-2 sentence summary of this document. Focus on: what is this document about, who is it for, and what is its purpose. Keep it concise and readable.
+
+## Output Format
+Respond with ONLY a JSON object (no markdown fences, no extra text):
+{"structured_summary": "===DATA===\\n- ...\\n===FACTS===\\n- ...\\n===INSIGHTS===\\n- ...", "short_summary": "1-2 sentence summary"}"""
+
+# INGEST_CONTEXT_TASK
+#   Purpose: Task suffix after the full document — a locator label per chunk
+#            for retrieval. Not a reading guide and not a summary of the chunk.
+#   Role: user (appended after the document)
+#   Called by: src/rag/contextual.py → ContextualRetrieval._situate_batch()
+#   Template vars: {chunks} — numbered full chunk bodies, each starting with [id]
+INGEST_CONTEXT_TASK = """The numbered blocks below are the target chunks sliced from the document above. Write a retrieval locator for each one. A locator is a label, not a summary.
+
+Each block starts with [N]. N is the chunk id. In the JSON, "id" must be that same N.
+
+Use the document above for names (project, client, site, document title, section titles). The text under each [N] is that chunk's full body (table-source screenshots are omitted; the table markup is the content). Do not copy specifications, table cells, flows, powers, recoveries, or equipment lists into the locator — those stay in the chunk.
+
+Good: "Project X proposal for Client A at Site B, section 1.1 process-flow table, intake through distribution steps"
+Good: "Project X, section 2.3 treatment-plant overall specification table"
+Bad: "table listing intake 100 m3/h, clarification 100 m3/h, filtration 80 m3/h and waste 20 m3/h"
+Bad: "This section specifies the treatment design" / "This part of the document discusses pretreatment"
+
+Rules:
+- One entry per [N] below
+- One short sentence (two only if two distinct names are needed)
+- Name the project/document and the section or table; for a table slice, name the topic of this slice (which rows or columns), not the values
+- If a number or equipment model appears in the chunk, leave it out of the locator
+- If a chunk is only a figure, name the figure's subject and its section
+- Output ONLY JSON (no markdown fences): {{"contexts": [{{"id": 0, "context": "..."}}, {{"id": 1, "context": "..."}}]}}
+
+Chunks:
+{chunks}"""
+
 # SUMMARY_PROMPT
-#   Purpose: Step 1 of contextual enrichment — generates BOTH a structured summary
-#            (data/facts/insights) AND a short 1-2 sentence summary in one LLM call.
-#            The structured part uses the same format as STRUCTURED_SUMMARY_PROMPT.
+#   Purpose: Standalone summary call used by doc-summary / structured-summary
+#            helpers (document is inlined). Ingest uses INGEST_* instead.
 #   Template vars: {document} — full document text
+#   Called by: src/rag/contextual.py → generate_structured_summary path / tests
 SUMMARY_PROMPT = """Analyze the following document and produce two outputs:
 
 Document:
@@ -176,11 +256,10 @@ Respond with ONLY a JSON object (no markdown fences, no extra text):
 {{"structured_summary": "===DATA===\\n- ...\\n===FACTS===\\n- ...\\n===INSIGHTS===\\n- ...", "short_summary": "1-2 sentence summary"}}"""
 
 # CONTEXT_PROMPT
-#   Purpose: For each chunk, generates background context that a reader cannot
-#            infer from the chunk text alone, using surrounding chunks.
-#            The document summary is generated in parallel and stored separately.
+#   Purpose: Legacy per-chunk situating prompt (1 LLM call per chunk).
+#            Superseded by INGEST_CONTEXT_TASK. Kept so existing imports resolve.
 #   Role: user (single message)
-#   Called by: src/rag/contextual.py → ContextualRetrieval._generate_context()
+#   Called by: unused (was src/rag/contextual.py → ContextualRetrieval._generate_context)
 #   Template vars: {chunk}              — current chunk text
 #                  {surrounding_section} — neighboring chunk text (may be empty)
 CONTEXT_PROMPT = """You are helping build a search index. Given a chunk from a document and its surrounding chunks, write 1-2 sentences of background context that a reader would need to understand this chunk but CANNOT figure out from the chunk text alone.
@@ -196,6 +275,56 @@ Rules:
 - Keep it brief — max 2 short sentences
 
 Output only the context text, nothing else."""
+
+# SECTION_SEGMENT_PROMPT
+#   Purpose: Legacy section-split prompt. Ingest no longer segments.
+#   Role: user (single message)
+#   Called by: unused
+#   Template vars: {chunk_count} — number of searchable chunks (0..n-1)
+#                  {previews}    — numbered preview lines, one per chunk
+SECTION_SEGMENT_PROMPT = """You are splitting a document into topical sections for a search index.
+
+You will see {chunk_count} numbered chunk previews (index 0 to {chunk_count_last}).
+Each preview is a short prefix of that chunk, not the full text.
+
+Assign every index to exactly one section. Prefer 6-15 sections, at most 20.
+Merge very short neighboring spans unless a single chunk is clearly standalone
+(cover page, isolated table, appendix).
+
+Respond with ONLY a JSON object (no markdown fences):
+{{"sections": [{{"start": 0, "end": 14}}, {{"start": 15, "end": 15}}]}}
+
+Rules:
+- start and end are inclusive indices
+- sections must be in order, cover 0..{chunk_count_last} with no gaps or overlaps
+- do not invent section titles
+
+Previews:
+{previews}"""
+
+# SECTION_SUMMARY_PROMPT
+#   Purpose: Legacy section-level background. Ingest uses INGEST_CONTEXT_TASK.
+#   Role: user (single message)
+#   Called by: unused
+#   Template vars: {section_text} — concatenated body of the section (may be truncated)
+SECTION_SUMMARY_PROMPT = """You are writing background context for a search index.
+
+The text below is one topical section of a longer document. Write 1-2 concise
+sentences naming the topic, entities, and key facts a search query would need.
+
+Prefer direct statements such as "Project X uses a 150 m3/h RO train"
+over framing such as "This section specifies the RO design" or
+"This part of the document discusses the treatment process".
+
+Rules:
+- Only use information that is present in the section text
+- Lead with the subject (project, unit, table, party), not "this section"
+- Write natural sentences, not key=value pairs
+- Prefer facts and names over restating that a section exists
+- Output only the 1-2 sentences, nothing else
+
+Section text:
+{section_text}"""
 
 # STRUCTURED_SUMMARY_PROMPT
 #   Purpose: Extracts structured information (data / facts / insights) from a

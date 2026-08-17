@@ -81,8 +81,10 @@ class Task:
 class TaskManager:
     """Async task queue with separate channels for upload and light tasks.
 
-    Uploads get a dedicated queue capped at 2-3 concurrent so parsing
-    runs in parallel while ``_enrich_lock`` serializes only enrichment.
+    Uploads get a dedicated queue (default 5 concurrent) that gates
+    parse/filter. After parse the slot is released so a slow OCR/Vision
+    job cannot freeze later files. Summary, Context, and Vision share
+    ``enrichment.max_parallel_context`` (default 50).
     Lightweight tasks share an unbounded concurrent general queue.
     """
 
@@ -98,6 +100,7 @@ class TaskManager:
         self.timeout = timeout
         self._general_running = 0
         self._upload_running = 0
+        self._upload_slot_released: set[str] = set()
         self._processors: list[asyncio.Task] = []
         self._handlers: dict[str, Callable[..., Coroutine]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -229,8 +232,8 @@ class TaskManager:
     async def _process_upload_queue(self):
         """Process uploads with limited concurrency.
 
-        Parsing overlaps across uploads; ``_enrich_lock`` serializes the
-        actual enrichment step so thread pools don't stack up.
+        Parse is limited here; handlers release the slot after parse so
+        OCR / Vision / enrich of one file cannot stall the next.
         """
         logger.info("Upload queue processor started (max %d concurrent)", self.max_concurrent)
         while True:
@@ -252,12 +255,33 @@ class TaskManager:
             except Exception as e:
                 logger.error("Upload queue processor error: %s", e, exc_info=True)
 
+    def release_upload_slot(self, task_id: str) -> None:
+        """Free this upload's concurrency slot after parse/filter.
+
+        OCR, Vision, Summary, and Context keep running on the same task.
+        They are capped by their own pools and the ingest LLM limiter.
+        One slow image job must not freeze later files in the upload queue.
+        Idempotent; safe to call from the handler on the event loop.
+        """
+        if not task_id or task_id in self._upload_slot_released:
+            return
+        self._upload_slot_released.add(task_id)
+        if self._upload_running > 0:
+            self._upload_running -= 1
+            logger.info(
+                "Released upload slot early for %s (running=%d)",
+                task_id, self._upload_running,
+            )
+
     async def _execute_upload_task(self, task_id: str, task_type: str, kwargs: dict):
         """Execute an upload, decrementing the upload counter on completion."""
         try:
             await self._execute_task(task_id, task_type, kwargs)
         finally:
-            self._upload_running -= 1
+            if task_id not in self._upload_slot_released:
+                self._upload_running -= 1
+            else:
+                self._upload_slot_released.discard(task_id)
 
     # ── General queue (concurrent) ─────────────────────────────────────
 

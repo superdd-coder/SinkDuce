@@ -61,8 +61,8 @@ class TestLoadMeetingTranscriptText:
         ):
             text = load_meeting_transcript_text("mid2")
         assert text is not None
-        assert "[1] 0: hello alpha" in text
-        assert "[2] 0: hello beta" in text
+        assert "[ref:1] 0: hello alpha" in text
+        assert "[ref:2] 0: hello beta" in text
 
     def test_returns_none_when_empty(self):
         from src.chatbox.meeting_context import load_meeting_transcript_text

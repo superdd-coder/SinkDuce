@@ -37,7 +37,7 @@ official Docker image). It is provided for attribution and license-compliance pu
 | Python runtime deps | Yes | MIT, BSD-2/3, Apache-2.0, 0BSD, MIT-CMU |
 | Python optional (`diarization`) | Yes | MIT, Apache-2.0 / BSD multi, ISC, BSD-3 |
 | Frontend production deps | Yes | MIT, Apache-2.0, ISC, OFL-1.1, … |
-| Docker system packages | Yes | Apache-2.0 (Tesseract), LGPL/GPL (FFmpeg builds) |
+| Docker system packages | Yes | LGPL/GPL (FFmpeg builds), LGPL (libgl1) |
 | Qdrant (Compose service) | Yes | Apache-2.0 |
 
 No proprietary / closed-source **library** is declared as a direct dependency of this project.
@@ -68,7 +68,8 @@ No proprietary / closed-source **library** is declared as a direct dependency of
 | markdownify | MIT | https://github.com/matthewwithanm/python-markdownify |
 | tiktoken | MIT | https://github.com/openai/tiktoken |
 | httpx | BSD-3-Clause | https://github.com/encode/httpx |
-| pytesseract | Apache-2.0 | https://github.com/madmaze/pytesseract |
+| rapidocr | Apache-2.0 | https://github.com/RapidAI/RapidOCR |
+| onnxruntime | MIT | https://github.com/microsoft/onnxruntime |
 | Pillow | MIT-CMU (HPND-derived) | https://github.com/python-pillow/Pillow |
 | regex | Apache-2.0 AND CNRI-Python | https://github.com/mrabarnett/mrab-regex |
 | dashscope | Apache-2.0 | https://github.com/aliyun/alibabacloud-dashscope-sdk / Aliyun DashScope |
@@ -148,7 +149,7 @@ The application Docker image installs:
 
 | Package | Typical license | Purpose |
 |---------|-----------------|---------|
-| tesseract-ocr (+ eng / chi-sim data) | Apache-2.0 | OCR fallback |
+| (none for OCR) | — | RapidOCR ONNX weights ship in the Python package |
 | ffmpeg | LGPL / GPL (build-dependent) | Audio/video processing for meeting features |
 | libgl1 | LGPL (Mesa / related) | Graphics support for native libs |
 

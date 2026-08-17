@@ -41,6 +41,98 @@ def test_merge_glues_image_fence_to_following_gfm_table():
             assert not b.content.lstrip().startswith(":::image")
 
 
+def test_image_fence_always_counts_as_160():
+    from src.rag.chunker import IMAGE_DESC_RESERVE_TOKENS, estimate_chunking_tokens
+
+    fence = (
+        ":::image\n"
+        "image_id: aabbccddeeff00112233445566778899\n"
+        "file_id: \n"
+        ":::"
+    )
+    described = (
+        ":::image\n"
+        "image_id: aabbccddeeff00112233445566778899\n"
+        "file_id: \n"
+        "description: A process flow of the pretreatment unit\n"
+        "ocr_text: Q3 42M\n"
+        ":::"
+    )
+    assert estimate_chunking_tokens(fence) == IMAGE_DESC_RESERVE_TOKENS
+    assert estimate_chunking_tokens(described) == IMAGE_DESC_RESERVE_TOKENS
+    assert estimate_chunking_tokens("前言\n\n" + fence) == (
+        estimate_chunking_tokens("前言\n\n") + IMAGE_DESC_RESERVE_TOKENS
+    )
+
+    para = "字" * 650
+    chunker = MarkdownChunker(max_tokens=512, buffer_ratio=0.5)
+    chunks = chunker.chunk(para + "\n\n" + fence)
+    assert len(chunks) >= 2
+    image_chunks = [c for c in chunks if ":::image" in c]
+    assert image_chunks
+    # 650 CJK + 160 figure > 768 hard limit, so the figure starts the next chunk
+    assert "字" * 50 not in image_chunks[0]
+
+
+def test_buffer_allows_next_paragraph_up_to_hard_limit():
+    """~380 + ~146 = ~526 is over 512 but under 768 — keep one chunk."""
+    from src.rag.chunker import _estimate_tokens
+    first = "word " * 152
+    second = "next " * 58
+    total = _estimate_tokens(first) + _estimate_tokens(second)
+    assert 512 < total < 768
+    chunks = MarkdownChunker(max_tokens=512, buffer_ratio=0.5).chunk(first.strip() + "\n\n" + second.strip())
+    assert len(chunks) == 1
+
+
+def test_buffer_seals_after_one_overflow_even_if_room_remains():
+    """After one overflow past 512, do not pack more even if still under 768."""
+    from src.rag.chunker import _estimate_tokens
+    first = "word " * 152
+    second = "next " * 58
+    third = "tail " * 40
+    two = _estimate_tokens(first) + _estimate_tokens(second)
+    three = two + _estimate_tokens(third)
+    assert two > 512
+    assert three < 768
+    text = "\n\n".join([first.strip(), second.strip(), third.strip()])
+    chunks = MarkdownChunker(max_tokens=512, buffer_ratio=0.5).chunk(text)
+    assert len(chunks) == 2
+    assert "tail" not in chunks[0]
+    assert "tail" in chunks[1]
+
+
+def test_independent_image_packs_with_neighbors_when_budget_allows():
+    fence = (
+        ":::image\n"
+        "image_id: aabbccddeeff00112233445566778899\n"
+        "file_id: \n"
+        ":::\n"
+    )
+    text = "前言短句。\n\n" + fence + "\n后记也短。\n"
+    chunks = MarkdownChunker(max_tokens=512, buffer_ratio=0.5).chunk(text)
+    assert len(chunks) == 1
+    assert "前言短句" in chunks[0]
+    assert ":::image" in chunks[0]
+    assert "后记也短" in chunks[0]
+
+
+def test_independent_image_starts_next_chunk_when_current_is_full():
+    fence = (
+        ":::image\n"
+        "image_id: aabbccddeeff00112233445566778899\n"
+        "file_id: \n"
+        ":::\n"
+    )
+    # 650 CJK leaves 118 of a 768 hard limit — not enough for a 160 figure
+    text = ("字" * 650) + "\n\n" + fence + "\n尾句。\n"
+    chunks = MarkdownChunker(max_tokens=512, buffer_ratio=0.5).chunk(text)
+    assert len(chunks) == 2
+    assert ":::image" not in chunks[0]
+    assert ":::image" in chunks[1]
+    assert "尾句" in chunks[1]
+
+
 def test_chunker_never_splits_image_from_table():
     """Even with a tiny token budget, image and table share a chunk boundary."""
     doc = _sample_doc()
@@ -61,7 +153,7 @@ def test_chunker_never_splits_image_from_table():
     assert "| Flow |" in with_img[0]
 
 
-def test_oversized_table_split_keeps_figure_on_first_piece_only():
+def test_oversized_table_split_copies_figure_onto_every_piece():
     rows = "\n".join(f"| r{i} | v{i} |" for i in range(40))
     content = (
         ":::image\n"
@@ -80,11 +172,27 @@ def test_oversized_table_split_keeps_figure_on_first_piece_only():
     )
     parts = _split_table_block(block, max_tokens=30)
     assert len(parts) >= 2
-    assert ":::image" in parts[0].content
-    assert "| ColA |" in parts[0].content
-    for p in parts[1:]:
-        assert ":::image" not in p.content
+    for p in parts:
+        assert ":::image" in p.content
+        assert "aabbccddeeff00112233445566778899" in p.content
         assert "| ColA |" in p.content  # header repeated
+
+
+def test_table_source_fence_does_not_count_as_160():
+    from src.rag.chunker import estimate_chunking_tokens, strip_table_source_fences
+
+    table = "| ColA | ColB |\n| --- | --- |\n| a | b |\n"
+    fence = (
+        ":::image\n"
+        "image_id: aabbccddeeff00112233445566778899\n"
+        "file_id: \n"
+        ":::\n\n"
+    )
+    glued = fence + table
+    assert estimate_chunking_tokens(glued) == estimate_chunking_tokens(table)
+    stripped = strip_table_source_fences(glued)
+    assert ":::image" not in stripped
+    assert "| ColA |" in stripped
 
 
 def test_merge_html_table_source_image():

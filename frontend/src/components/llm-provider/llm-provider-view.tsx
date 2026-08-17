@@ -1002,10 +1002,23 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     return [{ value: "", label: "Default" }, ...meetingModels]
   })()
 
-  const enrichModelOptions = [
-    { value: "", label: "Default" },
-    ...providers.map((p) => ({ value: p.id, label: `${p.name} / ${p.model}` })),
-  ]
+  const enrichModelOptions = (() => {
+    const models = providers.flatMap((p) =>
+      (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
+        value: `${p.id}|${m}`,
+        label: `${p.name || p.id} / ${m}`,
+      })),
+    )
+    // Keep a bare provider-id value selectable so older configs still display.
+    if (enrichModel && !enrichModel.includes("|") && !models.some((o) => o.value === enrichModel)) {
+      const p = providers.find((x) => x.id === enrichModel)
+      models.unshift({
+        value: enrichModel,
+        label: p ? `${p.name || p.id} (provider default)` : enrichModel,
+      })
+    }
+    return [{ value: "", label: "Default" }, ...models]
+  })()
 
   const saveMineru = async (patch: Record<string, unknown>) => {
     await updateConfig("mineru", {
@@ -1079,7 +1092,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   onClick={() => setShowModelConfig(!showModelConfig)}
                   aria-expanded={showModelConfig}
                 >
-                  <span className="pm-settings-subhead">More · visual · chat · meeting</span>
+                  <span className="pm-settings-subhead">More · visual · chat · meeting · ingest</span>
                   <ChevronRight className="pm-settings-fold-chev" strokeWidth={1.75} />
                 </button>
                 <div className={cn("pm-config-fold", showModelConfig && "is-open")}>
@@ -1159,6 +1172,34 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                 }
                               }}
                               options={meetingModelOptions}
+                              placeholder="Default"
+                            />
+                          )}
+                        </div>
+
+                        <div className="pm-settings-model-field">
+                          <FieldLabel>Contextual enrichment & Summary</FieldLabel>
+                          {enrichModelOptions.length <= 1 ? (
+                            <div className="pm-settings-empty">
+                              <p className="pm-meta">No LLM providers configured.</p>
+                            </div>
+                          ) : (
+                            <DropdownSelect
+                              value={enrichModel}
+                              onChange={async (v) => {
+                                setEnrichModel(v)
+                                try {
+                                  await updateConfig("enrichment", {
+                                    enrichment_model: v,
+                                    max_parallel_context: parseInt(enrichMaxParallel) || 50,
+                                    batch_poll_interval: 30,
+                                  })
+                                  toast.success("Ingest model updated")
+                                } catch {
+                                  toast.error("Failed to update")
+                                }
+                              }}
+                              options={enrichModelOptions}
                               placeholder="Default"
                             />
                           )}
@@ -1761,30 +1802,12 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                     <div className="pm-settings-adv-head">
                       <h3 className="pm-settings-subhead">Enrichment</h3>
                       <p className="pm-settings-adv-desc">
-                        Context generation for each chunk during document ingestion.
+                        Global cap on concurrent Summary, Context, and Vision
+                        LLM requests across all files (default 50). The model
+                        is set under Contextual enrichment & Summary.
                       </p>
                     </div>
                     <div className="pm-settings-adv-grid">
-                      <div className="pm-settings-adv-field pm-settings-adv-field--wide">
-                        <FieldLabel>Model</FieldLabel>
-                        <DropdownSelect
-                          value={enrichModel}
-                          onChange={async (v) => {
-                            setEnrichModel(v)
-                            try {
-                              await updateConfig("enrichment", {
-                                enrichment_model: v,
-                                max_parallel_context: parseInt(enrichMaxParallel) || 50,
-                                batch_poll_interval: 30,
-                              })
-                              toast.success("Enrichment model updated")
-                            } catch {
-                              toast.error("Failed to update")
-                            }
-                          }}
-                          options={enrichModelOptions}
-                        />
-                      </div>
                       <div className="pm-settings-adv-field">
                         <FieldLabel>Parallel</FieldLabel>
                         <Input

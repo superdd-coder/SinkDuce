@@ -1380,6 +1380,60 @@ def _normalize_chunk_source_key(source: str) -> str:
     return s
 
 
+def _jsonable_meta(value):
+    """Coerce payload values so the chunks API can return every metadata field."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_meta(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _jsonable_meta(item) for key, item in value.items()}
+    return str(value)
+
+
+def serialize_chunk_point(point_id, payload: dict | None) -> dict:
+    """File-detail chunk row: body + every Qdrant payload field except internals."""
+    pl = payload or {}
+    out = {
+        "id": point_id,
+        "text": pl.get("text", ""),
+        "chunk_index": pl.get("chunk_index", 0),
+        "file_type": pl.get("file_type", ""),
+        "context": pl.get("context", ""),
+        "chunk_type": pl.get("chunk_type", "normal"),
+        "parent_id": pl.get("parent_id"),
+        "summary": pl.get("summary", ""),
+        "version_id": pl.get("version_id") or "",
+        "archived": bool(pl.get("archived")),
+        "char_offset": pl.get("char_offset"),
+        "page_number": pl.get("page_number"),
+        "slide_number": pl.get("slide_number"),
+        "section_label": pl.get("section_label"),
+        "heading_path": pl.get("heading_path"),
+        "note_id": pl.get("note_id", ""),
+        "meeting_id": pl.get("meeting_id", ""),
+    }
+    skip = {"text", "images"}
+    for key, value in pl.items():
+        if key in out or key in skip or str(key).startswith("_"):
+            continue
+        out[key] = _jsonable_meta(value)
+    text = out.get("text") or ""
+    stored_images = pl.get("images")
+    if (isinstance(stored_images, list) and stored_images) or ":::image" in text:
+        try:
+            from src.parsers.image_utils import refresh_chunk_image_refs
+
+            out["images"] = refresh_chunk_image_refs(
+                text,
+                existing=stored_images if isinstance(stored_images, list) else None,
+            )
+        except Exception:
+            if isinstance(stored_images, list):
+                out["images"] = stored_images
+    return out
+
+
 @router.get("/documents/{collection}/files/{source:path}/chunks")
 def get_file_chunks(
     collection: str,
@@ -1478,27 +1532,7 @@ def get_file_chunks(
     )
 
     def _point_to_chunk(p: dict) -> dict:
-        pl = p.get("payload") or {}
-        return {
-            "id": p["id"],
-            "text": pl.get("text", ""),
-            "chunk_index": pl.get("chunk_index", 0),
-            "file_type": pl.get("file_type", ""),
-            "context": pl.get("context", ""),
-            "chunk_type": pl.get("chunk_type", "normal"),
-            "parent_id": pl.get("parent_id"),
-            "summary": pl.get("summary", ""),
-            "version_id": pl.get("version_id") or "",
-            "archived": bool(pl.get("archived")),
-            # Position fields for source navigation
-            "char_offset": pl.get("char_offset"),
-            "page_number": pl.get("page_number"),
-            "slide_number": pl.get("slide_number"),
-            "section_label": pl.get("section_label"),
-            "heading_path": pl.get("heading_path"),
-            "note_id": pl.get("note_id", ""),
-            "meeting_id": pl.get("meeting_id", ""),
-        }
+        return serialize_chunk_point(p["id"], p.get("payload") or {})
 
     chunks = [_point_to_chunk(p) for p in all_points]
 

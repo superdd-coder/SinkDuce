@@ -1,0 +1,4 @@
+PP-OCRv6 small + PP-OCR mobile classifier (ONNX).
+Source: RapidOCR 3.9.2 wheel (https://github.com/RapidAI/RapidOCR)
+Upstream models: PaddleOCR. License: Apache-2.0.
+Shipped with SinkDuce so ingest never downloads OCR weights at runtime.

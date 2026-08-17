@@ -64,7 +64,7 @@ def _is_content_blob_name(name: str) -> bool:
     """True if *name* looks like a real content file (not a sidecar / noise)."""
     if not name or name.startswith("."):
         return False
-    if name in {"parsed.txt"}:
+    if name in {"parsed.txt", "ingest_trace.json", "ingest_trace.json.tmp"}:
         return False
     if name.endswith(".extracted.txt"):
         return False
@@ -320,21 +320,33 @@ def find_image_file(
     for root in roots:
         if not root.is_dir():
             continue
-        # Legacy: files/{file_id}/images/
-        for ext in extensions:
-            p = root / "images" / f"{image_id}.{ext}"
-            if p.is_file():
-                return p
+        def _lookup(img_dir: Path) -> Path | None:
+            if not img_dir.is_dir():
+                return None
+            for ext in extensions:
+                p = img_dir / f"{image_id}.{ext}"
+                if p.is_file():
+                    return p
+            # Office extracts (x-wmf / emf / tiff) before we normalize to png
+            try:
+                for p in img_dir.glob(f"{image_id}.*"):
+                    if p.is_file():
+                        return p
+            except OSError:
+                return None
+            return None
+
+        found = _lookup(root / "images")
+        if found is not None:
+            return found
         # Version dirs: files/{file_id}/{version_id}/images/
         try:
             for child in root.iterdir():
                 if not child.is_dir():
                     continue
-                # Skip non-version noise; version_id is hex uuid without dashes
-                for ext in extensions:
-                    p = child / "images" / f"{image_id}.{ext}"
-                    if p.is_file():
-                        return p
+                found = _lookup(child / "images")
+                if found is not None:
+                    return found
         except OSError:
             continue
     return None

@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { Send, Loader2, AlertTriangle, MessageCircle, BrushCleaning } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { parseMeetingRefGroups } from "@/lib/meeting-ref-chips"
+import { humanSourceLabel } from "@/lib/source-display"
+import { parseMeetingRefGroups, MEETING_CITE_RE_SOURCE } from "@/lib/meeting-ref-chips"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
 
@@ -943,7 +944,12 @@ export function MeetingQuickChat({
                                     <div key={i} className="pm-qc-source-item is-static">
                                       <div className="flex items-center gap-1 min-w-0">
                                         <span className="truncate font-medium">
-                                          {src || "Meeting"}
+                                          {humanSourceLabel({
+                                            source: src,
+                                            source_label: s.metadata?.source_label,
+                                            filename: s.metadata?.filename,
+                                            display_name: s.metadata?.display_name,
+                                          })}
                                         </span>
                                       </div>
                                       {chunkIdx != null && (
@@ -1103,13 +1109,16 @@ export function MeetingQuickChat({
 // clickable [HH:MM:SS] timestamp buttons styled like Summary refs.
 
 // ── Sentence-ref aware inline renderer ──
-// Clickable [ref:N] / [stt_N] chips; ranges expand via parseMeetingRefGroups.
+// Clickable [ref:N] chips; ranges expand via parseMeetingRefGroups.
 
 function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) => void): ReactNode[] {
   const parts: ReactNode[] = []
-  // [ref:67] / [ref:1-5] / [ref:47, 78-86] / [stt_0001] and 【】 variants.
+  // [ref:67] / [ref:1-5] / [ref:47, 78-86] and 【ref:…】 variants.
   // Bare [67] is ordinary text — do not chip it.
-  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|((?:\[|【)(?:ref:\s*((?:stt_)?\d+(?:\s*[-–—,，、;；]\s*(?:stt_)?\d+)*)|(stt_\d+(?:\s*[-–—,，、;；]\s*(?:stt_)?\d+)*))\s*(?:\]|】))|((?:\[|【)\s*priority:\s*(high|medium|low)\s*(?:\]|】))/gi
+  const regex = new RegExp(
+    `(\\*\\*(.+?)\\*\\*)|(\\*(.+?)\\*)|(\`(.+?)\`)|(${MEETING_CITE_RE_SOURCE})|((?:\\[|【)\\s*priority:\\s*(high|medium|low)\\s*(?:\\]|】))`,
+    "gi",
+  )
   let lastIdx = 0
   let match
   regex.lastIndex = 0
@@ -1123,13 +1132,14 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
       parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick)}</em>)
     } else if (match[5]) {
       parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
-    } else if (match[8] || match[9]) {
-      const groups = parseMeetingRefGroups(match[8] || match[9])
+    } else if (match[8]) {
+      const groups = parseMeetingRefGroups(match[8])
       for (const [gi, g] of groups.entries()) {
         parts.push(
           <button
+            type="button"
             key={`r${lastIdx}${gi}`}
-            className="inline-flex items-center px-1 py-0 pm-meta rounded bg-[var(--pm-green-soft)] text-[var(--pm-green)] hover:bg-[var(--pm-green-wash)] t-mono-family align-baseline cursor-pointer mr-1"
+            className="pm-meeting-ref-chip"
             onClick={(e) => { e.stopPropagation(); if (g.ids[0]) onRefClick?.(g.ids[0]) }}
             title={`Sources: ${g.ids.join(", ")}`}
           >
@@ -1137,8 +1147,8 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
           </button>,
         )
       }
-    } else if (match[11]) {
-      const level = match[11].toLowerCase()
+    } else if (match[10]) {
+      const level = match[10].toLowerCase()
       const colors: Record<string, { bg: string; fg: string }> = {
         high:    { bg: "rgba(140,46,46,0.12)",  fg: "#C06060" },
         medium:  { bg: "rgba(138,101,0,0.10)",   fg: "#B09030" },

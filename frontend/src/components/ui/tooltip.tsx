@@ -35,6 +35,7 @@ function TooltipContent({
   alignOffset = 0,
   children,
   showArrow = true,
+  positionerClassName,
   ...props
 }: TooltipPrimitive.Popup.Props &
   Pick<
@@ -43,6 +44,7 @@ function TooltipContent({
   > & {
     /** Small rotated square under the bubble (default true). */
     showArrow?: boolean
+    positionerClassName?: string
   }) {
   return (
     <TooltipPrimitive.Portal>
@@ -51,7 +53,7 @@ function TooltipContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
-        className="isolate z-50"
+        className={cn("isolate z-50", positionerClassName)}
       >
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"

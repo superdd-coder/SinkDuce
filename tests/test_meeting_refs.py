@@ -68,6 +68,7 @@ def test_frontend_view_and_chat_chip_ref_prefix():
     ).read_text(encoding="utf-8")
     assert "parseMeetingRefGroups" in marks
     assert r"[ref:" in marks
+    assert "MEETING_CITE_RE_SOURCE" in chat
     assert "Bare [67] is ordinary text" in chat
 
 
