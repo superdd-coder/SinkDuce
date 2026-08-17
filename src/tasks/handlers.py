@@ -31,9 +31,9 @@ _parse_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="parse-wo
 _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker")
 _enrich_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="enrich-worker")
 # Separate pools so one file's OCR never blocks that file's Vision.
-# OCR is CPU-heavy (RapidOCR ONNX): cap at 2 so five files do not thrash.
+# OCR is CPU-heavy (RapidOCR ONNX): 3 file workers match 3 engines.
 # Vision is I/O-bound and shares the ingest LLM request limiter.
-_ocr_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr-worker")
+_ocr_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ocr-worker")
 _vision_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="vision-worker")
 # Do not wait forever for OCR/Vision before embed/store.
 IMAGE_JOB_DEADLINE_SEC = 180.0

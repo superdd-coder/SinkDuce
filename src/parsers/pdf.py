@@ -56,13 +56,16 @@ def _table_data_to_markdown(data: list[list[str | None]]) -> str:
 
 def _ocr_page(page_image, lang: str = "") -> str:
     """Extract text from a scanned page via bundled RapidOCR."""
-    try:
-        from src.parsers.rapid_ocr import ocr_array
+    from src.parsers.rapid_ocr import backlog_add, backlog_done, ocr_array
 
+    backlog_add(1)
+    try:
         text, _conf = ocr_array(page_image)
         return text.strip()
     except Exception:
         return ""
+    finally:
+        backlog_done(1)
 
 
 # ── Image extraction ──────────────────────────────────────────────────
