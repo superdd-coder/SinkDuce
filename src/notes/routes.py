@@ -26,7 +26,6 @@ from src.services import services
 from src.rag.markdown_chunker import MarkdownChunker, MarkdownParentChildChunker
 from src.rag.collection_utils import get_collection_embedding
 from src.tasks.handlers import (
-    _enrich_lock,
     _do_enrich,
     _build_enriched_text,
 )
@@ -168,62 +167,138 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
         content, url_resolver=_resolve_note_image,
     )
 
+    from src.parsers.base import ParsedDocument
+    from src.parsers.image_utils import (
+        annotate_chunks_with_images,
+        apply_image_updates_to_chunks,
+        describe_document_images,
+        ocr_classify_document_images,
+        process_document_images,
+    )
+    from src.config import get_config
+    from src.prompts import VISUAL_PROMPT
+    from src.rag.contextual import enrichment_model_is_visual, run_ingest_summary
+
+    _note_doc = None
+    vision_provider = None
+    vision_model_id = ""
     if note_images:
         logger.info("[INGEST] Note %s: found %d images to process", note_id, len(note_images))
-        # Build a minimal ParsedDocument for process_document_images
-        from src.parsers.base import ParsedDocument
-        from src.parsers.image_utils import process_document_images, annotate_chunks_with_images
-        from src.config import get_config
-        from src.prompts import VISUAL_PROMPT
-
-        _doc = ParsedDocument(
+        _note_doc = ParsedDocument(
             content=content, file_type="note", images=note_images,
         )
         cfg = get_config()
-        vision_provider = None
         vision_model_id = cfg.visual_model_id if hasattr(cfg, "visual_model_id") else ""
         if vision_model_id:
             for p in cfg.llm.providers:
                 if hasattr(p, "visual_model_ids") and vision_model_id in p.visual_model_ids:
                     vision_provider = p
                     break
-        _doc = process_document_images(
-            _doc, file_id, snapshot_dir,
-            vision_provider=vision_provider,
-            vision_model_id=vision_model_id,
-            vision_prompt=VISUAL_PROMPT,
+        _note_doc = process_document_images(
+            _note_doc, file_id, snapshot_dir, describe=False, ocr=False,
         )
-        content = _doc.content
-        note_images = _doc.images
-        # Update snapshot with processed content
+        content = _note_doc.content
+        note_images = _note_doc.images
         (snapshot_dir / f"{safe_title}.md").write_text(content, encoding="utf-8")
-        logger.info("[INGEST] Note %s: image processing done — %d images in final content",
+        logger.info("[INGEST] Note %s: image filter/save done — %d images",
                     note_id, len(note_images or []))
 
-    if config.get("chunk_mode") == "parent_child":
-        chunker = MarkdownParentChildChunker(
-            parent_strategy=config.get("parent_strategy", "heading"),
-            parent_chunk_size=config.get("parent_chunk_size", 1024),
-            parent_overlap=config.get("parent_chunk_overlap", 128),
-            parent_buffer_ratio=config.get("buffer_ratio", 0.5),
-            child_chunk_size=config.get("child_chunk_size", 128),
-            child_overlap=config.get("child_chunk_overlap", 32),
-            child_buffer_ratio=config.get("buffer_ratio", 0.5),
+    is_visual = enrichment_model_is_visual(config)
+    needs_ocr = bool(
+        _note_doc
+        and _note_doc.images
+        and any((not img.is_table_source) and img.image_bytes for img in _note_doc.images)
+    )
+    needs_vision = bool(
+        needs_ocr
+        and vision_provider
+        and vision_model_id
+        and any(
+            (not img.is_table_source) and (not img.description) and img.image_bytes
+            for img in _note_doc.images
         )
-    else:
-        chunker = MarkdownChunker(
-            max_tokens=config.get("chunk_size", 512),
-            buffer_ratio=config.get("buffer_ratio", 0.5),
-            chunk_overlap=config.get("chunk_overlap", 64),
+    )
+
+    content_snapshot = content
+
+    def _chunk_note():
+        if config.get("chunk_mode") == "parent_child":
+            chunker = MarkdownParentChildChunker(
+                parent_strategy=config.get("parent_strategy", "heading"),
+                parent_chunk_size=config.get("parent_chunk_size", 1024),
+                parent_overlap=config.get("parent_chunk_overlap", 128),
+                parent_buffer_ratio=config.get("buffer_ratio", 0.5),
+                child_chunk_size=config.get("child_chunk_size", 128),
+                child_overlap=config.get("child_chunk_overlap", 32),
+                child_buffer_ratio=config.get("buffer_ratio", 0.5),
+            )
+        else:
+            chunker = MarkdownChunker(
+                max_tokens=config.get("chunk_size", 512),
+                buffer_ratio=config.get("buffer_ratio", 0.5),
+                chunk_overlap=config.get("chunk_overlap", 64),
+            )
+        return chunker.chunk_with_metadata(
+            content_snapshot, source=source, extra_metadata=extra_meta
         )
 
-    chunks = chunker.chunk_with_metadata(
-        content, source=source, extra_metadata=extra_meta
-    )
+    from concurrent.futures import ThreadPoolExecutor
+
+    wait_summary_for_vision = (not is_visual) and needs_vision
+    pre_short = None
+    pre_structured = None
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        chunk_fut = pool.submit(_chunk_note)
+        ocr_fut = None
+        vision_fut = None
+        if needs_ocr:
+            ocr_fut = pool.submit(ocr_classify_document_images, _note_doc)
+        if needs_vision:
+            vision_fut = pool.submit(
+                describe_document_images,
+                _note_doc,
+                vision_provider=vision_provider,
+                vision_model_id=vision_model_id,
+                vision_prompt=VISUAL_PROMPT,
+            )
+        summary_fut = None
+        if not wait_summary_for_vision:
+            summary_fut = pool.submit(
+                run_ingest_summary,
+                config,
+                content_snapshot,
+                collection_id=collection,
+                file_id=file_id,
+                is_visual=is_visual,
+            )
+        chunks = chunk_fut.result()
+        if note_images:
+            apply_image_updates_to_chunks(chunks, note_images)
+        if summary_fut is not None:
+            try:
+                early = summary_fut.result()
+                pre_short = early.get("short_summary") or ""
+                pre_structured = early.get("structured_summary") or ""
+            except Exception:
+                logger.warning("[INGEST] Note %s: early Summary failed", note_id, exc_info=True)
+        try:
+            if ocr_fut is not None:
+                ocr_fut.result()
+            if vision_fut is not None:
+                result = vision_fut.result()
+                if result is not None:
+                    _note_doc = result
+            if ocr_fut is not None or vision_fut is not None:
+                content = _note_doc.content
+                note_images = _note_doc.images
+                apply_image_updates_to_chunks(chunks, note_images or [])
+                (snapshot_dir / f"{safe_title}.md").write_text(content, encoding="utf-8")
+        except Exception:
+            logger.warning("[INGEST] Note %s: OCR/Vision failed", note_id, exc_info=True)
+
     logger.info("[INGEST] Note %s: chunked into %d chunks (%.1fs)",
                 note_id, len(chunks), time.time() - t_start)
 
-    # Annotate chunks with image references for multimodal stitching at query time
     if note_images:
         annotate_chunks_with_images(chunks, note_images)
 
@@ -231,21 +306,24 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
         logger.warning("[INGEST] Note %s: chunking produced 0 chunks, aborting", note_id)
         return
 
-    # ── Stage 2: Enrichment (serialized, non-fatal) ──
+    # ── Stage 2: Summary always; Context only if collection switch is on ──
     t_ctx = time.time()
-    contextual_enabled = config.get("contextual_enabled", True)
-    if contextual_enabled:
-        _Doc = type("_Doc", (), {"content": content})
-        _enrich_lock.acquire()
-        try:
-            chunks = _do_enrich(chunks, _Doc, config)
-            logger.info("[INGEST] Note %s: enrichment done (%.1fs)",
-                        note_id, time.time() - t_ctx)
-        except Exception as e:
-            logger.warning("[INGEST] Note %s: enrichment failed (%.1fs), continuing: %s",
-                        note_id, time.time() - t_ctx, e)
-        finally:
-            _enrich_lock.release()
+    contextual_enabled = bool(config.get("contextual_enabled", True))
+    _Doc = type("_Doc", (), {"content": content, "file_type": "note", "metadata": {}})
+    try:
+        chunks = _do_enrich(
+            chunks, _Doc, config, collection,
+            contextual_enabled=contextual_enabled,
+            full_document=content_snapshot if not wait_summary_for_vision else content,
+            summary=pre_short or None,
+            structured_summary=pre_structured or None,
+            cache_warmup_delay=3.0 if (pre_short or pre_structured) else None,
+        )
+        logger.info("[INGEST] Note %s: enrichment done (%.1fs)",
+                    note_id, time.time() - t_ctx)
+    except Exception as e:
+        logger.warning("[INGEST] Note %s: enrichment failed (%.1fs), continuing: %s",
+                    note_id, time.time() - t_ctx, e)
 
     # ── Stage 3: Embedding ──
     t_emb = time.time()
@@ -301,30 +379,18 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
     except Exception:
         logger.warning("[INGEST] Note %s: sparse encoding failed", note_id, exc_info=True)
 
-    # Update file index
-    try:
-        from src.collections.file_index import add as add_file_index
-        add_file_index(collection, file_id, source, f"Note: {note_title}", "note", len(chunks))
-    except Exception:
-        logger.warning("[INGEST] Note %s: failed to update files.json", note_id, exc_info=True)
-
     logger.info("[INGEST] Note %s: store done in %.1fs. Total: %.1fs",
                 note_id, time.time() - t_store, time.time() - t_start)
 
-    # Clean up old re-ingest snapshots (remove all except current file_id for this source)
+    # Disk only: drop old re-ingest snapshot dirs. files.json is no longer written.
     try:
-        from src.collections.file_index import load as load_file_index, save as save_file_index
+        from src.collections.file_index import load as load_file_index
         idx = load_file_index(collection)
-        dirty = False
         for fid, entry in list(idx.items()):
             if entry.get("source") == source and fid != file_id:
                 old_dir = snapshot_dir.parent / fid
                 if old_dir.exists():
                     shutil.rmtree(old_dir)
-                del idx[fid]
-                dirty = True
-        if dirty:
-            save_file_index(collection, idx)
     except Exception:
         logger.warning(
             "[INGEST] Note %s: failed cleaning old re-ingest snapshots",
@@ -342,6 +408,7 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
             source=source,
             storage_name=f"{safe_title}.md",
             system_folder_name="Notes",
+            source_label=f"Note: {note_title}",
         )
     except Exception:
         logger.warning(

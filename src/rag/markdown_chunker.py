@@ -15,7 +15,14 @@ import uuid
 from dataclasses import dataclass, field
 from urllib.parse import unquote
 
-from src.rag.chunker import Chunk, _annotate_position, _estimate_tokens, _split_sentences
+from src.rag.chunker import (
+    Chunk,
+    _annotate_position,
+    _estimate_tokens,
+    _strip_image_fences,
+    _split_sentences,
+    estimate_chunking_tokens,
+)
 
 
 # ── Note Content Preprocessing ──────────────────────────────────
@@ -321,8 +328,8 @@ def _merge_table_source_images(blocks: list[MarkdownBlock]) -> list[MarkdownBloc
     Parse (MinerU / PDF) places the cropped table image *before* the table
     markup.  Treating them as separate blocks lets the packer flush the image
     into chunk N and the table into chunk N+1.  Merging keeps the pair atomic
-    for packing; oversized tables still split rows, but the figure stays on
-    the first sub-table only (see ``_strip_leading_image_fence``).
+    for packing; oversized tables still split rows, and the figure is
+    copied onto every sub-table (see ``_strip_leading_image_fence``).
     """
     if not blocks:
         return blocks
@@ -472,8 +479,9 @@ def _split_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBl
     This keeps sub-tables compact while letting each one carry more data.
 
     When a table-source ``:::image`` fence is glued in front of the table
-    (see ``_merge_table_source_images``), it is preserved on the **first**
-    sub-block only so the figure is not duplicated across row splits.
+    (see ``_merge_table_source_images``), it is copied onto **every**
+    sub-block so a retrieved slice still carries the figure. The fence
+    does not count toward the row budget.
 
     For the *first* sub-block ``start_offset`` points to the real header in
     the original text.  For *subsequent* sub-blocks ``start_offset`` points
@@ -506,10 +514,9 @@ def _split_table_block(block: MarkdownBlock, max_tokens: int) -> list[MarkdownBl
     current_rows: list[str] = []
     current_tokens = 0  # header does NOT count toward max_tokens
     _data_start_idx = 0  # index into _data_start_positions for the current group
-
     def _emit(part_content: str, data_start_idx: int) -> None:
-        # First sub-block carries the table-source figure when present
-        if data_start_idx == 0 and figure_prefix:
+        # Every slice carries the table-source figure (same image_id)
+        if figure_prefix:
             part_content = figure_prefix.rstrip() + "\n\n" + part_content
         tbl_start = block.start_offset if data_start_idx == 0 else (
             block.start_offset + body_off + _data_start_positions[data_start_idx]
@@ -731,7 +738,7 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     ``</table>`` wrappers are also injected for every sub-block.
 
     A leading table-source ``:::image`` fence (glued by
-    ``_merge_table_source_images``) is kept on the first sub-block only.
+    ``_merge_table_source_images``) is copied onto every sub-block.
 
     ``start_offset`` for the first sub-block points to the original ``<table>``
     opening tag.  For subsequent sub-blocks it points to the first ``<tr>`` of
@@ -807,7 +814,7 @@ def _split_html_table_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     _data_start_idx = 0
 
     def _emit_html(part_content: str, data_start_idx: int) -> None:
-        if data_start_idx == 0 and figure_prefix:
+        if figure_prefix:
             part_content = figure_prefix.rstrip() + "\n\n" + part_content
         tbl_start = block.start_offset if data_start_idx == 0 else (
             block.start_offset + _tr_positions[data_start_idx]
@@ -853,6 +860,9 @@ def _split_fenced_div_block(block: MarkdownBlock, max_tokens: int) -> list[Markd
     """
     lines = block.content.split("\n")
     if len(lines) < 3:
+        return [block]
+    # :::image fences are atomic — splitting them leaks description/OCR as body.
+    if block.content.lstrip().startswith(":::image"):
         return [block]
 
     opening = lines[0]
@@ -958,7 +968,7 @@ class MarkdownChunker:
 
         for block in blocks:
             block_text = block.content
-            block_tokens = _estimate_tokens(block_text)
+            block_tokens = estimate_chunking_tokens(block_text)
 
             # Oversized block — split it
             if block_tokens > self.hard_limit:
@@ -971,14 +981,19 @@ class MarkdownChunker:
                     chunks.append(sb.content)
                 continue
 
-            # Adding this block would exceed max_tokens — flush
-            if current_parts and current_tokens + block_tokens > self.max_tokens:
+            # Adding this block would exceed the buffer ceiling — flush
+            if current_parts and current_tokens + block_tokens > self.hard_limit:
                 chunks.append("\n\n".join(current_parts))
                 current_parts = []
                 current_tokens = 0
 
             current_parts.append(block_text)
             current_tokens += block_tokens
+            # Crossed the 512 target via buffer — accept this block, then seal.
+            if current_tokens > self.max_tokens:
+                chunks.append("\n\n".join(current_parts))
+                current_parts = []
+                current_tokens = 0
 
         if current_parts:
             chunks.append("\n\n".join(current_parts))
@@ -1013,7 +1028,7 @@ class MarkdownChunker:
 
         for block in blocks:
             block_text = block.content
-            block_tokens = _estimate_tokens(block_text)
+            block_tokens = estimate_chunking_tokens(block_text)
 
             # Oversized block — flush current and split
             if block_tokens > self.hard_limit:
@@ -1034,8 +1049,8 @@ class MarkdownChunker:
                     ))
                 continue
 
-            # Adding this block would exceed max_tokens — flush
-            if current_parts and current_tokens + block_tokens > self.max_tokens:
+            # Adding this block would exceed the buffer ceiling — flush
+            if current_parts and current_tokens + block_tokens > self.hard_limit:
                 raw_chunks.append((
                     "\n\n".join(current_parts),
                     chunk_start_offset,
@@ -1049,6 +1064,14 @@ class MarkdownChunker:
                 current_heading_path = list(block.heading_path)
             current_parts.append(block_text)
             current_tokens += block_tokens
+            if current_tokens > self.max_tokens:
+                raw_chunks.append((
+                    "\n\n".join(current_parts),
+                    chunk_start_offset,
+                    list(current_heading_path),
+                ))
+                current_parts = []
+                current_tokens = 0
 
         if current_parts:
             raw_chunks.append((

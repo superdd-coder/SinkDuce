@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from src.config import AppConfig, TranscriptionConfig, TranscriptionProviderConfig
 from src.meeting.models import Meeting, MeetingMode, MeetingStatus, TranscriptionResult, TranscriptSegment
@@ -569,10 +570,12 @@ class TestMeetingService:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = None
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                generate_summary("missing")
-            )
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    generate_summary("missing")
+                )
+        assert ei.value.status_code == 404
+        assert "not found" in str(ei.value.detail).lower()
 
     @pytest.mark.skip(reason="v3: allocate_to_collection replaced by allocate_section_to_collection(meeting_id, tab_id, collection_id)")
     def test_allocate_to_collection(self):
@@ -720,18 +723,50 @@ class TestDashScopeTranscription:
         ]
         assert _build_precompiled_vocabulary_items(None) is None
 
-    def test_realtime_transcription_fixed_model(self):
-        """DashScopeRealtimeTranscription always uses fixed Qwen-Audio streaming model."""
-        from src.meeting.transcription.dashscope_realtime import DashScopeRealtimeTranscription
+    def test_realtime_transcription_honors_fun_asr_model(self):
+        """DashScope realtime uses config.model when it is fun-asr-realtime or Qwen."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_FUN_ASR_REALTIME,
+            MODEL_QWEN_REALTIME,
+        )
 
         with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True):
-            cfg = TranscriptionProviderConfig(api_key="sk-test", model="fun-asr-realtime")
-            provider = DashScopeRealtimeTranscription(cfg)
-            assert provider._model == "qwen-audio-3.0-asr-flash-streaming"
+            fun = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_FUN_ASR_REALTIME)
+            )
+            assert fun._model == MODEL_FUN_ASR_REALTIME
+            assert fun._uses_instant_vocabulary() is False
 
-    def test_realtime_start_uses_instant_vocab_and_semantic_punctuation(self):
-        """Realtime start passes instant vocabulary + semantic_punctuation_enabled."""
-        from src.meeting.transcription.dashscope_realtime import DashScopeRealtimeTranscription
+            qwen = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=MODEL_QWEN_REALTIME)
+            )
+            assert qwen._model == MODEL_QWEN_REALTIME
+            assert qwen._uses_instant_vocabulary() is True
+
+    def test_realtime_unknown_model_falls_back_to_fun_asr(self):
+        """Empty / unknown realtime model falls back to fun-asr-realtime."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_FUN_ASR_REALTIME,
+        )
+
+        with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True):
+            empty = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model=None)
+            )
+            assert empty._model == MODEL_FUN_ASR_REALTIME
+            bad = DashScopeRealtimeTranscription(
+                TranscriptionProviderConfig(api_key="sk-test", model="not-a-real-model")
+            )
+            assert bad._model == MODEL_FUN_ASR_REALTIME
+
+    def test_realtime_start_qwen_uses_instant_vocab(self):
+        """Qwen realtime start passes instant vocabulary + semantic_punctuation_enabled."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_QWEN_REALTIME,
+        )
 
         mock_recognition = MagicMock()
         mock_recognition_cls = MagicMock(return_value=mock_recognition)
@@ -748,7 +783,7 @@ class TestDashScopeTranscription:
                  mock_ds,
                  create=True,
              ):
-            cfg = TranscriptionProviderConfig(api_key="sk-test")
+            cfg = TranscriptionProviderConfig(api_key="sk-test", model=MODEL_QWEN_REALTIME)
             provider = DashScopeRealtimeTranscription(cfg)
 
             import asyncio
@@ -757,16 +792,63 @@ class TestDashScopeTranscription:
                 await provider.start(
                     on_segment=lambda *a: None,
                     hot_words=[{"text": "SinkDuce", "weight": 4}],
-                    language_hints=["zh"],
+                    language_hints=["zh", "en"],
                 )
 
             asyncio.get_event_loop().run_until_complete(_run())
 
         mock_recognition_cls.assert_called_once()
         kwargs = mock_recognition_cls.call_args.kwargs
-        assert kwargs["model"] == "qwen-audio-3.0-asr-flash-streaming"
+        assert kwargs["model"] == MODEL_QWEN_REALTIME
         assert kwargs["semantic_punctuation_enabled"] is True
         assert kwargs["vocabulary"] == {"SinkDuce": 3}
+        assert "vocabulary_id" not in kwargs
+        mock_recognition.start.assert_called_once_with(language_hints=["zh", "en"])
+
+    def test_realtime_start_fun_asr_uses_precompiled_vocab_and_one_hint(self):
+        """Fun-ASR realtime uses vocabulary_id, not instant vocabulary; one language hint."""
+        from src.meeting.transcription.dashscope_realtime import (
+            DashScopeRealtimeTranscription,
+            MODEL_FUN_ASR_REALTIME,
+        )
+
+        mock_recognition = MagicMock()
+        mock_recognition_cls = MagicMock(return_value=mock_recognition)
+        mock_ds = MagicMock()
+
+        with patch("src.meeting.transcription.dashscope_realtime._HAS_DASHSCOPE", True), \
+             patch(
+                 "src.meeting.transcription.dashscope_realtime.Recognition",
+                 mock_recognition_cls,
+                 create=True,
+             ), \
+             patch(
+                 "src.meeting.transcription.dashscope_realtime.dashscope",
+                 mock_ds,
+                 create=True,
+             ):
+            cfg = TranscriptionProviderConfig(
+                api_key="sk-test", model=MODEL_FUN_ASR_REALTIME
+            )
+            provider = DashScopeRealtimeTranscription(cfg)
+            provider._create_vocabulary = MagicMock(return_value="vocab-rt-1")
+
+            import asyncio
+
+            async def _run():
+                await provider.start(
+                    on_segment=lambda *a: None,
+                    hot_words=[{"text": "SinkDuce", "weight": 4}],
+                    language_hints=["zh", "en"],
+                )
+
+            asyncio.get_event_loop().run_until_complete(_run())
+
+        kwargs = mock_recognition_cls.call_args.kwargs
+        assert kwargs["model"] == MODEL_FUN_ASR_REALTIME
+        assert kwargs["semantic_punctuation_enabled"] is True
+        assert "vocabulary" not in kwargs
+        assert kwargs["vocabulary_id"] == "vocab-rt-1"
         mock_recognition.start.assert_called_once_with(language_hints=["zh"])
 
     def test_realtime_send_frame_before_start_raises(self):
@@ -993,11 +1075,11 @@ class TestMeetingRoutes:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = None
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                get_meeting("missing")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    get_meeting("missing")
+                )
+        assert ei.value.status_code == 404
 
     def test_delete_meeting_route(self):
         """DELETE /meetings/{id} deletes the meeting."""
@@ -1022,11 +1104,11 @@ class TestMeetingRoutes:
             mock_store.get_meeting.return_value = None
             mock_store.delete_meeting.return_value = False
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                delete_meeting("missing")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    delete_meeting("missing")
+                )
+        assert ei.value.status_code == 404
 
     def test_update_meeting_route(self):
         """PUT /meetings/{id} updates meeting fields."""
@@ -1035,12 +1117,28 @@ class TestMeetingRoutes:
         updated = _make_meeting(title="New Title")
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.update_meeting.return_value = updated
+            mock_store.get_notes.return_value = None
             import asyncio
             result = asyncio.get_event_loop().run_until_complete(
                 update_meeting("abc123", {"title": "New Title"})
             )
 
         assert result["title"] == "New Title"
+
+    def test_update_meeting_response_includes_existing_notes(self):
+        """PUT must return notes_content so the UI does not drop live notes after summarize."""
+        from src.meeting.routes import update_meeting
+
+        updated = _make_meeting(title="Keep notes")
+        with patch("src.meeting.routes.store") as mock_store:
+            mock_store.update_meeting.return_value = updated
+            mock_store.get_notes.return_value = "Live notes from recording"
+            import asyncio
+            result = asyncio.get_event_loop().run_until_complete(
+                update_meeting("abc123", {"title": "Keep notes"})
+            )
+
+        assert result["notes_content"] == "Live notes from recording"
 
     def test_update_meeting_notes(self):
         """PUT /meetings/{id} with notes key saves notes to file."""
@@ -1050,12 +1148,14 @@ class TestMeetingRoutes:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = meeting
             mock_store.update_meeting.return_value = meeting
+            mock_store.get_notes.return_value = "New notes"
             import asyncio
             result = asyncio.get_event_loop().run_until_complete(
                 update_meeting("abc123", {"notes": "New notes"})
             )
 
         mock_store.save_notes.assert_called_once_with("abc123", "New notes")
+        assert result["notes_content"] == "New notes"
 
     def test_start_transcription_route(self):
         """POST /meetings/{id}/transcribe creates a task."""
@@ -1089,12 +1189,12 @@ class TestMeetingRoutes:
         with patch("src.meeting.routes.store") as mock_store:
             mock_store.get_meeting.return_value = meeting
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                start_transcription("abc123")
-            )
-
-        assert "error" in result
-        assert "No audio" in result["error"]
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    start_transcription("abc123")
+                )
+        assert ei.value.status_code == 400
+        assert "No audio" in str(ei.value.detail)
 
     def test_start_transcription_no_provider(self):
         """POST /meetings/{id}/transcribe fails when no provider configured."""
@@ -1107,11 +1207,11 @@ class TestMeetingRoutes:
             mock_store.update_meeting.return_value = meeting
             mock_svc.get_active_file_provider.return_value = None
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                start_transcription("abc123")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    start_transcription("abc123")
+                )
+        assert ei.value.status_code == 400
 
     def test_generate_summary_route(self):
         """POST /meetings/{id}/generate-summary creates a task (v3)."""
@@ -1122,6 +1222,7 @@ class TestMeetingRoutes:
              patch("src.meeting.routes.task_manager") as mock_tm:
             mock_store.get_meeting.return_value = meeting
             mock_store.get_transcript.return_value = _make_transcript_result()
+            mock_store.get_notes.return_value = None
             mock_task = _make_task()
             mock_tm.create_task.return_value = mock_task
 
@@ -1130,7 +1231,8 @@ class TestMeetingRoutes:
                 generate_summary("abc123")
             )
 
-        assert result["message"] == "Generation started"
+        assert result["id"] == "abc123"
+        mock_tm.create_task.assert_called_once()
 
     def test_generate_summary_no_transcript(self):
         """POST /meetings/{id}/generate-summary fails when no transcript."""
@@ -1142,11 +1244,11 @@ class TestMeetingRoutes:
             mock_store.get_transcript.return_value = None
 
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                generate_summary("abc123")
-            )
-
-        assert "error" in result
+            with pytest.raises(HTTPException) as ei:
+                asyncio.get_event_loop().run_until_complete(
+                    generate_summary("abc123")
+                )
+        assert ei.value.status_code == 400
 
     @pytest.mark.skip(reason="v3: allocate_to_db replaced by allocate_section(meeting_id, tab_id, body)")
     def test_allocate_route(self):
@@ -1158,10 +1260,11 @@ class TestMeetingRoutes:
         from src.meeting.routes import allocate_section
 
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
-            allocate_section("abc123", "tab_01", {})
-        )
-        assert "error" in result
+        with pytest.raises(HTTPException) as ei:
+            asyncio.get_event_loop().run_until_complete(
+                allocate_section("abc123", "tab_01", {})
+            )
+        assert ei.value.status_code == 400
 
     def test_get_meeting_tasks_route(self):
         """GET /meetings/{id}/tasks returns matching tasks."""

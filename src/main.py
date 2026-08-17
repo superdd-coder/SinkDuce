@@ -73,6 +73,12 @@ async def lifespan(app: FastAPI):
 
     init_services()
     await task_manager.start()
+    # Load RapidOCR weights in the background so the first upload is not
+    # blocked by ONNX session init. Failure is non-fatal (retried on ingest).
+    import asyncio
+    from src.parsers.rapid_ocr import warmup as warmup_rapidocr
+
+    asyncio.get_running_loop().run_in_executor(None, warmup_rapidocr)
     # Recover stale processing states left by a previous crash/restart
     from src.meeting.service import reset_stale_processing_states
     await reset_stale_processing_states()

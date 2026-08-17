@@ -205,7 +205,7 @@ def prepare_meeting_summary_for_note(
         # Unmapped "Speaker N" (digits) → [spk:N] for consistency
         md = _re.sub(r"\bSpeaker\s+(\d+)\b", r"[spk:\1]", md, flags=_re.IGNORECASE)
 
-    # 3. References — strip citation brackets (not [spk:…])
+    # 3. References — strip [ref:…] and [stt_…], not bare [1]
     _cite_token = (
         r"(?:"
         r"[A-Za-z0-9]{6,}_stt_\d+"
@@ -214,8 +214,15 @@ def prepare_meeting_summary_for_note(
         r")"
     )
     _cite_sep = r"[\s,，、;；\-–—]+"
+    _stt_token = r"(?:[A-Za-z0-9]{6,}_)?stt_\d+"
     md = _re.sub(
-        rf"\[(?:ref\s*:)?\s*{_cite_token}(?:{_cite_sep}{_cite_token})*\s*\]",
+        rf"\[ref\s*:\s*{_cite_token}(?:{_cite_sep}{_cite_token})*\s*\]",
+        "",
+        md,
+        flags=_re.IGNORECASE,
+    )
+    md = _re.sub(
+        rf"\[(?:ref\s*:)?\s*{_stt_token}(?:{_cite_sep}{_stt_token})*\s*\]",
         "",
         md,
         flags=_re.IGNORECASE,

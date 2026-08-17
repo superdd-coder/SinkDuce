@@ -1,22 +1,8 @@
 import {
-  useState, useEffect, useLayoutEffect, useCallback, useRef, forwardRef, useImperativeHandle,
-  type ReactNode,
+  useState, useEffect, useLayoutEffect, useCallback, useRef,
 } from "react"
-import { createPortal } from "react-dom"
 import { useShallow } from "zustand/react/shallow"
-import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogKicker,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Pencil, Check, X, Plus, PanelRightClose, PanelRightOpen, Mic, Upload, Pause, Square, Loader2, Users, Play, Sparkles } from "lucide-react"
-import { Tabs, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { useAppStore } from "@/stores/app-store"
 import { useAudioRecorder } from "@/hooks/use-audio-recorder"
 import { useTranscription } from "@/hooks/use-transcription"
@@ -30,232 +16,35 @@ import {
 } from "@/api/client"
 import { toast } from "sonner"
 import {
-  MeetingTabs,
   type SectionRailActions,
   type SectionRailModel,
 } from "./meeting-tabs"
-import { TranscriptTab, SpeakersTab } from "./transcript-panel"
-import { AlertCircle, Settings } from "lucide-react"
 import { MeetingList } from "./meeting-list"
-import { MediaBar } from "./media-bar"
 import type { MediaBarHandle } from "./media-bar"
 
 import {
-  MeetingQuickChat,
-  MeetingQcFab,
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
-import { DEFAULT_LANGUAGE_HINTS, LanguageHintsSelector } from "./language-hints-selector"
-import { HotWordsSelector } from "./hot-words-selector"
-import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { LiveCaptureControlCard } from "./live-capture-control-card"
+import { DEFAULT_LANGUAGE_HINTS } from "./language-hints-selector"
+import { clipLanguageHints } from "@/lib/language-hints"
 import { startStream as startBlueprintStream } from "@/hooks/use-blueprint-stream"
+import { type CaptureMiniPlayerHandle } from "./capture-mini-player"
+import { MeetingCaptureStages } from "./meeting-capture-stages"
+import { MeetingStudioStage } from "./meeting-studio-stage"
+import { MeetingViewOverlays } from "./meeting-view-overlays"
 
-export type CaptureMiniPlayerHandle = {
-  /** Jump to start and play; if end is set, auto-pause at that time (one sentence). */
-  seekTo: (start: number, end?: number) => void
+/** Keep live notes when a mutation response omitted notes_content (PUT/upload). */
+function mergeMeetingUpdate(prev: Meeting | null, next: Meeting): Meeting {
+  if (
+    prev &&
+    prev.id === next.id &&
+    next.notes_content === undefined &&
+    prev.notes_content !== undefined
+  ) {
+    return { ...next, notes_content: prev.notes_content }
+  }
+  return next
 }
-
-/** Compact / review capture player; optional segment end-stop */
-const CaptureMiniPlayer = forwardRef<
-  CaptureMiniPlayerHandle,
-  {
-    audioUrl: string
-    audioVersion: number
-    /** compact = chip player; review = progress under cards + play in footer row */
-    variant?: "compact" | "review"
-    onTimeUpdate?: (time: number) => void
-    /** review only: right-side action (e.g. Summarize) on same row as play */
-    footerSlot?: ReactNode
-    /** review only: left tools (hot words / language / re-transcribe) */
-    footerLeftSlot?: ReactNode
-  }
->(function CaptureMiniPlayer(
-  { audioUrl, audioVersion, variant = "compact", onTimeUpdate, footerSlot, footerLeftSlot },
-  ref,
-) {
-  const audioRef = useRef<HTMLAudioElement>(null)
-  const trackRef = useRef<HTMLDivElement>(null)
-  const segmentEndRef = useRef<number | null>(null)
-  const [playing, setPlaying] = useState(false)
-  const [current, setCurrent] = useState(0)
-  const [duration, setDuration] = useState(0)
-
-  const fmt = (s: number) => {
-    const m = Math.floor(s / 60)
-    const sec = Math.floor(s % 60)
-    return `${m}:${sec.toString().padStart(2, "0")}`
-  }
-
-  useEffect(() => {
-    segmentEndRef.current = null
-    setPlaying(false)
-    setCurrent(0)
-    setDuration(0)
-    onTimeUpdate?.(0)
-  }, [audioUrl, audioVersion, onTimeUpdate])
-
-  useImperativeHandle(ref, () => ({
-    seekTo(start: number, end?: number) {
-      const el = audioRef.current
-      if (!el) return
-      const t = Math.max(0, start)
-      // Only stop at end when explicitly provided (speaker samples)
-      segmentEndRef.current =
-        end != null && Number.isFinite(end) && end > t ? end : null
-      el.currentTime = t
-      setCurrent(t)
-      onTimeUpdate?.(t)
-      void el.play().catch(() => {})
-    },
-  }))
-
-  const clearSegmentEnd = () => {
-    segmentEndRef.current = null
-  }
-
-  const onTimeUpdateInternal = () => {
-    const el = audioRef.current
-    if (!el) return
-    const t = el.currentTime
-    setCurrent(t)
-    onTimeUpdate?.(t)
-    const stopAt = segmentEndRef.current
-    if (stopAt != null && t >= stopAt - 0.02) {
-      segmentEndRef.current = null
-      el.pause()
-      if (el.currentTime > stopAt) {
-        el.currentTime = stopAt
-        setCurrent(stopAt)
-        onTimeUpdate?.(stopAt)
-      }
-    }
-  }
-
-  const toggle = () => {
-    const el = audioRef.current
-    if (!el) return
-    clearSegmentEnd()
-    if (el.paused) {
-      void el.play().catch(() => {})
-      setPlaying(true)
-    } else {
-      el.pause()
-      setPlaying(false)
-    }
-  }
-
-  const seek = (clientX: number) => {
-    const el = audioRef.current
-    const track = trackRef.current
-    if (!el || !track || !duration) return
-    clearSegmentEnd()
-    const r = track.getBoundingClientRect()
-    const ratio = Math.min(1, Math.max(0, (clientX - r.left) / r.width))
-    el.currentTime = ratio * duration
-    setCurrent(el.currentTime)
-    onTimeUpdate?.(el.currentTime)
-  }
-
-  const ratio = duration > 0 ? Math.min(1, current / duration) : 0
-
-  const audioEl = (
-    <audio
-      key={`capture-audio-${audioVersion}`}
-      ref={audioRef}
-      src={audioUrl}
-      preload="metadata"
-      className="sr-only"
-      onTimeUpdate={onTimeUpdateInternal}
-      onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
-      onEnded={() => {
-        segmentEndRef.current = null
-        setPlaying(false)
-      }}
-      onPlay={() => setPlaying(true)}
-      onPause={() => setPlaying(false)}
-    />
-  )
-
-  const progressEl = (
-    <div
-      ref={trackRef}
-      className={
-        variant === "review"
-          ? "pm-meeting-review-progress"
-          : "pm-meeting-player-progress"
-      }
-      role="slider"
-      tabIndex={0}
-      aria-label="Seek"
-      aria-valuemin={0}
-      aria-valuemax={Math.floor(duration || 0)}
-      aria-valuenow={Math.floor(current || 0)}
-      onClick={(e) => seek(e.clientX)}
-    >
-      <div
-        className={
-          variant === "review"
-            ? "pm-meeting-review-progress-fill"
-            : "pm-meeting-player-progress-fill"
-        }
-        style={{ width: `${ratio * 100}%` }}
-      />
-    </div>
-  )
-
-  if (variant === "review") {
-    return (
-      <div className="pm-meeting-review-dock">
-        {audioEl}
-        <div className="pm-meeting-review-progress-wrap">
-          {progressEl}
-          <span className="pm-meeting-review-time t-mono-family">
-            {fmt(current)}
-            <span className="pm-meeting-player-time-sep">/</span>
-            {fmt(duration)}
-          </span>
-        </div>
-        <div className="pm-meeting-f-controls pm-meeting-speaker-gate-actions pm-meeting-review-actions">
-          {footerLeftSlot ? (
-            <div className="pm-meeting-review-tools">{footerLeftSlot}</div>
-          ) : (
-            <div className="pm-meeting-review-tools" aria-hidden />
-          )}
-          <button
-            type="button"
-            className="pm-meeting-review-play"
-            onClick={toggle}
-            aria-label={playing ? "Pause" : "Play"}
-          >
-            {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
-          </button>
-          <div className="pm-meeting-review-footer-right">{footerSlot}</div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="pm-meeting-capture-player">
-      {audioEl}
-      <button
-        type="button"
-        className="pm-meeting-player-play"
-        onClick={toggle}
-        aria-label={playing ? "Pause" : "Play"}
-      >
-        {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-      </button>
-      {progressEl}
-      <span className="pm-meeting-player-time t-mono-family">
-        {fmt(current)}
-        <span className="pm-meeting-player-time-sep">/</span>
-        {fmt(duration)}
-      </span>
-    </div>
-  )
-})
 
 export function MeetingView({ active = true }: { active?: boolean }) {
   const {
@@ -279,6 +68,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   // Data
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [meeting, setMeeting] = useState<Meeting | null>(null)
+  const applyMeeting = useCallback((m: Meeting) => {
+    setMeeting((prev) => mergeMeetingUpdate(prev, m))
+  }, [])
+  const liveNotesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Draft notes while recording survive switching away and back */
+  const liveNotesDraftsRef = useRef<Map<string, string>>(new Map())
   const meetingContentRef = useRef<HTMLDivElement>(null)
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([])
 
@@ -309,6 +104,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const captureOwnerRef = useRef<string | null>(null)
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
+  const [maxLanguageHints, setMaxLanguageHints] = useState(1)
   /** Active adapter hot-words capability (from registry class flag) */
   const [fileSupportsHotWords, setFileSupportsHotWords] = useState(false)
   const [rtSupportsHotWords, setRtSupportsHotWords] = useState(false)
@@ -653,11 +449,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   // Per-meeting setter: persists to map + updates state
   const updateLanguageHints = (hints: string[]) => {
-    setLanguageHints(hints)
+    const next = clipLanguageHints(hints, maxLanguageHints)
+    setLanguageHints(next)
     if (activeMeeting) {
       perMeetingLanguageHints.current.set(
         `${activeMeeting}:${languagePathRef.current}`,
-        hints,
+        next,
       )
     }
   }
@@ -686,6 +483,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         languagePathRef.current = useRt ? "rt" : "file"
         setFileSupportsHotWords(!!info.file?.supports_hot_words)
         setRtSupportsHotWords(!!info.realtime?.supports_hot_words)
+        const side = useRt ? info.realtime : info.file
+        const maxHints = Math.max(1, side?.max_language_hints ?? 1)
+        setMaxLanguageHints(maxHints)
 
         const supportedCodes = new Set(hints.map((h) => h.code))
         const mid = opts?.meetingId ?? activeMeeting
@@ -697,7 +497,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         const stored = perMeetingLanguageHints.current.get(storeKey)
         const pick = (codes: string[]) => {
           const filtered = codes.filter((c) => supportedCodes.has(c))
-          if (filtered.length > 0) return filtered
+          if (filtered.length > 0) return clipLanguageHints(filtered, maxHints)
           if (supportedCodes.has("auto")) return ["auto"]
           return hints[0]?.code ? [hints[0].code] : [...DEFAULT_LANGUAGE_HINTS]
         }
@@ -760,13 +560,13 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       const m = await getMeeting(id)
       // Guard: if activeMeeting changed while fetching, discard stale result
       if (fetchMeetingIdRef.current !== id) return
-      setMeeting(m)
+      applyMeeting(m)
       // If a background task is in progress, resume polling.
       // Update meeting on every poll tick so children (MeetingTabs) stay in sync.
       // Polling for busy processing is started by the active-view effect below
       // (avoids network churn while Meeting sidebar is hidden).
     } catch { /* ignore */ }
-  }, [])
+  }, [applyMeeting])
 
   // Fetch transcript (stale-safe — never clear previous segments mid-switch)
   const fetchTranscript = useCallback(async (id: string) => {
@@ -1058,7 +858,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         .then((m) => {
           // Only replace detail panel if user is still viewing that meeting
           if (fetchMeetingIdRef.current === uploadTo || activeMeeting === uploadTo) {
-            setMeeting(m)
+            applyMeeting(m)
             setAudioVersion((v) => v + 1)
           }
           toast.success("Audio uploaded")
@@ -1102,7 +902,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (!activeMeeting) return
     try {
       const m = await uploadMeetingAudio(activeMeeting, file)
-      setMeeting(m)
+      applyMeeting(m)
       setAudioVersion((v) => v + 1)
       toast.success("Audio ready — review then Transcribe")
       fetchMeetings()
@@ -1179,6 +979,19 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const handleStopRecording = useCallback(() => {
     // Keep captureOwnerRef for upload target even if user is viewing another meeting
     const owner = captureOwnerRef.current ?? recordingMeetingId
+    // Flush live notes immediately so Studio/Summarize does not mount on a stale empty field
+    if (liveNotesTimer.current) {
+      clearTimeout(liveNotesTimer.current)
+      liveNotesTimer.current = null
+    }
+    if (owner) {
+      const draft = liveNotesDraftsRef.current.get(owner)
+      if (draft !== undefined) {
+        updateMeeting(owner, { notes: draft })
+          .then((m) => applyMeeting(m))
+          .catch(() => {})
+      }
+    }
     // Lock Capture on "Transcribing" UI before realtime save sets status=completed
     // (otherwise speakers gate flashes until file-tx starts).
     if (owner && hasFileProvider) {
@@ -1195,6 +1008,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     clearRecordingOwner,
     recordingMeetingId,
     hasFileProvider,
+    applyMeeting,
   ])
 
   /** Uncommitted hot-words pick when a transcript already exists (cleared on leave / refresh). */
@@ -1217,7 +1031,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (draft !== undefined) {
       try {
         const m = await updateMeeting(activeMeeting, { hot_words_library_id: draft })
-        setMeeting(m)
+        applyMeeting(m)
         hotWordsDraftRef.current = undefined
       } catch (err) {
         toast.error(
@@ -1281,11 +1095,31 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return
+    const target =
+      meetings.find((m) => m.id === deleteTarget) ||
+      (meeting?.id === deleteTarget ? meeting : null)
+    const colIds = new Set<string>()
+    for (const col of target?.allocated_collections || []) {
+      if (col) colIds.add(col)
+    }
+    for (const t of target?.tabs || []) {
+      const col = t.associated_collection_id
+      if (col) colIds.add(col)
+    }
     try {
       await deleteMeeting(deleteTarget)
       if (activeMeeting === deleteTarget) setActiveMeeting(null)
       setDeleteTarget(null)
       fetchMeetings()
+      if (colIds.size > 0) {
+        try {
+          const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+          const store = useFileMgmtStore.getState()
+          for (const col of colIds) {
+            await store.refreshLibrarySurfaces(col)
+          }
+        } catch { /* Database view may be unmounted */ }
+      }
       toast.success("Meeting deleted")
     } catch {
       toast.error("Delete failed")
@@ -1363,7 +1197,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
 
   const handleMeetingUpdate = useCallback((m: Meeting) => {
-    setMeeting(m)
+    applyMeeting(m)
     if (activeMeeting) {
       fetchMeetings()
       // If meeting just became busy (Summarize/Extract/Regenerate triggered),
@@ -1387,7 +1221,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (!activeMeeting || !titleDraft.trim()) { setEditingTitle(false); return }
     try {
       const m = await updateMeeting(activeMeeting, { title: titleDraft.trim() })
-      setMeeting(m)
+      applyMeeting(m)
       setEditingTitle(false)
       fetchMeetings()
     } catch (err) {
@@ -1399,7 +1233,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (!activeMeeting) return
     try {
       const m = await updateMeeting(activeMeeting, { hot_words_library_id: libraryId })
-      setMeeting(m)
+      applyMeeting(m)
     } catch (err) {
       toast.error(`Failed to update hot words: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -1561,6 +1395,14 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       ? `/api/meetings/${meeting.id}/audio?v=${audioVersion}`
       : null
 
+  /** LIVE chip only while this meeting is actually capturing with realtime. */
+  const studioPartialText =
+    !!recorder.isRecording &&
+    recordingMeetingId === meeting?.id &&
+    realtimeEnabled
+      ? transcription.currentPartial
+      : ""
+
   /** Prefer file/API transcript once completed; live draft during Capture live/wait */
   const displaySegments =
     meeting?.status === "completed" || hasStudioAnchor
@@ -1605,7 +1447,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       const updated = { ...(meeting.speaker_names ?? {}), [speakerId]: name }
       updateMeeting(meeting.id, { speaker_names: updated })
         .then((m) => {
-          setMeeting(m)
+          applyMeeting(m)
           void import("@/components/ui/tiptap-editor").then((mod) => {
             mod.invalidateMeetingSpeakerCache(meeting.id)
           })
@@ -1619,9 +1461,6 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   const emptyUploadRef = useRef<HTMLInputElement>(null)
   const [liveNotes, setLiveNotes] = useState(meeting?.notes_content ?? "")
-  const liveNotesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** Draft notes while recording survive switching away and back */
-  const liveNotesDraftsRef = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     if (!meeting?.id) return
     const draft = liveNotesDraftsRef.current.get(meeting.id)
@@ -1634,7 +1473,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     if (liveNotesTimer.current) clearTimeout(liveNotesTimer.current)
     liveNotesTimer.current = setTimeout(() => {
       updateMeeting(activeMeeting, { notes: value })
-        .then((m) => setMeeting(m))
+        .then((m) => applyMeeting(m))
         .catch(() => {})
     }, 800)
   }
@@ -1692,1158 +1531,145 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 displayStageMode === "live") && "is-mode-capture",
             )}
           >
-            {meeting && displayStageMode === "setup" ? (
-              /* ═══ Capture · Setup
-               * 1) Hot words (shared) + language (realtime model)
-               * 2) Start recording
-               * 3) or
-               * 4) Upload audio → leaves setup; language becomes file model
-               */
-              <div className="pm-meeting-mode-empty" data-meeting-mode="empty">
-                <div className="pm-meeting-e-stage">
-                  <p className="pm-meeting-e-kicker">New meeting</p>
-                  <h3 className="pm-meeting-e-title">Capture the conversation</h3>
-                  <p className="pm-meeting-e-sub">
-                    Pick a hot-words library to reduce ambiguity. Select language for live caption.
-                  </p>
-
-                  <div className="pm-meeting-e-config" aria-label="Transcription settings">
-                    <HotWordsSelector
-                      meetingId={meeting.id}
-                      currentLibraryId={meeting.hot_words_library_id}
-                      hasTranscript={false}
-                      providerSupportsHotWords={activeHotWordsSupported}
-                      onSelectLibrary={handleSelectHotWordsLibrary}
-                    />
-                    {supportedLanguageHints.length > 0 && (
-                      <LanguageHintsSelector
-                        selected={languageHints}
-                        onChange={updateLanguageHints}
-                        options={supportedLanguageHints}
-                      />
-                    )}
-                  </div>
-
-                  <div className="pm-meeting-e-actions pm-meeting-e-actions--stack">
-                    <input
-                      ref={emptyUploadRef}
-                      type="file"
-                      accept="audio/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (file) void handleUploadAudio(file)
-                        e.target.value = ""
-                      }}
-                    />
-                    <div
-                      className={cn(
-                        "pm-meeting-e-start-group",
-                        startLiveChipOpen && hasRealtimeProvider && "is-open",
-                      )}
-                      onMouseEnter={hasRealtimeProvider ? openStartLiveChip : undefined}
-                      onMouseLeave={hasRealtimeProvider ? scheduleCloseStartLiveChip : undefined}
-                      onFocusCapture={hasRealtimeProvider ? openStartLiveChip : undefined}
-                      onBlurCapture={(e) => {
-                        if (!hasRealtimeProvider) return
-                        const next = e.relatedTarget as Node | null
-                        if (next && e.currentTarget.contains(next)) return
-                        scheduleCloseStartLiveChip()
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="pm-meeting-e-cta is-primary"
-                        onClick={() => void handleStartRecording()}
-                      >
-                        <Mic className="size-3.5" />
-                        Start recording
-                      </button>
-                      {hasRealtimeProvider && (
-                        <button
-                          type="button"
-                          className={cn(
-                            "pm-meeting-e-realtime-chip",
-                            realtimeEnabled ? "is-on" : "is-off",
-                          )}
-                          tabIndex={startLiveChipOpen ? 0 : -1}
-                          onClick={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            setRealtimeEnabled((v) => !v)
-                            openStartLiveChip()
-                          }}
-                          title={
-                            realtimeEnabled
-                              ? "Live caption on — click to turn off"
-                              : "Live caption off — click to turn on"
-                          }
-                        >
-                          <span
-                            className={cn(
-                              "pm-meeting-e-realtime-dot",
-                              realtimeEnabled && "is-on",
-                            )}
-                          />
-                          Live caption · {realtimeEnabled ? "On" : "Off"}
-                        </button>
-                      )}
-                    </div>
-
-                    <p className="pm-meeting-e-or" aria-hidden>
-                      or
-                    </p>
-
-                    <button
-                      type="button"
-                      className="pm-meeting-e-cta is-secondary"
-                      onClick={() => emptyUploadRef.current?.click()}
-                    >
-                      <Upload className="size-3.5" />
-                      Upload audio
-                    </button>
-                  </div>
-                  {recorder.error && (
-                    <p className="pm-meeting-e-error">{recorder.error}</p>
-                  )}
-                </div>
-              </div>
-            ) : meeting && displayStageMode === "audio" ? (
-              /* ═══ Capture · Audio ready (upload / post-live before file-tx) ═══ */
-              <div className="pm-meeting-mode-empty" data-meeting-mode="audio-ready">
-                <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
-                  <p className="pm-meeting-e-kicker">Audio ready</p>
-                  <h3 className="pm-meeting-e-title">Review audio</h3>
-                  <p className="pm-meeting-e-sub">
-                    Pick a hot-words library to reduce ambiguity. Select language for file transcription.
-                  </p>
-
-                  <div className="pm-meeting-e-config" aria-label="Transcription settings">
-                    <HotWordsSelector
-                      meetingId={meeting.id}
-                      currentLibraryId={meeting.hot_words_library_id}
-                      hasTranscript={false}
-                      providerSupportsHotWords={activeHotWordsSupported}
-                      onSelectLibrary={handleSelectHotWordsLibrary}
-                    />
-                    {supportedLanguageHints.length > 0 && (
-                      <LanguageHintsSelector
-                        selected={languageHints}
-                        onChange={updateLanguageHints}
-                        options={supportedLanguageHints}
-                        showTipBubble
-                      />
-                    )}
-                  </div>
-
-                  {captureAudioUrl && (
-                    <CaptureMiniPlayer
-                      audioUrl={captureAudioUrl}
-                      audioVersion={audioVersion}
-                    />
-                  )}
-
-                  <div className="pm-meeting-e-actions">
-                    <button
-                      type="button"
-                      className="pm-meeting-e-cta is-primary"
-                      onClick={() => void handleTranscribe()}
-                      disabled={!hasFileProvider}
-                    >
-                      <Play className="size-3.5" />
-                      Transcribe
-                    </button>
-                    <button
-                      type="button"
-                      className="pm-meeting-e-cta is-secondary"
-                      onClick={() => emptyUploadRef.current?.click()}
-                    >
-                      <Upload className="size-3.5" />
-                      Replace audio
-                    </button>
-                    <input
-                      ref={emptyUploadRef}
-                      type="file"
-                      accept="audio/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (file) void handleUploadAudio(file)
-                        e.target.value = ""
-                      }}
-                    />
-                  </div>
-                  {!hasFileProvider && (
-                    <p className="pm-meeting-e-error">
-                      No file transcription provider configured. Go to Settings → Transcription.
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : meeting && displayStageMode === "transcribing" ? (
-              /* ═══ Capture · File transcription in progress ═══ */
-              <div className="pm-meeting-mode-empty" data-meeting-mode="transcribing">
-                <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
-                  <p className="pm-meeting-e-kicker">Transcribing</p>
-                  <h3 className="pm-meeting-e-title">File transcription in progress</h3>
-                  <p className="pm-meeting-e-sub">
-                    Stay on this page — next you can name speakers and start Summary.
-                  </p>
-
-                  <div className="pm-meeting-e-config" aria-label="Transcription settings">
-                    <HotWordsSelector
-                      meetingId={meeting.id}
-                      currentLibraryId={meeting.hot_words_library_id}
-                      hasTranscript={false}
-                      providerSupportsHotWords={activeHotWordsSupported}
-                      onSelectLibrary={handleSelectHotWordsLibrary}
-                      disabled
-                    />
-                    {supportedLanguageHints.length > 0 && (
-                      <LanguageHintsSelector
-                        selected={languageHints}
-                        onChange={updateLanguageHints}
-                        options={supportedLanguageHints}
-                        disabled
-                        showTipBubble={false}
-                      />
-                    )}
-                  </div>
-
-                  {captureAudioUrl && (
-                    <CaptureMiniPlayer
-                      audioUrl={captureAudioUrl}
-                      audioVersion={audioVersion}
-                    />
-                  )}
-
-                  <div className="pm-meeting-e-actions">
-                    <button
-                      type="button"
-                      className="pm-meeting-e-cta is-primary"
-                      disabled
-                    >
-                      <Loader2 className="size-3.5 animate-spin" />
-                      Transcribing…
-                    </button>
-                    <button
-                      type="button"
-                      className="pm-meeting-e-cta is-secondary"
-                      onClick={() => void handleCancelTranscribe()}
-                    >
-                      <Square className="size-3.5" />
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : meeting && displayStageMode === "speakers" ? (
-              /* ═══ Capture · Review: transcript + speakers, then Summarize → Studio ═══ */
-              <div className="pm-meeting-mode-live" data-meeting-mode="speakers">
-                <div className="pm-meeting-speaker-gate-hint" role="status">
-                  <Users className="size-3.5 shrink-0" />
-                  <p>
-                    {speakersNeedNames ? (
-                      <>
-                        <strong>Review transcript</strong>
-                        {" · "}
-                        {namedSpeakerCount}/{speakerIdsInTranscript.length || 0} speakers named.
-                        {" "}
-                        Name speakers on the right so Summary uses real names
-                        (e.g. &ldquo;Alex&rdquo; instead of &ldquo;Speaker 0&rdquo;).
-                      </>
-                    ) : speakerIdsInTranscript.length === 0 ? (
-                      <>
-                        <strong>Review transcript</strong>
-                        {" · "}
-                        No speaker labels — you can continue to Summary.
-                      </>
-                    ) : (
-                      <>
-                        <strong>Review transcript</strong>
-                        {" · "}
-                        Speakers named · ready for Summary.
-                      </>
-                    )}
-                  </p>
-                </div>
-
-                <div className="pm-meeting-f-grid">
-                  <div className="pm-meeting-f-card">
-                    <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Transcript</span>
-                      <span className="pm-meeting-f-card-meta">
-                        {displaySegments.length} segments
-                      </span>
-                    </div>
-                    <div className="pm-meeting-f-card-body">
-                      <TranscriptTab
-                        segments={displaySegments}
-                        onSegmentClick={handleTranscriptSegmentClick}
-                        speakerNames={meeting.speaker_names ?? {}}
-                        showSearch={false}
-                        playbackTime={playbackTime}
-                      />
-                    </div>
-                  </div>
-                  <div className="pm-meeting-f-card">
-                    <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Speakers</span>
-                      <span className="pm-meeting-f-card-meta">configure</span>
-                    </div>
-                    <div className="pm-meeting-f-card-body">
-                      <SpeakersTab
-                        segments={displaySegments}
-                        speakerNames={meeting.speaker_names ?? {}}
-                        onUpdateSpeakerName={handleUpdateSpeakerName}
-                        onSegmentClick={handleSpeakerSampleClick}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {captureAudioUrl ? (
-                  <CaptureMiniPlayer
-                    ref={capturePlayerRef}
-                    variant="review"
-                    audioUrl={captureAudioUrl}
-                    audioVersion={audioVersion}
-                    onTimeUpdate={setPlaybackTime}
-                    footerLeftSlot={
-                      <>
-                        <HotWordsSelector
-                          meetingId={meeting.id}
-                          currentLibraryId={meeting.hot_words_library_id}
-                          hasTranscript={displaySegments.length > 0}
-                          providerSupportsHotWords={activeHotWordsSupported}
-                          onSelectLibrary={handleSelectHotWordsLibrary}
-                          onDraftChange={handleHotWordsDraftChange}
-                          compact
-                        />
-                        {supportedLanguageHints.length > 0 && (
-                          <LanguageHintsSelector
-                            selected={languageHints}
-                            onChange={updateLanguageHints}
-                            options={supportedLanguageHints}
-                            compact
-                            showTipBubble={false}
-                          />
-                        )}
-                        <button
-                          type="button"
-                          className="pm-meeting-pill is-compact pm-meeting-review-retx"
-                          onClick={() => void handleTranscribe()}
-                          disabled={!hasFileProvider}
-                          title="Re-run file transcription with current hot words and language"
-                        >
-                          <Play className="size-3.5 opacity-80" />
-                          Re-transcribe
-                        </button>
-                      </>
-                    }
-                    footerSlot={
-                      <button
-                        type="button"
-                        className="pm-meeting-e-cta is-primary"
-                        onClick={handleEnterStudio}
-                      >
-                        <Sparkles className="size-3.5" />
-                        Summarize
-                      </button>
-                    }
-                  />
-                ) : (
-                  <div className="pm-meeting-f-controls pm-meeting-speaker-gate-actions pm-meeting-review-actions">
-                    <div className="pm-meeting-review-tools">
-                      <HotWordsSelector
-                        meetingId={meeting.id}
-                        currentLibraryId={meeting.hot_words_library_id}
-                        hasTranscript={displaySegments.length > 0}
-                        providerSupportsHotWords={activeHotWordsSupported}
-                        onSelectLibrary={handleSelectHotWordsLibrary}
-                        onDraftChange={handleHotWordsDraftChange}
-                        compact
-                      />
-                      {supportedLanguageHints.length > 0 && (
-                        <LanguageHintsSelector
-                          selected={languageHints}
-                          onChange={updateLanguageHints}
-                          options={supportedLanguageHints}
-                          compact
-                          showTipBubble={false}
-                        />
-                      )}
-                      <button
-                        type="button"
-                        className="pm-meeting-pill is-compact pm-meeting-review-retx"
-                        onClick={() => void handleTranscribe()}
-                        disabled={!hasFileProvider}
-                      >
-                        <Play className="size-3.5 opacity-80" />
-                        Re-transcribe
-                      </button>
-                    </div>
-                    <button
-                      type="button"
-                      className="pm-meeting-e-cta is-primary"
-                      onClick={handleEnterStudio}
-                    >
-                      <Sparkles className="size-3.5" />
-                      Summarize
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : meeting && displayStageMode === "live" ? (
-              /* ═══ F · Live record + Notes (independent of Steady) ═══ */
-              <div className="pm-meeting-mode-live" data-meeting-mode="live">
-                <LiveCaptureControlCard
-                  levels={recorder.levels ?? []}
-                  durationLabel={formatRecTime(recorder.duration)}
-                  isPaused={!!recorder.isPaused}
-                  hasRealtimeProvider={hasRealtimeProvider}
-                  realtimeEnabled={realtimeEnabled}
-                  onToggleRealtime={() => setRealtimeEnabled((v) => !v)}
-                  onPause={recorder.pauseRecording}
-                  onResume={recorder.resumeRecording}
-                  onStop={handleStopRecording}
-                  onDiscard={() => void handleDiscard()}
-                />
-                <div className="pm-meeting-f-grid">
-                  <div className="pm-meeting-f-card">
-                    <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Live transcript</span>
-                      <span className="pm-meeting-f-card-meta">
-                        {realtimeEnabled && hasRealtimeProvider ? "live captions" : "auto-scroll"}
-                      </span>
-                    </div>
-                    <div className="pm-meeting-f-card-body">
-                      <TranscriptTab
-                        segments={transcription.segments}
-                        partialText={transcription.currentPartial}
-                        onSegmentClick={handleSegmentClick}
-                        speakerNames={meeting.speaker_names ?? {}}
-                        showSearch={false}
-                        followLive
-                      />
-                    </div>
-                  </div>
-                  <div className="pm-meeting-f-card">
-                    <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Notes</span>
-                      <span className="pm-meeting-f-card-meta">saved live</span>
-                    </div>
-                    <div className="pm-meeting-f-card-body pm-meeting-f-notes">
-                      <MarkdownEditor
-                        value={liveNotes}
-                        onChange={handleLiveNotesChange}
-                        minHeight="200px"
-                        placeholder="Write notes while recording…"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
+            {meeting && displayStageMode !== "studio" && displayStageMode !== "empty" ? (
+              <MeetingCaptureStages
+                mode={displayStageMode}
+                meeting={meeting}
+                languageHints={languageHints}
+                updateLanguageHints={updateLanguageHints}
+                supportedLanguageHints={supportedLanguageHints}
+                maxLanguageHints={maxLanguageHints}
+                activeHotWordsSupported={activeHotWordsSupported}
+                handleSelectHotWordsLibrary={handleSelectHotWordsLibrary}
+                emptyUploadRef={emptyUploadRef}
+                handleUploadAudio={handleUploadAudio}
+                startLiveChipOpen={startLiveChipOpen}
+                hasRealtimeProvider={hasRealtimeProvider}
+                openStartLiveChip={openStartLiveChip}
+                scheduleCloseStartLiveChip={scheduleCloseStartLiveChip}
+                handleStartRecording={handleStartRecording}
+                realtimeEnabled={realtimeEnabled}
+                setRealtimeEnabled={setRealtimeEnabled}
+                recorderError={recorder.error}
+                captureAudioUrl={captureAudioUrl}
+                audioVersion={audioVersion}
+                handleTranscribe={handleTranscribe}
+                hasFileProvider={hasFileProvider}
+                handleCancelTranscribe={handleCancelTranscribe}
+                speakersNeedNames={speakersNeedNames}
+                namedSpeakerCount={namedSpeakerCount}
+                speakerIdsInTranscript={speakerIdsInTranscript}
+                displaySegments={displaySegments}
+                handleTranscriptSegmentClick={handleTranscriptSegmentClick}
+                handleSpeakerSampleClick={handleSpeakerSampleClick}
+                handleUpdateSpeakerName={handleUpdateSpeakerName}
+                capturePlayerRef={capturePlayerRef}
+                setPlaybackTime={setPlaybackTime}
+                playbackTime={playbackTime}
+                handleHotWordsDraftChange={handleHotWordsDraftChange}
+                handleEnterStudio={handleEnterStudio}
+                recorderLevels={recorder.levels ?? []}
+                recorderDuration={recorder.duration}
+                recorderIsPaused={!!recorder.isPaused}
+                formatRecTime={formatRecTime}
+                handleStopRecording={handleStopRecording}
+                handleDiscard={handleDiscard}
+                liveSegments={transcription.segments}
+                livePartial={transcription.currentPartial}
+                handleSegmentClick={handleSegmentClick}
+                liveNotes={liveNotes}
+                handleLiveNotesChange={handleLiveNotesChange}
+                pauseRecording={recorder.pauseRecording}
+                resumeRecording={recorder.resumeRecording}
+              />
             ) : meeting && displayStageMode === "studio" ? (
-              <div className="pm-meeting-mode-studio" data-meeting-mode="studio">
-                {/* ── Steady · R1C1: title + meta ── */}
-                <div
-                  ref={mainAreaRef}
-                  className="pm-meeting-left-chrome"
-                  onPointerDownCapture={() => {
-                    if (txPeekOpen) setTxPeekOpen(false)
-                  }}
-                >
-                  <div data-meeting-title className="pm-meeting-title-card">
-                    <div className="pm-meeting-head">
-                      {editingTitle ? (
-                        <div className="flex items-center gap-1 flex-1 min-w-0">
-                          <input
-                            className="pm-meeting-title-input"
-                            value={titleDraft}
-                            onChange={(e) => setTitleDraft(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleSaveTitle()
-                              if (e.key === "Escape") setEditingTitle(false)
-                            }}
-                            autoFocus
-                          />
-                          <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={handleSaveTitle} aria-label="Save title">
-                            <Check className="size-3.5" />
-                          </Button>
-                          <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => setEditingTitle(false)} aria-label="Cancel edit">
-                            <X className="size-3.5" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-start gap-1 min-w-0 flex-1">
-                          <h2 className="pm-meeting-title">{meeting.title}</h2>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="shrink-0 opacity-50 hover:opacity-100 mt-0.5"
-                            onClick={handleStartEditTitle}
-                            aria-label="Edit title"
-                          >
-                            <Pencil className="size-3.5" />
-                          </Button>
-                        </div>
-                      )}
-
-                      <div className="pm-meeting-meta-stack">
-                        <div className="pm-meeting-meta-row">
-                          <span className="pm-meeting-meta-key">Created</span>
-                          <span className="pm-meeting-meta-val">{metaCreated}</span>
-                        </div>
-                        <div className="pm-meeting-meta-row">
-                          <span className="pm-meeting-meta-key">Speakers</span>
-                          <span className="pm-meeting-meta-val">{metaSpeakers}</span>
-                        </div>
-                        <div className="pm-meeting-meta-row">
-                          <span className="pm-meeting-meta-key">Collections</span>
-                          <span className="pm-meeting-meta-val">
-                            {(() => {
-                              const cols = meeting.allocated_collections
-                              if (!cols || cols.length === 0) return <span>—</span>
-                              return [...new Set(cols)].map((id, i, arr) => (
-                                <span key={id}>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveCollection(id)
-                                      setSidebarView("database")
-                                      setTimeout(() => window.dispatchEvent(new CustomEvent("show-meeting-log")), 100)
-                                    }}
-                                  >
-                                    {collections.find((x: any) => x.id === id)?.name || id}
-                                  </button>
-                                  {i < arr.length - 1 ? ", " : ""}
-                                </span>
-                              ))
-                            })()}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── R2C1: fixed-height content card (tabs + tools inside; body scrolls) ── */}
-                <div
-                  className="pm-meeting-left-body"
-                  onPointerDownCapture={() => {
-                    if (txPeekOpen) setTxPeekOpen(false)
-                  }}
-                >
-                  {!hasFileProvider && meeting.audio_path && (
-                    <div className="pm-meeting-warn mx-3 mt-2 mb-0">
-                      <AlertCircle className="size-3.5 shrink-0" />
-                      <span className="flex-1">No transcription provider configured.</span>
-                      <Button variant="ghost" size="sm" onClick={() => setSidebarView("llm_provider")}>
-                        <Settings className="size-3 mr-1" /> Settings
-                      </Button>
-                    </div>
-                  )}
-
-                  <div ref={meetingContentRef} className="pm-meeting-content-card">
-                    <MeetingTabs
-                      meetingId={meeting.id}
-                      meeting={meeting}
-                      notesContent={meeting.notes_content ?? ""}
-                      onMeetingUpdate={handleMeetingUpdate}
-                      onSeekTo={handleSegmentClick}
-                      onFocusSentence={(id) => {
-                        // Summary sentence-ref → single side Transcript (no floating panel)
-                        requestSideTab("transcript")
-                        setQuickChatOpen(false)
-                        setActiveSectionTag("")
-                        const allSegments =
-                          displaySegments
-                        let idx = allSegments.findIndex((seg: any) => seg.sentence_id === id)
-                        if (idx === -1) {
-                          const numMatch = id.match(/^stt_(\d+)$/)
-                          if (numMatch) idx = parseInt(numMatch[1], 10) - 1
-                        }
-                        if (idx >= 0 && idx < allSegments.length) {
-                          handleSegmentClick(allSegments[idx].start)
-                          requestAnimationFrame(() => {
-                            requestAnimationFrame(() => {
-                              setFocusRef({ id: "_idx_" + idx, ts: Date.now() })
-                            })
-                          })
-                        } else {
-                          setFocusRef({ id, ts: Date.now() })
-                        }
-                      }}
-                      onActiveTabChange={setActiveSectionTag}
-                      transcriptSegments={displaySegments}
-                      partialText={transcription.currentPartial}
-                      focusRef={focusRef}
-                      activeSectionTag={activeSectionTag}
-                      floatingPanelOpen={false}
-                      forceTranscriptTab={transcriptJumpCounter}
-                      tabBarOffset={0}
-                      canShift={false}
-                      playbackTime={playbackTime}
-                      selectedSummaryId={selectedSummaryId}
-                      onSelectedSummaryIdChange={setSelectedSummaryId}
-                      onSectionRailModelChange={setSectionRailModel}
-                      onBindSectionRailActions={bindSectionRailActions}
-                      onMainTabChange={setMainTab}
-                      onRequestSideTab={requestSideTab}
-                      hostTranscriptInParent
-                      className="pm-meeting-tabs-shell"
-                    />
-                  </div>
-                </div>
-
-                {/* ── R1C2: player always stays (does not collapse with side) ── */}
-                <div className="pm-meeting-player-zone">
-                  <div className="pm-meeting-player-zone-card">
-                    <MediaBar
-                      ref={mediaBarRef}
-                      meetingId={meeting.id}
-                      status={meeting.status}
-                      hasAudio={!!meeting.audio_path}
-                      audioPath={meeting.audio_path}
-                      audioUrl={meeting.audio_path ? `/api/meetings/${meeting.id}/audio?v=${audioVersion}` : null}
-                      audioVersion={audioVersion}
-                      duration={
-                        recordingMeetingId === meeting.id ? recorder.duration : 0
-                      }
-                      levels={
-                        recordingMeetingId === meeting.id
-                          ? recorder.levels
-                          : null
-                      }
-                      isRecording={
-                        !!recorder.isRecording &&
-                        recordingMeetingId === meeting.id
-                      }
-                      isPaused={
-                        !!recorder.isPaused && recordingMeetingId === meeting.id
-                      }
-                      transcriptionError={meeting.transcription_error}
-                      onUploadAudio={handleUploadAudio}
-                      onStartRecord={() => void handleStartRecording()}
-                      onStopRecord={handleStopRecording}
-                      onPauseRecord={recorder.pauseRecording}
-                      onResumeRecord={recorder.resumeRecording}
-                      onTranscribe={handleTranscribe}
-                      onReTranscribe={(displaySegments.length > 0 || meeting.transcript_path) ? () => {
-                        setRetranscribeConfirmOpen(true)
-                      } : undefined}
-                      onCancelTranscribe={meeting.status === "transcribing" ? handleCancelTranscribe : undefined}
-                      hasRealtimeProvider={hasRealtimeProvider}
-                      realtimeEnabled={realtimeEnabled}
-                      onToggleRealtime={() => setRealtimeEnabled((v) => !v)}
-                      hasTranscript={displaySegments.length > 0}
-                      hotWordsLibraryId={meeting.hot_words_library_id}
-                      hotWordsLibraries={hotWordsLibraries}
-                      onSelectHotWords={handleSelectHotWordsLibrary}
-                      languageHints={languageHints}
-                      languageHintOptions={supportedLanguageHints}
-                      onChangeLanguageHints={updateLanguageHints}
-                      showLanguageSelector={!!meeting.audio_path}
-                      onTimeUpdate={setPlaybackTime}
-                      recorderError={recorder.error}
-                      onDiscard={handleDiscard}
-                    />
-                  </div>
-                </div>
-
-                {/* ── R2C2: analysis side only (collapses; main body expands right) ── */}
-                <aside
-                  className={cn(
-                    "pm-meeting-stage-right",
-                    !sideRailOpen && "is-collapsed",
-                  )}
-                  aria-label="Meeting side panel"
-                  aria-hidden={!sideRailOpen}
-                >
-                    <div className="pm-meeting-stage-right-card">
-                      {/* Head: sliding pill tabs / Chat label + collapse. Diamond parks absolutely. */}
-                      <div
-                        className={cn(
-                          "pm-meeting-side-head",
-                          sideSurfaceDisplay === "chat" && "is-chat-mode",
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            "pm-meeting-side-head-main",
-                            sideSurfaceExiting && "is-exiting",
-                            !sideSurfaceExiting && "is-entering",
-                          )}
-                          key={sideSurfaceDisplay === "chat" ? "chat-head" : "tabs-head"}
-                        >
-                          {sideSurfaceDisplay === "chat" ? (
-                            <div className="pm-meeting-side-chat-label">
-                              <span className="pm-meeting-side-chat-title">Chat</span>
-                              <span className="pm-meeting-side-chat-sub truncate" title={meeting.title ?? ""}>
-                                {meeting.title || "Meeting"}
-                              </span>
-                            </div>
-                          ) : (
-                            <Tabs
-                              value={sideTab}
-                              onValueChange={(v) => {
-                                if (v === "sections" || v === "transcript" || v === "speaker") {
-                                  setSideTab(v)
-                                }
-                              }}
-                              className="pm-meeting-side-tabs gap-0 min-w-0 flex-1"
-                            >
-                              <TabsList className="relative" aria-label="Side panel">
-                                <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
-                                <TabsTrigger value="sections" disabled={sideSurfaceExiting}>
-                                  Sections
-                                </TabsTrigger>
-                                <TabsTrigger value="transcript" disabled={sideSurfaceExiting}>
-                                  Transcript
-                                </TabsTrigger>
-                                <TabsTrigger value="speaker" disabled={sideSurfaceExiting}>
-                                  Speaker
-                                </TabsTrigger>
-                              </TabsList>
-                            </Tabs>
-                          )}
-                        </div>
-                        {/* Spacer so diamond parks over this gap when top; collapse only in tools mode */}
-                        <span className="pm-meeting-side-fab-slot" aria-hidden />
-                        {sideSurfaceDisplay !== "chat" && (
-                          <button
-                            type="button"
-                            className="pm-meeting-side-collapse"
-                            title="Collapse side panel"
-                            aria-label="Collapse side panel"
-                            onClick={() => setSideRailOpenWithMotion(false)}
-                          >
-                            <PanelRightClose className="size-3.5" />
-                          </button>
-                        )}
-                      </div>
-
-                      <div
-                        className={cn(
-                          "pm-meeting-side-slot",
-                          sideSurfaceExiting && "is-exiting",
-                          !sideSurfaceExiting && "is-entering",
-                        )}
-                        key={sideSurfaceDisplay}
-                      >
-                      {sideSurfaceDisplay === "chat" ? (
-                        <MeetingQuickChat
-                          meetingId={meeting.id}
-                          meetingTitle={meeting.title ?? ""}
-                          open
-                          onOpen={() => {
-                            if (!sideRailOpen) setSideRailOpenWithMotion(true)
-                            else setSideRailOpen(true)
-                            setQuickChatOpen(true)
-                          }}
-                          onClose={() => {
-                            /* Back to tools tabs — keep side rail open */
-                            setQuickChatOpen(false)
-                            setTxPeekOpen(false)
-                          }}
-                          onRefClick={handleRefClick}
-                          layout="dock"
-                        />
-                      ) : (
-                        <>
-                          <div className="pm-meeting-side-body">
-                            {/* Keep panels mounted; CSS crossfade on tab change (no remount / hard cut) */}
-                            <div
-                              className={cn(
-                                "pm-meeting-side-panel",
-                                sideTab === "sections" && "is-active",
-                              )}
-                              aria-hidden={sideTab !== "sections"}
-                            >
-                              <div
-                                ref={sectionRailCardRef}
-                                className={cn(
-                                  "pm-meeting-section-rail-card",
-                                  sectionRailModel?.thinking && "sk-thinking-flow",
-                                )}
-                              >
-                                <div className="pm-meeting-section-rail-head">
-                                  <span className="pm-meeting-section-rail-title">
-                                    {sectionRailModel?.thinking ? "Building…" : "Browse"}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="pm-meeting-section-rail-add"
-                                    disabled={!!sectionRailModel?.busy || !!sectionRailModel?.thinking}
-                                    title="Add section"
-                                    aria-label="Add section"
-                                    onClick={() => sectionRailActionsRef.current?.openAddSection()}
-                                  >
-                                    <Plus className="size-3.5" />
-                                    <span>Add</span>
-                                  </button>
-                                </div>
-                                <div
-                                  className={cn(
-                                    "pm-meeting-section-rail-list",
-                                    sectionRailModel?.thinking && "is-building",
-                                  )}
-                                  onScroll={hideSectionTip}
-                                >
-                                  {/* Sliding focus pill — moves between General / sections */}
-                                  {activeSectionRailId && !sectionRailModel?.thinking ? (
-                                    <div
-                                      className={cn(
-                                        "pm-meeting-section-focus",
-                                        sectionFocusReady && "is-ready",
-                                      )}
-                                      style={{
-                                        transform: `translateY(${sectionFocus.top}px)`,
-                                        height: sectionFocus.height,
-                                      }}
-                                      aria-hidden
-                                    />
-                                  ) : null}
-                                  {/* Building: only solid skeleton fence — never show real General/sections underneath */}
-                                  {sectionRailModel?.thinking ? (
-                                    <div className="pm-meeting-section-fence-overlay" aria-hidden>
-                                      <div className="pm-meeting-section-fence-line" />
-                                      <div className="pm-meeting-section-fence-line" />
-                                      <div className="pm-meeting-section-fence-line" />
-                                      <div className="pm-meeting-section-fence-line" />
-                                    </div>
-                                  ) : !sectionRailModel || sectionRailModel.items.length === 0 ? (
-                                    <p className="pm-meeting-section-rail-empty">No sections yet</p>
-                                  ) : (
-                                    sectionRailModel.items.map((item) => {
-                                      if (item.kind === "skeleton") {
-                                        return (
-                                          <div
-                                            key={item.id}
-                                            className="pm-meeting-section-card is-skeleton"
-                                            aria-hidden
-                                          >
-                                            <span
-                                              className="pm-meeting-section-skel"
-                                              style={{ width: `${52 + (item.id.charCodeAt(3) % 3) * 14}%` }}
-                                            />
-                                          </div>
-                                        )
-                                      }
-
-                                      const isNav = item.kind === "general" || item.kind === "section"
-                                      const isPick = item.kind === "blueprint"
-                                      const isCustom = item.kind === "custom"
-                                      const isEarly = item.kind === "early"
-                                      /** md on disk OR live gen/stream — can open */
-                                      const isReady = isNav && item.ready === true
-                                      /** Tokens flowing (open to watch stream) */
-                                      const isStreaming = isNav && item.streaming === true
-                                      /**
-                                       * Work in flight before first token (server generating / SSE prefilling)
-                                       * OR not yet openable. Show Generating badge.
-                                       */
-                                      const isGenerating =
-                                        isNav &&
-                                        (item.generating === true || item.ready === false) &&
-                                        !isStreaming
-                                      const isIngested = item.kind === "section" && item.ingested === true
-                                      const clickable =
-                                        (isNav && (isReady || isStreaming || isGenerating)) ||
-                                        ((isPick || isCustom) && !sectionRailModel.busy)
-                                      const desc = item.hint?.trim() || ""
-
-                                      return (
-                                        <div
-                                          key={item.id}
-                                          ref={(el) => {
-                                            if (el) sectionItemRefs.current.set(item.id, el)
-                                            else sectionItemRefs.current.delete(item.id)
-                                          }}
-                                          className="pm-meeting-section-card-wrap"
-                                          onMouseEnter={(e) => {
-                                            if (desc) {
-                                              showSectionTip(
-                                                item.id,
-                                                desc,
-                                                e.currentTarget,
-                                              )
-                                            }
-                                          }}
-                                          onMouseLeave={hideSectionTip}
-                                        >
-                                          <button
-                                            type="button"
-                                            disabled={!clickable}
-                                            className={cn(
-                                              "pm-meeting-section-card",
-                                              item.active && isReady && "is-active",
-                                              item.selected && "is-picked",
-                                              isReady && !isStreaming && !isGenerating && "is-ready",
-                                              isStreaming && "is-streaming",
-                                              isGenerating && "is-pending",
-                                              isIngested && "is-ingested",
-                                              (isEarly || (item.kind === "blueprint" && !item.selected)) && "is-preview",
-                                              isCustom && "is-picked",
-                                            )}
-                                            title={
-                                              isStreaming
-                                                ? "Streaming — click to watch"
-                                                : isGenerating
-                                                  ? "Generating…"
-                                                  : isIngested
-                                                    ? "Ingested · open section"
-                                                    : isReady
-                                                      ? "Open section"
-                                                      : undefined
-                                            }
-                                            onClick={() => {
-                                              const actions = sectionRailActionsRef.current
-                                              if (!actions) return
-                                              if (isNav) {
-                                                // Enter ready + live streaming sections without
-                                                // dismissing SSE (stream state is global).
-                                                if (!isReady && !isStreaming && !isGenerating) return
-                                                setSelectedSummaryId(item.id)
-                                                actions.selectSection(item.id)
-                                                setMainTab("summary")
-                                                return
-                                              }
-                                              if (isPick) {
-                                                actions.toggleBlueprint(item.id)
-                                                return
-                                              }
-                                              if (isCustom) {
-                                                const idx = Number(item.id.replace("custom:", ""))
-                                                if (!Number.isNaN(idx)) actions.removeCustom(idx)
-                                              }
-                                            }}
-                                            onFocus={(e) => {
-                                              if (desc) {
-                                                const wrap = e.currentTarget.closest(
-                                                  ".pm-meeting-section-card-wrap",
-                                                ) as HTMLElement | null
-                                                showSectionTip(item.id, desc, wrap)
-                                              }
-                                            }}
-                                            onBlur={hideSectionTip}
-                                            aria-describedby={
-                                              desc && sectionTip?.id === item.id
-                                                ? `section-tip-${item.id}`
-                                                : undefined
-                                            }
-                                          >
-                                            {(isPick || isCustom) && (
-                                              <span
-                                                className={cn(
-                                                  "pm-meeting-section-card-dot",
-                                                  (item.selected || isCustom) && "is-on",
-                                                )}
-                                                aria-hidden
-                                              />
-                                            )}
-                                            {/* Ready / streaming / generating status mark */}
-                                            {isNav && (
-                                              <span
-                                                className={cn(
-                                                  "pm-meeting-section-card-status",
-                                                  isStreaming
-                                                    ? "is-streaming"
-                                                    : isGenerating
-                                                      ? "is-pending"
-                                                      : isReady
-                                                        ? "is-ready"
-                                                        : "is-pending",
-                                                )}
-                                                aria-hidden
-                                              />
-                                            )}
-                                            {item.shortLabel ? (
-                                              <span className="pm-meeting-section-card-t">{item.shortLabel}</span>
-                                            ) : null}
-                                            <span className="pm-meeting-section-card-name">{item.label}</span>
-                                            {isStreaming ? (
-                                              <span className="pm-meeting-section-card-badge is-streaming">
-                                                Streaming
-                                              </span>
-                                            ) : isGenerating ? (
-                                              <span className="pm-meeting-section-card-badge">Generating</span>
-                                            ) : isIngested ? (
-                                              <span
-                                                className="pm-meeting-section-card-ingested"
-                                                title="Ingested to collection"
-                                                aria-label="Ingested"
-                                              >
-                                                <Check className="size-2.5" strokeWidth={2.5} aria-hidden />
-                                              </span>
-                                            ) : null}
-                                            {isCustom ? (
-                                              <X className="pm-meeting-section-card-x size-3" aria-hidden />
-                                            ) : null}
-                                          </button>
-                                        </div>
-                                      )
-                                    })
-                                  )}
-                                  {/* Breakdown sits under the last list item (not a separate footer bar) */}
-                                  {sectionRailModel?.canBreakdown && (
-                                    <div className="pm-meeting-section-rail-breakdown-wrap">
-                                      <button
-                                        type="button"
-                                        className={cn(
-                                          "pm-meeting-section-rail-breakdown",
-                                          sectionRailModel.busy && "sk-thinking-flow",
-                                        )}
-                                        disabled={sectionRailModel.busy}
-                                        onClick={() => sectionRailActionsRef.current?.breakdown()}
-                                      >
-                                        {sectionRailModel.busy ? "Extracting…" : "Breakdown"}
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            <div
-                              className={cn(
-                                "pm-meeting-side-panel",
-                                sideTab === "transcript" && "is-active",
-                              )}
-                              aria-hidden={sideTab !== "transcript"}
-                            >
-                              <TranscriptTab
-                                segments={displaySegments}
-                                partialText={transcription.currentPartial}
-                                onSegmentClick={handleSegmentClick}
-                                focusRef={focusRef}
-                                activeSectionTag={activeSectionTag}
-                                speakerNames={meeting.speaker_names ?? {}}
-                                tabs={meeting?.tabs}
-                                showSearch
-                                playbackTime={playbackTime}
-                              />
-                            </div>
-
-                            <div
-                              className={cn(
-                                "pm-meeting-side-panel",
-                                sideTab === "speaker" && "is-active",
-                              )}
-                              aria-hidden={sideTab !== "speaker"}
-                            >
-                              <SpeakersTab
-                                segments={displaySegments}
-                                speakerNames={meeting.speaker_names ?? {}}
-                                onUpdateSpeakerName={(id, name) => {
-                                  const updated = { ...meeting.speaker_names, [id]: name }
-                                  updateMeeting(meeting.id, { speaker_names: updated }).then((m) => {
-                                    handleMeetingUpdate(m)
-                                    void import("@/components/ui/tiptap-editor").then((mod) => {
-                                      mod.invalidateMeetingSpeakerCache(meeting.id)
-                                    })
-                                  }).catch(() => {})
-                                }}
-                                onSegmentClick={handleSegmentClick}
-                                activeSectionTag={activeSectionTag}
-                              />
-                            </div>
-                          </div>
-                        </>
-                      )}
-                      </div>
-                    </div>
-                  </aside>
-
-                {/*
-                  Single QC diamond: bottom park by default; Chat open → fade out,
-                  snap to top, fade in (no slide). Side collapse keeps bottom park.
-                */}
-                <div
-                  className={cn(
-                    "pm-meeting-qc-fab-host",
-                    qcFabPark === "top" ? "is-park-top" : "is-park-bottom",
-                    qcFabFading && "is-fading",
-                    qcFabRideOut && "is-ride-out",
-                    qcFabBottomFadeIn && "is-fade-in",
-                  )}
-                >
-                  <MeetingQcFab
-                    open={
-                      quickChatOpen &&
-                      sideRailOpen &&
-                      qcFabPark === "top" &&
-                      (qcFabSpinPhase === "cruise" ||
-                        qcFabSpinPhase === "enter-hold" ||
-                        qcFabSpinPhase === "enter-decel-top")
-                    }
-                    spinPhase={qcFabSpinPhase}
-                    onOpen={() => {
-                      if (!sideRailOpen) setSideRailOpenWithMotion(true)
-                      else setSideRailOpen(true)
-                      setQuickChatOpen(true)
-                      setTxPeekOpen(false)
-                    }}
-                    onClose={() => {
-                      /* Leave Chat → tools tabs; do not collapse the side rail */
-                      setQuickChatOpen(false)
-                      setTxPeekOpen(false)
-                    }}
-                  />
-                </div>
-
-                {!sideRailOpen && (
-                  <button
-                    type="button"
-                    className="pm-meeting-side-reopen"
-                    onClick={() => {
-                      setSideRailOpenWithMotion(true)
-                      /* reopen to last non-chat tools view */
-                    }}
-                    aria-label="Open side panel"
-                  >
-                    <PanelRightOpen className="size-3.5" />
-                    Panel
-                  </button>
-                )}
-
-                {/* Chat sentence-ref: overlay Transcript peek (covers main; side width fixed) */}
-                {txPeekOpen && sideRailOpen && (
-                  <aside
-                    className="pm-meeting-tx-peek"
-                    aria-label="Transcript reference"
-                  >
-                    <div className="pm-meeting-tx-peek-card">
-                      <div className="pm-meeting-tx-peek-head">
-                        <span className="pm-meeting-tx-peek-title">Transcript</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => setTxPeekOpen(false)}
-                          aria-label="Close transcript"
-                        >
-                          <X className="size-3.5" />
-                        </Button>
-                      </div>
-                      <div className="pm-meeting-tx-peek-body">
-                        <TranscriptTab
-                          segments={displaySegments}
-                          partialText={transcription.currentPartial}
-                          onSegmentClick={handleSegmentClick}
-                          focusRef={focusRef}
-                          activeSectionTag={activeSectionTag}
-                          speakerNames={meeting.speaker_names ?? {}}
-                          tabs={meeting?.tabs}
-                          showSearch={false}
-                          playbackTime={playbackTime}
-                        />
-                      </div>
-                    </div>
-                  </aside>
-                )}
-              </div>
+              <MeetingStudioStage
+                meeting={meeting}
+                collections={collections}
+                setActiveCollection={setActiveCollection}
+                setSidebarView={setSidebarView}
+                mainAreaRef={mainAreaRef}
+                meetingContentRef={meetingContentRef}
+                mediaBarRef={mediaBarRef}
+                txPeekOpen={txPeekOpen}
+                setTxPeekOpen={setTxPeekOpen}
+                editingTitle={editingTitle}
+                setEditingTitle={setEditingTitle}
+                titleDraft={titleDraft}
+                setTitleDraft={setTitleDraft}
+                handleSaveTitle={handleSaveTitle}
+                handleStartEditTitle={handleStartEditTitle}
+                metaCreated={metaCreated}
+                metaSpeakers={metaSpeakers}
+                hasFileProvider={hasFileProvider}
+                handleMeetingUpdate={handleMeetingUpdate}
+                handleSegmentClick={handleSegmentClick}
+                requestSideTab={requestSideTab}
+                setQuickChatOpen={setQuickChatOpen}
+                setActiveSectionTag={setActiveSectionTag}
+                displaySegments={displaySegments}
+                setFocusRef={setFocusRef}
+                partialText={studioPartialText}
+                focusRef={focusRef}
+                activeSectionTag={activeSectionTag}
+                transcriptJumpCounter={transcriptJumpCounter}
+                playbackTime={playbackTime}
+                selectedSummaryId={selectedSummaryId}
+                setSelectedSummaryId={setSelectedSummaryId}
+                setSectionRailModel={setSectionRailModel}
+                bindSectionRailActions={bindSectionRailActions}
+                setMainTab={setMainTab}
+                audioVersion={audioVersion}
+                recordingMeetingId={recordingMeetingId}
+                recorderDuration={recorder.duration}
+                recorderLevels={recorder.levels}
+                recorderIsRecording={!!recorder.isRecording}
+                recorderIsPaused={!!recorder.isPaused}
+                recorderError={recorder.error}
+                pauseRecording={recorder.pauseRecording}
+                resumeRecording={recorder.resumeRecording}
+                handleUploadAudio={handleUploadAudio}
+                handleStartRecording={handleStartRecording}
+                handleStopRecording={handleStopRecording}
+                handleTranscribe={handleTranscribe}
+                setRetranscribeConfirmOpen={setRetranscribeConfirmOpen}
+                handleCancelTranscribe={handleCancelTranscribe}
+                hasRealtimeProvider={hasRealtimeProvider}
+                realtimeEnabled={realtimeEnabled}
+                setRealtimeEnabled={setRealtimeEnabled}
+                hotWordsLibraries={hotWordsLibraries}
+                handleSelectHotWordsLibrary={handleSelectHotWordsLibrary}
+                languageHints={languageHints}
+                supportedLanguageHints={supportedLanguageHints}
+                updateLanguageHints={updateLanguageHints}
+                maxLanguageHints={maxLanguageHints}
+                setPlaybackTime={setPlaybackTime}
+                handleDiscard={handleDiscard}
+                sideRailOpen={sideRailOpen}
+                sideSurfaceDisplay={sideSurfaceDisplay}
+                sideSurfaceExiting={sideSurfaceExiting}
+                sideTab={sideTab}
+                setSideTab={setSideTab}
+                setSideRailOpenWithMotion={setSideRailOpenWithMotion}
+                setSideRailOpen={setSideRailOpen}
+                handleRefClick={handleRefClick}
+                sectionRailCardRef={sectionRailCardRef}
+                sectionRailModel={sectionRailModel}
+                sectionRailActionsRef={sectionRailActionsRef}
+                hideSectionTip={hideSectionTip}
+                activeSectionRailId={activeSectionRailId}
+                sectionFocusReady={sectionFocusReady}
+                sectionFocus={sectionFocus}
+                sectionItemRefs={sectionItemRefs}
+                showSectionTip={showSectionTip}
+                sectionTip={sectionTip}
+                qcFabPark={qcFabPark}
+                qcFabFading={qcFabFading}
+                qcFabRideOut={qcFabRideOut}
+                qcFabBottomFadeIn={qcFabBottomFadeIn}
+                qcFabSpinPhase={qcFabSpinPhase}
+                quickChatOpen={quickChatOpen}
+              />
             ) : (
               <div className="pm-meeting-empty pm-meeting-empty--span">
                 <p>Select a meeting or create one</p>
@@ -2853,80 +1679,17 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         </div>
       </div>
 
-      {/* Dialogs */}
-
-      <Dialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
-        <DialogContent
-          className="pm-dialog pm-dialog--silk sm:max-w-[280px]"
-          showCloseButton={false}
-          overlayClassName="pm-dialog-overlay--silk"
-        >
-          <DialogHeader>
-            <DialogKicker>Meeting</DialogKicker>
-            <DialogTitle>Delete meeting?</DialogTitle>
-            <DialogDescription>
-              This meeting and its audio will be permanently removed.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button type="button" variant="destructive-solid" size="sm" onClick={confirmDelete}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={retranscribeConfirmOpen} onOpenChange={setRetranscribeConfirmOpen}>
-        <DialogContent
-          className="pm-dialog pm-dialog--silk sm:max-w-sm"
-          showCloseButton={false}
-          overlayClassName="pm-dialog-overlay--silk"
-        >
-          <DialogHeader>
-            <DialogKicker>Transcript</DialogKicker>
-            <DialogTitle>Re-transcribe meeting?</DialogTitle>
-            <DialogDescription>
-              Re-transcribing will overwrite the existing transcript and speaker names.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setRetranscribeConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              onClick={() => { setRetranscribeConfirmOpen(false); handleTranscribe() }}
-            >
-              Continue
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Section description: under the hovered item */}
-      {sectionTip &&
-        sideRailOpen &&
-        sideTab === "sections" &&
-        createPortal(
-          <div
-            id={`section-tip-${sectionTip.id}`}
-            role="tooltip"
-            className="pm-meeting-section-tip"
-            style={{
-              left: sectionTip.left,
-              top: sectionTip.top,
-              width: sectionTip.width,
-            }}
-          >
-            {sectionTip.text}
-          </div>,
-          document.body,
-        )}
+      <MeetingViewOverlays
+        deleteTarget={deleteTarget}
+        setDeleteTarget={setDeleteTarget}
+        confirmDelete={confirmDelete}
+        retranscribeConfirmOpen={retranscribeConfirmOpen}
+        setRetranscribeConfirmOpen={setRetranscribeConfirmOpen}
+        handleTranscribe={handleTranscribe}
+        sectionTip={sectionTip}
+        sideRailOpen={sideRailOpen}
+        sideTab={sideTab}
+      />
 
     </div>
   )

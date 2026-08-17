@@ -446,7 +446,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           </header>
           <div className="pm-config-grid">
             <div className="pm-config-field">
-              <ConfigLabel tooltip="Controls how aggressively paragraphs are merged. 0.5 = merge until 50% of max_tokens.">
+              <ConfigLabel tooltip="One extra block may push the chunk past chunk size, up to 150% (512 → 768). After that overflow the chunk is sealed even if more would still fit under 768.">
                 Buffer Ratio
               </ConfigLabel>
               <Input
@@ -637,8 +637,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
             />
           </header>
           <p className="pm-meta pm-config-card-desc">
-            Uses an LLM to generate background for each chunk, improving
-            retrieval quality.
+            When on, each searchable chunk gets situating context for retrieval.
+            The document Summary still runs when this switch is off.
           </p>
           <div
             className={cn(
@@ -669,8 +669,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
             <span className="pm-config-card-kicker">Enriching LLM</span>
           </header>
           <p className="pm-meta pm-config-card-desc">
-            Used for contextual enrichment during ingestion. Leave empty for
-            the global default.
+            Overrides Settings → Contextual enrichment & Summary. Leave empty
+            for the global default.
           </p>
           <div className="pm-config-grid">
             <div className="pm-config-field">

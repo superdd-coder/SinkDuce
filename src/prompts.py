@@ -127,11 +127,91 @@ If no conflicts, use an empty array: "conflicts": []"""
 # Contextual Enrichment (document indexing pipeline)
 # ═══════════════════════════════════════════════════════════════════════
 
+# INGEST_SYSTEM_PROMPT
+#   Purpose: Shared system message for ingest Summary and Context so the
+#            request prefix (system + full document) is identical.
+#   Role: system
+#   Called by: src/rag/contextual.py → ContextualRetrieval._ingest_generate()
+#   Template vars: none
+INGEST_SYSTEM_PROMPT = """You are helping build a search index for a document collection. Read the document carefully. Follow the task that comes after the document. Respond in the format the task requests."""
+
+# INGEST_SUMMARY_TASK
+#   Purpose: Task suffix after the full document — structured DATA/FACTS/INSIGHTS
+#            plus a short overview. The short overview is stored, not embedded.
+#   Role: user (appended after the document)
+#   Called by: src/rag/contextual.py → ContextualRetrieval._generate_summary()
+#   Template vars: none
+INGEST_SUMMARY_TASK = """Analyze the document above and produce two outputs.
+
+## Output 1 — Structured Summary
+Extract key information. Be extremely conservative — only extract facts that are EXPLICITLY stated. Do not infer, assume, or generalize.
+
+Output in this exact format:
+
+===DATA===
+(Numerical data that is EXPLICITLY stated in the document with clear context)
+- Example: The contract value for Project X is 5 million USD
+- Example: The system design capacity is 3,000 m3/day
+
+===FACTS===
+(Factual statements that are EXPLICITLY stated — not inferred)
+- Example: Company A is the contractor for Project X
+- Example: The project uses membrane type M
+
+===INSIGHTS===
+(Only include if there is STRONG direct evidence. If uncertain, write "- None identified")
+- Example: Based on the 3-month delay mentioned by the project manager, the Q3 deadline appears at risk
+
+Rules:
+- MAX 10 items per category. Quality over quantity.
+- ONLY extract what is explicitly written. Do not generalize from examples or discussions.
+- If a number or fact is mentioned in a hypothetical, example, or "what-if" scenario, do not treat it as a real data point.
+- If you are not sure whether something is a fact or an assumption, do not include it.
+- Each item MUST clearly state what it refers to. Do not use vague references like "the project" — name the specific project or entity.
+- If a category has nothing that meets these criteria, write "- None identified"
+- Do not use square brackets [] around words. Write plain sentences.
+- Pay attention to context: if someone says "let's model a 1000 m3/day project", that is a discussion about modeling, not a statement about an actual project's capacity.
+
+## Output 2 — Short Summary
+Write a brief 1-2 sentence summary of this document. Focus on: what is this document about, who is it for, and what is its purpose. Keep it concise and readable.
+
+## Output Format
+Respond with ONLY a JSON object (no markdown fences, no extra text):
+{"structured_summary": "===DATA===\\n- ...\\n===FACTS===\\n- ...\\n===INSIGHTS===\\n- ...", "short_summary": "1-2 sentence summary"}"""
+
+# INGEST_CONTEXT_TASK
+#   Purpose: Task suffix after the full document — a locator label per chunk
+#            for retrieval. Not a reading guide and not a summary of the chunk.
+#   Role: user (appended after the document)
+#   Called by: src/rag/contextual.py → ContextualRetrieval._situate_batch()
+#   Template vars: {chunks} — numbered full chunk bodies, each starting with [id]
+INGEST_CONTEXT_TASK = """The numbered blocks below are the target chunks sliced from the document above. Write a retrieval locator for each one. A locator is a label, not a summary.
+
+Each block starts with [N]. N is the chunk id. In the JSON, "id" must be that same N.
+
+Use the document above for names (project, client, site, document title, section titles). The text under each [N] is that chunk's full body (table-source screenshots are omitted; the table markup is the content). Do not copy specifications, table cells, flows, powers, recoveries, or equipment lists into the locator — those stay in the chunk.
+
+Good: "Project X proposal for Client A at Site B, section 1.1 process-flow table, intake through distribution steps"
+Good: "Project X, section 2.3 treatment-plant overall specification table"
+Bad: "table listing intake 100 m3/h, clarification 100 m3/h, filtration 80 m3/h and waste 20 m3/h"
+Bad: "This section specifies the treatment design" / "This part of the document discusses pretreatment"
+
+Rules:
+- One entry per [N] below
+- One short sentence (two only if two distinct names are needed)
+- Name the project/document and the section or table; for a table slice, name the topic of this slice (which rows or columns), not the values
+- If a number or equipment model appears in the chunk, leave it out of the locator
+- If a chunk is only a figure, name the figure's subject and its section
+- Output ONLY JSON (no markdown fences): {{"contexts": [{{"id": 0, "context": "..."}}, {{"id": 1, "context": "..."}}]}}
+
+Chunks:
+{chunks}"""
+
 # SUMMARY_PROMPT
-#   Purpose: Step 1 of contextual enrichment — generates BOTH a structured summary
-#            (data/facts/insights) AND a short 1-2 sentence summary in one LLM call.
-#            The structured part uses the same format as STRUCTURED_SUMMARY_PROMPT.
+#   Purpose: Standalone summary call used by doc-summary / structured-summary
+#            helpers (document is inlined). Ingest uses INGEST_* instead.
 #   Template vars: {document} — full document text
+#   Called by: src/rag/contextual.py → generate_structured_summary path / tests
 SUMMARY_PROMPT = """Analyze the following document and produce two outputs:
 
 Document:
@@ -176,11 +256,10 @@ Respond with ONLY a JSON object (no markdown fences, no extra text):
 {{"structured_summary": "===DATA===\\n- ...\\n===FACTS===\\n- ...\\n===INSIGHTS===\\n- ...", "short_summary": "1-2 sentence summary"}}"""
 
 # CONTEXT_PROMPT
-#   Purpose: For each chunk, generates background context that a reader cannot
-#            infer from the chunk text alone, using surrounding chunks.
-#            The document summary is generated in parallel and stored separately.
+#   Purpose: Legacy per-chunk situating prompt (1 LLM call per chunk).
+#            Superseded by INGEST_CONTEXT_TASK. Kept so existing imports resolve.
 #   Role: user (single message)
-#   Called by: src/rag/contextual.py → ContextualRetrieval._generate_context()
+#   Called by: unused (was src/rag/contextual.py → ContextualRetrieval._generate_context)
 #   Template vars: {chunk}              — current chunk text
 #                  {surrounding_section} — neighboring chunk text (may be empty)
 CONTEXT_PROMPT = """You are helping build a search index. Given a chunk from a document and its surrounding chunks, write 1-2 sentences of background context that a reader would need to understand this chunk but CANNOT figure out from the chunk text alone.
@@ -196,6 +275,56 @@ Rules:
 - Keep it brief — max 2 short sentences
 
 Output only the context text, nothing else."""
+
+# SECTION_SEGMENT_PROMPT
+#   Purpose: Legacy section-split prompt. Ingest no longer segments.
+#   Role: user (single message)
+#   Called by: unused
+#   Template vars: {chunk_count} — number of searchable chunks (0..n-1)
+#                  {previews}    — numbered preview lines, one per chunk
+SECTION_SEGMENT_PROMPT = """You are splitting a document into topical sections for a search index.
+
+You will see {chunk_count} numbered chunk previews (index 0 to {chunk_count_last}).
+Each preview is a short prefix of that chunk, not the full text.
+
+Assign every index to exactly one section. Prefer 6-15 sections, at most 20.
+Merge very short neighboring spans unless a single chunk is clearly standalone
+(cover page, isolated table, appendix).
+
+Respond with ONLY a JSON object (no markdown fences):
+{{"sections": [{{"start": 0, "end": 14}}, {{"start": 15, "end": 15}}]}}
+
+Rules:
+- start and end are inclusive indices
+- sections must be in order, cover 0..{chunk_count_last} with no gaps or overlaps
+- do not invent section titles
+
+Previews:
+{previews}"""
+
+# SECTION_SUMMARY_PROMPT
+#   Purpose: Legacy section-level background. Ingest uses INGEST_CONTEXT_TASK.
+#   Role: user (single message)
+#   Called by: unused
+#   Template vars: {section_text} — concatenated body of the section (may be truncated)
+SECTION_SUMMARY_PROMPT = """You are writing background context for a search index.
+
+The text below is one topical section of a longer document. Write 1-2 concise
+sentences naming the topic, entities, and key facts a search query would need.
+
+Prefer direct statements such as "Project X uses a 150 m3/h RO train"
+over framing such as "This section specifies the RO design" or
+"This part of the document discusses the treatment process".
+
+Rules:
+- Only use information that is present in the section text
+- Lead with the subject (project, unit, table, party), not "this section"
+- Write natural sentences, not key=value pairs
+- Prefer facts and names over restating that a section exists
+- Output only the 1-2 sentences, nothing else
+
+Section text:
+{section_text}"""
 
 # STRUCTURED_SUMMARY_PROMPT
 #   Purpose: Extracts structured information (data / facts / insights) from a
@@ -295,19 +424,20 @@ languages — this is a hard failure.
 
 ## Summary
 A concise 3-5 sentence overview of the entire meeting.
-Use [spk:ID] and [N] to cite speakers and source sentences.
+Use [spk:ID] and [ref:N] to cite speakers and source sentences.
 Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
 the same person's bare name).
 
 ## Data & Facts
 Key data points, figures, metrics, decisions, deadlines mentioned.
-Each as a standalone bullet with [N] reference.
+Each as a standalone bullet with a [ref:N] reference.
 
 REF ACCURACY — CRITICAL:
-- Before writing a [N] ref, verify that the sentence text ACTUALLY
+- Before writing a [ref:N] citation, verify that the sentence text ACTUALLY
   contains the data point or claim.
 - If no single sentence directly supports a fact, do NOT add a ref tag.
-- Combine IDs: [67,70] or ranges [67-70].
+- Combine IDs: [ref:67,70] or ranges [ref:67-70].
+- Never cite with a bare [67] — that is ordinary text, not a citation.
 
 SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
 and Detail):
@@ -339,8 +469,8 @@ HARD RULES:
 
 GOOD:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- [spk:1] recommended Option B; the team agreed. [42]
-- External vendor Northline to send revised quotes by Friday [88]
+- [spk:1] recommended Option B; the team agreed. [ref:42]
+- External vendor Northline to send revised quotes by Friday [ref:88]
   (third party named in dialogue, not a [spk:] in this meeting)
 
 BAD (double labeling — forbidden):
@@ -428,28 +558,28 @@ Q&A process entirely.  If [spk:A] asked a question and [spk:B]
 answered, write only the answer.
 
 BAD (narrates the discussion journey):
-  [spk:A] asked about Topic X, noting Fact 1. [N]
-  [spk:B] explained that the reason is Condition C. [N]
-  [spk:A] confirmed that this means Outcome O. [N]
+  [spk:A] asked about Topic X, noting Fact 1. [ref:12]
+  [spk:B] explained that the reason is Condition C. [ref:13]
+  [spk:A] confirmed that this means Outcome O. [ref:14]
 
 GOOD (states the final answer directly):
-  Topic X operates under Condition C, resulting in Outcome O [N-N].
+  Topic X operates under Condition C, resulting in Outcome O [ref:12-14].
 
 BAD (attributes every fact to a speaker):
   [spk:B] stated the capacity is N units. [spk:C] noted the cost is
   $M. [spk:B] added that the timeline is D months.
 
 GOOD (states facts directly, speaker only for opinions/decisions):
-  Capacity is N units at a cost of $M with a D-month timeline [N-N].
+  Capacity is N units at a cost of $M with a D-month timeline [ref:12-14].
   [spk:B] recommended proceeding with Option A.
 
 BAD (every sentence gets a ref — noisy):
-  The system uses N units, each V m³ [ref].  The loading rate is R
-  kg/m³ with a D-day retention time [ref].
+  The system uses N units, each V m³ [ref:12].  The loading rate is R
+  kg/m³ with a D-day retention time [ref:15].
 
 GOOD (refs only on key data, combined):
   The system uses N units of V m³ each at R kg/m³ loading with a
-  D-day retention time [ref-ref].
+  D-day retention time [ref:12-15].
 
 INFERENCE RULES — what you MAY vs MAY NOT infer:
 
@@ -470,12 +600,13 @@ When in doubt, state the raw numbers and let the reader draw
 their own conclusions.
 
 SENTENCE REFERENCES:
-- Use [N] refs for key data points, numbers, decisions, and direct
+- Use [ref:N] for key data points, numbers, decisions, and direct
   quotes.  Do NOT add refs to every sentence — narrative context
   and transitional prose do not need refs.
-- Place [N] at the end of the clause it supports.
-- Combine IDs: [67,70] or ranges [67-70].
+- Place [ref:N] at the end of the clause it supports.
+- Combine IDs: [ref:67,70] or ranges [ref:67-70].
 - NEVER invent or concatenate IDs.
+- NEVER use a bare [67] as a citation.
 
 Output the Markdown document directly — no JSON wrapper, no markdown
 fences, no preamble.  Start immediately with ``## Summary``.
@@ -689,7 +820,8 @@ _MEETING_V3_SHARED_SYSTEM = (
     "\n\n"
     "TRANSCRIPT FORMAT: Each line is [N] [spk:ID] {text} where [N] is "
     "a bare integer sentence number and [spk:ID] is a speaker identifier.  "
-    "Cite sentences as [67] (bare integer, no prefix)."
+    "Cite sentences as [ref:67] — the prefix ref: plus that integer.  "
+    "Never cite with a bare [67]."
     "\n\n"
     "SPEAKER IDENTITY:\n"
     "- Transcript speakers are labeled only as [spk:ID] (e.g. [spk:0]). "
@@ -753,7 +885,7 @@ MEETING_TRANSLATION_SYSTEM = (
     "RULES:\n"
     "- Preserve the markdown structure exactly: headings, lists, bold, "
     "italic, and line breaks carry over unchanged.\n"
-    "- Keep citation markers such as [67], speaker tags such as "
+    "- Keep citation markers such as [ref:67] or [stt_0067], speaker tags such as "
     "[spk:ID], and priority tags such as [priority: high] verbatim — never translate, reorder, or drop them.\n"
     "- Translate naturally and fluently into the target language; prefer "
     "idiomatic phrasing over word-for-word literalness.\n"
@@ -779,7 +911,7 @@ MEETING_TRANSLATION_PROMPT = """\
 <task>
 Translate the document above into {target_language}.  Follow every rule \
 from your instructions: keep the markdown structure, keep citation markers \
-like [67], speaker tags like [spk:ID], and priority tags like [priority: high] verbatim, and output only the \
+like [ref:67] or [stt_0067], speaker tags like [spk:ID], and priority tags like [priority: high] verbatim, and output only the \
 translated document.
 </task>
 """
@@ -1078,11 +1210,11 @@ Produce a Markdown document with these sections:
 A 3-5 paragraph overview covering all distinct discussion threads,
 decisions, and outcomes found in FOCUS sentences.  Be information-
 dense — prefer one well-crafted paragraph over three vague ones.
-Use [spk:ID] and [N] references (copy the number from the header).
+Use [spk:ID] and [ref:N] references (copy the number from the header).
 Follow SPEAKER IDENTITY rules below (never write [spk:ID] next to
 the same person's bare name).
 
-Use [N] to cite source sentences.
+Use [ref:N] to cite source sentences. Never cite with a bare [67].
 
 SPEAKER IDENTITY — CRITICAL (applies to Summary, Todo, Data & Facts,
 and Detail):
@@ -1114,8 +1246,8 @@ HARD RULES:
 
 GOOD:
 - [spk:0] to prepare the Q3 budget report [priority: high]
-- [spk:1] recommended Option B; the team agreed. [42]
-- External vendor Northline to send revised quotes by Friday [88]
+- [spk:1] recommended Option B; the team agreed. [ref:42]
+- External vendor Northline to send revised quotes by Friday [ref:88]
   (third party named in dialogue, not a [spk:] in this meeting)
 
 BAD (double labeling — forbidden):
@@ -1167,16 +1299,16 @@ Every data point, figure, metric, decision, and deadline found in
 FOCUS sentences.  Present each as a standalone bullet.
 
 REF ACCURACY — CRITICAL:
-- Before writing a [N] ref, verify that the sentence text ACTUALLY
+- Before writing a [ref:N] citation, verify that the sentence text ACTUALLY
   contains the data point or claim being cited.
 - If no single sentence directly supports a fact, do NOT add a ref
   tag.  An unsupported fact without a ref is better than a wrong ref.
-- Combine multiple IDs with commas: [67,70] or ranges
-  with a dash: [67-70].  NEVER concatenate IDs without a
+- Combine multiple IDs with commas: [ref:67,70] or ranges
+  with a dash: [ref:67-70].  NEVER concatenate IDs without a
   comma or dash separator.
 
 Example:
-- [spk:0] reported Q3 revenue at $2.1M, a 15% increase YoY. [12,15]
+- [spk:0] reported Q3 revenue at $2.1M, a 15% increase YoY. [ref:12,15]
 
 ## Detail
 A condensed narrative of the discussion about this section.
@@ -1218,28 +1350,28 @@ Q&A process entirely.  If [spk:A] asked a question and [spk:B]
 answered, write only the answer.
 
 BAD (narrates the discussion journey):
-  [spk:A] asked about Topic X, noting Fact 1. [N]
-  [spk:B] explained that the reason is Condition C. [N]
-  [spk:A] confirmed that this means Outcome O. [N]
+  [spk:A] asked about Topic X, noting Fact 1. [ref:12]
+  [spk:B] explained that the reason is Condition C. [ref:13]
+  [spk:A] confirmed that this means Outcome O. [ref:14]
 
 GOOD (states the final answer directly):
-  Topic X operates under Condition C, resulting in Outcome O [N-N].
+  Topic X operates under Condition C, resulting in Outcome O [ref:12-14].
 
 BAD (attributes every fact to a speaker):
   [spk:B] stated the capacity is N units. [spk:C] noted the cost is
   $M. [spk:B] added that the timeline is D months.
 
 GOOD (states facts directly, speaker only for opinions/decisions):
-  Capacity is N units at a cost of $M with a D-month timeline [N-N].
+  Capacity is N units at a cost of $M with a D-month timeline [ref:12-14].
   [spk:B] recommended proceeding with Option A.
 
 BAD (every sentence gets a ref — noisy):
-  The system uses N units, each V m³ [ref].  The loading rate is R
-  kg/m³ with a D-day retention time [ref].
+  The system uses N units, each V m³ [ref:12].  The loading rate is R
+  kg/m³ with a D-day retention time [ref:15].
 
 GOOD (refs only on key data, combined):
   The system uses N units of V m³ each at R kg/m³ loading with a
-  D-day retention time [ref-ref].
+  D-day retention time [ref:12-15].
 
 INFERENCE RULES — what you MAY vs MAY NOT infer:
 
@@ -1260,12 +1392,13 @@ When in doubt, state the raw numbers and let the reader draw
 their own conclusions.
 
 SENTENCE REFERENCES:
-- Use [N] refs for key data points, numbers, decisions, and direct
+- Use [ref:N] for key data points, numbers, decisions, and direct
   quotes.  Do NOT add refs to every sentence — narrative context
   and transitional prose do not need refs.
-- Place [N] at the end of the clause it supports.
-- Combine IDs: [67,70] or ranges [67-70].
+- Place [ref:N] at the end of the clause it supports.
+- Combine IDs: [ref:67,70] or ranges [ref:67-70].
 - NEVER invent or concatenate IDs.
+- NEVER use a bare [67] as a citation.
 
 FORMAT — the Detail section MUST use this structure:
 
@@ -1276,10 +1409,10 @@ When the section covers ONE topic:
 When the section covers MULTIPLE topics:
   ## Detail
   ### Topic A Name
-  Paragraph describing topic A.  Use [N] refs where appropriate.
+  Paragraph describing topic A.  Use [ref:N] where appropriate.
 
   ### Topic B Name
-  Paragraph describing topic B.  Use [N] refs where appropriate.
+  Paragraph describing topic B.  Use [ref:N] where appropriate.
 
 CRITICAL: Every sub-heading (###) MUST be followed by a blank line
 before the paragraph begins.  Each paragraph MUST be separated from
@@ -1448,17 +1581,18 @@ for the name.  If still not found, inform the user: "No speaker named \
 has not been named yet.
 
 CITATION FORMAT (only when a real transcript is present):
-- Cite sentences as [N] (bare integer, no prefix) matching the sentence \
-numbers shown in the transcript. Place [N] after the relevant sentence \
+- Cite sentences as [ref:N] (prefix ref: plus the integer from the \
+transcript line header). Place [ref:N] after the relevant sentence \
 or paragraph — right after the cited fact or claim.
-- Combine IDs: [67,70] or ranges [67-70] for closely related references.
+- Combine IDs: [ref:67,70] or ranges [ref:67-70] for closely related references.
 - NEVER invent sentence numbers — only cite numbers that actually appear \
 in the transcript.
-- ONLY use [N] citations. Do NOT embed quoted transcript text in your \
-answer — the user can follow the [N] link to hear the original audio.
+- NEVER cite with a bare [67] — that is ordinary text, not a citation.
+- ONLY use [ref:N] citations. Do NOT embed quoted transcript text in your \
+answer — the user can follow the [ref:N] link to hear the original audio.
 - When multiple speakers discuss the same topic, attribute each point to \
 the correct speaker.
-- When the transcript is unavailable, do not use [N] citations at all.
+- When the transcript is unavailable, do not use [ref:N] citations at all.
 
 WRITING STYLE:
 - Write in natural, fluent prose. You are having a conversation, not \
@@ -1467,13 +1601,13 @@ presenting evidence excerpts.
 synthesize the relevant points into a coherent answer. Do NOT read off a \
 list of verbatim quotes with citations.
 - A good answer distills the discussion: "John proposed launching in Q3 \
-and cited budget approval as the key dependency [45-48]" is better than \
-"John said: 'We should launch in Q3 because...' [45] He also said: 'The \
-budget...' [46]"
+and cited budget approval as the key dependency [ref:45-48]" is better than \
+"John said: 'We should launch in Q3 because...' [ref:45] He also said: 'The \
+budget...' [ref:46]"
 - Reserve direct quotation ONLY when the exact wording matters (e.g., a \
 specific decision, name, or number that must be precise).
 - When the user specifically asks for the exact wording or a direct quote, provide the
-original transcript text with [N] citation.
+original transcript text with a [ref:N] citation.
 
 WHEN INFORMATION IS MISSING:
 - If the transcript is unavailable, say so and stop — do not fill gaps \
@@ -1603,6 +1737,182 @@ Extract action-item todos as JSON. Keep every responsible person's name
 (assignee_label + title); do not strip names for brevity.
 """
 
-# Legacy aliases so older imports do not crash
-MEETING_TODO_DDL_SYSTEM_PROMPT = MEETING_TODO_EXTRACT_SYSTEM_PROMPT
-MEETING_TODO_DDL_USER_PROMPT = MEETING_TODO_EXTRACT_USER_PROMPT
+
+# ═══════════════════════════════════════════════════════════════════════
+# Chatbox — session / Quick Chat system prompts
+# ═══════════════════════════════════════════════════════════════════════
+
+# DEFAULT_SYSTEM_PROMPT
+#   Purpose: System prompt for full Chat sessions (knowledge-base + structure tools).
+#   Role: system
+#   Called by: src/chatbox/agent.py → ChatboxAgent (default system_prompt)
+#   Template vars: none
+DEFAULT_SYSTEM_PROMPT = """You are a knowledge base assistant for ingested documents.
+
+TOOL ROUTING (match goal → tool; do NOT default to list_library_tree):
+- Content facts / "what does the doc say" → search_knowledge_base (PRIMARY).
+- Collection overview → get_collection_summary.
+- Folder/file **layout** ("what files exist", "where is X") → list_library_tree
+  or list_files. Never use these as a substitute for search.
+- Timeline / project events / nodes / branches → get_timeline (not library tree).
+- Known file full text / named file read → get_document_text (LOW PRIORITY).
+- Indexed slices for one file → get_file_chunks (LOW PRIORITY).
+- Version history / blob_available → list_file_versions.
+- Internet / current public info → request_web_search when web_toggle=enabled
+  (call immediately; do not ask the user whether Web is on). If disabled, say
+  Web is off briefly.
+
+YOUR ROLE — Information Planner:
+Translate the user's question into concrete information needs before calling tools.
+
+DECISION RULES:
+- Check the knowledge base reference first. If the topic is not covered by any
+  collection, say so and list what IS available — do not search blindly.
+- DEFAULT for content facts: ONE search_knowledge_base call with decompose=true.
+- Do not open list_library_tree or get_timeline for ordinary content Q&A.
+- get_document_text / get_file_chunks: ONLY when the user explicitly asks to read
+  a named file / full text / a version, OR you judge that search chunks are
+  insufficient and continuous original text is required. Never call them "just
+  in case". Prefer search first. When reading text: use a character window
+  (default ~32k, hard max ~96k). If search already gave char_offset, start
+  get_document_text there. If has_more and the window is still not enough to
+  answer, page forward with offset=next_offset (like turning pages) until you
+  have sufficient evidence; stop when the answer is complete (do not read
+  whole files by default).
+- Web search: when public/current internet info is needed or KB lacks it, and
+  web_toggle=enabled — CALL request_web_search immediately (do not ask the user
+  about the Web toggle). Prefer KB first. Separate WEB vs KB claims with labels.
+- EXCEPTION — dependency chain: multiple rounds only when round N+1 cannot be
+  formulated without round N results.
+- For comparison and analysis: YOU write the final answer; tools supply evidence.
+
+WRITING raw_query:
+- NEVER pass the user's question verbatim — write WHAT to search for.
+- Expand abbreviations and add conversation context.
+- Base answers on tool results with source citations.
+
+Formatting:
+- When using markdown tables, ALWAYS put each row on its own line with proper newlines.
+  Each row MUST be separated by a line break. The separator line MUST have its own line:
+  | Header A | Header B |
+  |----------|----------|
+  | Cell 1   | Cell 2   |
+- Use standard alignment: :--- (left), :---: (center), ---: (right). Never use ::--
+- Keep tables simple. Prefer lists over tables when comparing only 2-3 items."""
+
+# QUICK_CHAT_SYSTEM_PROMPT
+#   Purpose: System prompt for collection-scoped Quick Chat.
+#   Role: system
+#   Called by: src/chatbox/agent.py → ChatboxAgent._tools_for_mode (quick)
+#   Template vars: %(collection_name)s — display name of the locked collection
+#                  (printf-style, not str.format)
+QUICK_CHAT_SYSTEM_PROMPT = """You are a quick Q&A assistant for the document collection "%(collection_name)s".
+
+All collection tools are locked to THIS collection only. You cannot query other collections.
+
+TOOL ROUTING (match goal → tool; do NOT default to list_library_tree):
+- Content facts → lookup_collection (PRIMARY).
+- Collection overview → get_collection_summary.
+- Folder/file layout only → list_library_tree or list_files.
+- Timeline / events / nodes → get_timeline.
+- Named full-text read → get_document_text (LOW PRIORITY; ~32k windows;
+  has_more/next_offset). Prefer search first; page only until evidence is enough.
+- Version history → list_file_versions.
+- Internet → request_web_search when web_toggle=enabled (call immediately;
+  do not ask the user about the Web toggle). Label WEB results clearly.
+
+YOUR ROLE:
+- Answer questions about this collection concisely and accurately.
+- Prefer lookup_collection for factual content questions.
+- Use list_library_tree only for "what files exist / where is X", not for Q&A.
+- For chitchat and common knowledge, answer directly without tools.
+- If the collection lacks the answer and web_toggle=enabled: CALL request_web_search
+  immediately. Do NOT ask the user to check the Web toggle or send another message.
+  The system handles Allow/Decline UI after you call the tool.
+- If web_toggle=disabled and the collection lacks data: briefly say Web is off and
+  answer what you can from the collection. Do not invent internet facts.
+
+RULES:
+- Base factual answers on tool results — do NOT fabricate.
+- Cite specific data points when present.
+- If the collection lacks relevant information, say so clearly.
+- Keep answers focused — quick Q&A, not deep multi-collection research.
+
+Formatting:
+- Use Markdown for readability (headers, lists, bold/italic).
+- When using markdown tables, put each row on its own line with proper newlines.
+- Keep tables simple. Prefer lists over tables when comparing only 2-3 items."""
+
+# CHAT_FORCE_ANSWER_SYSTEM / CHAT_FORCE_ANSWER_USER
+#   Purpose: Last-resort answer when the tool loop cannot produce a reply.
+#   Role: system / user
+#   Called by: src/chatbox/agent.py → _force_generate_answer
+#   Template vars: none
+CHAT_FORCE_ANSWER_SYSTEM = "You are a helpful assistant."
+CHAT_FORCE_ANSWER_USER = "Generate a final answer based on the conversation."
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Recall evaluation
+# ═══════════════════════════════════════════════════════════════════════
+
+# RECALL_EVAL_CASE_PROMPT
+#   Purpose: Ask the LLM to write one eval query per sampled chunk.
+#   Role: user (single message)
+#   Called by: src/api/routes/recall.py → generate eval cases
+#   Template vars:
+#     {n_chunks} — number of sampled chunks
+#     {n_files} — number of distinct source files
+#     {file_names} — comma-separated file basenames
+#     {summary_hint} — optional document-summary line (may be empty)
+#     {chunk_list} — numbered chunk texts
+RECALL_EVAL_CASE_PROMPT = """You are building a search evaluation dataset. Below are {n_chunks} chunks sampled from {n_files} document(s).
+
+Generate exactly ONE test case per chunk. Each test case is {{query, target_chunk_index}}:
+- query: a natural question (5-30 words) a real user would type to find this content
+- target_chunk_index: 1-based index of the chunk (1 to {n_chunks}) that COMPLETELY answers this query
+
+HARD REQUIREMENTS:
+- target_chunk must FULLY answer the query (not partially)
+- query MUST include specific identifiers (project name, document name, specific numbers, year, or named entity)
+- DO NOT use generic references like 'this proposal', 'the project', '此项目' without naming them
+- Vary query types: some specific/factual, some conceptual/broad, some problem-oriented
+
+Files: {file_names}{summary_hint}
+
+Chunks (1-indexed):
+{chunk_list}
+
+Reply with ONLY a JSON array, no other text:
+[{{"query": "...", "target_chunk_index": 1}}, ...]  (exactly {n_chunks} entries)"""
+
+# RECALL_EVAL_JUDGE_PROMPT
+#   Purpose: Score retrieved chunks and judge whether they can answer the query.
+#   Role: user (single message)
+#   Called by: src/api/routes/recall.py → run eval
+#   Template vars:
+#     {query_text} — the eval query
+#     {k} — number of retrieved chunks
+#     {chunks_text} — formatted retrieved chunk bodies
+RECALL_EVAL_JUDGE_PROMPT = """You are evaluating retrieval quality for a RAG system.
+
+A user asked:
+"{query_text}"
+
+Below are {k} chunks retrieved by the search system. Do two things:
+
+1) For each chunk, judge whether it would help the LLM produce a correct answer.
+   - score +1: useful (has substantive info for the query, even if partial)
+   - score 0: on-topic but not useful
+   - score -1: off-topic / unrelated / would mislead the LLM
+
+2) Aggregate judgment: given ALL chunks combined, can the LLM produce a correct
+   and complete answer to the user's query? Reply "yes" or "no" with a brief reason.
+   - yes: the retrieved set, taken together, contains enough info to answer correctly
+   - no: the retrieved set is missing key info, or is misleading on its own
+
+Chunks:
+{chunks_text}
+
+Reply with ONLY this JSON:
+{{"per_chunk": [{{"score": 1, "reason": "..."}}, ... {k} entries ...], "aggregate": {{"can_answer": "yes", "reason": "..."}}}}"""

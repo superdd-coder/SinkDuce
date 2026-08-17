@@ -12,8 +12,14 @@ class FileTranscriptionProvider(ABC):
     # Supported language hints declared per adapter.
     # Each entry: {"code": "zh", "label": "中文"}
     SUPPORTED_LANGUAGE_HINTS: list[dict[str, str]] = []
+    # Official DashScope / Whisper-style APIs accept one hint unless overridden.
+    MAX_LANGUAGE_HINTS: int = 1
     # Class flag — read by registry / active-provider-info (do not use @property).
     supports_hot_words: bool = False
+
+    @classmethod
+    def max_language_hints(cls, model: str | None = None) -> int:
+        return cls.MAX_LANGUAGE_HINTS
 
     @abstractmethod
     async def transcribe(
@@ -41,8 +47,13 @@ class RealtimeTranscriptionProvider(ABC):
     """Real-time streaming transcription via WebSocket."""
 
     SUPPORTED_LANGUAGE_HINTS: list[dict[str, str]] = []
+    MAX_LANGUAGE_HINTS: int = 1
     # Class flag — read by registry / active-provider-info (do not use @property).
     supports_hot_words: bool = False
+
+    @classmethod
+    def max_language_hints(cls, model: str | None = None) -> int:
+        return cls.MAX_LANGUAGE_HINTS
 
     @abstractmethod
     async def start(
@@ -72,3 +83,32 @@ class RealtimeTranscriptionProvider(ABC):
     async def stop(self) -> None:
         """Stop the transcription session and release resources."""
         ...
+
+
+def language_hint_limit(adapter_cls, model: str | None = None) -> int:
+    """How many language_hints the active adapter+model accepts (official caps)."""
+    fn = getattr(adapter_cls, "max_language_hints", None)
+    if callable(fn):
+        try:
+            n = fn(model)
+        except TypeError:
+            n = fn()
+    else:
+        n = getattr(adapter_cls, "MAX_LANGUAGE_HINTS", 1)
+    try:
+        return max(1, int(n))
+    except (TypeError, ValueError):
+        return 1
+
+
+def clip_language_hints(
+    hints: list[str] | None,
+    max_hints: int = 1,
+) -> list[str] | None:
+    """Drop auto / empties and trim to the model cap. None means “let the model detect”."""
+    if not hints:
+        return None
+    cleaned = [h for h in hints if h and h != "auto"]
+    if not cleaned:
+        return None
+    return cleaned[: max(1, int(max_hints))]

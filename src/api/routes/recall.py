@@ -28,6 +28,7 @@ from src.rag.collection_utils import (
 )
 # retrieve_standard / retrieve_parent_child_multi migrated to DirectQueryModule
 from src.rag.retriever import RetrievedChunk
+from src.prompts import RECALL_EVAL_CASE_PROMPT, RECALL_EVAL_JUDGE_PROMPT
 from src.services import services
 from src.collections import store as collections_store
 
@@ -388,10 +389,10 @@ def recall_search(req: RecallSearchRequest):
         )
         elapsed = int((time.time() - t0) * 1000)
         # Preload files.json once per collection (avoid N× disk reads)
-        from src.collections.file_index import load as load_file_index
+        from src.collections.file_index import load_for_read
 
         index_by_col: dict[str, dict] = {
-            c: load_file_index(c) for c in valid_collections
+            c: load_for_read(c) for c in valid_collections
         }
         default_col = valid_collections[0] if valid_collections else ""
         results = []
@@ -428,10 +429,10 @@ def recall_search(req: RecallSearchRequest):
     child_groups_map: dict[str, list[dict]] = dict(dq_result.child_groups)
 
     elapsed = int((time.time() - t0) * 1000)
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read
 
     index_by_col: dict[str, dict] = {
-        c: load_file_index(c) for c in valid_collections
+        c: load_for_read(c) for c in valid_collections
     }
     default_col = valid_collections[0] if valid_collections else ""
     results = []
@@ -641,20 +642,12 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
                 summary_hint = f"\nDocument summary (for {c['source'].split('/')[-1]}): {c['summary'][:500]}"
                 break
 
-        prompt = (
-            f"You are building a search evaluation dataset. Below are {len(selected)} chunks sampled from {len(file_list)} document(s).\n\n"
-            f"Generate exactly ONE test case per chunk. Each test case is {{query, target_chunk_index}}:\n"
-            f"- query: a natural question (5-30 words) a real user would type to find this content\n"
-            f"- target_chunk_index: 1-based index of the chunk (1 to {len(selected)}) that COMPLETELY answers this query\n\n"
-            f"HARD REQUIREMENTS:\n"
-            f"- target_chunk must FULLY answer the query (not partially)\n"
-            f"- query MUST include specific identifiers (project name, document name, specific numbers, year, or named entity)\n"
-            f"- DO NOT use generic references like 'this proposal', 'the project', '此项目' without naming them\n"
-            f"- Vary query types: some specific/factual, some conceptual/broad, some problem-oriented\n\n"
-            f"Files: {', '.join(f.split('/')[-1] for f in file_list)}{summary_hint}\n\n"
-            f"Chunks (1-indexed):\n{chunk_list_str}\n\n"
-            f"Reply with ONLY a JSON array, no other text:\n"
-            f'[{{"query": "...", "target_chunk_index": 1}}, ...]  (exactly {len(selected)} entries)'
+        prompt = RECALL_EVAL_CASE_PROMPT.format(
+            n_chunks=len(selected),
+            n_files=len(file_list),
+            file_names=", ".join(f.split("/")[-1] for f in file_list),
+            summary_hint=summary_hint,
+            chunk_list=chunk_list_str,
         )
 
         parsed_items: list[dict] = []
@@ -789,22 +782,10 @@ def run_eval(collection: str, req: EvalRequest):
                 f"--- Chunk {i+1} (id: {c['id']}, source: {c['source'].split('/')[-1]}) ---\n{c['text'][:2000]}"
                 for i, c in enumerate(retrieved_chunks)
             )
-            judge_prompt = (
-                f"You are evaluating retrieval quality for a RAG system.\n\n"
-                f"A user asked:\n\"{query_text}\"\n\n"
-                f"Below are {k} chunks retrieved by the search system. Do two things:\n\n"
-                f"1) For each chunk, judge whether it would help the LLM produce a correct answer.\n"
-                f"   - score +1: useful (has substantive info for the query, even if partial)\n"
-                f"   - score 0: on-topic but not useful\n"
-                f"   - score -1: off-topic / unrelated / would mislead the LLM\n\n"
-                f"2) Aggregate judgment: given ALL chunks combined, can the LLM produce a correct\n"
-                f"   and complete answer to the user's query? Reply \"yes\" or \"no\" with a brief reason.\n"
-                f"   - yes: the retrieved set, taken together, contains enough info to answer correctly\n"
-                f"   - no: the retrieved set is missing key info, or is misleading on its own\n\n"
-                f"Chunks:\n{chunks_text}\n\n"
-                f"Reply with ONLY this JSON:\n"
-                f'{{"per_chunk": [{{"score": 1, "reason": "..."}}, ... {k} entries ...], '
-                f'"aggregate": {{"can_answer": "yes", "reason": "..."}}}}'
+            judge_prompt = RECALL_EVAL_JUDGE_PROMPT.format(
+                query_text=query_text,
+                k=k,
+                chunks_text=chunks_text,
             )
             try:
                 judge_response = services.llm.generate(judge_prompt).strip()

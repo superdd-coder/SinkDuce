@@ -193,9 +193,10 @@ const HOT_WORD_LANG_OPTIONS: DropdownSelectOption[] = [
   { value: "en", label: "en · English" },
   { value: "ja", label: "ja · Japanese" },
   { value: "ko", label: "ko · Korean" },
-  { value: "ms", label: "ms · Malay" },
+  { value: "vi", label: "vi · Vietnamese" },
   { value: "th", label: "th · Thai" },
   { value: "id", label: "id · Indonesian" },
+  { value: "ms", label: "ms · Malay" },
 ]
 
 interface Props {
@@ -567,7 +568,6 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
     try {
       await flushSave()
       const res = await setDefaultHotWordsLibrary(next)
-      if (res.error) throw new Error(res.error)
       setDefaultLibraryId(res.default_library_id)
       await fetchList()
       toast.success(

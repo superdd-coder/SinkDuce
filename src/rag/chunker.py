@@ -50,6 +50,119 @@ def _annotate_position(metadata: dict, char_offset: int, position_map: list[dict
         metadata["section_label"] = entry["label"]
 
 
+def iter_sheet_segments(
+    text: str, position_map: list[dict] | None
+) -> list[tuple[int, int, str | None]]:
+    """Split *text* into ``(start, end, sheet_name)`` ranges on sheet boundaries.
+
+    Consecutive entries with the same ``sheet_name`` stay one segment.
+    Text before the first named sheet is attached to that sheet.
+    If no ``sheet_name`` is present, returns a single full-document range.
+    """
+    n = len(text or "")
+    entries: list[tuple[int, str]] = []
+    if not isinstance(position_map, list):
+        return [(0, n, None)]
+    for entry in position_map or []:
+        name = entry.get("sheet_name")
+        if not name:
+            continue
+        try:
+            offset = int(entry.get("char_offset", 0) or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        entries.append((max(0, min(offset, n)), str(name)))
+    entries.sort(key=lambda item: item[0])
+
+    collapsed: list[tuple[int, str]] = []
+    for offset, name in entries:
+        if collapsed and collapsed[-1][1] == name:
+            continue
+        collapsed.append((offset, name))
+
+    if not collapsed:
+        return [(0, n, None)]
+    if collapsed[0][0] > 0:
+        collapsed[0] = (0, collapsed[0][1])
+
+    segments: list[tuple[int, int, str | None]] = []
+    for i, (offset, name) in enumerate(collapsed):
+        end = collapsed[i + 1][0] if i + 1 < len(collapsed) else n
+        if end > offset:
+            segments.append((offset, end, name))
+    return segments or [(0, n, None)]
+
+
+def _remap_position_map(
+    position_map: list[dict], start: int, end: int
+) -> list[dict]:
+    """Shift position_map entries so offsets are relative to ``text[start:end]``."""
+    local: list[dict] = []
+    prev: dict | None = None
+    for entry in position_map or []:
+        try:
+            offset = int(entry.get("char_offset", 0) or 0)
+        except (TypeError, ValueError):
+            offset = 0
+        if offset < start:
+            prev = entry
+            continue
+        if offset >= end:
+            break
+        shifted = dict(entry)
+        shifted["char_offset"] = offset - start
+        local.append(shifted)
+    if not local and prev is not None:
+        shifted = dict(prev)
+        shifted["char_offset"] = 0
+        local.append(shifted)
+    return local
+
+
+def _reindex_chunk_groups(chunks: list[Chunk]) -> None:
+    """Renumber normal / parent indices after concatenating per-sheet runs."""
+    normals = [c for c in chunks if c.chunk_type == "normal"]
+    for i, chunk in enumerate(normals):
+        chunk.metadata["chunk_index"] = i
+        chunk.metadata["total_chunks"] = len(normals)
+    parents = [c for c in chunks if c.chunk_type == "parent"]
+    for i, chunk in enumerate(parents):
+        chunk.metadata["chunk_index"] = i
+        chunk.metadata["total_chunks"] = len(parents)
+
+
+def chunk_with_sheet_boundaries(
+    chunker, text: str, source: str = "", extra_metadata: dict | None = None
+) -> list[Chunk]:
+    """Run an existing chunker, but never let one chunk span two sheets.
+
+    Same size / overlap / parent-child logic as *chunker.chunk_with_metadata*;
+    the document is split on ``position_map`` sheet boundaries first.
+    """
+    extra = dict(extra_metadata or {})
+    position_map = extra.get("position_map") or []
+    segments = iter_sheet_segments(text, position_map)
+    if len(segments) <= 1:
+        name = segments[0][2] if segments else None
+        if name and "sheet_name" not in extra:
+            extra = {**extra, "sheet_name": name}
+        return chunker.chunk_with_metadata(text, source=source, extra_metadata=extra)
+
+    out: list[Chunk] = []
+    for start, end, name in segments:
+        segment = text[start:end]
+        if not segment.strip():
+            continue
+        seg_extra = {**extra, "position_map": _remap_position_map(position_map, start, end)}
+        if name:
+            seg_extra["sheet_name"] = name
+        out.extend(
+            chunker.chunk_with_metadata(segment, source=source, extra_metadata=seg_extra)
+        )
+    _reindex_chunk_groups(out)
+    return out
+
+
 
 def _estimate_tokens(text: str) -> int:
     """Conservative token estimate. CJK ≈ 1 tok/char, non-CJK ≈ 1 tok/2 chars."""
@@ -58,6 +171,108 @@ def _estimate_tokens(text: str) -> int:
     cjk = sum(1 for c in text if "一" <= c <= "鿿")
     non_cjk = len(text) - cjk
     return cjk + (non_cjk + 1) // 2
+
+
+# Each :::image fence counts as this many tokens when packing chunks,
+# regardless of description / OCR inside (chunking runs in parallel with Vision).
+IMAGE_DESC_RESERVE_TOKENS = 160
+
+
+def _is_table_markup_start(text: str) -> bool:
+    """True if *text* begins with a GFM table row or an HTML ``<table>``."""
+    body = (text or "").lstrip("\n\r\t ")
+    if not body:
+        return False
+    if body.lower().startswith("<table"):
+        return True
+    first = body.split("\n", 1)[0].strip()
+    return first.startswith("|") and first.endswith("|")
+
+
+def iter_image_fence_spans(text: str) -> list[tuple[int, int, bool]]:
+    """Return ``(start, end, is_table_source)`` for each ``:::image … :::`` block.
+
+    A fence is table-source when the next non-whitespace content is a table
+    (the parse-time pairing: screenshot immediately before the table markup).
+    """
+    if not text or ":::image" not in text:
+        return []
+    spans: list[tuple[int, int, bool]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        idx = text.find(":::image", i)
+        if idx < 0:
+            break
+        rest = text[idx:]
+        lines = rest.split("\n")
+        close_at = None
+        for j, line in enumerate(lines[1:], start=1):
+            if line.strip() == ":::":
+                close_at = j
+                break
+        if close_at is None:
+            break
+        consumed = len("\n".join(lines[: close_at + 1]))
+        if idx + consumed < n and text[idx + consumed] == "\n":
+            consumed += 1
+        end = idx + consumed
+        is_table_source = _is_table_markup_start(text[end:])
+        spans.append((idx, end, is_table_source))
+        i = end
+    return spans
+
+
+def count_image_fences(text: str, *, include_table_source: bool = True) -> int:
+    """How many ``:::image`` fences are in *text*."""
+    if include_table_source:
+        if not text:
+            return 0
+        return text.count(":::image")
+    return sum(1 for _s, _e, table_src in iter_image_fence_spans(text) if not table_src)
+
+
+def _strip_image_fences(text: str, *, table_source_only: bool = False) -> str:
+    """Remove ``:::image … :::`` blocks so only surrounding prose remains.
+
+    When *table_source_only* is True, independent figure fences are kept.
+    """
+    if not text or ":::image" not in text:
+        return text or ""
+    spans = iter_image_fence_spans(text)
+    if not spans:
+        return text
+    out: list[str] = []
+    cursor = 0
+    for start, end, is_table_source in spans:
+        if table_source_only and not is_table_source:
+            continue
+        out.append(text[cursor:start])
+        cursor = end
+    out.append(text[cursor:])
+    return "".join(out)
+
+
+def strip_table_source_fences(text: str) -> str:
+    """Drop table-source ``:::image`` fences (they do not go into embeddings)."""
+    return _strip_image_fences(text, table_source_only=True)
+
+
+_FENCE_LEXICAL = re.compile(r"^(?:description|ocr_text):\s*(\S.*)$", re.I | re.M)
+
+
+def fence_lexical_text(text: str) -> str:
+    """Description / OCR lines from ``:::image`` fences — for embedding figure-only chunks."""
+    if not text:
+        return ""
+    return "\n".join(m.group(1).strip() for m in _FENCE_LEXICAL.finditer(text))
+
+
+def estimate_chunking_tokens(text: str) -> int:
+    """Packing estimate: prose + 160 per independent figure. Table-source is free."""
+    independent = count_image_fences(text, include_table_source=False)
+    prose = _strip_image_fences(text).strip()
+    return _estimate_tokens(prose) + IMAGE_DESC_RESERVE_TOKENS * independent
 
 
 def _split_paragraphs(text: str) -> list[str]:
@@ -160,10 +375,10 @@ class ParagraphChunker:
 
     Strategy (preserves original paragraph-aware logic):
     - Split text into paragraphs (double newline separated)
-    - Merge consecutive paragraphs until reaching max_tokens
-    - If a single paragraph exceeds hard_limit (max_tokens × (1+buffer_ratio)), split it
-      using 3-level fallback: line → sentence → token
-    - If a single paragraph is between max_tokens and hard_limit, keep it whole (buffer tolerance)
+    - Merge consecutive paragraphs until hard_limit (max_tokens × (1+buffer_ratio))
+    - If a single paragraph exceeds hard_limit, split it using 3-level
+      fallback: line → sentence → token (pieces aim at max_tokens)
+    - A single paragraph between max_tokens and hard_limit stays whole
     - Sentence-level overlap: keep the last N sentences from previous chunk (>= 1 sentence)
     """
 
@@ -263,7 +478,7 @@ class ParagraphChunker:
         current_tokens = 0
 
         for para in paragraphs:
-            para_tokens = _estimate_tokens(para)
+            para_tokens = estimate_chunking_tokens(para)
 
             # Case 1: paragraph alone exceeds hard_limit — must split it
             if para_tokens > self.hard_limit:
@@ -277,17 +492,23 @@ class ParagraphChunker:
                 chunks.extend(self._split_long_paragraph(para))
                 continue
 
-            # Case 2: adding this paragraph would exceed max_tokens — flush
-            if current_parts and current_tokens + para_tokens > self.max_tokens:
+            # Case 2: adding this paragraph would exceed the buffer ceiling — flush
+            if current_parts and current_tokens + para_tokens > self.hard_limit:
                 chunk_text = "\n\n".join(current_parts)
                 chunks.append(chunk_text)
                 overlap = self._get_overlap_sentences(chunk_text)
                 current_parts = list(overlap)
                 current_tokens = sum(_estimate_tokens(s) for s in current_parts)
 
-            # Case 3: paragraph is within buffer tolerance (max_tokens ~ hard_limit) — keep whole
             current_parts.append(para)
             current_tokens += para_tokens
+            # Used the buffer to take this paragraph — seal, do not keep packing.
+            if current_tokens > self.max_tokens:
+                chunk_text = "\n\n".join(current_parts)
+                chunks.append(chunk_text)
+                overlap = self._get_overlap_sentences(chunk_text)
+                current_parts = list(overlap)
+                current_tokens = sum(_estimate_tokens(s) for s in current_parts)
 
         # Flush remaining
         if current_parts:
@@ -418,7 +639,7 @@ class ParagraphChunker:
         chunk_start_offset = 0
 
         for para_idx, para in enumerate(paragraphs):
-            para_tokens = _estimate_tokens(para)
+            para_tokens = estimate_chunking_tokens(para)
 
             if para_tokens > self.hard_limit:
                 if current_parts:
@@ -439,7 +660,7 @@ class ParagraphChunker:
                     sub_pos = sc_idx + len(sc)
                 continue
 
-            if current_parts and current_tokens + para_tokens > self.max_tokens:
+            if current_parts and current_tokens + para_tokens > self.hard_limit:
                 raw_chunks.append(("\n\n".join(current_parts), chunk_start_offset))
                 overlap = self._get_overlap_sentences("\n\n".join(current_parts))
                 current_parts = list(overlap)
@@ -452,6 +673,13 @@ class ParagraphChunker:
             current_parts.append(para)
             current_para_indices.append(para_idx)
             current_tokens += para_tokens
+            if current_tokens > self.max_tokens:
+                raw_chunks.append(("\n\n".join(current_parts), chunk_start_offset))
+                overlap = self._get_overlap_sentences("\n\n".join(current_parts))
+                current_parts = list(overlap)
+                current_tokens = sum(_estimate_tokens(s) for s in current_parts)
+                current_para_indices = []
+                chunk_start_offset = para_offsets[para_idx] + len(para)
 
         if current_parts:
             raw_chunks.append(("\n\n".join(current_parts), chunk_start_offset))

@@ -91,7 +91,9 @@ _CREATE_TABLES = [
       archived           INTEGER DEFAULT 0,
       unsupported        INTEGER DEFAULT 0,
       created_by         TEXT NOT NULL DEFAULT 'local',
-      version            INTEGER NOT NULL DEFAULT 1
+      version            INTEGER NOT NULL DEFAULT 1,
+      source             TEXT,
+      source_label       TEXT
     )''',
     # file_versions (file_id -> files)
     '''CREATE TABLE file_versions (
@@ -475,6 +477,20 @@ def _ensure_todo_suggestion_state_table(conn: sqlite3.Connection) -> None:
         logger.info("Created todo_suggestion_state table")
 
 
+def _ensure_files_source_columns(conn: sqlite3.Connection) -> None:
+    """Persist document source + display label after files.json stop-write."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()}
+    for col in ("source", "source_label"):
+        if col in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE files ADD COLUMN {col} TEXT")
+            logger.info("Added files.%s column", col)
+        except sqlite3.OperationalError as e:
+            if not _is_duplicate_column_error(e):
+                raise
+
+
 def _ensure_file_paths_archived(conn: sqlite3.Connection) -> None:
     """Add file_paths.archived if missing (idempotent path-level archive)."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(file_paths)").fetchall()}
@@ -840,6 +856,7 @@ def init_collection_db(collection_id: str) -> None:
                 _ensure_node_groups_icon_columns(conn_backfill)
                 _ensure_folders_icon_columns(conn_backfill)
                 _ensure_file_paths_archived(conn_backfill)
+                _ensure_files_source_columns(conn_backfill)
                 _ensure_nodes_external_ref(conn_backfill)
                 _ensure_todos_table(conn_backfill)
                 _ensure_todo_suggestion_state_table(conn_backfill)

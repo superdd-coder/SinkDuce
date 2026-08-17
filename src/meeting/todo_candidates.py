@@ -35,8 +35,10 @@ _TITLE_MAX_WORDS = 12
 _TITLE_MAX_CHARS = 72
 
 _STT_BRACKET_RE = re.compile(
-    r"\[(?:ref:)?\s*(?:stt_\d+(?:\s*[-–]\s*\d+)?"
-    r"(?:\s*,\s*stt_\d+(?:\s*[-–]\s*\d+)?)*)\s*\]",
+    r"\[ref:\s*(?:stt_)?\d+(?:\s*[-–]\s*(?:stt_)?\d+)?"
+    r"(?:\s*,\s*(?:stt_)?\d+(?:\s*[-–]\s*(?:stt_)?\d+)?)*\s*\]"
+    r"|\[(?:ref:)?\s*stt_\d+(?:\s*[-–]\s*(?:stt_)?\d+)?"
+    r"(?:\s*,\s*stt_\d+(?:\s*[-–]\s*(?:stt_)?\d+)?)*\s*\]",
 )
 _STT_BARE_RE = re.compile(r"\bstt_\d{4}\b")
 

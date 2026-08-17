@@ -2,8 +2,10 @@ import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { Send, Loader2, AlertTriangle, MessageCircle, BrushCleaning } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { humanSourceLabel } from "@/lib/source-display"
+import { parseMeetingRefGroups, MEETING_CITE_RE_SOURCE } from "@/lib/meeting-ref-chips"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
-import { createSession, getSession, deleteSession } from "@/api/client"
+import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
 
 // ── Types ──
 
@@ -630,17 +632,16 @@ export function MeetingQuickChat({
     abortRef.current = controller
 
     try {
-      const resp = await fetch(`/api/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const resp = await postSessionMessage(
+        sessionId,
+        {
           content: text,
           thinking: true,
           collections: [],
           mode: "direct",
-        }),
-        signal: controller.signal,
-      })
+        },
+        controller.signal,
+      )
 
       if (!resp.ok) {
         const err = await resp.text()
@@ -648,36 +649,16 @@ export function MeetingQuickChat({
         return
       }
 
-      const reader = resp.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ""
       let sources: QAMessage["sources"] = []
-      // Survive across network chunks (do not reset each read)
-      let eventType = ""
       let gotDoneCount: number | null = null
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7).trim()
-          } else if (line.startsWith("data: ") && eventType) {
-            try {
-              const data = JSON.parse(line.slice(6))
+      if (resp.body) {
+        for await (const { event: eventType, data } of iterateSessionSse(resp.body)) {
               handleSSEEvent(assistantMsg.id, eventType, data, (s) => { sources = s })
               if (eventType === "done" && typeof data.message_count === "number") {
                 gotDoneCount = data.message_count
                 setMsgCount(data.message_count)
               }
-            } catch (e) {
-              console.error("[MeetingQuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
-            }
-            eventType = ""
-          }
         }
       }
 
@@ -963,7 +944,12 @@ export function MeetingQuickChat({
                                     <div key={i} className="pm-qc-source-item is-static">
                                       <div className="flex items-center gap-1 min-w-0">
                                         <span className="truncate font-medium">
-                                          {src || "Meeting"}
+                                          {humanSourceLabel({
+                                            source: src,
+                                            source_label: s.metadata?.source_label,
+                                            filename: s.metadata?.filename,
+                                            display_name: s.metadata?.display_name,
+                                          })}
                                         </span>
                                       </div>
                                       {chunkIdx != null && (
@@ -1123,13 +1109,16 @@ export function MeetingQuickChat({
 // clickable [HH:MM:SS] timestamp buttons styled like Summary refs.
 
 // ── Sentence-ref aware inline renderer ──
-// Matches Summary's renderInline approach: regex-based parsing with
-// clickable [N] ref buttons that convert N to stt_XXXX format.
+// Clickable [ref:N] chips; ranges expand via parseMeetingRefGroups.
 
 function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) => void): ReactNode[] {
   const parts: ReactNode[] = []
-  // Supports [stt_XXXX,...], 【stt_XXXX,...】, [ref: stt_XXXX], and bare [7,7-10]
-  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|(\[(?:ref:)?\s*(stt_\d+(?:\s*[-–,]\s*stt_\d+)*)\s*\])|(【(?:ref:)?\s*(stt_\d+(?:\s*[-–,]\s*stt_\d+)*)\s*】)|(\[priority:\s*(high|medium|low)\s*\])|(【priority:\s*(high|medium|low)\s*】)|\[(\d+(?:\s*[-–,]\s*\d+)*)\]/gi
+  // [ref:67] / [ref:1-5] / [ref:47, 78-86] and 【ref:…】 variants.
+  // Bare [67] is ordinary text — do not chip it.
+  const regex = new RegExp(
+    `(\\*\\*(.+?)\\*\\*)|(\\*(.+?)\\*)|(\`(.+?)\`)|(${MEETING_CITE_RE_SOURCE})|((?:\\[|【)\\s*priority:\\s*(high|medium|low)\\s*(?:\\]|】))`,
+    "gi",
+  )
   let lastIdx = 0
   let match
   regex.lastIndex = 0
@@ -1143,37 +1132,23 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
       parts.push(<em key={`i${lastIdx}`}>{renderInlineWithRefs(match[4], onRefClick)}</em>)
     } else if (match[5]) {
       parts.push(<code key={`c${lastIdx}`} className="bg-muted px-1 rounded text-xs t-mono-family">{match[6]}</code>)
-    } else if (match[8] || match[10] || match[15]) {
-      // [stt_0044,...], 【stt_0044,...】, or bare [7,7-10]
-      const raw: string = (match[8] || match[10] || match[15])!
-      const ids = raw.split(/[,–-]/).map((s: string) => s.trim()).filter(Boolean)
-      const parsed = ids
-        .map((id) => ({ id, num: parseInt(id.replace(/^stt_0*/, "") || "0", 10) }))
-        .sort((a, b) => a.num - b.num)
-      let ri = 0
-      while (ri < parsed.length) {
-        const start = parsed[ri]
-        let end = start
-        let rj = ri + 1
-        while (rj < parsed.length && parsed[rj].num === end.num + 1) { end = parsed[rj]; rj++ }
-        const sl = start.id.replace(/^stt_0*/, "") || "0"
-        const el = end.id.replace(/^stt_0*/, "") || "0"
-        const label = start.id === end.id ? sl : sl + "-" + el
-        const sttIds = parsed.slice(ri, rj).map((p) => "stt_" + String(p.num).padStart(4, "0"))
+    } else if (match[8]) {
+      const groups = parseMeetingRefGroups(match[8])
+      for (const [gi, g] of groups.entries()) {
         parts.push(
           <button
-            key={`r${lastIdx}${ri}`}
-            className="inline-flex items-center px-1 py-0 pm-meta rounded bg-[var(--pm-green-soft)] text-[var(--pm-green)] hover:bg-[var(--pm-green-wash)] t-mono-family align-baseline cursor-pointer mr-1"
-            onClick={(e) => { e.stopPropagation(); onRefClick?.(sttIds[0]) }}
-            title={`Sources: ${sttIds.join(", ")}`}
+            type="button"
+            key={`r${lastIdx}${gi}`}
+            className="pm-meeting-ref-chip"
+            onClick={(e) => { e.stopPropagation(); if (g.ids[0]) onRefClick?.(g.ids[0]) }}
+            title={`Sources: ${g.ids.join(", ")}`}
           >
-            {label}
+            {g.label}
           </button>,
         )
-        ri = rj
       }
-    } else if (match[12] || match[14]) {
-      const level = (match[12] || match[14])!.toLowerCase()
+    } else if (match[10]) {
+      const level = match[10].toLowerCase()
       const colors: Record<string, { bg: string; fg: string }> = {
         high:    { bg: "rgba(140,46,46,0.12)",  fg: "#C06060" },
         medium:  { bg: "rgba(138,101,0,0.10)",   fg: "#B09030" },

@@ -65,8 +65,8 @@ def _files_dir(collection_id: str) -> Path:
 
 def _load_file_index(collection_id: str) -> dict[str, dict]:
     """Load the lightweight file metadata index (no Qdrant scroll)."""
-    from src.collections.file_index import load
-    return load(collection_id)
+    from src.collections.file_index import load_for_read
+    return load_for_read(collection_id)
 
 
 async def _await_mcp(fn) -> Any:
@@ -847,6 +847,48 @@ async def set_document_definitive(
 
         if e := require_collection(collection):
             return e
+
+        src = (source or "").strip()
+        file_id = ""
+        if src.startswith("__file__:"):
+            file_id = src[len("__file__:") :].strip()
+        elif src.startswith("file:"):
+            file_id = src[len("file:") :].strip()
+        if file_id:
+            from src.file_mgmt import service as fm
+            from src.file_mgmt.store import get_db
+
+            conn = get_db(collection)
+            try:
+                row = conn.execute(
+                    "SELECT version, is_definitive FROM files WHERE file_id=?",
+                    (file_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                return err(f"File not found for source '{source}'")
+            canonical = f"__file__:{file_id}"
+            if bool(row["is_definitive"]) == bool(definitive):
+                return ok(
+                    source=canonical,
+                    definitive=bool(definitive),
+                    debounce_skipped=True,
+                    message="Document definitive flag unchanged",
+                )
+            fm.update_file(
+                collection,
+                file_id,
+                {
+                    "is_definitive": bool(definitive),
+                    "version": int(row["version"]),
+                },
+            )
+            return ok(
+                source=canonical,
+                definitive=bool(definitive),
+                message="Document definitive flag updated",
+            )
 
         sm = SummaryManager(db=services.db)
         existing = sm.get_doc_summary(collection, source)

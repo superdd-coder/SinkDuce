@@ -179,11 +179,11 @@ export function ChatInput() {
   useEffect(() => {
     if (sidebarView !== "chat") return
     const el = composerRef.current
-    if (el) setWebSearchConfirmAnchor(el)
+    if (el) setWebSearchConfirmAnchor(el, sessionId)
     return () => {
       if (getComposerStillOurs(el)) setWebSearchConfirmAnchor(null)
     }
-  }, [sidebarView])
+  }, [sidebarView, sessionId])
 
   const modelLabel =
     activeModel ||

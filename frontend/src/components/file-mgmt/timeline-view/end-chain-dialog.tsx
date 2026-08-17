@@ -27,6 +27,8 @@ import { toast } from "sonner"
 import type { FileSummary, Node, NodeGroup } from "@/types/file-mgmt"
 import {
   attachFileToNode,
+  createNode,
+  deleteNode,
   endChain,
   getNodeDetail,
   uploadFileToFolder,
@@ -40,6 +42,9 @@ type PendingAttachment =
 
 interface EndChainDialogProps {
   collectionId: string
+  /** Branch being merged — used to create the end marker on submit. */
+  branchChainId: string
+  /** Existing leftover end node, if any. Empty until submit creates one. */
   chainNodeId: string
   nodes: Node[]
   open: boolean
@@ -55,6 +60,7 @@ interface NodeWithFiles {
 
 export function EndChainDialog({
   collectionId,
+  branchChainId,
   chainNodeId,
   nodes,
   open,
@@ -203,7 +209,7 @@ export function EndChainDialog({
   }
 
   const handleSubmit = async () => {
-    if (!chainNodeId) return
+    if (!branchChainId) return
     const trimmedTitle = title.trim()
     if (!trimmedTitle) {
       toast.error("Merge node name is required")
@@ -214,6 +220,7 @@ export function EndChainDialog({
       return
     }
     setLoading(true)
+    let createdEndId: string | null = null
     try {
       // Upload pending files into the selected group's folder first, then end_chain attaches
       const groupFolderId = groups.find((g) => g.group_id === groupId)?.folder_id
@@ -234,7 +241,21 @@ export function EndChainDialog({
         }
       }
 
-      const result = await endChain(collectionId, chainNodeId, {
+      let endId = chainNodeId
+      if (!endId) {
+        const maxO = nodes.reduce((m, n) => Math.max(m, n.order ?? 0), 0)
+        const end = await createNode(collectionId, branchChainId, {
+          group_id: null,
+          node_type: "end",
+          title: null,
+          order: maxO + 1,
+          event_time: null,
+        })
+        endId = end.node_id
+        createdEndId = end.node_id
+      }
+
+      const result = await endChain(collectionId, endId, {
         inherit_file_ids: Array.from(selectedFileIds),
         title: trimmedTitle,
         group_id: groupId,
@@ -264,6 +285,13 @@ export function EndChainDialog({
       onComplete()
       onOpenChange(false)
     } catch (err) {
+      if (createdEndId) {
+        try {
+          await deleteNode(collectionId, createdEndId)
+        } catch {
+          /* leftover cleaned when the dialog is dismissed */
+        }
+      }
       toast.error(`End chain failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setLoading(false)

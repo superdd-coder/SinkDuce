@@ -37,6 +37,7 @@ class FunASROnnxFileTranscription(FileTranscriptionProvider):
         {"code": "en", "label": "English"},
         {"code": "ja", "label": "Japanese"},
         {"code": "ko", "label": "Korean"},
+        {"code": "yue", "label": "Cantonese"},
     ]
 
     def __init__(self, config: TranscriptionProviderConfig):

@@ -5,7 +5,7 @@ import {
   _getCachedMessages, _setCachedMessages,
   type ThinkingSummary,
 } from "@/stores/app-store"
-import { confirmWebSearch, generateSessionTitle, listSessions } from "@/api/client"
+import { confirmWebSearch, generateSessionTitle, iterateSessionSse, listSessions, postSessionMessage } from "@/api/client"
 import { promptWebSearchConfirm } from "@/lib/web-search-confirm"
 /** Check if sid is the active session; if not, update cache instead of store. */
 function _isActive(sid: string) {
@@ -86,19 +86,18 @@ export function useStreamChat() {
         flushLastMessageToThinking,
       } = useAppStore.getState()
 
-      const resp = await fetch(`/api/sessions/${sid}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const resp = await postSessionMessage(
+        sid,
+        {
           content,
           thinking,
           collections: selectedCollections,
           provider_id: activeProvider || undefined,
           model: activeModel || undefined,
           web_search_enabled: webSearchEnabled,
-        }),
-        signal: controller.signal,
-      })
+        },
+        controller.signal,
+      )
 
       if (!resp.ok) {
         const err = await resp.text()
@@ -109,9 +108,6 @@ export function useStreamChat() {
         return
       }
 
-      const reader = resp.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = "", currentEvent = ""
       // Batch answer tokens on a short timer (not rAF): rAF is starved when the
       // main thread is busy with Markdown/layout, which looked like a freeze at
       // "好的" while the backend kept generating.
@@ -147,27 +143,14 @@ export function useStreamChat() {
         flushTokenBuf()
       }
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() ?? ""
-
-        for (const line of lines) {
-          const t = line.trimEnd()
-          if (t.startsWith("event: ")) {
-            currentEvent = t.slice(7).trim()
-          } else if (t.startsWith("data: ")) {
-            let data: any
-            try { data = JSON.parse(t.slice(6)) } catch { continue }
-
+      if (resp.body) {
+        for await (const { event: currentEvent, data } of iterateSessionSse(resp.body)) {
             const active = _isActive(sid)
 
             switch (currentEvent) {
               case "thinking":
                 // Reasoning timeline is plain text — keep low latency, no MD cost
-                if (active) appendTimelineThinking(data.content)
+                if (active) appendTimelineThinking(String(data.content ?? ""))
                 break
 
               case "token":
@@ -189,11 +172,11 @@ export function useStreamChat() {
 
               case "tool_step":
                 // Live progress: update tool block status from step events
-                if (active) setTimelineToolStatus(data.content || data.step || "")
+                if (active) setTimelineToolStatus(String(data.content || data.step || ""))
                 break
 
               case "thinking_summary":
-                if (active) setTimelineToolSummary(data as ThinkingSummary)
+                if (active) setTimelineToolSummary(data as unknown as ThinkingSummary)
                 break
 
               case "searching":
@@ -269,7 +252,7 @@ export function useStreamChat() {
 
               case "done":
                 flushAnswerTokensNow()
-                if (data.sources?.length) {
+                if (Array.isArray(data.sources) && data.sources.length) {
                   if (active) setLastMessageSources(data.sources)
                   else _cacheSetLastSources(sid, data.sources)
                 }
@@ -313,8 +296,6 @@ export function useStreamChat() {
                 else _cacheFinishLast(sid)
                 return
             }
-            currentEvent = ""
-          }
         }
       }
       // Stream body ended without a done event — still flush pending answer text

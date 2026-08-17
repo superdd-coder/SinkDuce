@@ -146,7 +146,7 @@ def _dedup_by_id(
 # ══════════════════════════════════════════════════════════════════════════
 
 # node_retrieve_and_rerank — REMOVED
-# (retrieval is now handled by DirectQueryModule + RewriteLoop)
+# (retrieval is handled by DirectQueryModule + VariantFetcher)
 
 def _chunk_in_list(chunk: RetrievedChunk, chunks: list[RetrievedChunk]) -> bool:
     """Check if chunk is already in list by Qdrant point ID."""

@@ -241,10 +241,13 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
     ? false
     : !currentFolderId
 
+  const fileLabel =
+    focusFile?.display_name?.trim() || focusFile?.filename?.trim() || ""
+
   const scopeHint = (() => {
     if (focusFileId) {
-      return focusFile?.filename
-        ? `File: ${focusFile.filename}`
+      return fileLabel
+        ? `File: ${fileLabel}`
         : "Selected file messages"
     }
     if (focusFolderId) {
@@ -475,8 +478,8 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
           editingMsg
             ? undefined
             : focusFileId
-              ? focusFile?.filename
-                ? `New message on file “${focusFile.filename}”.`
+              ? fileLabel
+                ? `New message on file “${fileLabel}”.`
                 : "New message on the selected file."
               : focusFolderId
                 ? focusFolder?.name

@@ -153,6 +153,93 @@ MINERU_SUPPORTED_EXTENSIONS = {
 }
 
 
+def _mineru_block_text(block: dict) -> str:
+    """Flatten MinerU layout block lines/spans into plain text."""
+    if not isinstance(block, dict):
+        return ""
+    parts: list[str] = []
+    for line in block.get("lines") or []:
+        if not isinstance(line, dict):
+            continue
+        for span in line.get("spans") or []:
+            if isinstance(span, dict):
+                parts.append(span.get("content") or "")
+    if parts:
+        return "".join(parts).strip()
+    if block.get("text"):
+        return str(block["text"]).strip()
+    return ""
+
+
+def _first_title_on_mineru_page(page: dict) -> str:
+    """First layout block with type=title on a page (sheet name for xlsx)."""
+    if not isinstance(page, dict):
+        return ""
+    for block in page.get("para_blocks") or page.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if (block.get("type") or "").lower() != "title":
+            continue
+        text = _mineru_block_text(block)
+        if text:
+            return text
+    return ""
+
+
+def _find_title_offset(markdown: str, title: str, start: int) -> int:
+    if not title:
+        return -1
+    idx = markdown.find(title, start)
+    if idx >= 0:
+        return idx
+    for prefix in ("# ", "## ", "### ", "#### "):
+        idx = markdown.find(f"{prefix}{title}", start)
+        if idx >= 0:
+            return idx
+    return -1
+
+
+def _sheet_map_from_mineru_titles(pages, markdown_content: str) -> list[dict]:
+    """Map each page's first Title onto a markdown offset as sheet_name."""
+    out: list[dict] = []
+    search_from = 0
+    for i, page in enumerate(pages or []):
+        title = _first_title_on_mineru_page(page)
+        if not title:
+            continue
+        offset = _find_title_offset(markdown_content, title, search_from)
+        if offset < 0:
+            continue
+        page_idx = page.get("page_idx", i) if isinstance(page, dict) else i
+        out.append({
+            "char_offset": offset,
+            "label": f"Sheet: {title}",
+            "type": "section",
+            "sheet_name": title,
+            "page_number": int(page_idx) + 1,
+        })
+        search_from = offset + len(title)
+    return out
+
+
+def _sheet_map_from_markdown_headings(markdown_content: str) -> list[dict]:
+    """Fallback sheet map when MinerU left no layout — headings become sheet names."""
+    out: list[dict] = []
+    for match in _re_module.finditer(
+        r"^(#{1,6})\s+(.+)$", markdown_content, _re_module.MULTILINE
+    ):
+        title = match.group(2).strip()
+        if not title:
+            continue
+        out.append({
+            "char_offset": match.start(),
+            "label": f"Sheet: {title}",
+            "type": "section",
+            "sheet_name": title,
+        })
+    return out
+
+
 class MinerUError(Exception):
     """Raised when MinerU API returns an error."""
 
@@ -529,7 +616,10 @@ class MinerUParser:
         if len(markdown_content) != original_len:
             logger.info("[MinerU] Cleaned markdown for Tiptap: %d → %d chars", original_len, len(markdown_content))
 
-        position_map = self._build_position_map(layout_data, markdown_content)
+        original_file_type = source_path.suffix.lstrip(".").lower()
+        position_map = self._build_position_map(
+            layout_data, markdown_content, original_file_type=original_file_type
+        )
         logger.info("[MinerU] Built position_map with %d entries (layout keys: %s)",
                     len(position_map), list(layout_data.keys()) if isinstance(layout_data, dict) else f"list[{len(layout_data)}]")
 
@@ -548,24 +638,33 @@ class MinerUParser:
         )
 
     def _build_position_map(
-        self, layout_data: dict[str, Any], markdown_content: str
+        self,
+        layout_data: dict[str, Any],
+        markdown_content: str,
+        original_file_type: str = "",
     ) -> list[dict]:
         """Build position_map from MinerU's layout.json.
 
         The layout data typically contains page-level block information.
         We extract page boundaries mapped to character offsets in the Markdown.
+
+        For xls/xlsx, the first Title on each page is treated as ``sheet_name``
+        (MinerU writes the tab name as a title). Offsets are resolved against
+        the markdown so sheet-boundary chunking can split on them.
         """
         position_map: list[dict] = []
 
         # MinerU layout.json contains an array of page objects.
         # Each page has a "page_idx" and blocks with type/position info.
         pages = layout_data if isinstance(layout_data, list) else layout_data.get("pdf_info", [])
+        is_excel = original_file_type in ("xls", "xlsx")
 
         if not pages:
             # No layout data — build position_map from markdown headings as fallback
             logger.info("[MinerU] No page-level layout data, building position_map from markdown headings")
+            if is_excel:
+                return _sheet_map_from_markdown_headings(markdown_content)
             import re as _re
-            offset = 0
             for m in _re.finditer(r"^(#{1,6})\s+(.+)$", markdown_content, _re.MULTILINE):
                 position_map.append({
                     "char_offset": m.start(),
@@ -573,6 +672,11 @@ class MinerUParser:
                     "type": "section",
                 })
             return position_map
+
+        if is_excel:
+            excel_map = _sheet_map_from_mineru_titles(pages, markdown_content)
+            if excel_map:
+                return excel_map
 
         # Strategy: scan markdown for page markers or heading patterns
         # and map them to positions in the text.

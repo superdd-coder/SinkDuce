@@ -5,7 +5,7 @@ import logging
 import mimetypes
 from pathlib import Path
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, HTTPException
 
 from src.config import get_config, DATA_DIR
 from src.prompts import VISUAL_PROMPT
@@ -50,12 +50,12 @@ def describe_image(body: dict = Body(...)):
     """
     image_url = body.get("image_url", "")
     if not image_url:
-        return {"error": "image_url is required"}
+        raise HTTPException(400, "image_url is required")
 
     config = get_config()
     visual_model_id = config.visual_model_id
     if not visual_model_id:
-        return {"error": "No Visual Model configured. Please select one in Settings."}
+        raise HTTPException(400, "No Visual Model configured. Please select one in Settings.")
 
     # Find the provider that owns this visual model
     target_provider = None
@@ -65,20 +65,21 @@ def describe_image(body: dict = Body(...)):
             break
 
     if not target_provider:
-        return {
-            "error": (
-                f"Visual model '{visual_model_id}' not found in any provider. "
-                "Please check your Visual Model settings."
-            )
-        }
+        raise HTTPException(
+            400,
+            f"Visual model '{visual_model_id}' not found in any provider. "
+            "Please check your Visual Model settings.",
+        )
 
     # Resolve image file
     try:
         image_path = _resolve_image_path(image_url)
         if not image_path.exists():
-            return {"error": f"Image file not found: {image_path}"}
+            raise HTTPException(404, f"Image file not found: {image_path}")
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"error": f"Failed to resolve image path: {e}"}
+        raise HTTPException(400, f"Failed to resolve image path: {e}") from e
 
     # Read and encode image
     try:
@@ -87,7 +88,7 @@ def describe_image(body: dict = Body(...)):
         image_mime = _get_mime_type(image_path)
     except Exception as e:
         logger.error("Failed to read image %s: %s", image_path, e)
-        return {"error": f"Failed to read image file: {e}"}
+        raise HTTPException(400, f"Failed to read image file: {e}") from e
 
     # Call vision model
     try:
@@ -104,12 +105,13 @@ def describe_image(body: dict = Body(...)):
         )
         return {"description": description}
     except NotImplementedError:
-        return {
-            "error": (
-                f"The selected model '{visual_model_id}' does not support image input. "
-                "Please choose a vision-capable model."
-            )
-        }
+        raise HTTPException(
+            400,
+            f"The selected model '{visual_model_id}' does not support image input. "
+            "Please choose a vision-capable model.",
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Visual describe failed: %s", e)
-        return {"error": f"Failed to generate image description: {e}"}
+        raise HTTPException(502, f"Failed to generate image description: {e}") from e

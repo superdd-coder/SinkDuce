@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from src.rag.agent_prompts import AGGREGATE_GROUP_SYSTEM
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,36 +25,6 @@ class SubQueryResult:
     task_query: str = ""            # complete task description
     retrieved_chunks: list = field(default_factory=list)  # pre-grade candidates
 
-
-# ── Prompts ────────────────────────────────────────────────────────────────
-
-_AGGREGATE_GROUP_SYSTEM = """You are a research assistant synthesizing information from multiple searches.
-
-Given a task description, multiple sub-queries, their findings (retained_info), and relevant
-context chunks, produce a comprehensive answer to the task.
-
-Rules:
-1. Answer the TASK, not each sub-query individually — synthesize across all sub-queries.
-2. Preserve ALL specific data points (numbers, dates, names) from the context and retained info.
-3. If a note indicates some sub-queries returned incomplete data, clearly mark which parts of the answer are uncertain.
-4. Use clear Markdown formatting with headers and bullet points where helpful.
-5. Do NOT fabricate information — only use what is provided.
-6. If all sub-queries returned no useful information, state that clearly."""
-
-_AGGREGATE_GROUP_USER = """The user asked: {original_query}
-This was broken down into one or more tasks. The task you need to answer is: {task_query}
-Below are the sub-queries run against the knowledge base to gather information for this task, and what they found.
-
-{sub_results}
-
-Your goal is to answer this task: {task_query}
-
-Using the sub-query findings and context above, write a complete, well-structured answer.
-- Synthesize across all sub-queries into one coherent response.
-- Include specific data points (numbers, names, dates) where relevant.
-- Use Markdown formatting with headers, bullet points, and tables where helpful.
-- If any sub-query returned incomplete data, clearly mark those parts as uncertain.
-- Do NOT fabricate information not present in the context or retained info."""
 
 class Aggregator:
     """Group-aware aggregation: within-group first, then cross-group merge."""
@@ -167,7 +139,7 @@ class Aggregator:
         prompt = self._build_aggregate_prompt(results, original_query=original_query)
 
         try:
-            answer = self.llm.generate(prompt, system=_AGGREGATE_GROUP_SYSTEM, max_tokens=16384, thinking=True).strip()
+            answer = self.llm.generate(prompt, system=AGGREGATE_GROUP_SYSTEM, max_tokens=16384, thinking=True).strip()
             logger.info("[Aggregate] task %r: %d AQs → %d chars",
                         label, len(results), len(answer))
             return answer

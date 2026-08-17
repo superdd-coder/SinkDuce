@@ -41,12 +41,20 @@ export function prepareMeetingSummaryForNote(
   }
 
   // 3. Whole citation bracket groups (never leave [,,,])
-  // Tokens: full sentence id | stt_N | bare number
+  // [ref:N] (LLM) and [stt_N] (persisted). Bare [1] is prose, not a cite.
   const citeToken = "(?:[A-Za-z0-9]{6,}_stt_\\d+|stt_\\d+|\\d+)"
+  const sttToken = "(?:[A-Za-z0-9]{6,}_)?stt_\\d+"
   const citeSep = "[\\s,，、;；\\-–—]+"
   md = md.replace(
     new RegExp(
-      `\\[(?:ref\\s*:)?\\s*${citeToken}(?:${citeSep}${citeToken})*\\s*\\]`,
+      `\\[ref\\s*:\\s*${citeToken}(?:${citeSep}${citeToken})*\\s*\\]`,
+      "gi",
+    ),
+    "",
+  )
+  md = md.replace(
+    new RegExp(
+      `\\[(?:ref\\s*:)?\\s*${sttToken}(?:${citeSep}${sttToken})*\\s*\\]`,
       "gi",
     ),
     "",

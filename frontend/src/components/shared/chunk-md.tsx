@@ -62,6 +62,10 @@ export interface ChunkMdProps {
   /** Qdrant source key (__file__:{id}) — used when fileId is omitted */
   source?: string
   className?: string
+  /** When rendering a list, skip image_ids already shown (table-source slices). */
+  skipImageIds?: Set<string>
+  /** Record newly rendered image_ids into skipImageIds. */
+  recordSeen?: boolean
 }
 
 /**
@@ -74,13 +78,15 @@ export function ChunkMd({
   fileId,
   source,
   className,
+  skipImageIds,
+  recordSeen,
 }: ChunkMdProps) {
   const raw = text || ""
   const col = (collection || "").trim()
   const fallbackFid = (fileId || "").trim() || fileIdFromSource(source)
   const expanded = tightenChunkMarkdown(
     col && raw.includes(":::image")
-      ? transformImageBlocks(raw, col, fallbackFid)
+      ? transformImageBlocks(raw, col, fallbackFid, { skipImageIds, recordSeen })
       : raw,
   )
 
@@ -102,16 +108,46 @@ export function ChunkMd({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw]}
         components={{
-          img: ({ src, alt, ...props }) => (
-            // eslint-disable-next-line @next/next/no-img-element -- API-served document images
-            <img
-              src={src}
-              alt={alt || "Document figure"}
-              loading="lazy"
-              className="pm-recall-md-img"
-              {...props}
-            />
-          ),
+          img: ({ src, alt, ...props }) => {
+            const extra = props as {
+              "data-visual-desc"?: string
+              "data-ocr-text"?: string
+            }
+            const decodeAttr = (raw?: string) => {
+              if (!raw) return ""
+              try {
+                return decodeURIComponent(raw)
+              } catch {
+                return raw
+              }
+            }
+            const desc = decodeAttr(extra["data-visual-desc"])
+            const ocr = decodeAttr(extra["data-ocr-text"]) || (alt || "").trim()
+            return (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element -- API-served document images */}
+                <img
+                  src={src}
+                  alt={ocr || desc || "Document figure"}
+                  loading="lazy"
+                  className="pm-recall-md-img"
+                  {...props}
+                />
+                {ocr ? (
+                  <span className="pm-recall-md-figocr">
+                    <span className="pm-recall-md-figlabel">OCR</span>
+                    {ocr}
+                  </span>
+                ) : null}
+                {desc ? (
+                  <span className="pm-recall-md-figdesc">
+                    <span className="pm-recall-md-figlabel">Description</span>
+                    {desc}
+                  </span>
+                ) : null}
+              </>
+            )
+          },
           // Drop empty paragraphs; mark figure-only paragraphs for tight CSS.
           p: ({ children, node, ...props }) => {
             const empty =

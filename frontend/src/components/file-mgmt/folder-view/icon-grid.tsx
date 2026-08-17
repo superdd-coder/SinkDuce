@@ -28,6 +28,15 @@ const TIP_OPEN_MS = 450
 const TIP_CLOSE_MS = 200
 /** Compact tooltip width */
 const TIP_MAX = "max-w-[11rem]"
+
+function suggestUniqueName(name: string, taken: string[]): string {
+  const have = new Set(taken.map((n) => n.trim().toLowerCase()).filter(Boolean))
+  const base = name.trim() || "unnamed"
+  if (!have.has(base.toLowerCase())) return base
+  let n = 1
+  while (have.has(`${base} (${n})`.toLowerCase())) n += 1
+  return `${base} (${n})`
+}
 import {
   Dialog,
   DialogContent,
@@ -85,6 +94,7 @@ export function IconGrid({
   const [editIconColor, setEditIconColor] = useState(DEFAULT_ICON_COLOR)
   const [editSymbol, setEditSymbol] = useState("")
   const [editSaving, setEditSaving] = useState(false)
+  const [editClash, setEditClash] = useState<string | null>(null)
 
   const editFileExt = useMemo(() => {
     if (!editTarget || editTarget.kind !== "file") return ""
@@ -102,6 +112,7 @@ export function IconGrid({
   const openEditFolder = useCallback((folder: FolderTreeNode) => {
     if (folder.is_system) return
     setEditTarget({ kind: "folder", folder })
+    setEditClash(null)
     setEditName(folder.name || "")
     if (folder.icon_type === "emoji" && folder.icon_value) {
       setEditIconMode("emoji")
@@ -118,6 +129,7 @@ export function IconGrid({
 
   const openEditFile = useCallback((file: FileSummary) => {
     setEditTarget({ kind: "file", file })
+    setEditClash(null)
     const fn = file.filename || ""
     const fromMeta = (file.original_ext || "").replace(/^\./, "")
     if (fromMeta) {
@@ -154,19 +166,32 @@ export function IconGrid({
     const name = editName.trim()
     if (!name || !editTarget) return
     setEditSaving(true)
+    setEditClash(null)
     try {
       if (editTarget.kind === "folder") {
         if (editIconMode === "emoji" && !editSymbol.trim()) return
+        const siblings = getSubfolders(folderTree, currentFolderId)
+        const taken = siblings
+          .filter((f) => f.folder_id !== editTarget.folder.folder_id)
+          .map((f) => f.name || "")
+        if (taken.some((n) => n.trim().toLowerCase() === name.toLowerCase())) {
+          const suggested = suggestUniqueName(name, taken)
+          setEditClash(
+            `A folder named '${name}' already exists here.`
+          )
+          setEditName(suggested)
+          return
+        }
         const icon = buildIconPayload({
           iconMode: editIconMode,
           iconKey: editIconKey,
           iconColor: editIconColor,
           symbol: editSymbol,
         })
-        await updateFolderDetails(
+        const clash = await updateFolderDetails(
           collectionId,
           editTarget.folder.folder_id,
-          editTarget.folder.version,
+          editTarget.folder.version ?? 1,
           {
             name,
             icon_type: icon.icon_type,
@@ -174,6 +199,11 @@ export function IconGrid({
             icon_color: icon.icon_color,
           }
         )
+        if (clash) {
+          setEditClash(clash.message)
+          setEditName(clash.suggested_name)
+          return
+        }
       } else {
         let stem = name
         if (editFileExt) {
@@ -184,12 +214,40 @@ export function IconGrid({
         }
         stem = stem.replace(/[/\\]/g, "").trim() || "unnamed"
         const finalName = editFileExt ? `${stem}${editFileExt}` : stem
-        await renameFile(
+        const takenFiles = currentFolderFiles
+          .filter((f) => f.file_id !== editTarget.file.file_id)
+          .map((f) => (f.display_name || f.filename || "").trim())
+        if (
+          takenFiles.some((n) => n.toLowerCase() === finalName.toLowerCase())
+        ) {
+          const suggested = suggestUniqueName(finalName, takenFiles)
+          setEditClash(`A file named '${finalName}' already exists here.`)
+          if (
+            editFileExt &&
+            suggested.toLowerCase().endsWith(editFileExt.toLowerCase())
+          ) {
+            setEditName(suggested.slice(0, -editFileExt.length))
+          } else {
+            setEditName(suggested)
+          }
+          return
+        }
+        const clash = await renameFile(
           collectionId,
           editTarget.file.file_id,
           finalName,
           editTarget.file.version
         )
+        if (clash) {
+          setEditClash(clash.message)
+          const sug = clash.suggested_name
+          if (editFileExt && sug.toLowerCase().endsWith(editFileExt.toLowerCase())) {
+            setEditName(sug.slice(0, -editFileExt.length))
+          } else {
+            setEditName(sug)
+          }
+          return
+        }
       }
       setEditTarget(null)
     } finally {
@@ -590,6 +648,11 @@ export function IconGrid({
                 </p>
               </div>
             )}
+            {editClash ? (
+              <p className="text-[13px] text-[var(--pm-danger,#b42318)] leading-snug">
+                {editClash} Suggested name is filled in — Save to apply, or type another.
+              </p>
+            ) : null}
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button

@@ -85,10 +85,14 @@ export function NameConflictDialog() {
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v) cancelNameConflict()
+        // Ignore dismiss while the Edit dialog is still tearing down.
+        if (!v && nameConflict) cancelNameConflict()
       }}
     >
-      <DialogContent className="pm-dialog w-[min(32rem,calc(100vw-2rem))] max-w-[min(32rem,calc(100vw-2rem))] overflow-hidden">
+      <DialogContent
+        overlayClassName="pm-dialog-overlay--silk"
+        className="pm-dialog w-[min(32rem,calc(100vw-2rem))] max-w-[min(32rem,calc(100vw-2rem))] overflow-hidden"
+      >
         <DialogHeader>
           <DialogTitle>Name already used</DialogTitle>
         </DialogHeader>

@@ -32,7 +32,7 @@ def _files_dir(collection_id: str) -> Path:
 
 
 def load(collection_id: str) -> dict[str, dict]:
-    """Return the files index dict, or ``{}`` if missing."""
+    """Return the raw files.json dict (mutators / old-library cleanup only)."""
     path = _index_path(collection_id)
     try:
         if path.is_file():
@@ -40,6 +40,117 @@ def load(collection_id: str) -> dict[str, dict]:
     except (json.JSONDecodeError, OSError):
         logger.warning("[FileIndex] corrupt files.json for %s, resetting", collection_id)
     return {}
+
+
+def _sqlite_index_entries(collection_id: str) -> dict[str, dict]:
+    """Current files from meta.db, keyed by file_id. Empty if DB missing."""
+    if not collection_id:
+        return {}
+    db_path = COLLECTIONS_DIR / collection_id / "meta.db"
+    if not db_path.is_file():
+        return {}
+    try:
+        from src.file_mgmt.store import get_db
+
+        conn = get_db(collection_id)
+        try:
+            try:
+                rows = conn.execute(
+                    """SELECT f.file_id AS file_id,
+                              fv.storage_file_id AS storage_name,
+                              f.source AS source,
+                              f.source_label AS source_label
+                       FROM files f
+                       LEFT JOIN file_versions fv
+                         ON fv.version_id = f.current_version_id"""
+                ).fetchall()
+            except Exception:
+                rows = conn.execute(
+                    """SELECT f.file_id AS file_id,
+                              fv.storage_file_id AS storage_name
+                       FROM files f
+                       LEFT JOIN file_versions fv
+                         ON fv.version_id = f.current_version_id"""
+                ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug(
+            "sqlite index overlay failed for %s", collection_id, exc_info=True
+        )
+        return {}
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        fid = str(row["file_id"] if hasattr(row, "keys") else row[0])
+        name = str(
+            (row["storage_name"] if hasattr(row, "keys") else row[1]) or ""
+        ).strip()
+        ext = Path(name).suffix.lower().lstrip(".") if name else ""
+        sql_src = ""
+        sql_label = ""
+        if hasattr(row, "keys"):
+            sql_src = str(row["source"] or "").strip() if "source" in row.keys() else ""
+            sql_label = (
+                str(row["source_label"] or "").strip()
+                if "source_label" in row.keys()
+                else ""
+            )
+        entry: dict = {
+            "source": sql_src or f"__file__:{fid}",
+            # Empty unless persist — do not treat storage basename as a title.
+            "source_label": sql_label,
+            "storage_name": name,
+            "file_type": "file",
+        }
+        if ext:
+            entry["original_ext"] = ext
+        out[fid] = entry
+    return out
+
+
+def load_for_read(collection_id: str) -> dict[str, dict]:
+    """Display/list index: JSON fallback overlaid by SQLite current files.
+
+    Regular ``__file__:`` rows take the current storage name from SQLite.
+    ``__note__:`` / ``__meeting__:`` JSON source + label are kept.
+    Files that exist only in SQLite (post stop-write) appear here.
+    """
+    idx = dict(load(collection_id) or {})
+    for fid, sql in _sqlite_index_entries(collection_id).items():
+        prev = dict(idx.get(fid) or {})
+        json_src = (prev.get("source") or "").strip()
+        sql_src = (sql.get("source") or "").strip()
+        storage = (sql.get("storage_name") or "").strip()
+        sql_label = (sql.get("source_label") or "").strip()
+        src = (
+            sql_src
+            if sql_src.startswith("__note__:") or sql_src.startswith("__meeting__:")
+            else json_src
+        )
+        if src.startswith("__note__:") or src.startswith("__meeting__:"):
+            label = sql_label or (prev.get("source_label") or "").strip() or storage
+            if label:
+                prev["source_label"] = label
+            prev["source"] = src
+            if not prev.get("file_type"):
+                prev["file_type"] = "note" if src.startswith("__note__:") else "meeting"
+            if sql.get("original_ext") and not prev.get("original_ext"):
+                prev["original_ext"] = sql["original_ext"]
+        else:
+            prev["source"] = f"__file__:{fid}"
+            prev["source_label"] = sql_label or storage or (
+                prev.get("source_label") or ""
+            ).strip()
+            prev["file_type"] = prev.get("file_type") or "file"
+            if sql.get("original_ext"):
+                prev["original_ext"] = sql["original_ext"]
+        if "ingested_at" not in prev:
+            prev["ingested_at"] = 0
+        if "chunks" not in prev:
+            prev["chunks"] = prev.get("chunks", 0)
+        idx[fid] = prev
+    return idx
 
 
 def save(collection_id: str, data: dict[str, dict]) -> None:
@@ -296,7 +407,9 @@ def resolve_display_name(
     if not src:
         return payload or "Unknown"
 
-    idx = index if index is not None else (load(collection_id) if collection_id else {})
+    idx = index if index is not None else (
+        load_for_read(collection_id) if collection_id else {}
+    )
 
     # ── Managed files ──────────────────────────────────────────────
     if src.startswith("__file__:") or src.startswith("file:"):

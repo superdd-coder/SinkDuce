@@ -380,8 +380,9 @@ def test_upload_handler_uses_parent_child_chunker():
     with patch("src.tasks.handlers.services", mock_services), \
          patch("src.services.services", mock_services), \
          patch("src.tasks.handlers.parse_file") as mock_parse, \
+         patch("src.tasks.handlers._do_enrich", side_effect=lambda chunks, *a, **k: chunks), \
          patch("src.rag.collection_utils.create_embedding_provider", return_value=mock_embedding):
-        mock_parse.return_value = MagicMock(content="Test content for parent child chunking.", file_type="txt")
+        mock_parse.return_value = MagicMock(content="Test content for parent child chunking.", file_type="txt", images=None)
         result = asyncio.run(upload_handler(task, tmp.name, "test_col", "test.txt"))
 
     os.unlink(tmp.name)
@@ -429,8 +430,9 @@ def test_upload_handler_normal_mode_unchanged():
     with patch("src.tasks.handlers.services", mock_services), \
          patch("src.services.services", mock_services), \
          patch("src.tasks.handlers.parse_file") as mock_parse, \
+         patch("src.tasks.handlers._do_enrich", side_effect=lambda chunks, *a, **k: chunks), \
          patch("src.rag.collection_utils.create_embedding_provider", return_value=mock_embedding):
-        mock_parse.return_value = MagicMock(content="Test content. " * 50, file_type="txt")
+        mock_parse.return_value = MagicMock(content="Test content. " * 50, file_type="txt", images=None)
         result = asyncio.run(upload_handler(task, tmp.name, "test_col", "test.txt"))
 
     os.unlink(tmp.name)
@@ -626,7 +628,7 @@ def test_upload_handler_empty_chunks_raises():
     with patch("src.tasks.handlers.services", mock_services), \
          patch("src.tasks.handlers.parse_file") as mock_parse, \
          patch("src.tasks.handlers.ParagraphChunker", return_value=mock_chunker):
-        mock_parse.return_value = MagicMock(content="some text", file_type="txt")
+        mock_parse.return_value = MagicMock(content="some text", file_type="txt", images=None)
         with pytest.raises(Exception, match="Chunking produced no results"):
             asyncio.run(upload_handler(task, tmp.name, "test_col", "tiny.txt"))
 

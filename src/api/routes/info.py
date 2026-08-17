@@ -35,11 +35,16 @@ _debounce: dict[str, dict] = {}  # collection_id -> {"timer": Timer, "snapshot":
 def source_is_definitive(collection_id: str, source: str) -> bool:
     """Whether this source participates in Collection Summary consolidate.
 
-    File-mgmt files (``__file__:{file_id}``): ``files.is_definitive``.
+    File-mgmt files (``__file__:{file_id}`` / ``file:{id}``): ``files.is_definitive``.
     Other sources (notes/meetings legacy): fall back to doc_summary.include_in_summary.
     """
-    if (source or "").startswith("__file__:"):
-        file_id = source[len("__file__:") :]
+    src = source or ""
+    file_id = None
+    if src.startswith("__file__:"):
+        file_id = src[len("__file__:") :]
+    elif src.startswith("file:"):
+        file_id = src[len("file:") :]
+    if file_id is not None:
         try:
             from src.file_mgmt.store import get_db
 
@@ -292,9 +297,9 @@ def get_collection_conflicts(collection: str):
     # Add human-readable labels via files.json WITHOUT mutating original source
     # (the original source is needed by the frontend to call preview/summary APIs).
     try:
-        from src.collections.file_index import load as load_file_index
+        from src.collections.file_index import load_for_read
         import re as _re_uuid
-        idx = load_file_index(collection_id)
+        idx = load_for_read(collection_id)
         # Build lookup tables. Conflict sources come from the LLM, which sometimes
         # uses the raw UUID or formats like "note (uuid)" / "file (uuid)" — match
         # those patterns too so labels resolve even for older conflict data.
@@ -487,11 +492,11 @@ async def generate_doc_summary(
             )
 
     # Validate source file exists via file index
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read
     from src.collections.file_index import COLLECTIONS_DIR as _COL_DIR
 
     file_path = None
-    idx = load_file_index(collection_id)
+    idx = load_for_read(collection_id)
     for fid, entry in idx.items():
         if entry.get("source") == source:
             # Prefer current version dir (v2 layout); fall back to flat legacy
@@ -552,20 +557,10 @@ async def generate_doc_summary(
 
 
 def _get_enriching_llm(config: dict):
-    """Get LLM for enrichment from config."""
-    from src.providers.llm import create_llm_for_provider
-    from src.config import get_config
-    provider_id = config.get("enriching_llm_provider")
-    if provider_id:
-        for p in get_config().llm.providers:
-            if p.id == provider_id:
-                model = config.get("enriching_llm_model")
-                return create_llm_for_provider(p, model=model)
-    cfg = get_config()
-    if cfg.llm.providers:
-        default_p = next((p for p in cfg.llm.providers if p.is_default), cfg.llm.providers[0])
-        return create_llm_for_provider(default_p)
-    return services.llm
+    """Get LLM for enrichment from config (collection override → Settings → default)."""
+    from src.rag.contextual import get_enriching_llm
+
+    return get_enriching_llm(config)
 
 
 # ── Consolidation trigger ───────────────────────────────────
@@ -677,8 +672,8 @@ def get_meeting_log(collection: str):
                 file_labels: dict[str, str] = {}
                 # Try to get display labels and source identifiers from files.json
                 try:
-                    from src.collections.file_index import load as load_file_index
-                    idx = load_file_index(collection_id)
+                    from src.collections.file_index import load_for_read
+                    idx = load_for_read(collection_id)
                     for col, fid in zip(alloc_collections, alloc_file_ids):
                         if col == collection_id:
                             entry = idx.get(fid, {})

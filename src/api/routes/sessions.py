@@ -74,13 +74,6 @@ class SessionDetailResponse(BaseModel):
 # ── helpers ───────────────────────────────────────────────────────
 
 
-def _num_to_stt(num: int) -> str:
-    """Convert segment index to stt_XXXX format (matching Summary's ref convention).
-    1 -> 'stt_0001', 123 -> 'stt_0123'
-    """
-    return f"stt_{num:04d}"
-
-
 def _get_store():
     store = services.session_store
     if store is None:

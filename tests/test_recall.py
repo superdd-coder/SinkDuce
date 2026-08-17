@@ -600,20 +600,20 @@ def test_is_specific_query_accepts_specific_queries():
     """Queries with proper nouns, acronyms, or specific numbers should pass."""
     from src.api.routes.recall import _is_specific_query
     # These should pass
-    assert _is_specific_query("What is the capacity of AQ PURE-2500 MAX?") is True
-    assert _is_specific_query("What is the Chotiwat SMC project timeline?") is True
+    assert _is_specific_query("What is the capacity of Unit M-100?") is True
+    assert _is_specific_query("What is the Client A Project X timeline?") is True
     assert _is_specific_query("What was the 2024 revenue for ABC Corp?") is True
-    assert _is_specific_query("What is the AQIONIX proposal for project X?") is True
+    assert _is_specific_query("What is the Company A proposal for Project X?") is True
 
 
 def test_is_specific_query_rejects_too_short():
     """Too-short or too-long queries are rejected."""
     from src.api.routes.recall import _is_specific_query
-    assert _is_specific_query("Capacity of AQ-2500") is False  # 3 words
+    assert _is_specific_query("Capacity of Unit-100") is False  # 3 words
     # 36+ words rejected
     long_q = (
-        "What is the capacity and detailed technical specifications of the AQ "
-        "PURE-2500 MAX system installed at the Chotiwat SMC project in 2024 "
+        "What is the capacity and detailed technical specifications of the "
+        "Unit M-100 system installed at Project X for Client A in 2024 "
         "according to the official proposal document, including the physical "
         "dimensions and operating parameters of the unit?"
     )

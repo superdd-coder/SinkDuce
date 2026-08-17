@@ -29,8 +29,6 @@ import {
   FileText, FolderOpen, GitBranch, Trash2, Download, FileType2,
   ListTodo,
 } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import {
   extract, deleteSection,
   regenerateSection, getSectionMd,
@@ -63,7 +61,6 @@ import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 import { SummaryTranslateControl } from "./summary-translate-control"
 import {
   SummaryMarkdownViewer,
-  normalizeMd,
   unescapeMarkdownOverEscapes,
 } from "./summary-markdown-viewer"
 import {
@@ -73,6 +70,18 @@ import {
 } from "@/lib/meeting-summary-export"
 
 const SAVE_DELAY = 800
+
+/** DatabaseView stays mounted — refresh Files / Timeline after ingest or cancel. */
+async function refreshKeepMountedLibrary(collectionId: string | null | undefined) {
+  const colId = (collectionId || "").trim()
+  if (!colId) return
+  try {
+    const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
+    await useFileMgmtStore.getState().refreshLibrarySurfaces(colId)
+  } catch {
+    /* store / Database view may be unmounted */
+  }
+}
 
 interface Props {
   meetingId: string
@@ -846,7 +855,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     try {
       // Delete old allocation first; fail fast — don't proceed if cleanup fails
       if (ingested && colId !== associatedId) {
+        const oldCol = associatedId
         await deleteSectionAllocation(meetingId, tab.tab_id)
+        await refreshKeepMountedLibrary(oldCol)
       }
     } catch (err) {
       toast.error(`Failed to remove old allocation: ${err instanceof Error ? err.message : String(err)}`)
@@ -879,6 +890,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     if (ingested) {
       try {
         await deleteSectionAllocation(meetingId, tab.tab_id)
+        await refreshKeepMountedLibrary(associatedId)
       } catch (err) {
         toast.error(`Failed to remove old allocation: ${err instanceof Error ? err.message : String(err)}`)
         setPendingName(null)
@@ -923,6 +935,10 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       if (bridgeNodeId) lastNodeIdRef.current = bridgeNodeId
       onMeetingUpdate(meetingRest as Meeting)
       const wasUpdate = !!tab.allocated_file_id
+
+      // Node + Meeting folder row exist as soon as allocate returns.
+      // DatabaseView stays mounted across sidebar switches — refresh now.
+      await refreshKeepMountedLibrary(colId)
 
       // allocate returns as soon as the file is registered; indexing is async.
       // Keep pill "Ingesting…" until the task finishes — don't toast "done" early.
@@ -1068,8 +1084,10 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     setLocalIngesting(true)
     onIngestingChangeRef.current?.(jobTabId, true)
     try {
+      const colId = associatedId
       const m = await deleteSectionAllocation(meetingId, jobTabId)
       onMeetingUpdate(m)
+      await refreshKeepMountedLibrary(colId)
       toast.success("Ingestion cancelled")
     } catch (err) {
       toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1698,6 +1716,9 @@ export function MeetingTabs({
   /** Dedup local stream-end effect vs hook onCompletedAway (both fire when viewing). */
   const summaryHandledAtRef = useRef(0)
 
+  const viewedMeetingIdRef = useRef(meetingId)
+  viewedMeetingIdRef.current = meetingId
+
   const handleCompletedAway = useCallback((mid: string) => {
     // Local isStreaming effect already seeded chips + reloaded while viewing
     if (Date.now() - summaryHandledAtRef.current < 2500) {
@@ -1706,14 +1727,19 @@ export function MeetingTabs({
     }
     summaryHandledAtRef.current = Date.now()
     getMeeting(mid).then((m) => {
+      if (viewedMeetingIdRef.current !== mid) return
       onCompletedAwayRef.current(m)
       loadedTabsRef.current.delete("tab_general")
       void loadTabContentRef.current("tab_general")
       toast.success("Summary generated")
     }).catch(() => {
-      toast.error("Failed to fetch updated meeting")
+      if (viewedMeetingIdRef.current === mid) {
+        toast.error("Failed to fetch updated meeting")
+      }
     }).finally(() => {
-      bpStreamCtrlRef.current?.dismissStreaming()
+      if (viewedMeetingIdRef.current === mid) {
+        bpStreamCtrlRef.current?.dismissStreaming()
+      }
     })
   }, [])
 
@@ -1944,31 +1970,42 @@ export function MeetingTabs({
 
   // Auto-start section streams for all generating tabs (once per tab per session)
   const startedSectionStreamsRef = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    const generatingTabs = tabs.filter(
-      t => t.type === "section" && t.processing_state === "generating"
-    )
-    for (const tab of generatingTabs) {
-      const key = `${meetingId}::${tab.tab_id}`
-      if (!startedSectionStreamsRef.current.has(key)) {
+  const kickSectionStreams = useCallback(
+    (mid: string, list: MeetingTab[] | undefined | null) => {
+      for (const tab of list || []) {
+        if (tab.type !== "section" || tab.processing_state !== "generating") continue
+        const key = `${mid}::${tab.tab_id}`
+        if (startedSectionStreamsRef.current.has(key)) continue
         startedSectionStreamsRef.current.add(key)
-        startSectionStream(meetingId, tab.tab_id)
+        startSectionStream(mid, tab.tab_id)
       }
-    }
-  }, [tabs, meetingId])
+    },
+    [],
+  )
+  useEffect(() => {
+    startedSectionStreamsRef.current = new Set()
+  }, [meetingId])
+  useEffect(() => {
+    kickSectionStreams(meetingId, tabs)
+  }, [tabs, meetingId, kickSectionStreams])
 
   // Track streaming completion for the *selected* section only.
   // Tab switches re-baseline — they must never look like a true→false edge
   // (that was dismissing the newly selected live stream and clearing Streaming).
   const sectionWasStreamingRef = useRef(false)
+  const sectionStreamMeetingRef = useRef(meetingId)
   const streamingTabRef = useRef<string | null>(
     isGeneralSelected ? null : selectedSummaryId,
   )
   useEffect(() => {
     const tabId = isGeneralSelected ? null : selectedSummaryId
 
-    if (streamingTabRef.current !== tabId) {
+    if (
+      streamingTabRef.current !== tabId ||
+      sectionStreamMeetingRef.current !== meetingId
+    ) {
       streamingTabRef.current = tabId
+      sectionStreamMeetingRef.current = meetingId
       sectionWasStreamingRef.current = !!(tabId && sectionStream.isStreaming)
       return
     }
@@ -2098,7 +2135,11 @@ export function MeetingTabs({
       case "regenerate":
         // Delete old allocation AFTER successful regeneration
         if (action.hadAllocation) {
-          deleteSectionAllocation(meetingId, action.tabId).catch(() => { /* best effort */ })
+          const colId = meeting.tabs?.find((t) => t.tab_id === action.tabId)
+            ?.associated_collection_id
+          deleteSectionAllocation(meetingId, action.tabId)
+            .then(() => refreshKeepMountedLibrary(colId))
+            .catch(() => { /* best effort */ })
         }
         loadedTabsRef.current.delete(action.tabId)
         setTabMdContents((prev) => {
@@ -2136,12 +2177,17 @@ export function MeetingTabs({
   const notesSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevNotesContentRef = useRef(notesContent)
 
-  // Sync notes draft when parent content changes from external source
+  // Sync notes draft when parent content changes from external source.
+  // Empty/whitespace draft is not a real user edit — Tiptap's empty-doc
+  // onChange used to make draft !== baseline and block this until refresh.
   if (prevNotesContentRef.current !== notesContent) {
-    prevNotesContentRef.current = notesContent
-    if (notesDraft === notesBaselineRef.current) {
-      setNotesDraft(notesContent)
-      notesBaselineRef.current = notesContent
+    const incoming = notesContent ?? ""
+    const draftEmpty = !notesDraft.trim()
+    const baselineEmpty = !notesBaselineRef.current.trim()
+    prevNotesContentRef.current = incoming
+    if (notesDraft === notesBaselineRef.current || (draftEmpty && baselineEmpty)) {
+      setNotesDraft(incoming)
+      notesBaselineRef.current = incoming
     }
   }
 
@@ -2159,7 +2205,10 @@ export function MeetingTabs({
     setTranslations({})
     setAvailableLangs({})
     setIngestingTabs(new Set())
-  }, [meetingId])
+    setNotesDraft(notesContent)
+    notesBaselineRef.current = notesContent
+    prevNotesContentRef.current = notesContent
+  }, [meetingId]) // eslint-disable-line react-hooks/exhaustive-deps -- seed notes from first paint of this meeting
 
   const loadTabContent = useCallback(async (tabId: string) => {
     // Already loaded → skip
@@ -2171,15 +2220,14 @@ export function MeetingTabs({
     setLoadingTabs((prev) => new Set(prev).add(tabId))
     try {
       const md = await getSectionMd(meetingId, tabId)
-      if (md !== null) {
+      if (md) {
         loadedTabsRef.current.add(tabId)   // mark loaded ONLY on success
         setTabMdContents((prev) => ({ ...prev, [tabId]: md }))
-      } else {
-        setTabMdContents((prev) => ({ ...prev, [tabId]: "" }))
-        // NOT marked as loaded → will retry next time
       }
+      // Missing/empty file: do not store "" — that blocks live SSE tokens
+      // (`"" ?? streamingMd` stays empty).
     } catch {
-      setTabMdContents((prev) => ({ ...prev, [tabId]: "" }))
+      /* retry next select */
     }
     inFlightRef.current.delete(tabId)
     setLoadingTabs((prev) => {
@@ -2256,6 +2304,9 @@ export function MeetingTabs({
       setCustomReceipts([])
       // Notify parent to start polling (meeting now has processing_state="extracting")
       onMeetingUpdate(updated)
+      // Don't wait for a later tabs-effect: refresh used to be required
+      // before SSE / Tagger started.
+      kickSectionStreams(extractMeetingId, updated.tabs)
     } catch (err) {
       setPendingAction((prev) =>
         prev?.type === "extract" && prev.meetingId === extractMeetingId ? null : prev,
@@ -2351,16 +2402,34 @@ export function MeetingTabs({
   }
 
   // ── Detect streaming finish → prepared chips + fetch meeting ────────────────
-  // While streaming we show plain ReactMarkdown. On end, immediately seed
-  // tabMdContents and leave the generating path so SummaryMarkdownViewer can
-  // resolve speakers + sentence refs (refresh used to be required for that).
+  // When the full blueprint stream ends, persist + toast. Live chips already
+  // come from SummaryMarkdownViewer on streamingMd / settledSummaryMd.
+  const summaryStreamMeetingRef = useRef(meetingId)
+  const lastSeededGeneralRef = useRef("")
   useEffect(() => {
+    const settled = (bpStream.settledSummaryMd || "").trim()
+    if (!settled || lastSeededGeneralRef.current === settled) return
+    lastSeededGeneralRef.current = settled
+    setTabMdContents((prev) =>
+      prev.tab_general === settled ? prev : { ...prev, tab_general: settled },
+    )
+    loadedTabsRef.current.delete("tab_general")
+  }, [bpStream.settledSummaryMd])
+
+  useEffect(() => {
+    if (summaryStreamMeetingRef.current !== meetingId) {
+      summaryStreamMeetingRef.current = meetingId
+      wasStreamingRef.current = bpStream.isStreaming
+      lastSeededGeneralRef.current = ""
+      return
+    }
     const was = wasStreamingRef.current
     wasStreamingRef.current = bpStream.isStreaming
     if (!was || bpStream.isStreaming) return
 
     summaryHandledAtRef.current = Date.now()
-    const interim = bpStream.streamingMd || ""
+    const interim =
+      bpStream.settledSummaryMd || bpStream.streamingMd || ""
     if (interim.trim()) {
       setTabMdContents((prev) => ({ ...prev, tab_general: interim }))
       loadedTabsRef.current.delete("tab_general")
@@ -2368,15 +2437,19 @@ export function MeetingTabs({
     // Drop generating gate (isStreaming already false); clear buffer after seed
     bpStreamCtrl.dismissStreaming()
 
-    getMeeting(meetingId).then((m) => {
+    const finishedId = meetingId
+    getMeeting(finishedId).then((m) => {
+      if (viewedMeetingIdRef.current !== finishedId) return
       onMeetingUpdate(m)
       loadedTabsRef.current.delete("tab_general")
       void loadTabContent("tab_general")
       toast.success("Summary generated")
     }).catch(() => {
-      toast.error("Failed to fetch updated meeting")
+      if (viewedMeetingIdRef.current === finishedId) {
+        toast.error("Failed to fetch updated meeting")
+      }
     })
-  }, [bpStream.isStreaming, bpStream.streamingMd, bpStreamCtrl, meetingId, onMeetingUpdate, loadTabContent])
+  }, [bpStream.isStreaming, bpStream.streamingMd, bpStream.settledSummaryMd, bpStreamCtrl, meetingId, onMeetingUpdate, loadTabContent])
 
   const handleDeleteSection = (tabId: string) => {
     setDeleteSectionTarget(tabId)
@@ -2386,9 +2459,12 @@ export function MeetingTabs({
     const tabId = deleteSectionTarget
     if (!tabId) return
     setDeleteSectionTarget(null)
+    const colId = meeting.tabs?.find((t) => t.tab_id === tabId)
+      ?.associated_collection_id
     try {
       const m = await deleteSection(meetingId, tabId)
       onMeetingUpdate(m)
+      await refreshKeepMountedLibrary(colId)
       if (selectedSummaryId === tabId) setSelectedSummaryId("tab_general")
       setTabMdContents((prev) => {
         const next = { ...prev }
@@ -2406,6 +2482,13 @@ export function MeetingTabs({
     const targetTab = tabs.find(t => t.tab_id === tabId)
     const hadAllocation = !!targetTab?.allocated_file_id
     const regenMeetingId = meetingId
+    loadedTabsRef.current.delete(tabId)
+    setTabMdContents((prev) => {
+      if (!(tabId in prev)) return prev
+      const next = { ...prev }
+      delete next[tabId]
+      return next
+    })
     setPendingAction({
       type: "regenerate",
       meetingId: regenMeetingId,
@@ -2416,6 +2499,7 @@ export function MeetingTabs({
       const updated = await regenerateSection(regenMeetingId, tabId)
       // Notify parent to start polling (meeting now has processing_state="extracting")
       onMeetingUpdate(updated)
+      kickSectionStreams(regenMeetingId, updated.tabs)
     } catch (err) {
       setPendingAction((prev) =>
         prev?.type === "regenerate" && prev.meetingId === regenMeetingId ? null : prev,
@@ -2558,20 +2642,20 @@ export function MeetingTabs({
     // General always present once we have any summary surface / blueprint path
     if (hasBlueprint || hasSections || hasSummary || thinking) {
       const generalTab = tabs.find((t) => t.tab_id === "tab_general")
-      const hasGeneralMd = !!generalTab?.md_file_path || hasSummary
-      // Tokens flowing → Streaming badge (avoid redundant summaryGenState checks — TS narrows)
-      const genStreaming =
-        !hasGeneralMd &&
-        (bpStream.summaryGenState === "streaming" || !!bpStream.streamingMd)
-      // Prefilling / summarizing before first token → Generating (not Streaming)
+      const hasGeneralMd =
+        !!generalTab?.md_file_path ||
+        hasSummary ||
+        !!tabMdContents["tab_general"] ||
+        !!bpStream.settledSummaryMd
+      const genStreaming = bpStream.summaryGenState === "streaming"
       const genGenerating =
-        !hasGeneralMd &&
         !genStreaming &&
-        (bpStream.isStreaming ||
-          bpStream.summaryGenState === "prefilling" ||
-          meeting.processing_state === "summarizing" ||
-          pendingAction?.type === "summarize" ||
-          pendingAction?.type === "re_summarize")
+        !hasGeneralMd &&
+        (bpStream.summaryGenState === "prefilling" ||
+          ((pendingAction?.type === "summarize" ||
+            pendingAction?.type === "re_summarize" ||
+            meeting.processing_state === "summarizing") &&
+            !bpStream.streamingMd))
       items.push({
         id: "tab_general",
         label: "General",
@@ -2715,23 +2799,56 @@ export function MeetingTabs({
 
   const getTabContent = (tabId: string): string => {
     if (tabId === "tab_general") {
-      return tabMdContents["tab_general"] ?? (bpStream.streamingMd || "")
+      return (
+        tabMdContents["tab_general"] ||
+        bpStream.settledSummaryMd ||
+        bpStream.streamingMd ||
+        ""
+      )
     }
-    // For sections, prefer loaded content but fall back to streaming markdown
-    return tabMdContents[tabId] ?? ((tabId === selectedSummaryId ? sectionStream.streamingMd : "") || "")
+    // Live SSE wins while this tab is generating (cached "" or stale md
+    // must not hide tokens).
+    if (
+      tabId === selectedSummaryId &&
+      sectionStream.streamingMd &&
+      (sectionStream.isStreaming ||
+        sectionStream.genState === "streaming" ||
+        sectionStream.genState === "prefilling")
+    ) {
+      return sectionStream.streamingMd
+    }
+    return (
+      tabMdContents[tabId] ||
+      (tabId === selectedSummaryId ? sectionStream.streamingMd : "") ||
+      ""
+    )
   }
 
   const selectedTab = tabs.find((t) => t.tab_id === selectedSummaryId)
   const isGeneral = selectedSummaryId === "tab_general"
+  /** Only while General tokens are still arriving — not while blueprint runs. */
+  const generalSummaryWriting =
+    bpStream.summaryGenState === "prefilling" ||
+    bpStream.summaryGenState === "streaming"
   const isTabGenerating = selectedTab?.processing_state === "generating"
   /** Live SSE for the selected section (survives processing_state lag). */
-  // Only while actively generating — bare streamingMd after idle kept ReactMarkdown
-  // without speaker/ref chips (same bug as general summary).
   const sectionLive =
     !isGeneral &&
     (sectionStream.isStreaming ||
       sectionStream.genState === "prefilling" ||
       sectionStream.genState === "streaming")
+  /** Prefill/thinking only — once tokens exist, use SummaryMarkdownViewer like translation. */
+  const generalWaitingTokens =
+    isGeneral &&
+    generalSummaryWriting &&
+    !bpStream.streamingMd &&
+    !bpStream.settledSummaryMd
+  const sectionWaitingTokens =
+    !isGeneral &&
+    (isTabGenerating ||
+      sectionLive ||
+      loadingTabs.has(selectedSummaryId)) &&
+    !sectionStream.streamingMd
 
   // ── Summary translation view ─────────────────────────────
   // Content priority: live stream > cached translation > original summary.
@@ -3002,20 +3119,8 @@ export function MeetingTabs({
              * even when early blueprint already landed (hasBlueprint=true).
              * Do NOT gate on bare streamingMd after isStreaming ends — that kept
              * ReactMarkdown (no speaker/sentence chips) until a full page refresh. */
-            const isSummaryGenerating =
-              isGeneral &&
-              (bpStream.isStreaming ||
-                bpStream.summaryGenState === "prefilling" ||
-                bpStream.summaryGenState === "streaming" ||
-                meeting.processing_state === "summarizing" ||
-                pendingAction?.type === "summarize" ||
-                pendingAction?.type === "re_summarize")
-            const hasStreamTokens = !!bpStream.streamingMd
-
-            if (isSummaryGenerating) {
-              // Waiting: skeleton fence only. Streaming tokens: normal content layout (no fence).
-              if (!hasStreamTokens) {
-                return (
+            if (generalWaitingTokens) {
+              return (
                   <div className="pm-meeting-fence-pad">
                     <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-5 space-y-4 min-h-[200px]">
                       <div className="flex items-center gap-2">
@@ -3044,64 +3149,11 @@ export function MeetingTabs({
                       ))}
                     </div>
                   </div>
-                )
-              }
-              return (
-                <div className="flex flex-col min-h-0 overflow-auto px-6 pt-6 pb-8">
-                  <div className="pm-meeting-body-read">
-                    <div className="pm-meeting-stream-md">
-                      <div className="prose prose-sm dark:prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {normalizeMd(bpStream.streamingMd)}
-                        </ReactMarkdown>
-                      </div>
-                      {bpStream.isStreaming && (
-                        <span className="sk-stream-cursor" aria-hidden />
-                      )}
-                    </div>
-                  </div>
-                </div>
               )
             }
 
-            if (
-              isTabGenerating ||
-              sectionLive ||
-              (!isGeneral && loadingTabs.has(selectedSummaryId))
-            ) {
+            if (sectionWaitingTokens) {
               if (isGeneral) return <ThinkingSkeleton />
-              const secGenState = sectionStream.genState
-              const hasStreamingContent =
-                secGenState === "streaming" ||
-                sectionStream.streamingMd.length > 0
-              if (hasStreamingContent) {
-                return (
-                  <div className="flex flex-col min-h-0 overflow-auto">
-                    <div className="px-6 pt-6 pb-3">
-                      <div className="flex items-start gap-2">
-                        <span className="pm-meeting-title shrink-0">
-                          {tabShortLabel(selectedTab!)} {selectedTab?.name}
-                        </span>
-                        {sectionStream.isStreaming && (
-                          <Loader2 className="size-3.5 animate-spin mt-1.5 shrink-0 text-[var(--pm-green)]" />
-                        )}
-                      </div>
-                      {selectedTab?.description && (
-                        <p className="pm-meta leading-relaxed mt-1">{selectedTab.description}</p>
-                      )}
-                    </div>
-                    <div className="px-6 flex-1">
-                      <div className="pm-meeting-body-read">
-                        <div className="prose prose-sm dark:prose-invert max-w-none">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {normalizeMd(sectionStream.streamingMd)}
-                          </ReactMarkdown>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )
-              }
               return (
                 <div className="flex flex-col min-h-0 overflow-auto">
                   <div className="px-6 pt-6 pb-3">
@@ -3133,6 +3185,8 @@ export function MeetingTabs({
 
             const hasGeneralMd =
               !!tabMdContents["tab_general"] ||
+              !!bpStream.settledSummaryMd ||
+              !!bpStream.streamingMd ||
               !!tabs.some((t) => t.tab_id === "tab_general" && t.md_file_path)
             if (!hasBlueprint && !hasGeneralMd) {
               return (
@@ -3150,24 +3204,15 @@ export function MeetingTabs({
 
             return null
           })()}
-          {/* Settled content path (has summary md / sections) — chips via SummaryMarkdownViewer */}
-          {!(
-            isGeneral &&
-            (bpStream.isStreaming ||
-              bpStream.summaryGenState === "prefilling" ||
-              bpStream.summaryGenState === "streaming" ||
-              meeting.processing_state === "summarizing" ||
-              pendingAction?.type === "summarize" ||
-              pendingAction?.type === "re_summarize")
-          ) &&
-          !(
-            isTabGenerating ||
-            sectionLive ||
-            (!isGeneral && loadingTabs.has(selectedSummaryId))
-          ) &&
+          {/* Same viewer as translation — chips/fonts update as tokens arrive */}
+          {!generalWaitingTokens &&
+          !sectionWaitingTokens &&
           (hasBlueprint ||
             !!tabMdContents["tab_general"] ||
+            !!bpStream.settledSummaryMd ||
+            !!bpStream.streamingMd ||
             !!tabMdContents[selectedSummaryId] ||
+            (!isGeneral && !!sectionStream.streamingMd) ||
             tabs.some((t) => t.tab_id === "tab_general" && t.md_file_path)) ? (
             <>
               <EditableSectionContent

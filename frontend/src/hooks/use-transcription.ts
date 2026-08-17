@@ -186,6 +186,9 @@ export function useTranscription(meetingId: string | null) {
           return
         }
         if (data.type === "transcript") {
+          // After stop, ignore late non-finals — they overwrite a finalized
+          // utterance and leave the Studio Transcript "Live" card stuck.
+          if (!wantLiveRef.current && !data.is_final) return
           const key = `s${session}:${makeKey(data)}`
           const seg: InternalSegment = {
             start: (data.start ?? 0) + offset,
@@ -243,7 +246,7 @@ export function useTranscription(meetingId: string | null) {
       // Drop ref only if this is still the active socket
       if (wsRef.current === ws) wsRef.current = null
 
-      setState((prev) => ({ ...prev, isConnected: false }))
+      setState((prev) => ({ ...prev, isConnected: false, currentPartial: "" }))
 
       // Intentional stop: do not reconnect and do not clear isTranscribing here
       // (stopTranscription already sets isTranscribing false).

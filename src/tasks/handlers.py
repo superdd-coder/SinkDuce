@@ -15,19 +15,28 @@ from src.tasks.task_manager import Task, task_manager
 from src.services import services
 from src.parsers import parse_file
 from src.parsers.mineru_parser import parse_with_mineru, MINERU_SUPPORTED_EXTENSIONS, MinerUError
-from src.rag.chunker import ParentChildChunker, ParagraphChunker
+from src.rag.chunker import ParentChildChunker, ParagraphChunker, chunk_with_sheet_boundaries
 from src.rag.markdown_chunker import MarkdownChunker, MarkdownParentChildChunker
 from src.rag.collection_utils import get_collection_embedding
 from src.rag.summary_manager import SummaryManager
 
 logger = logging.getLogger(__name__)
 
-# Pipeline stage locks: only one file can be in enriching/embedding at a time,
-# but different files can be at different stages concurrently.
-# Use threading.Lock for reliable cross-thread synchronization.
-_enrich_lock = threading.Lock()
+# MinerU/local parse is slow and would starve chunk if they share a pool.
+# Parse matches upload concurrency (5); chunk/sparse stay on a small CPU pool.
+# Summary + Context orchestration uses a dedicated pool; ingest LLM calls
+# share a process-wide cap (Settings Parallel, default 50).
 _embed_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="embed-worker")
+_parse_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="parse-worker")
 _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker")
+_enrich_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="enrich-worker")
+# Separate pools so one file's OCR never blocks that file's Vision.
+# OCR is CPU-heavy (RapidOCR ONNX): cap at 2 so five files do not thrash.
+# Vision is I/O-bound and shares the ingest LLM request limiter.
+_ocr_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr-worker")
+_vision_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="vision-worker")
+# Do not wait forever for OCR/Vision before embed/store.
+IMAGE_JOB_DEADLINE_SEC = 180.0
 
 
 class _MonotonicProgress:
@@ -146,20 +155,15 @@ class _EmbedBatcher:
         self._on_embed_done = on_embed_done      # called with n=batch_size after result
 
     def set_summary(self, summary: str):
+        """Kept for callers; summary is stored separately and is not embedded."""
         with self._lock:
             self._summary = summary
-            for chunk, ctx in self._pending:
-                self._assemble_and_buffer(chunk, ctx)
-            self._pending.clear()
 
     def on_ready(self, chunk, context: str):
         # Parent chunks are never searched — skip embedding
         if chunk.chunk_type == "parent":
             return
         with self._lock:
-            if self._summary is None:
-                self._pending.append((chunk, context))
-                return
             self._assemble_and_buffer(chunk, context)
 
     def _assemble_and_buffer(self, chunk, context: str):
@@ -239,81 +243,217 @@ class _EmbedBatcher:
 
 
 def _get_enriching_llm(config: dict):
-    """Get LLM for contextual enrichment.
+    """Get LLM for contextual enrichment / Summary.
 
-    Resolution: per-collection override → global Settings default → system default LLM.
-
-    Cached by (provider_id, model) so the same provider instance — and its
-    httpx connection pool — is reused across enrichments. Without caching,
-    every upload creates a new OpenAI client with a cold connection pool,
-    so the first LLM call (the slow summary call) pays TCP+TLS handshake
-    and any server-side warmup, blocking the upload for several extra
-    seconds on the very first enrichment.
+    Resolution: per-collection override → Settings "Contextual enrichment &
+    Summary" → system default LLM.
     """
-    from src.providers.llm import create_llm_for_provider
-    from src.providers.cache import get_or_create as cached_provider
-    from src.config import get_config
-    cfg = get_config()
+    from src.rag.contextual import get_enriching_llm
 
-    def _build(provider_cfg, model_override: str | None):
-        # Apply model override by producing an updated copy of the config;
-        # adapters read the model from the config themselves.
-        effective_cfg = provider_cfg
-        if model_override:
-            effective_cfg = provider_cfg.model_copy(update={"default_model": model_override})
-        cache_key = f"llm:enrich:{provider_cfg.id}:{effective_cfg.default_model or effective_cfg.model or ''}"
-        return cached_provider(cache_key, lambda: create_llm_for_provider(effective_cfg))
+    return get_enriching_llm(config)
 
-    # 1. Per-collection override (collection-config.tsx)
-    provider_id = config.get("enriching_llm_provider")
-    if provider_id:
-        for p in cfg.llm.providers:
-            if p.id == provider_id:
-                return _build(p, config.get("enriching_llm_model"))
 
-    # 2. Global enrichment model (Settings → Advanced → Enrichment → Model)
-    enrich_model = cfg.enrichment.enrichment_model
-    if enrich_model:
-        for p in cfg.llm.providers:
-            if p.id == enrich_model:
-                return _build(p, None)
-
-    # 3. System default LLM
-    if cfg.llm.providers:
-        default_p = next((p for p in cfg.llm.providers if p.is_default), cfg.llm.providers[0])
-        return _build(default_p, None)
-    return services.llm
+def _is_tabular_document(doc) -> bool:
+    """Excel / CSV skip section LLM and use sheet_name in the embedding instead."""
+    file_type = getattr(doc, "file_type", "") or ""
+    if file_type in ("excel", "csv"):
+        return True
+    meta = getattr(doc, "metadata", None) or {}
+    if not isinstance(meta, dict):
+        return False
+    original = str(meta.get("original_file_type") or "").lower()
+    return original in ("xls", "xlsx", "csv")
 
 
 def _do_enrich(chunks, doc, config, collection_id: str = "", *,
-                on_summary=None, on_chunk_ready=None):
-    """Run contextual enrichment (blocking). Must be called with _enrich_lock held."""
+                on_summary=None, on_chunk_ready=None,
+                contextual_enabled: bool | None = None,
+                full_document: str | None = None,
+                inspect_out: dict | None = None,
+                summary: str | None = None,
+                structured_summary: str | None = None,
+                cache_warmup_delay: float | None = None):
+    """Run Summary (always) and optional block-level Context.
+
+    Safe to call concurrently across files. Summary + Context LLM calls
+    share a process-wide cap (``enrichment.max_parallel_context``, default 50).
+    Collection Contextual switch only gates Context — Summary still runs
+    when the switch is off.
+    """
+    from src.rag.contextual import ContextualRetrieval, enrichment_model_is_visual
+
     enriching_llm = _get_enriching_llm(config)
     ctx_window = config.get("contextual_window", 1)
-    from src.rag.contextual import ContextualRetrieval
-    contextual = ContextualRetrieval(llm=enriching_llm, context_window=ctx_window)
-    kwargs = dict(on_summary=on_summary, on_chunk_ready=on_chunk_ready)
-    if config.get("chunk_mode") == "parent_child":
-        parent_chunks = [c for c in chunks if c.chunk_type == "parent"]
-        child_chunks = [c for c in chunks if c.chunk_type == "child"]
-        # Children first — generates summary in parallel with contexts
-        child_chunks = contextual.add_context(child_chunks, full_document=doc.content,
-                                               on_summary=on_summary,
-                                               on_chunk_ready=on_chunk_ready)
-        # Parents reuse children's summary if available, else generate their own
-        shared_summary = (child_chunks[0].metadata.get("summary", "") if child_chunks else "")
-        shared_structured = (child_chunks[0].metadata.get("_structured_summary", "") if child_chunks else "")
-        parent_chunks = contextual.add_context(parent_chunks, full_document=doc.content,
-                                                summary=shared_summary,
-                                                structured_summary=shared_structured,
-                                                on_chunk_ready=on_chunk_ready)
-        enriched = parent_chunks + child_chunks
-    else:
-        enriched = contextual.add_context(chunks, full_document=doc.content, **kwargs)
+    if contextual_enabled is None:
+        contextual_enabled = bool(config.get("contextual_enabled", True))
+    if enriching_llm is None:
+        logger.warning("[ENRICH] No LLM configured — skipping Summary/Context")
+        if on_chunk_ready:
+            for chunk in chunks:
+                try:
+                    on_chunk_ready(chunk, chunk.metadata.get("context", ""))
+                except Exception:
+                    pass
+        return chunks
+    kwargs = {}
+    if cache_warmup_delay is not None:
+        kwargs["cache_warmup_delay"] = cache_warmup_delay
+    contextual = ContextualRetrieval(llm=enriching_llm, context_window=ctx_window, **kwargs)
+    file_id = ""
+    if chunks:
+        file_id = str(chunks[0].metadata.get("file_id") or "")
 
-    # Store structured summary if enrichment produced one
-    _store_structured_summary(enriched, doc, config, collection_id)
+    def _on_sum(short: str) -> None:
+        _store_structured_summary(chunks, doc, config, collection_id)
+        if on_summary:
+            try:
+                on_summary(short)
+            except Exception:
+                logger.debug("[ENRICH] on_summary failed")
+
+    document_text = full_document
+    if document_text is None:
+        document_text = getattr(doc, "content", "") or ""
+    enriched = contextual.add_context(
+        chunks,
+        full_document=document_text,
+        summary=summary,
+        structured_summary=structured_summary,
+        on_summary=_on_sum,
+        on_chunk_ready=on_chunk_ready,
+        tabular=_is_tabular_document(doc),
+        contextual_enabled=contextual_enabled,
+        is_visual=enrichment_model_is_visual(config),
+        collection_id=collection_id,
+        file_id=file_id,
+    )
+    if inspect_out is not None:
+        inspect_out.update(getattr(contextual, "inspect", {}) or {})
     return enriched
+
+
+def _record_enrich_trace(trace, inspect: dict) -> None:
+    """Write Summary / Context steps from ContextualRetrieval.inspect."""
+    if trace is None:
+        return
+    inspect = inspect or {}
+    attempts = int(inspect.get("summary_attempts") or 0)
+    summary_ok = bool(inspect.get("summary_ok"))
+    short = inspect.get("short_summary") or ""
+    structured = inspect.get("structured_summary") or ""
+    summary_ms = inspect.get("summary_ms")
+    summary_ms_val = int(summary_ms) if summary_ms is not None else 0
+    summary_detail = (
+        f"{'ok' if summary_ok else 'failed'} after {attempts or 1} attempt(s)"
+        + (f" — {short[:160]}" if short else "")
+    )
+    summary_data = {
+        "attempts": attempts,
+        "ok": summary_ok,
+        "short_summary": short,
+        "structured_summary": structured,
+    }
+    patched = trace.update(
+        "summary",
+        status="ok" if summary_ok else "error",
+        title="Summary",
+        detail=summary_detail,
+        data=summary_data,
+        ms=summary_ms_val,
+    )
+    if not patched:
+        patched = trace.update(
+            "summary_start",
+            id="summary",
+            title="Summary",
+            status="ok" if summary_ok else "error",
+            detail=summary_detail,
+            data=summary_data,
+            ms=summary_ms_val,
+        )
+    if not patched:
+        trace.add(
+            "summary",
+            "Summary",
+            status="ok" if summary_ok else "error",
+            detail=summary_detail,
+            data=summary_data,
+            ms=summary_ms,
+        )
+    wait_s = inspect.get("cache_wait_s") or 0
+    sum_end = trace.ended_epoch("summary") or time.time()
+    wait_started = inspect.get("cache_wait_started")
+    wait_ended = inspect.get("cache_wait_ended")
+    ctx_started = inspect.get("context_started")
+    if wait_s:
+        wait_ms = int(float(wait_s) * 1000)
+        t0 = float(wait_started) if wait_started else sum_end
+        t1 = float(wait_ended) if wait_ended else t0 + float(wait_s)
+        trace.add(
+            "cache_wait",
+            "Prefix-cache wait",
+            detail=f"Waited {wait_s}s after successful Summary",
+            data={"seconds": wait_s},
+            ms=wait_ms,
+            started_at=t0,
+            ended_at=t1,
+        )
+        ctx_start = t1
+    elif inspect.get("context_ran"):
+        trace.add(
+            "cache_wait",
+            "Prefix-cache wait",
+            status="skip",
+            detail=(
+                "No extra wait — Summary already covered the 3s prefix-cache window"
+                if summary_ok
+                else "Summary failed — Context started immediately"
+            ),
+            started_at=sum_end,
+            ended_at=sum_end,
+        )
+        ctx_start = sum_end
+    else:
+        ctx_start = sum_end
+    if ctx_started:
+        ctx_start = float(ctx_started)
+    if inspect.get("context_ran"):
+        written = inspect.get("context_written") or 0
+        batches = inspect.get("context_batches") or 0
+        skipped = inspect.get("context_skipped_image_only") or 0
+        contexts = inspect.get("contexts") or []
+        context_ms = int(inspect.get("context_ms") or 0)
+        trace.add(
+            "context",
+            "Situating context",
+            detail=f"{written} written, {batches} batch(es), {skipped} image-only skipped",
+            data={
+                "written": written,
+                "batches": batches,
+                "skipped_image_only": skipped,
+                "contexts": contexts,
+            },
+            ms=context_ms,
+            started_at=ctx_start,
+            ended_at=ctx_start + context_ms / 1000.0,
+        )
+    else:
+        reason = inspect.get("context_skip_reason") or "skipped"
+        labels = {
+            "tabular": "Excel/CSV — Sheet: used instead of Context",
+            "off": "Collection Contextual switch off — Summary still ran",
+            "no_chunks": "No searchable chunks",
+            "image_only": "Only empty image chunks (non-visual model)",
+        }
+        trace.add(
+            "context",
+            "Situating context",
+            status="skip",
+            detail=labels.get(reason, reason),
+            data={"reason": reason},
+            started_at=ctx_start,
+            ended_at=ctx_start,
+        )
 
 
 def _store_structured_summary(enriched_chunks, doc, config, collection_id: str):
@@ -517,24 +657,70 @@ def _after_ingest_definitive_followup(
         )
 
 
+_IDENTITY_SOURCE_PREFIXES = (
+    "__file__:",
+    "__note__:",
+    "__meeting__:",
+    "__url__:",
+    "__youtube__:",
+)
+
+
+def _embed_source_name(meta: dict) -> str:
+    """Human filename for the Source: embedding prefix — never the identity key."""
+    for key in ("source_label", "note_title"):
+        label = str(meta.get(key) or "").strip()
+        if label:
+            return label.replace("\\", "/").rsplit("/", 1)[-1]
+    source = str(meta.get("source") or "").strip()
+    if not source:
+        return ""
+    if source.startswith(_IDENTITY_SOURCE_PREFIXES):
+        return ""
+    return source.replace("\\", "/").rsplit("/", 1)[-1]
+
+
 def _build_enriched_text(chunk) -> str:
     """Build text for embedding/sparse encoding from chunk text + key metadata."""
     parts = []
-    source = chunk.metadata.get("source", "")
-    if source:
-        # Use just the filename, not the full path
-        filename = source.replace("\\", "/").rsplit("/", 1)[-1]
+    filename = _embed_source_name(chunk.metadata)
+    if filename:
         parts.append(f"Source: {filename}")
+    sheet = chunk.metadata.get("sheet_name", "")
+    if sheet:
+        parts.append(f"Sheet: {sheet}")
     meeting_date = chunk.metadata.get("meeting_date", "")
     if meeting_date:
         parts.append(f"Meeting Date: {meeting_date}")
-    summary = chunk.metadata.get("summary", "")
-    if summary:
-        parts.append(f"Document: {summary}")
+    # short_summary is stored on the chunk for INFO / consolidate, but is
+    # not prepended here — a shared document line homogenizes chunk vectors.
     context = chunk.metadata.get("context", "")
     if context:
         parts.append(f"Context: {context}")
-    parts.append(chunk.text)
+    from src.rag.chunker import (
+        _strip_image_fences,
+        fence_lexical_text,
+        strip_table_source_fences,
+    )
+
+    # Table-source fences never enter the vector. Independent figures contribute
+    # only their description/OCR, not the :::image markup.
+    without_table_src = strip_table_source_fences(chunk.text)
+    prose = _strip_image_fences(without_table_src).strip()
+    lexical = fence_lexical_text(chunk.text)
+    extra: list[str] = []
+    for ref in (chunk.metadata or {}).get("images") or []:
+        if not isinstance(ref, dict):
+            continue
+        for key in ("ocr_text", "description"):
+            val = str(ref.get(key) or "").strip()
+            if val and val not in lexical and val not in extra:
+                extra.append(val)
+    if extra:
+        lexical = "\n".join(p for p in (lexical, *extra) if p)
+    body = "\n".join(p for p in (lexical, prose) if p)
+    if body.strip():
+        parts.append(body)
     return "\n".join(parts)
 
 
@@ -856,7 +1042,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
     enriching_llm = _get_enriching_llm(config)
     loop = asyncio.get_running_loop()
     raw = await loop.run_in_executor(
-        None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, thinking=True)
+        None, lambda: enriching_llm.generate(CONSOLIDATION_PROMPT.format(summaries=summaries_text), max_tokens=8192, thinking=False)
     )
     logger.info("[CONSOLIDATE] LLM returned %d chars", len(raw))
     collection_summary, conflicts = parse_consolidation_response(raw, alias_map=alias_map)
@@ -874,6 +1060,7 @@ async def consolidate_handler(task: Task, collection: str) -> dict:
             None, lambda: enriching_llm.generate(
                 PROJECT_DESCRIPTION_PROMPT.format(summaries=summaries_text, project_name=collection_name),
                 max_tokens=512,
+                thinking=False,
             )
         )
         project_desc = desc_raw.strip()
@@ -917,6 +1104,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         prog.set(progress, msg)
 
     loop = asyncio.get_running_loop()
+    ingest_trace = None
 
     try:
         set_current_task(task.id)
@@ -924,6 +1112,18 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         path = Path(file_path)
         if not path.is_file():
             raise FileNotFoundError(f"File not found: {file_path}")
+
+        from src.rag.ingest_trace import IngestTrace
+
+        ingest_trace = IngestTrace(
+            path.parent,
+            {
+                "file_id": file_id or "",
+                "version_id": version_id or "",
+                "filename": filename_param,
+                "collection": collection,
+            },
+        )
 
         # Stage band ends (filled after config / parse known)
         # Defaults assume local parse, no images, enrich on — adjusted below.
@@ -935,7 +1135,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
         update(5, "Checking collection...")
 
-        def _parse_and_chunk():
+        def _parse_and_prepare():
             nonlocal parse_hi, images_hi, chunk_hi, mid_lo
 
             if not services.db.collection_exists(collection):
@@ -977,6 +1177,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
             update(8, "Parsing file via MinerU cloud..." if mineru_ready else "Parsing file...")
 
+            t_parse = time.time()
             if mineru_ready:
                 try:
                     doc = parse_with_mineru(path, mineru_cfg)
@@ -996,53 +1197,58 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                     "The file may be empty or the images could not be read by OCR."
                 )
 
+            parse_via = "MinerU" if mineru_ready and doc is not None else "local"
+            ingest_trace.add(
+                "parse",
+                "Parse",
+                detail=f"{parse_via}, {len(doc.content or '')} chars, {len(doc.images or [])} images",
+                data={
+                    "parser": parse_via,
+                    "chars": len(doc.content or ""),
+                    "images_extracted": len(doc.images or []),
+                    "file_type": getattr(doc, "file_type", "") or "",
+                },
+                ms=int((time.time() - t_parse) * 1000),
+            )
             update(parse_hi, "Parse complete")
             file_dir = path.parent
 
-            # ── Image processing (own progress band — never shared with enrich) ──
+            # ── Filter / save images (Vision describe runs in parallel with chunking) ──
             has_images = bool(doc.images and file_id)
             if has_images:
-                images_hi = parse_hi + 18.0  # e.g. 18→36 or 28→46
+                images_hi = parse_hi + 8.0
                 from src.parsers.image_utils import process_document_images
-                from src.config import get_config
 
-                # Resolve Vision LLM config
-                cfg = get_config()
-                vision_provider = None
-                vision_model_id = cfg.visual_model_id if hasattr(cfg, "visual_model_id") else ""
-                if vision_model_id:
-                    for p in cfg.llm.providers:
-                        if hasattr(p, "visual_model_ids") and vision_model_id in p.visual_model_ids:
-                            vision_provider = p
-                            break
-
-                # Use the VISUAL_PROMPT from prompts.py
-                from src.prompts import VISUAL_PROMPT
-
-                img_work = _WorkProgress(prog, lo=parse_hi, hi=images_hi)
-                update(parse_hi + 0.5, "Processing images...")
-
-                def _img_done():
-                    img_work.done(1, None)
-                    d, t = img_work.snapshot()
-                    update(
-                        parse_hi + (images_hi - parse_hi) * min(1.0, d / max(t, 1)),
-                        f"Describing images… {d}/{t}",
-                    )
-
+                update(parse_hi + 0.5, "Filtering images...")
+                t_filter = time.time()
                 doc = process_document_images(
                     doc, file_id, file_dir,
-                    vision_provider=vision_provider,
-                    vision_model_id=vision_model_id,
-                    vision_prompt=VISUAL_PROMPT,
-                    on_describe_planned=lambda n: img_work.set_total(n),
-                    on_image_done=_img_done,
+                    describe=False,
+                    ocr=False,
                 )
-                img_work.finish("Images done")
-                logger.info("[%s] Image processing done: %d images in doc",
+                kept = list(doc.images or [])
+                ingest_trace.add(
+                    "images_filter",
+                    "Filter / save images",
+                    detail=(
+                        f"{len(kept)} kept "
+                        f"({sum(1 for i in kept if i.is_table_source)} table-source)"
+                    ),
+                    data={
+                        "kept": len(kept),
+                        "table_source": sum(1 for i in kept if i.is_table_source),
+                        "pending_vision": sum(
+                            1 for i in kept
+                            if (not i.is_table_source) and (not i.description) and i.image_bytes
+                        ),
+                    },
+                    ms=int((time.time() - t_filter) * 1000),
+                )
+                logger.info("[%s] Image filter/save done: %d images in doc",
                             filename_param, len(doc.images or []))
             else:
                 images_hi = parse_hi
+                ingest_trace.add("images_filter", "Filter / save images", status="skip", detail="No images")
 
             # Save parsed text for preview (same text the chunker uses)
             try:
@@ -1057,7 +1263,17 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
             chunk_hi = images_hi + 6.0
             mid_lo = chunk_hi
+            update(images_hi + 0.5, "Parse complete")
+            return doc, config, file_dir
+
+        def _chunk_document(doc, config, content: str):
             update(images_hi + 1.0, "Chunking...")
+            ingest_trace.add(
+                "chunk",
+                "Chunk",
+                status="running",
+                detail="Started after image filter (parallel with OCR / Summary)",
+            )
             # Use MarkdownChunker when content has ::: blocks (images, distill, etc.)
             # so fenced blocks are treated as atomic units and not split across chunks.
             use_markdown_chunker = doc.file_type == "markdown" or bool(doc.images)
@@ -1099,8 +1315,9 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
 
             t_chunk = time.time()
             extra_meta: dict = {"file_type": doc.file_type, "ingested_at": time.time()}
-            if doc.position_map:
-                extra_meta["position_map"] = doc.position_map
+            position_map = getattr(doc, "position_map", None)
+            if isinstance(position_map, list) and position_map:
+                extra_meta["position_map"] = position_map
             if meeting_id:
                 extra_meta["meeting_id"] = meeting_id
             if meeting_date:
@@ -1117,8 +1334,8 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
             extra_meta["created_by"] = get_actor().id
             # Human-readable label for search results display
             extra_meta["source_label"] = source_label if source_label else filename_param
-            chunks = chunker.chunk_with_metadata(
-                doc.content, source=filename_param, extra_metadata=extra_meta
+            chunks = chunk_with_sheet_boundaries(
+                chunker, content, source=filename_param, extra_metadata=extra_meta
             )
             logger.info("[%s] Chunking done in %.1fs, %d chunks",
                         filename_param, time.time() - t_chunk, len(chunks))
@@ -1137,10 +1354,280 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                 )
 
             update(chunk_hi, f"Chunked {len(chunks)}")
-            return doc, chunks, config
+            ingest_trace.update(
+                "chunk",
+                status="ok",
+                detail=f"{len(chunks)} chunks ({sum(1 for c in chunks if c.chunk_type != 'parent')} searchable)",
+                data={
+                    "total": len(chunks),
+                    "searchable": sum(1 for c in chunks if c.chunk_type != "parent"),
+                    "parents": sum(1 for c in chunks if c.chunk_type == "parent"),
+                    "mode": config.get("chunk_mode") or "normal",
+                },
+                ms=int((time.time() - t_chunk) * 1000),
+            )
+            return chunks
 
-        # Use separate CPU thread pool for parsing/chunking
-        doc, chunks, config = await loop.run_in_executor(_cpu_executor, _parse_and_chunk)
+        # Use separate CPU thread pool for parsing; chunk ∥ Vision after that
+        doc, config, file_dir = await loop.run_in_executor(_parse_executor, _parse_and_prepare)
+        # Parse/filter is done — let the next queued file start. Remaining
+        # OCR / Vision / enrich of *this* file no longer occupy the upload slot.
+        task_manager.release_upload_slot(task.id)
+
+        from src.config import get_config
+        from src.parsers.image_utils import apply_image_updates_to_chunks, describe_document_images
+        from src.prompts import VISUAL_PROMPT
+        from src.rag.contextual import enrichment_model_is_visual
+
+        cfg = get_config()
+        vision_provider = None
+        vision_model_id = cfg.visual_model_id if hasattr(cfg, "visual_model_id") else ""
+        if vision_model_id:
+            for p in cfg.llm.providers:
+                if hasattr(p, "visual_model_ids") and vision_model_id in p.visual_model_ids:
+                    vision_provider = p
+                    break
+        is_visual = enrichment_model_is_visual(config)
+        from src.rag.contextual import resolve_enrichment_target
+
+        _prov, _model = resolve_enrichment_target(config)
+        ingest_trace.set_config(
+            contextual_enabled=bool(config.get("contextual_enabled", True)),
+            is_visual=is_visual,
+            enrich_provider=getattr(_prov, "id", "") or "",
+            enrich_model=_model or getattr(_prov, "default_model", None) or getattr(_prov, "model", None) or "",
+            vision_model=vision_model_id or "",
+            vision_configured=bool(vision_provider and vision_model_id),
+            tabular=_is_tabular_document(doc),
+        )
+        has_non_table_images = bool(
+            doc.images
+            and any((not img.is_table_source) and img.image_bytes for img in doc.images)
+        )
+        needs_ocr = bool(has_non_table_images)
+        needs_vision = bool(
+            has_non_table_images and vision_provider and vision_model_id
+        )
+        # Non-visual + Vision: Summary still waits for descriptions.
+        # Visual / no Vision: Summary starts now — does not wait for OCR.
+        wait_summary_for_vision = (not is_visual) and needs_vision
+
+        from src.rag.contextual import run_ingest_summary
+
+        summary_document = doc.content
+        summary_future = None
+        summary_started_at = 0.0
+        if not wait_summary_for_vision:
+            def _early_summary():
+                return run_ingest_summary(
+                    config,
+                    summary_document,
+                    collection_id=collection,
+                    file_id=file_id or "",
+                    is_visual=is_visual,
+                )
+
+            summary_future = loop.run_in_executor(_enrich_executor, _early_summary)
+            summary_started_at = time.time()
+            ingest_trace.add(
+                "summary",
+                "Summary",
+                status="running",
+                detail="Fired after image filter (not waiting for OCR)",
+                started_at=summary_started_at,
+            )
+
+        def _persist_parsed(content: str) -> None:
+            try:
+                (file_dir / "parsed.txt").write_text(content, encoding="utf-8")
+                blob_cache = file_dir / f"{path.name}.extracted.txt"
+                blob_cache.write_text(content, encoding="utf-8")
+            except Exception as e:
+                logger.warning("[%s] Failed to update parsed text after images: %s", filename_param, e)
+
+        def _rewrite_image_fences():
+            from src.parsers.image_utils import rewrite_image_fences_in_document
+
+            rewrite_image_fences_in_document(doc)
+            _persist_parsed(doc.content)
+
+        def _note_image_queue(step_id: str, title: str, submitted: float, started: float) -> None:
+            queued = started - submitted
+            if queued < 1.0:
+                return
+            ingest_trace.add(
+                f"{step_id}_queue",
+                f"Waiting for {title} worker",
+                detail=f"Queued {queued:.1f}s — other files were using the image workers",
+                ms=int(queued * 1000),
+                started_at=submitted,
+                ended_at=started,
+            )
+
+        def _run_ocr():
+            from src.parsers.image_utils import ocr_classify_document_images
+
+            t_ocr = time.time()
+            _note_image_queue("ocr", "OCR", ocr_submitted_at, t_ocr)
+            ocr_classify_document_images(doc, write_content=False)
+            n_ocr = sum(1 for img in (doc.images or []) if img.ocr_text)
+            t_ocr_end = time.time()
+            ingest_trace.update(
+                "ocr",
+                status="ok",
+                detail=f"{n_ocr} image(s) with OCR text (parallel with Vision / chunk / Summary)",
+                data={"with_ocr": n_ocr},
+                started_at=t_ocr,
+                ended_at=t_ocr_end,
+                ms=int((t_ocr_end - t_ocr) * 1000),
+            )
+            return doc
+
+        def _run_vision_only():
+            images_hi_local = images_hi + 10.0
+            img_work = _WorkProgress(prog, lo=images_hi, hi=images_hi_local)
+
+            def _img_done():
+                img_work.done(1, None)
+                d, t = img_work.snapshot()
+                update(
+                    images_hi + (images_hi_local - images_hi) * min(1.0, d / max(t, 1)),
+                    f"Describing images… {d}/{t}",
+                )
+
+            t_vision = time.time()
+            _note_image_queue("vision", "Vision", vision_submitted_at, t_vision)
+            described = describe_document_images(
+                doc,
+                vision_provider=vision_provider,
+                vision_model_id=vision_model_id,
+                vision_prompt=VISUAL_PROMPT,
+                on_describe_planned=lambda n: img_work.set_total(n),
+                on_image_done=_img_done,
+                write_content=False,
+                clear_bytes=False,
+            )
+            img_work.finish("Images done")
+            vision_ms = int((time.time() - t_vision) * 1000)
+            described_imgs = [
+                {
+                    "image_id": img.image_id,
+                    "description": (img.description or "")[:400],
+                    "ocr_text": (img.ocr_text or "")[:200],
+                    "is_table_source": bool(img.is_table_source),
+                }
+                for img in (described.images or [])
+                if img.description or img.ocr_text
+            ]
+            ingest_trace.update(
+                "vision",
+                status="ok",
+                detail=f"{sum(1 for i in described_imgs if i.get('description'))} described with {vision_model_id}",
+                data={"model": vision_model_id, "described": described_imgs},
+                started_at=t_vision,
+                ended_at=t_vision + vision_ms / 1000.0,
+                ms=vision_ms,
+            )
+            return described
+
+        content_snapshot = doc.content
+        chunk_future = loop.run_in_executor(
+            _cpu_executor, _chunk_document, doc, config, content_snapshot
+        )
+        ocr_future = None
+        vision_future = None
+        ocr_submitted_at = 0.0
+        vision_submitted_at = 0.0
+        if needs_ocr:
+            ocr_submitted_at = time.time()
+            ingest_trace.add(
+                "ocr",
+                "OCR classification",
+                status="running",
+                detail="Started after image filter (parallel with Vision / chunk / Summary)",
+                started_at=ocr_submitted_at,
+            )
+            ocr_future = loop.run_in_executor(_ocr_executor, _run_ocr)
+        else:
+            ingest_trace.add(
+                "ocr",
+                "OCR classification",
+                status="skip",
+                detail="No images to OCR",
+            )
+        if needs_vision:
+            vision_submitted_at = time.time()
+            ingest_trace.add(
+                "vision",
+                "Vision descriptions",
+                status="running",
+                detail="Started after image filter (parallel with OCR / chunk / Summary)",
+                started_at=vision_submitted_at,
+            )
+            vision_future = loop.run_in_executor(_vision_executor, _run_vision_only)
+        else:
+            ingest_trace.add(
+                "vision",
+                "Vision descriptions",
+                status="skip",
+                detail="Not needed (no pending images, or no Visual model)",
+            )
+
+        image_deadline = time.monotonic() + IMAGE_JOB_DEADLINE_SEC
+
+        async def _await_image_jobs(*jobs):
+            pending = [j for j in jobs if j is not None and not j.done()]
+            if not pending:
+                _rewrite_image_fences()
+                return
+            timeout = max(0.05, image_deadline - time.monotonic())
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] OCR/Vision exceeded %.0fs — continuing ingest",
+                    filename_param, IMAGE_JOB_DEADLINE_SEC,
+                )
+                for step_id, title, fut in (
+                    ("ocr", "OCR", ocr_future),
+                    ("vision", "Vision", vision_future),
+                ):
+                    if fut is None or fut.done():
+                        continue
+                    ingest_trace.update(
+                        step_id,
+                        status="error",
+                        detail=(
+                            f"{title} exceeded {int(IMAGE_JOB_DEADLINE_SEC)}s "
+                            "deadline; ingest continues"
+                        ),
+                    )
+                _rewrite_image_fences()
+                return
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("[%s] Image job failed", filename_param, exc_info=result)
+            _rewrite_image_fences()
+
+        if summary_future is not None:
+            chunk_res, summary_res = await asyncio.gather(
+                chunk_future, summary_future, return_exceptions=True
+            )
+        else:
+            chunk_res = await chunk_future
+            summary_res = None
+        if isinstance(chunk_res, Exception):
+            raise chunk_res
+        chunks = chunk_res
+        if doc.images:
+            apply_image_updates_to_chunks(chunks, doc.images or [])
+        if wait_summary_for_vision and vision_future is not None:
+            await _await_image_jobs(vision_future)
+            apply_image_updates_to_chunks(chunks, doc.images or [])
+            logger.info("[%s] Vision descriptions applied before Summary/Context", filename_param)
 
         # ── Stage 2+3: Enriching + Embedding (pipelined) ──
         # Fresh work band [mid_lo, 90] — never reuses image units (that caused
@@ -1148,112 +1635,179 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         t_ctx = time.time()
         contextual_enabled = bool(config.get("contextual_enabled", True))
         embed_count = len([c for c in chunks if c.chunk_type != "parent"])
-        enrich_count = len(chunks) if contextual_enabled else 0
+        enrich_count = len(chunks)
         mid_hi = 90.0
         mid_work = _WorkProgress(prog, lo=mid_lo, hi=mid_hi)
-        total_mid = (enrich_count + embed_count) if contextual_enabled else max(embed_count, 1)
+        total_mid = enrich_count + max(embed_count, 1)
         mid_work.set_total(total_mid)
-        if contextual_enabled:
-            update(mid_lo, f"Enrich+Embed 0/{total_mid}…")
-        else:
-            update(mid_lo, f"Embedding 0/{embed_count or 1}…")
+        update(mid_lo, f"Enrich+Embed 0/{total_mid}…")
 
-        if contextual_enabled:
-            embedding = get_collection_embedding(config, collection)
+        embedding = get_collection_embedding(config, collection)
 
-            def _on_embed_done(n: int):
-                mid_work.done(n)
-                d, t = mid_work.snapshot()
-                update(
-                    mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
-                    f"Embedding… {d}/{t}",
-                )
-
-            batcher = _EmbedBatcher(
-                embedding,
-                total_chunks=embed_count,
-                on_embed_done=_on_embed_done,
-            )
-
-            # Pre-number chunks so embeddings map back to list position
-            for i, c in enumerate(chunks):
-                c.metadata["_embed_idx"] = i
-
-            def _on_enrich_ready(chunk, context: str):
-                mid_work.done(1)
-                d, t = mid_work.snapshot()
-                update(
-                    mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
-                    f"Enriching… {d}/{t}",
-                )
-                batcher.on_ready(chunk, context)
-
-            def _enrich_and_embed():
-                _enrich_lock.acquire()
-                try:
-                    return _do_enrich(
-                        chunks,
-                        doc,
-                        config,
-                        collection,
-                        on_summary=batcher.set_summary,
-                        on_chunk_ready=_on_enrich_ready,
-                    )
-                finally:
-                    _enrich_lock.release()
-
-            chunks = await loop.run_in_executor(_cpu_executor, _enrich_and_embed)
-
-            # Flush remaining embed batches; start sparse in parallel.
-            # IMPORTANT: both batcher.wait_all() and sparse_future.result() are
-            # sync blocking calls. Calling them directly on the event loop would
-            # stall the entire server (list_files, chat, etc.) for the full
-            # duration of embedding + sparse encoding — which can be many seconds
-            # for slow APIs. Run them in threads and await both concurrently.
-            batcher.flush()
-            if batcher._futures:
-                sparse_future = _cpu_executor.submit(_do_sparse, batcher.get_all_texts(), collection)
-                embeddings, sparse_vectors = await asyncio.gather(
-                    loop.run_in_executor(None, batcher.wait_all, chunks),
-                    asyncio.wrap_future(sparse_future),
-                )
-            else:
-                # Enrichment skipped (e.g. >200 chunks) — embed all at once.
-                logger.info("[%s] enrichment skipped, embedding all %d chunks inline",
-                            filename_param, len(chunks))
-                if enrich_count:
-                    mid_work.done(enrich_count)
-                texts = [_build_enriched_text(c) for c in chunks]
-
-                def _embed_and_sparse():
-                    emb = embedding.embed_texts(texts)
-                    if embed_count:
-                        mid_work.done(embed_count)
-                        d, t = mid_work.snapshot()
-                        update(
-                            mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
-                            f"Embedding… {d}/{t}",
-                        )
-                    sp = _do_sparse(texts, collection)
-                    return emb, sp
-
-                embeddings, sparse_vectors = await loop.run_in_executor(None, _embed_and_sparse)
-
-        else:
-            # No enrichment — only embed units fill [mid_lo, mid_hi]
-            embedding = get_collection_embedding(config, collection)
-            texts = [_build_enriched_text(c) for c in chunks]
-            embeddings = embedding.embed_texts(texts)
-            if embed_count:
-                mid_work.done(embed_count)
-            else:
-                mid_work.finish("No chunks to embed")
+        def _on_embed_done(n: int):
+            mid_work.done(n)
             d, t = mid_work.snapshot()
             update(
                 mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
                 f"Embedding… {d}/{t}",
             )
-            sparse_vectors = _do_sparse(texts, collection)
+
+        batcher = _EmbedBatcher(
+            embedding,
+            total_chunks=embed_count,
+            on_embed_done=_on_embed_done,
+        )
+
+        # Pre-number chunks so embeddings map back to list position
+        for i, c in enumerate(chunks):
+            c.metadata["_embed_idx"] = i
+
+        # Wait for OCR (and Vision, if any) before embed so fence lexical
+        # text is in the vector. Summary/Context still do not wait for OCR.
+        defer_embed = ocr_future is not None or vision_future is not None
+
+        def _on_enrich_ready(chunk, context: str):
+            mid_work.done(1)
+            d, t = mid_work.snapshot()
+            update(
+                mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
+                f"Enriching… {d}/{t}",
+            )
+            if not defer_embed:
+                batcher.on_ready(chunk, context)
+
+        enrich_document = (
+            doc.content if (wait_summary_for_vision and vision_future is not None) else content_snapshot
+        )
+        enrich_inspect: dict = {}
+        pre_short = None
+        pre_structured = None
+        warmup = None
+        early_inspect: dict = {}
+        if summary_future is not None:
+            try:
+                if isinstance(summary_res, Exception):
+                    raise summary_res
+                early = summary_res or {}
+                pre_short = early.get("short_summary") or ""
+                pre_structured = early.get("structured_summary") or ""
+                early_inspect = dict(early.get("inspect") or {})
+                enrich_inspect.update(early_inspect)
+                if early_inspect.get("summary_ok"):
+                    # Prefix cache only needs a leftover wait — don't sleep 3s
+                    # again if chunk/OCR already burned that window.
+                    finished = summary_started_at + (int(early_inspect.get("summary_ms") or 0) / 1000.0)
+                    leftover = 3.0 - max(0.0, time.time() - finished)
+                    warmup = leftover if leftover > 0.05 else 0.0
+                else:
+                    pre_short = None
+                    pre_structured = None
+                    warmup = None
+            except Exception:
+                logger.exception("[%s] early Summary failed — will retry in enrich", filename_param)
+                pre_short = None
+                warmup = None
+        elif wait_summary_for_vision:
+            enrich_document = doc.content
+            ingest_trace.add(
+                "summary",
+                "Summary",
+                status="running",
+                detail="Waited for Vision descriptions (non-visual model)",
+            )
+
+        def _enrich_and_embed():
+            return _do_enrich(
+                chunks,
+                doc,
+                config,
+                collection,
+                on_summary=batcher.set_summary,
+                on_chunk_ready=_on_enrich_ready,
+                contextual_enabled=contextual_enabled,
+                full_document=enrich_document,
+                inspect_out=enrich_inspect,
+                summary=pre_short,
+                structured_summary=pre_structured,
+                cache_warmup_delay=warmup,
+            )
+
+        try:
+            chunks = await loop.run_in_executor(_enrich_executor, _enrich_and_embed)
+            if early_inspect:
+                for key in (
+                    "summary_attempts",
+                    "summary_ok",
+                    "short_summary",
+                    "structured_summary",
+                    "summary_ms",
+                ):
+                    if key in early_inspect:
+                        enrich_inspect[key] = early_inspect[key]
+            _record_enrich_trace(ingest_trace, enrich_inspect)
+        except Exception:
+            logger.exception("[%s] enrichment failed — continuing to embed", filename_param)
+            if not ingest_trace.update(
+                "summary",
+                status="error",
+                detail="Enrichment raised; ingest continues",
+            ):
+                ingest_trace.add(
+                    "summary",
+                    "Summary",
+                    status="error",
+                    detail="Enrichment raised; ingest continues",
+                )
+            for c in chunks:
+                _on_enrich_ready(c, c.metadata.get("context", ""))
+
+        if defer_embed:
+            try:
+                await _await_image_jobs(ocr_future, vision_future)
+                apply_image_updates_to_chunks(chunks, doc.images or [])
+                for img in doc.images or []:
+                    img.image_bytes = None
+            except Exception:
+                logger.warning("[%s] Image OCR/Vision after enrich failed", filename_param, exc_info=True)
+
+        if defer_embed:
+            for c in chunks:
+                batcher.on_ready(c, c.metadata.get("context", ""))
+
+        # Flush remaining embed batches; start sparse in parallel.
+        # IMPORTANT: both batcher.wait_all() and sparse_future.result() are
+        # sync blocking calls. Calling them directly on the event loop would
+        # stall the entire server (list_files, chat, etc.) for the full
+        # duration of embedding + sparse encoding — which can be many seconds
+        # for slow APIs. Run them in threads and await both concurrently.
+        t_embed_store = time.time()
+        batcher.flush()
+        if batcher._futures:
+            sparse_future = _cpu_executor.submit(_do_sparse, batcher.get_all_texts(), collection)
+            embeddings, sparse_vectors = await asyncio.gather(
+                loop.run_in_executor(None, batcher.wait_all, chunks),
+                asyncio.wrap_future(sparse_future),
+            )
+        else:
+            logger.info("[%s] no embed batches submitted, embedding all %d chunks inline",
+                        filename_param, len(chunks))
+            if enrich_count:
+                mid_work.done(enrich_count)
+            texts = [_build_enriched_text(c) for c in chunks]
+
+            def _embed_and_sparse():
+                emb = embedding.embed_texts(texts)
+                if embed_count:
+                    mid_work.done(embed_count)
+                    d, t = mid_work.snapshot()
+                    update(
+                        mid_lo + (mid_hi - mid_lo) * min(1.0, d / max(t, 1)),
+                        f"Embedding… {d}/{t}",
+                    )
+                sp = _do_sparse(texts, collection)
+                return emb, sp
+
+            embeddings, sparse_vectors = await loop.run_in_executor(None, _embed_and_sparse)
 
         mid_work.finish("Enrich+Embed done")
         t_emb = time.time()
@@ -1300,9 +1854,27 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
                         filename_param, time.time() - t_store, time.time() - t_start)
 
         # Use default thread pool for storage (I/O bound)
+        ingest_trace.add(
+            "store",
+            "Embed + store",
+            status="running",
+            detail="Writing vectors",
+            started_at=t_embed_store,
+        )
         await loop.run_in_executor(None, _do_store)
+        t_store_end = time.time()
+        ingest_trace.update(
+            "store",
+            status="ok",
+            detail=f"{len(chunks)} chunks written",
+            data={"chunks": len(chunks), "searchable": embed_count},
+            started_at=t_embed_store,
+            ended_at=t_store_end,
+            ms=int((t_store_end - t_embed_store) * 1000),
+        )
 
         update(100, f"Indexed {len(chunks)} chunks")
+        ingest_trace.finish("ok")
 
         # ── Catalog coverage refresh ──────────────────────────────────
         try:
@@ -1319,26 +1891,7 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         except Exception:
             logger.exception("[Coverage] trigger failed for %r", filename_param)
 
-        # Update file index — JSON load+save runs on a worker thread so the event
-        # loop stays responsive (avoids blocking other API calls like list_files
-        # when several uploads complete back-to-back).
         if file_id:
-            try:
-                from src.collections.file_index import add as add_file_index
-                # Preserve original extension for PDF/office files
-                original_ext = Path(file_path).suffix.lower().lstrip(".")
-                await loop.run_in_executor(
-                    None,
-                    lambda: add_file_index(
-                        collection, file_id, filename_param,
-                        source_label or filename_param,
-                        doc.file_type, len(chunks),
-                        original_ext if original_ext else None,
-                    ),
-                )
-            except Exception:
-                logger.warning("[%s] Failed to update files.json", filename_param, exc_info=True)
-
             # Definitive file version update / re-ingest:
             # Enrich path schedules consolidate when it stores a new summary.
             # When contextual is off (or enrich skipped), no new summary is
@@ -1358,6 +1911,11 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         return {"message": "Done", "filename": filename_param, "chunks_count": len(chunks), "collection": collection}
 
     except Exception as e:
+        if ingest_trace is not None:
+            try:
+                ingest_trace.finish("error", error=str(e))
+            except Exception:
+                pass
         clear_current_task()
         raise Exception(f"Failed to process {filename_param}: {e}")
 
@@ -1447,11 +2005,11 @@ async def doc_summary_handler(task: Task, collection: str, source: str) -> dict:
     logger.info("[DOC_SUMMARY] Starting for collection=%s source=%s", collection, source)
 
     # Resolve file path via file index
-    from src.collections.file_index import load as load_file_index
+    from src.collections.file_index import load_for_read
     from src.collections.file_index import COLLECTIONS_DIR as _COL_DIR
 
     file_path = None
-    idx = load_file_index(collection)
+    idx = load_for_read(collection)
     for fid, entry in idx.items():
         if entry.get("source") == source:
             try:

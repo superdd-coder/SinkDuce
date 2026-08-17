@@ -293,14 +293,19 @@ class DashScopeFileTranscription(FileTranscriptionProvider):
         {"code": "en", "label": "English"},
         {"code": "ja", "label": "Japanese"},
         {"code": "ko", "label": "Korean"},
-        {"code": "ms", "label": "Malay"},
+        {"code": "vi", "label": "Vietnamese"},
         {"code": "th", "label": "Thai"},
         {"code": "id", "label": "Indonesian"},
+        {"code": "ms", "label": "Malay"},
     ]
     SUPPORTED_MODELS = [
         {"value": MODEL_FUN_ASR, "label": "fun-asr (FunASR cloud)"},
         {"value": MODEL_QWEN_FILETRANS, "label": "qwen-audio-3.0-asr-flash-filetrans"},
     ]
+
+    @classmethod
+    def max_language_hints(cls, model: str | None = None) -> int:
+        return 4 if resolve_file_model(model) == MODEL_QWEN_FILETRANS else 1
 
     def __init__(self, config: TranscriptionProviderConfig):
         _require_dashscope()
@@ -443,8 +448,13 @@ class DashScopeFileTranscription(FileTranscriptionProvider):
                 "file_urls": [file_url],
                 "diarization_enabled": True,
             }
-            if language_hints:
-                kwargs["language_hints"] = language_hints
+            from src.meeting.transcription.base import clip_language_hints
+
+            clipped = clip_language_hints(
+                language_hints, self.max_language_hints(self._model)
+            )
+            if clipped:
+                kwargs["language_hints"] = clipped
 
             if hot_words:
                 if self._uses_precompiled_vocabulary():

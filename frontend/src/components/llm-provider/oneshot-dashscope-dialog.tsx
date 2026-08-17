@@ -23,10 +23,11 @@ interface OneShotDashscopeDialogProps {
 }
 
 const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-// File ASR is selectable in Settings (fun-asr | qwen-audio-3.0-asr-flash-filetrans).
-// OneShot defaults to fun-asr (precompiled hot words + stable batch path).
+// File / realtime ASR are selectable in Settings.
+// OneShot defaults to Fun-ASR (precompiled hot words + the same Recognition API).
 const FILE_TRANS_MODEL = "fun-asr"
-const RT_TRANS_MODEL = "qwen-audio-3.0-asr-flash-streaming"
+const RT_TRANS_MODEL = "fun-asr-realtime"
+const MEETING_MODEL = "deepseek-v4-pro"
 
 export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotDashscopeDialogProps) {
   const [apiKey, setApiKey] = useState("")
@@ -64,19 +65,21 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
       for (const p of rerankList.filter((p) => p.is_default)) {
         await updateRerankProvider(p.id, { ...p, is_default: false })
       }
-      for (const p of fileTransList.filter((p) => p.is_active)) {
+      const existingFile = fileTransList.find((p) => p.adapter === "dashscope_funasr")
+      const existingRt = rtTransList.find((p) => p.adapter === "dashscope_funasr_realtime")
+      for (const p of fileTransList.filter((p) => p.is_active && p.id !== existingFile?.id)) {
         await updateFileTranscriptionProvider(p.id, { ...p, is_active: false })
       }
-      for (const p of rtTransList.filter((p) => p.is_active)) {
+      for (const p of rtTransList.filter((p) => p.is_active && p.id !== existingRt?.id)) {
         await updateRealtimeTranscriptionProvider(p.id, { ...p, is_active: false })
       }
 
       // Build selected_models: all models (deduplicate)
-      const selectedModels = [...new Set([llmModel.trim(), chatModel.trim(), visualModel.trim()].filter(Boolean))]
+      const selectedModels = [...new Set([llmModel.trim(), chatModel.trim(), visualModel.trim(), MEETING_MODEL].filter(Boolean))]
       const visualModelIds = visualModel.trim() ? [visualModel.trim()] : []
 
       // Create new providers with default/active set
-      await Promise.all([
+      const [llmCreated] = await Promise.all([
         createLLMProvider({
           name: "Dashscope",
           provider: "openai_compatible",
@@ -106,25 +109,44 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           api_key: apiKey.trim(),
           is_default: true,
         }),
-        createFileTranscriptionProvider({
-          name: "Dashscope",
-          adapter: "dashscope_funasr",
-          model: FILE_TRANS_MODEL,
-          api_key: apiKey.trim(),
-          is_active: true,
-        }),
-        createRealtimeTranscriptionProvider({
-          name: "Dashscope",
-          adapter: "dashscope_funasr_realtime",
-          model: RT_TRANS_MODEL,
-          api_key: apiKey.trim(),
-          is_active: true,
-        }),
+        existingFile
+          ? updateFileTranscriptionProvider(existingFile.id, {
+              ...existingFile,
+              model: FILE_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            })
+          : createFileTranscriptionProvider({
+              name: "Dashscope",
+              adapter: "dashscope_funasr",
+              model: FILE_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            }),
+        existingRt
+          ? updateRealtimeTranscriptionProvider(existingRt.id, {
+              ...existingRt,
+              model: RT_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            })
+          : createRealtimeTranscriptionProvider({
+              name: "Dashscope",
+              adapter: "dashscope_funasr_realtime",
+              model: RT_TRANS_MODEL,
+              api_key: apiKey.trim(),
+              is_active: true,
+            }),
       ])
       // Set global model configs
       await updateConfig("default_chat_model", { default_chat_model: chatModel.trim() })
       if (visualModel.trim()) {
         await updateConfig("visual_model_id", { visual_model_id: visualModel.trim() })
+      }
+      if (llmCreated?.id) {
+        await updateConfig("enrichment", {
+          meeting_model: `${llmCreated.id}|${MEETING_MODEL}`,
+        })
       }
       toast.success("All Dashscope providers created")
       onSaved()
@@ -197,6 +219,9 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
                   <FieldLabel>Visual</FieldLabel>
                   <Input value={visualModel} onChange={(e) => setVisualModel(e.target.value)} placeholder="qwen3.5-flash" />
                 </div>
+                <p className="pm-settings-dlg-card-hint">
+                  Meeting summary · <span className="font-mono">{MEETING_MODEL}</span>
+                </p>
                 <div className="pm-settings-dlg-grid">
                   <div className="pm-settings-dlg-field">
                     <FieldLabel>Embedding</FieldLabel>

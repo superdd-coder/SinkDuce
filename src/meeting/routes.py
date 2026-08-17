@@ -20,6 +20,23 @@ from src.tasks.task_manager import task_manager
 logger = logging.getLogger("meeting")
 router = APIRouter()
 
+def _serialize_meeting(meeting, *, include_transcript: bool = False) -> dict:
+    """JSON for a meeting, including notes_content (GET-parity).
+
+    PUT/upload/summarize responses used to return ``model_dump()`` only. The
+    client then ``setMeeting(m)`` and dropped live notes until a full refresh.
+    """
+    data = meeting.model_dump(mode="json")
+    notes = store.get_notes(meeting.id)
+    if notes is not None:
+        data["notes_content"] = notes
+    if include_transcript:
+        transcript = store.get_transcript(meeting.id)
+        if transcript is not None:
+            data["transcript"] = transcript.model_dump(mode="json")
+    return data
+
+
 _AUDIO_MIME_TYPES = {
     "webm": "audio/webm",
     "ogg": "audio/ogg",
@@ -115,22 +132,14 @@ async def get_meeting(meeting_id: str):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         logger.warning("[GET] Meeting %s NOT FOUND", meeting_id)
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     # Trust persisted needs_reingest / ingested_content_hash (set on save & allocate).
     # Do NOT re-hash every section MD here — that made GET/polling very slow.
-    data = meeting.model_dump(mode="json")
-    # Include notes content if available
-    notes = store.get_notes(meeting_id)
-    if notes is not None:
-        data["notes_content"] = notes
-    # Include transcript if available
-    transcript = store.get_transcript(meeting_id)
-    if transcript is not None:
-        data["transcript"] = transcript.model_dump(mode="json")
+    data = _serialize_meeting(meeting, include_transcript=True)
     logger.debug(
         "[GET] Meeting %s status=%s has_notes=%s has_transcript=%s audio_path=%s",
-        meeting_id, meeting.status.value, notes is not None,
-        transcript is not None, meeting.audio_path,
+        meeting_id, meeting.status.value, "notes_content" in data,
+        "transcript" in data, meeting.audio_path,
     )
     return data
 
@@ -138,40 +147,13 @@ async def get_meeting(meeting_id: str):
 @router.delete("/meetings/{meeting_id}")
 async def delete_meeting(meeting_id: str):
     logger.info("[DELETE] Meeting %s", meeting_id)
-    # If allocated to a collection, clean up the uploaded file
     meeting = store.get_meeting(meeting_id)
-    if meeting and meeting.allocated_collections and meeting.allocated_file_ids:
-        try:
-            from src.services import services
-            from src.collections.file_index import load as load_file_index
-
-            for col, fid in zip(meeting.allocated_collections, meeting.allocated_file_ids):
-                try:
-                    # Look up source from files.json (fid is file_id UUID, source is __meeting__:{id}_N)
-                    idx = load_file_index(col)
-                    entry = idx.get(fid, {})
-                    source = entry.get("source", "")
-                    if source:
-                        services.db.delete_by_filter(col, key="source", value=source)
-                        # Also clean up file snapshot + files.json
-                        from src.collections.file_index import remove as remove_file_index
-                        import shutil as _shutil
-                        from src.collections.file_index import COLLECTIONS_DIR as _CDIR
-                        snap_dir = _CDIR / col / "files" / fid
-                        if snap_dir.exists():
-                            _shutil.rmtree(snap_dir)
-                        remove_file_index(col, fid)
-                        logger.info("[DELETE] Cleaned Qdrant points for %s/%s in %s", meeting_id, fid, col)
-                    else:
-                        logger.warning("[DELETE] No source found for file_id=%s in %s", fid, col)
-                except Exception as exc:
-                    logger.warning("[DELETE] Failed to clean Qdrant points in %s: %s", col, exc)
-        except Exception as exc:
-            logger.warning("[DELETE] Failed to clean Qdrant points: %s", exc)
+    if meeting:
+        meeting_service.cleanup_meeting_allocations(meeting)
     deleted = store.delete_meeting(meeting_id)
     if not deleted:
         logger.warning("[DELETE] Meeting %s NOT FOUND", meeting_id)
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     logger.info("[DELETE] Meeting %s deleted successfully", meeting_id)
     return {"message": "Meeting deleted"}
 
@@ -185,9 +167,9 @@ async def discard_meeting_recording(meeting_id: str):
         meeting = store.discard_recording(meeting_id)
     except FileNotFoundError as exc:
         logger.warning("[DISCARD] Meeting %s NOT FOUND", meeting_id)
-        return {"error": str(exc)}
+        raise HTTPException(404, str(exc))
     logger.info("[DISCARD] Meeting %s discarded successfully", meeting_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.put("/meetings/{meeting_id}")
@@ -201,13 +183,13 @@ async def update_meeting(meeting_id: str, body: dict = Body()):
         store.save_notes(meeting_id, body["notes"])
     if not fields and "notes" not in body:
         logger.warning("[UPDATE] No valid fields in request for %s", meeting_id)
-        return {"error": "No valid fields to update"}
+        raise HTTPException(400, "No valid fields to update")
     if fields:
         meeting = store.update_meeting(meeting_id, **fields)
     else:
         meeting = store.get_meeting(meeting_id)
     logger.info("[UPDATE] Meeting %s updated, status=%s", meeting_id, meeting.status.value)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 # ── File Uploads ──────────────────────────────────────────────
@@ -223,7 +205,7 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         logger.warning("[UPLOAD-AUDIO] Meeting %s NOT FOUND", meeting_id)
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     content = await file.read()
     logger.info("[UPLOAD-AUDIO] Read %d bytes for meeting %s", len(content), meeting_id)
     ext = (
@@ -242,7 +224,7 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
         **({} if meeting.status == MeetingStatus.completed else {"status": MeetingStatus.created}),
     )
     logger.info("[UPLOAD-AUDIO] Meeting %s updated: status=%s audio_path=%s", meeting_id, updated.status.value, updated.audio_path)
-    return updated.model_dump()
+    return _serialize_meeting(updated)
 
 
 @router.get("/meetings/{meeting_id}/audio")
@@ -257,13 +239,13 @@ async def serve_audio(meeting_id: str, token: str | None = None):
         from src.meeting.security import verify_audio_token
         if not verify_audio_token(meeting_id, token):
             logger.warning("[AUDIO] Invalid or expired token for meeting %s", meeting_id)
-            return {"error": "Invalid or expired token"}
+            raise HTTPException(401, "Invalid or expired token")
     meeting = store.get_meeting(meeting_id)
     if not meeting or not meeting.audio_path:
-        return {"error": "No audio file"}
+        raise HTTPException(400, "No audio file")
     audio_path = Path(meeting.audio_path)
     if not audio_path.exists():
-        return {"error": "Audio file not found on disk"}
+        raise HTTPException(404, "Audio file not found on disk")
     ext = audio_path.suffix.lstrip(".").lower()
     media_type = _AUDIO_MIME_TYPES.get(ext, "application/octet-stream")
     logger.debug("[AUDIO] Serving %s for meeting %s (mime=%s)", audio_path, meeting_id, media_type)
@@ -327,22 +309,28 @@ async def get_active_provider_info():
     config = get_config()
 
     def _info(provider_cfg, registry, *, resolve_adapter):
+        from src.meeting.transcription.base import language_hint_limit
+
         empty = {
             "supports_hot_words": False,
             "supported_language_hints": [],
+            "max_language_hints": 1,
             "adapter": None,
             "id": None,
             "name": None,
             "display_name": None,
+            "model": None,
         }
         if not provider_cfg:
             return empty
         adapter_name = resolve_adapter(provider_cfg.adapter or "")
+        model = getattr(provider_cfg, "model", None)
         meta = {
             "adapter": adapter_name or provider_cfg.adapter or None,
             "id": provider_cfg.id or None,
             "name": provider_cfg.name or None,
             "display_name": None,
+            "model": model,
         }
         # If provider has custom language_hints_config, use it (openai_compatible etc.)
         custom = getattr(provider_cfg, "language_hints_config", None)
@@ -351,8 +339,10 @@ async def get_active_provider_info():
             if entry:
                 supports = cls_supports_hot_words(entry.cls)
                 meta["display_name"] = entry.display_name or entry.name
+                max_hints = language_hint_limit(entry.cls, model)
             else:
                 supports = False
+                max_hints = 1
             # Build hint list from custom config, ensuring "auto" is always first
             hints = [{"code": h.get("code", ""), "label": h.get("label", "")} for h in custom]
             if not any(h["code"] == "auto" for h in hints):
@@ -360,6 +350,7 @@ async def get_active_provider_info():
             return {
                 "supports_hot_words": supports,
                 "supported_language_hints": hints,
+                "max_language_hints": max_hints,
                 **meta,
             }
         entry = registry.get(adapter_name)
@@ -373,6 +364,7 @@ async def get_active_provider_info():
             "supported_language_hints": list(
                 getattr(adapter_cls, "SUPPORTED_LANGUAGE_HINTS", [])
             ),
+            "max_language_hints": language_hint_limit(adapter_cls, model),
             **meta,
         }
 
@@ -414,15 +406,15 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         logger.warning("[SAVE-TRANSCRIPT] Meeting %s NOT FOUND", meeting_id)
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     raw_segments = body.get("segments") or []
     if not isinstance(raw_segments, list):
-        return {"error": "segments must be a list"}
+        raise HTTPException(400, "segments must be a list")
     try:
         segments = [TranscriptSegment(**s) for s in raw_segments]
     except Exception as exc:
         logger.warning("[SAVE-TRANSCRIPT] Invalid segment payload for %s: %s", meeting_id, exc)
-        return {"error": f"Invalid segment payload: {exc}"}
+        raise HTTPException(400, f"Invalid segment payload: {exc}")
     text = body.get("text") or " ".join(s.text for s in segments)
     result = TranscriptionResult(text=text, segments=segments)
     store.save_transcript(meeting_id, result)
@@ -474,7 +466,7 @@ async def upload_notes(meeting_id: str, file: UploadFile = File(...)):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         logger.warning("[UPLOAD-NOTES] Meeting %s NOT FOUND", meeting_id)
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     content_bytes = await file.read()
     filename = file.filename or "notes.txt"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt"
@@ -509,16 +501,16 @@ async def start_transcription(meeting_id: str, body: dict | None = Body(None)):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         logger.warning("[TRANSCRIBE] Meeting %s NOT FOUND", meeting_id)
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     if not meeting.audio_path:
         logger.warning("[TRANSCRIBE] Meeting %s has NO AUDIO", meeting_id)
-        return {"error": "No audio file uploaded"}
+        raise HTTPException(400, "No audio file uploaded")
 
     # Check active provider exists
     provider = meeting_service.get_active_file_provider()
     if not provider:
         logger.warning("[TRANSCRIBE] No active file transcription provider configured")
-        return {"error": "No active file transcription provider configured"}
+        raise HTTPException(400, "No active file transcription provider configured")
 
     logger.info("[TRANSCRIBE] Provider found: %s, updating status to transcribing", type(provider).__name__)
     # Drop previous Studio/summary work so the client always re-enters the
@@ -763,14 +755,14 @@ async def generate_summary(meeting_id: str):
     meeting = store.get_meeting(meeting_id)
     if not meeting:
         logger.warning("[SUMMARY] Meeting %s NOT FOUND", meeting_id)
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     if meeting.processing_state != ProcessingState.idle.value:
         logger.warning("[SUMMARY] Meeting %s is busy: %s", meeting_id, meeting.processing_state)
-        return {"error": f"Meeting is busy: {meeting.processing_state}"}
+        raise HTTPException(409, f"Meeting is busy: {meeting.processing_state}")
     transcript = store.get_transcript(meeting_id)
     if not transcript:
         logger.warning("[SUMMARY] Meeting %s has NO TRANSCRIPT", meeting_id)
-        return {"error": "No transcript available"}
+        raise HTTPException(400, "No transcript available")
 
     logger.info("[SUMMARY] Starting LLM generation for meeting %s (%d transcript segments)", meeting_id, len(transcript.segments))
     store.update_meeting(meeting_id, processing_state=ProcessingState.summarizing.value)
@@ -781,7 +773,9 @@ async def generate_summary(meeting_id: str):
     )
     logger.info("[SUMMARY] Task created for meeting %s: task_id=%s", meeting_id, task.id)
     updated = store.get_meeting(meeting_id)
-    return updated.model_dump()
+    if not updated:
+        raise HTTPException(404, "Meeting not found")
+    return _serialize_meeting(updated)
 
 
 def _sse_event(event: str, data: object) -> str:
@@ -862,18 +856,18 @@ async def start_extract(meeting_id: str, body: dict = Body()):
     """
     receipts = body.get("receipts", [])
     if not receipts:
-        return {"error": "receipts is required and must not be empty"}
+        raise HTTPException(400, "receipts is required and must not be empty")
     logger.info("[EXTRACT] Request for meeting %s: %d receipts", meeting_id, len(receipts))
     try:
         meeting = await meeting_service.start_extract(meeting_id, receipts)
     except FileNotFoundError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except ValueError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except RuntimeError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     logger.info("[EXTRACT] Started for meeting %s", meeting_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.delete("/meetings/{meeting_id}/sections/{tab_id}")
@@ -883,10 +877,10 @@ async def delete_section(meeting_id: str, tab_id: str):
     try:
         meeting = await meeting_service.delete_section(meeting_id, tab_id)
     except FileNotFoundError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except RuntimeError as exc:
-        return {"error": str(exc)}
-    return meeting.model_dump()
+        raise HTTPException(400, str(exc))
+    return _serialize_meeting(meeting)
 
 
 @router.post("/meetings/{meeting_id}/sections/{tab_id}/regenerate")
@@ -898,13 +892,13 @@ async def regenerate_section(meeting_id: str, tab_id: str):
             meeting_id, tab_id
         )
     except FileNotFoundError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except ValueError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except RuntimeError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     logger.info("[REGENERATE] Started for meeting %s tab=%s", meeting_id, tab_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.post("/meetings/{meeting_id}/sections/{tab_id}/allocate")
@@ -916,7 +910,7 @@ async def allocate_section(meeting_id: str, tab_id: str, body: dict):
     """
     collection_id = body.get("collection_id", "")
     if not collection_id:
-        return {"error": "collection_id is required"}
+        raise HTTPException(400, "collection_id is required")
     chain_id = (body.get("chain_id") or "").strip() or None
     logger.info(
         "[ALLOCATE_SECTION] Meeting %s tab=%s → collection=%s chain=%s",
@@ -930,9 +924,9 @@ async def allocate_section(meeting_id: str, tab_id: str, body: dict):
             meeting_id, tab_id, collection_id, chain_id=chain_id,
         )
     except FileNotFoundError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except ValueError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     logger.info(
         "[ALLOCATE_SECTION] Done meeting %s tab=%s file=%s task=%s node=%s",
         meeting_id,
@@ -941,7 +935,7 @@ async def allocate_section(meeting_id: str, tab_id: str, body: dict):
         bridge.get("task_id"),
         (bridge.get("node_id") or "")[:12],
     )
-    out = meeting.model_dump()
+    out = _serialize_meeting(meeting)
     out.update(bridge)
     return out
 
@@ -959,7 +953,7 @@ async def get_section_todo_candidates(
     """
     meeting = store.get_meeting(meeting_id)
     if meeting is None:
-        return {"error": "Meeting not found"}
+        raise HTTPException(404, "Meeting not found")
     tab_meta: dict | None = None
     for t in meeting.tabs or []:
         td = t if isinstance(t, dict) else t.model_dump()
@@ -967,7 +961,7 @@ async def get_section_todo_candidates(
             tab_meta = td
             break
     if tab_meta is None:
-        return {"error": f"Tab '{tab_id}' not found"}
+        raise HTTPException(404, f"Tab '{tab_id}' not found")
 
     cands = list(tab_meta.get("todo_candidates") or [])
     if refresh or not cands:
@@ -1012,12 +1006,12 @@ async def mark_todo_candidates_created(meeting_id: str, body: dict):
     """
     items = body.get("items") if isinstance(body, dict) else None
     if not isinstance(items, list):
-        return {"error": "items array is required"}
+        raise HTTPException(400, "items array is required")
     try:
         meeting = meeting_service.mark_todo_candidates_created(meeting_id, items)
     except FileNotFoundError as exc:
-        return {"error": str(exc)}
-    return meeting.model_dump()
+        raise HTTPException(400, str(exc))
+    return _serialize_meeting(meeting)
 
 
 @router.delete("/meetings/{meeting_id}/sections/{tab_id}/allocate")
@@ -1027,11 +1021,11 @@ async def delete_section_allocation(meeting_id: str, tab_id: str):
     try:
         meeting = await meeting_service.delete_section_allocation(meeting_id, tab_id)
     except FileNotFoundError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except ValueError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     logger.info("[DELETE_ALLOCATION] Done meeting %s tab=%s", meeting_id, tab_id)
-    return meeting.model_dump()
+    return _serialize_meeting(meeting)
 
 
 @router.get("/meetings/{meeting_id}/sections/{tab_id}/md")
@@ -1093,7 +1087,7 @@ async def save_section_md_content(meeting_id: str, tab_id: str, body: dict = Bod
         len(content),
         needs_reingest,
     )
-    meeting_payload = meeting.model_dump(mode="json") if meeting else None
+    meeting_payload = _serialize_meeting(meeting) if meeting else None
     return {
         "ok": True,
         "path": path,
@@ -1143,13 +1137,13 @@ async def generate_section_description(meeting_id: str, body: dict = Body()):
 
     section_name = (body.get("section_name") or "").strip()
     if not section_name:
-        return {"error": "section_name is required"}
+        raise HTTPException(400, "section_name is required")
     try:
         result = await _svc.generate_section_description(meeting_id, section_name)
     except FileNotFoundError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     except ValueError as exc:
-        return {"error": str(exc)}
+        raise HTTPException(400, str(exc))
     return result
 
 

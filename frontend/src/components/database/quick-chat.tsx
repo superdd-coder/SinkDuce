@@ -2,8 +2,9 @@ import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react
 import { createPortal } from "react-dom"
 import { Send, Loader2, AlertTriangle, Globe, MessageCircle, BrushCleaning } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { humanSourceLabel } from "@/lib/source-display"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
-import { createSession, getSession, deleteSession } from "@/api/client"
+import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
 import {
   loadWebSearchForSession,
   setSessionWebSearch,
@@ -144,7 +145,7 @@ interface QuickChatProps {
   onOpen: () => void
   onClose: () => void
   onSourceClick?: (source: string, chunkIndex?: number) => void
-  files?: { source: string; display_name?: string }[]
+  files?: { source: string; display_name?: string; file_id?: string }[]
   className?: string
   /**
    * When true, size the float card to the active right rail
@@ -274,10 +275,10 @@ export function QuickChat({
     initSession(sid)
   }, [collectionId])
 
-  // Claim / release web-confirm anchor only when panel open state changes
+  // Claim / release web-confirm anchor only when this Quick Chat is on screen
   useEffect(() => {
     if (open && webConfirmHostRef.current) {
-      setWebSearchConfirmAnchor(webConfirmHostRef.current)
+      setWebSearchConfirmAnchor(webConfirmHostRef.current, sessionId)
     }
     return () => {
       const cur = getWebSearchConfirmAnchor()
@@ -285,7 +286,7 @@ export function QuickChat({
         setWebSearchConfirmAnchor(null)
       }
     }
-  }, [open])
+  }, [open, sessionId])
 
   /*
    * Diamond spin: infinite CSS while open; on close WAAPI ease to rest.
@@ -539,18 +540,17 @@ export function QuickChat({
     }
 
     try {
-      const resp = await fetch(`/api/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const resp = await postSessionMessage(
+        sessionId,
+        {
           content: text,
           thinking: true,
           collections: [collectionId],
           mode: "direct",
           web_search_enabled: webSearch,
-        }),
-        signal: controller.signal,
-      })
+        },
+        controller.signal,
+      )
 
       if (!resp.ok) {
         const err = await resp.text()
@@ -564,26 +564,11 @@ export function QuickChat({
         return
       }
 
-      const reader = resp.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ""
       let sources: NonNullable<QAMessage["sources"]> = []
-      // Must survive across network chunks (event: and data: often split)
-      let eventType = ""
       let gotDoneCount: number | null = null
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7).trim()
-          } else if (line.startsWith("data: ") && eventType) {
-            try {
-              const data = JSON.parse(line.slice(6)) as Record<string, unknown>
+      if (resp.body) {
+        for await (const { event: eventType, data } of iterateSessionSse(resp.body)) {
               if (eventType === "web_search_confirm") {
                 const confirmId = String(data.confirm_id || "")
                 const query = String(data.query || "")
@@ -645,11 +630,6 @@ export function QuickChat({
               } else if (eventType === "error") {
                 appendTokenLocal(`Error: ${data.content}`)
               }
-            } catch (e) {
-              console.error("[QuickChat] SSE parse failed for event:", eventType, "line:", line.slice(0, 200), "err:", e)
-            }
-            eventType = ""
-          }
         }
       }
 
@@ -702,11 +682,19 @@ export function QuickChat({
 
   const hasMessages = messages.length > 0
 
-  // Resolve source ID → display name
-  const getDisplayName = (sourceId: string) => {
-    const f = files?.find((f) => f.source === sourceId)
-    return f?.display_name || sourceId.split("/").pop() || sourceId
-  }
+  const getDisplayName = (
+    sourceId: string,
+    meta?: Record<string, unknown>,
+  ) =>
+    humanSourceLabel(
+      {
+        source: sourceId,
+        source_label: meta?.source_label,
+        filename: meta?.filename,
+        display_name: meta?.display_name,
+      },
+      files,
+    )
 
   // ── Panel content (Premium compact chat chrome) ──
 
@@ -903,9 +891,7 @@ export function QuickChat({
                                             url ||
                                             "Web"
                                         )
-                                      : src
-                                        ? getDisplayName(src)
-                                        : "Unknown"
+                                      : getDisplayName(src || "", s.metadata)
                                     return (
                                       <button
                                         type="button"

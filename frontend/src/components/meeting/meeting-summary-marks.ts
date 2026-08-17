@@ -4,6 +4,7 @@
  * for bold/lists while keeping interactive stt / priority UI.
  */
 import { Node, mergeAttributes } from "@tiptap/core"
+import { parseMeetingRefGroups } from "@/lib/meeting-ref-chips"
 import { trimEmphasisInteriorSpaces } from "@/lib/md-emphasis"
 
 export type RefClickHandler = (sentenceId: string) => void
@@ -247,7 +248,7 @@ export function createMeetingPriorityExtension() {
  * Display-only prep before TipTap setContent:
  * - undo Tiptap escapes
  * - [spk:N] → display name
- * - [stt_…] / [priority:…] → HTML spans parsed by our nodes
+ * - [ref:N] / [stt_…] / [priority:…] → HTML spans parsed by our nodes
  * Never write this string back to disk (display only).
  */
 export function prepareMeetingSummaryForTiptapView(
@@ -279,6 +280,15 @@ export function prepareMeetingSummaryForTiptapView(
   }
 
   // Citations → HTML for meetingRef node (before markdown-it treats [] oddly)
+  // Streaming LLM writes [ref:67]; persist rewrites to [stt_0067].
+  s = s.replace(
+    /\[ref:\s*((?:stt_)?\d+(?:\s*[-–—]\s*(?:stt_)?\d+)?(?:\s*,\s*(?:stt_)?\d+(?:\s*[-–—]\s*(?:stt_)?\d+)?)*)\s*\]/gi,
+    (_m, inner: string) => {
+      const ids = parseMeetingRefGroups(inner).flatMap((g) => g.ids)
+      if (!ids.length) return _m
+      return `<span data-meeting-ref="${ids.join(",").replace(/"/g, "")}"></span>`
+    },
+  )
   s = s.replace(
     /\[(?:ref:)?\s*(stt_\d+(?:\s*,\s*stt_\d+)*)\s*\]/gi,
     (_m, ids: string) =>
