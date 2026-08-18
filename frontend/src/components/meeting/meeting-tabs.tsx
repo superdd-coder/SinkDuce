@@ -3102,12 +3102,6 @@ export function MeetingTabs({
         )}
       </div>
 
-      {/* Body scrolls inside the content card; tab bar stays fixed above */}
-      <div className={cn("pm-meeting-content-scroll-shell", mainTab === "notes" && "is-notes")}>
-        <div
-          ref={contentScrollRef}
-          className="pm-meeting-content-scroll"
-        >
       {mainTab === "notes" ? (
         <div className="pm-meeting-notes-fmt-bar">
           {notesEditor && !notesEditor.isDestroyed ? (
@@ -3115,6 +3109,13 @@ export function MeetingTabs({
           ) : null}
         </div>
       ) : null}
+
+      {/* Body scrolls inside the content card; tab bar + notes fmt stay fixed above */}
+      <div className={cn("pm-meeting-content-scroll-shell", mainTab === "notes" && "is-notes")}>
+        <div
+          ref={contentScrollRef}
+          className="pm-meeting-content-scroll"
+        >
       {/* ── Summary Tab ── */}
       <div className={cn(
         "transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",

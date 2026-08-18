@@ -23017,6 +23017,7 @@ button.pm-ws-path-row {
   isolation: auto;
 }
 /* Notes format strip sits immediately under the pills */
+.pm-meeting-tabs-shell:has(> .pm-meeting-notes-fmt-bar) .pm-meeting-tabs-bar,
 .pm-meeting-tabs-shell:has(> .is-notes) .pm-meeting-tabs-bar {
   padding-bottom: 2px;
 }
@@ -23026,8 +23027,7 @@ button.pm-ws-path-row {
  * Height token lives on the scroll shell (see below) so the top edge-fade can
  * offset with :has(.pm-meeting-summary-fmt-bar).
  */
-.pm-meeting-summary-fmt-bar,
-.pm-meeting-notes-fmt-bar {
+.pm-meeting-summary-fmt-bar {
   position: sticky;
   top: 0;
   z-index: 8;
@@ -23041,6 +23041,36 @@ button.pm-ws-path-row {
   /* Soft separation from title / prose below — not a hard hairline */
   box-shadow: 0 1px 0 color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
   isolation: isolate;
+}
+/* Notes strip lives outside the scroller so overscroll cannot pull it off the fade */
+.pm-meeting-notes-fmt-bar {
+  position: relative;
+  z-index: 8;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 4px 14px 6px;
+  box-sizing: border-box;
+  min-height: var(--pm-meeting-summary-fmt-h, 38px);
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  isolation: isolate;
+  overflow: visible;
+}
+.pm-meeting-notes-fmt-bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 28px;
+  pointer-events: none;
+  z-index: 7;
+  background: linear-gradient(
+    to bottom,
+    #ffffff 0%,
+    color-mix(in srgb, #ffffff 72%, transparent) 45%,
+    color-mix(in srgb, #ffffff 0%, transparent) 100%
+  );
 }
 .pm-meeting-summary-fmt-bar .pm-fmt-toolbar,
 .pm-meeting-notes-fmt-bar .pm-fmt-toolbar {
@@ -23092,9 +23122,15 @@ button.pm-ws-path-row {
  * scroll viewport — shift the top edge-fade to sit under that bar so the
  * toolbar is not washed out.
  */
-.pm-meeting-content-scroll-shell:has(.pm-meeting-summary-fmt-bar) > .pm-rail-edge-fade--top,
-.pm-meeting-content-scroll-shell.is-notes > .pm-rail-edge-fade--top {
+.pm-meeting-content-scroll-shell:has(.pm-meeting-summary-fmt-bar) > .pm-rail-edge-fade--top {
   top: var(--pm-meeting-summary-fmt-h, 38px);
+}
+/* Notes fade is glued to the fmt bar (outside the scroller) */
+.pm-meeting-content-scroll-shell.is-notes > .pm-rail-edge-fade--top {
+  display: none;
+}
+.pm-meeting-content-scroll-shell.is-notes > .pm-meeting-content-scroll {
+  overscroll-behavior-y: none;
 }
 .pm-meeting-content-scroll-shell > .pm-rail-edge-fade--bottom {
   height: 36px;
