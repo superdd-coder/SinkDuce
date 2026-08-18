@@ -12,9 +12,11 @@ import logging
 import threading
 from pathlib import Path
 
+from src.config import DATA_DIR
+
 logger = logging.getLogger(__name__)
 
-COLLECTIONS_DIR = Path("data").resolve() / "collections"
+COLLECTIONS_DIR = DATA_DIR / "collections"
 _LOCK = threading.Lock()
 
 

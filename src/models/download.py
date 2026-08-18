@@ -98,7 +98,9 @@ _package_active = False
 
 
 def _hf_home() -> Path:
-    return Path(os.environ.get("HF_HOME", "data/models"))
+    from src.config import get_models_dir
+
+    return get_models_dir()
 
 
 def _get_onnx_dir(model: ModelInfo) -> Path:
@@ -126,6 +128,10 @@ def _is_onnx_ready(model: ModelInfo) -> bool:
         return has_enc and has_dec
 
     if mid == "speaker":
+        from src.meeting.transcription.onnx.campplus import bundled_campplus_dir
+
+        if bundled_campplus_dir() is not None:
+            return True
         for f in d.glob("*.onnx"):
             try:
                 if f.is_file() and f.stat().st_size > 1_000_000:

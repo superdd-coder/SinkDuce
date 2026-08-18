@@ -18,13 +18,13 @@ import {
   Loader2,
   Star,
 } from "lucide-react"
-import { cn, chunkHasImageFence, isImageOnlyChunk, transformImageBlocks } from "@/lib/utils"
+import { cn, chunkHasImageFence, isImageOnlyChunk } from "@/lib/utils"
 import { SummarySection } from "./file-detail-parts"
 import { ChunkInspect } from "./chunk-inspect"
 import { IngestTracePane } from "./ingest-trace-pane"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ChunkMd } from "@/components/shared/chunk-md"
-import { TiptapEditor } from "@/components/ui/tiptap-editor"
+import { ParseTextViewer } from "./parse-text-viewer"
 import type { Editor } from "@tiptap/core"
 import {
   generateDocSummary,
@@ -110,7 +110,6 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
     isUnsupported,
     chunksLoading,
     previewContent,
-    sourceEditorRef,
     chunks,
     isGenerating,
     summaryLoading,
@@ -266,10 +265,11 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                     </div>
                   </div>
 
-                  {/* Preview — original file; white stage inside main card */}
+                  {/* Preview — original file; unmount when leaving so PDF + Parse never coexist */}
+                  {activeTab === "raw" && (
                   <TabsContent
                     value="raw"
-                    className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+                    className="flex-1 overflow-hidden min-h-0"
                   >
                     <div className="pm-ws-doc-stage">
                       <RawFileViewer
@@ -298,11 +298,13 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                       />
                     </div>
                   </TabsContent>
+                  )}
 
-                  {/* Parse — extracted / parsed text */}
+                  {/* Parse — extracted text. Never TipTap: a full-doc editor stalls the machine. */}
+                  {activeTab === "source" && (
                   <TabsContent
                     value="source"
-                    className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
+                    className="flex-1 overflow-hidden min-h-0"
                   >
                     <div className="pm-ws-doc-stage">
                       {previewLoading ||
@@ -316,42 +318,25 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           <p>No parse text for this version (unsupported type).</p>
                         </div>
                       ) : previewContent ? (
-                        <ScrollArea className="h-full">
-                          <div className="p-4">
-                            <TiptapEditor
-                              value={transformImageBlocks(
-                                previewContent,
-                                collectionId,
-                                // Empty file_id: in extract blocks → use managed id
-                                fileId || undefined
-                              )}
-                              readonly
-                              showToolbar={false}
-                              onEditorReady={(e) => {
-                                sourceEditorRef.current = e
-                              }}
-                            />
-                          </div>
-                        </ScrollArea>
+                        <ParseTextViewer
+                          text={previewContent}
+                          collectionId={collectionId}
+                          fileId={fileId}
+                        />
                       ) : chunks.length > 0 ? (
-                        /* Fallback: chunks for *this* focusVersionId / current only */
-                        <ScrollArea className="h-full">
-                          <div className="p-4 space-y-2">
-                            {isHistoricalFocus ? (
-                              <p className="pm-meta mb-2">
-                                Parse text reconstructed from this version’s chunks
-                              </p>
-                            ) : null}
-                            {chunks.map((chunk, i) => (
-                              <p
-                                key={chunk.id || i}
-                                className="pm-ws-prose-item"
-                              >
-                                {chunk.text}
-                              </p>
-                            ))}
-                          </div>
-                        </ScrollArea>
+                        <ParseTextViewer
+                          text={
+                            (isHistoricalFocus
+                              ? "Parse text reconstructed from this version’s chunks\n\n"
+                              : "") +
+                            chunks
+                              .slice(0, 80)
+                              .map((c) => c.text)
+                              .join("\n\n")
+                          }
+                          collectionId={collectionId}
+                          fileId={fileId}
+                        />
                       ) : (
                         <div className="pm-ws-empty h-full flex flex-col items-center justify-center gap-2 px-4">
                           <p>No extracted text for this version.</p>
@@ -359,6 +344,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                       )}
                     </div>
                   </TabsContent>
+                  )}
 
                   {/* Summary */}
                   <TabsContent

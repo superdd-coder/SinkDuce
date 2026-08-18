@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from src.services import init_services
 from src.tasks import task_manager
-from src.config import get_config
+from src.config import get_config, get_frontend_dist
 
 logging.getLogger("src").setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,6 +71,9 @@ async def lifespan(app: FastAPI):
     task_manager.register_handler("meeting_summary", meeting_summary_handler)
     task_manager.register_handler("meeting_extract", meeting_extract_handler)
 
+    from src.meeting.transcription.onnx.threads import configure_host_math_threads
+
+    configure_host_math_threads()
     init_services()
     await task_manager.start()
     # Load RapidOCR weights in the background so the first upload is not
@@ -239,11 +242,13 @@ async def proxy_openrouter_models():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    from src.config import health_payload
+
+    return health_payload()
 
 
 # Serve React frontend in production
-FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+FRONTEND_DIST = get_frontend_dist()
 
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="static-assets")
@@ -276,10 +281,12 @@ if FRONTEND_DIST.exists():
 if __name__ == "__main__":
     import uvicorn
     from src.config import get_config
+    from src.config import resolve_bind_host, resolve_bind_port
+
     config = get_config()
     uvicorn.run(
         app,
-        host=config.server.host,
-        port=config.server.api_port,
+        host=resolve_bind_host(config.server.host),
+        port=resolve_bind_port(config.server.api_port),
         reload=False,
     )

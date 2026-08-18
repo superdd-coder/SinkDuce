@@ -148,10 +148,9 @@ class TestFileMgmtMcpTools:
         }
 
         with patch("src.file_mgmt.store._migrate_files_json_import"), \
-             patch.object(fm, "get_folder_tree", return_value=[root]), \
-             patch.object(
-                 fm,
-                 "list_files_with_mounts",
+             patch("src.file_mgmt.files.get_folder_tree", return_value=[root]), \
+             patch(
+                 "src.file_mgmt.files.list_files_with_mounts",
                  side_effect=lambda *a, **kw: (
                      [deep_file] if kw.get("scope") == "all" else []
                  ),

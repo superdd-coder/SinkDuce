@@ -154,3 +154,64 @@ class TestSessionAPI:
                 headers={"Content-Type": "application/json"},
             )
             assert resp3.status_code == 422
+
+
+class TestGenerateSessionTitle:
+    def test_uses_llm_generate_not_raw_client_history(self, store):
+        """Title must not replay tool-call history into a hardcoded extra_body."""
+        from src.main import app
+        from src.api.routes import sessions as sess_mod
+
+        s = store.create_session(title="New Chat")
+        store.add_message(s.id, "user", "What is in the library?")
+        store.add_message(s.id, "assistant", "There are three folders.")
+
+        class FakeLLM:
+            def __init__(self):
+                self.seen = None
+
+            def generate(self, prompt, **kwargs):
+                self.seen = {"prompt": prompt, **kwargs}
+                return "Library folders"
+
+        llm = FakeLLM()
+        agent = type("A", (), {"_llm": llm})()
+        client = TestClient(app)
+        with patch.object(sess_mod, "services") as mock_svc:
+            mock_svc.session_store = store
+            mock_svc.chatbox_agent = agent
+            resp = client.post(f"/api/sessions/{s.id}/generate-title")
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Library folders"
+        assert llm.seen is not None
+        assert llm.seen.get("thinking") is False
+        assert "What is in the library?" in llm.seen["prompt"]
+        assert "tool_calls" not in llm.seen["prompt"]
+
+    def test_falls_back_to_question_when_llm_fails(self, store):
+        from src.main import app
+        from src.api.routes import sessions as sess_mod
+
+        s = store.create_session(title="New Chat")
+        store.add_message(s.id, "user", "Summarize the diligence memo")
+        store.add_message(s.id, "assistant", "It covers three sites.")
+
+        class BoomLLM:
+            def generate(self, *a, **k):
+                raise RuntimeError("provider rejected thinking extra_body")
+
+        agent = type("A", (), {"_llm": BoomLLM()})()
+        client = TestClient(app)
+        with patch.object(sess_mod, "services") as mock_svc:
+            mock_svc.session_store = store
+            mock_svc.chatbox_agent = agent
+            resp = client.post(f"/api/sessions/{s.id}/generate-title")
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Summarize the diligence memo"
+
+    def test_fallback_helper_trims_question(self):
+        from src.api.routes.sessions import _fallback_session_title
+
+        assert _fallback_session_title("Hello there") == "Hello there"
+        long_q = "x" * 90
+        assert len(_fallback_session_title(long_q)) <= 60

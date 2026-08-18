@@ -42,8 +42,12 @@ def _compute_fbank_80(
     opts.frame_opts.snip_edges = False
     opts.mel_opts.num_bins = 80
     fbank = knf.OnlineFbank(opts)
-    # knf accepts float samples in roughly [-1, 1]
-    fbank.accept_waveform(sample_rate, wav.tolist())
+    # Prefer the float32 buffer — .tolist() copies every sample into a
+    # Python float and dominates CAM++ time on long VAD segments.
+    try:
+        fbank.accept_waveform(sample_rate, wav)
+    except TypeError:
+        fbank.accept_waveform(sample_rate, wav.tolist())
     fbank.input_finished()
     n_frames = int(fbank.num_frames_ready)
     if n_frames <= 0:
@@ -60,8 +64,10 @@ class CampplusOnnxEmbedder:
     def __init__(self, model_path: Path, *, num_threads: int = 4):
         import onnxruntime as ort
 
+        from src.meeting.transcription.onnx.threads import apply_session_options
+
         opts = ort.SessionOptions()
-        opts.intra_op_num_threads = num_threads
+        apply_session_options(opts, num_threads=num_threads, arena=True)
         self._session = ort.InferenceSession(
             str(model_path),
             sess_options=opts,
@@ -226,31 +232,71 @@ def cluster_speakers(
     return labels
 
 
+_BUNDLED_DIR = Path(__file__).resolve().parent / "campplus_models"
+_CAMPPLUS_NAMES = (
+    "campplus_zh_cn_common_200k.onnx",
+    "campplus.onnx",
+    "embedding.onnx",
+    "model.onnx",
+    "model_quant.onnx",
+)
+
+
+def find_campplus_onnx(model_dir: Path | None) -> Path | None:
+    """Return the first loadable-looking CAM++ ONNX under ``model_dir``."""
+    if model_dir is None or not model_dir.is_dir():
+        return None
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    for name in _CAMPPLUS_NAMES:
+        ordered.append(model_dir / name)
+    ordered.extend(sorted(model_dir.glob("*.onnx")))
+    for p in ordered:
+        if p in seen:
+            continue
+        seen.add(p)
+        try:
+            if p.is_file() and p.stat().st_size > 100_000:
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def bundled_campplus_dir() -> Path | None:
+    """ONNX shipped next to this module (same pattern as RapidOCR)."""
+    if find_campplus_onnx(_BUNDLED_DIR) is not None:
+        return _BUNDLED_DIR
+    return None
+
+
+def resolve_campplus_dir() -> Path | None:
+    """Bundled weights first, then downloaded ``data/models/onnx`` / HF snapshot."""
+    bundled = bundled_campplus_dir()
+    if bundled is not None:
+        return bundled
+    from src.meeting.transcription.onnx.paths import onnx_cache_dir, resolve_hf_snapshot
+
+    cache = onnx_cache_dir("funasr/campplus")
+    if find_campplus_onnx(cache) is not None:
+        return cache
+    snap = resolve_hf_snapshot("funasr/campplus")
+    if find_campplus_onnx(snap) is not None:
+        return snap
+    return None
+
+
 def try_load_campplus(
     model_dir: Path | None,
     *,
     num_threads: int = 4,
 ) -> CampplusOnnxEmbedder | None:
     """Load CAM++ onnx from a model dir if present."""
-    if model_dir is None or not model_dir.is_dir():
+    p = find_campplus_onnx(model_dir)
+    if p is None:
         return None
-    candidates = [
-        model_dir / "model.onnx",
-        model_dir / "model_quant.onnx",
-        model_dir / "campplus.onnx",
-        model_dir / "embedding.onnx",
-    ]
-    # also any *.onnx
-    for p in candidates:
-        if p.is_file() and p.stat().st_size > 100_000:
-            try:
-                return CampplusOnnxEmbedder(p, num_threads=num_threads)
-            except Exception:
-                logger.warning("Failed to load CAM++ ONNX %s", p, exc_info=True)
-    for p in sorted(model_dir.glob("*.onnx")):
-        if p.stat().st_size > 100_000:
-            try:
-                return CampplusOnnxEmbedder(p, num_threads=num_threads)
-            except Exception:
-                continue
-    return None
+    try:
+        return CampplusOnnxEmbedder(p, num_threads=num_threads)
+    except Exception:
+        logger.warning("Failed to load CAM++ ONNX %s", p, exc_info=True)
+        return None

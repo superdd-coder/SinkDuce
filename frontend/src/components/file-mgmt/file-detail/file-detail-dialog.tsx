@@ -127,10 +127,11 @@ export function FileMgmtDetailDialog({
   contextNodeId = null,
 }: FileMgmtDetailDialogProps) {
   const refreshFiles = useFileMgmtStore((s) => s.refreshFiles)
-  const ingestingFiles = useFileMgmtStore((s) => s.ingestingFiles)
   const currentFolderId = useFileMgmtStore((s) => s.currentFolderId)
   const requestTimelineFocus = useFileMgmtStore((s) => s.requestTimelineFocus)
-  const { setActiveMeeting, setSidebarView, setPendingOpenNote } = useAppStore()
+  const setActiveMeeting = useAppStore((s) => s.setActiveMeeting)
+  const setSidebarView = useAppStore((s) => s.setSidebarView)
+  const setPendingOpenNote = useAppStore((s) => s.setPendingOpenNote)
 
   const parsedPropId = fileIdProp || parseFileIdFromSource(sourceProp) || null
   /** When opened via __meeting__: / __note__: source, resolve index file_id async. */
@@ -147,9 +148,12 @@ export function FileMgmtDetailDialog({
 
   /**
    * While async ingest runs, only Preview is usable (parse/summary/chunks
-   * are not ready yet). Driven by store task polling after upload.
+   * are not ready yet). Subscribe to this file only — other files' ingest
+   * polls must not re-render the open dialog (causes preview flicker).
    */
-  const ingestProgress = fileId ? ingestingFiles[fileId] : undefined
+  const ingestProgress = useFileMgmtStore((s) =>
+    fileId ? s.ingestingFiles[fileId] : undefined
+  )
   const isIngesting = !!ingestProgress
 
   // Force Preview tab while ingesting; leave other tabs disabled
@@ -684,31 +688,16 @@ export function FileMgmtDetailDialog({
     return () => clearTimeout(timer)
   }, [highlightedIdx, chunksLoading, chunks.length])
 
-  // Map offset → editor scroll
+  // Map chunk offset → Parse pane scroll (lightweight viewer, not TipTap)
   useEffect(() => {
     if (highlightOffset === undefined || !previewContent) return
-    const editor = sourceEditorRef.current
-    if (!editor || (editor as { isDestroyed?: boolean }).isDestroyed) return
-    const rawLen = previewContent.length
-    const textLen = editor.state.doc.textContent.length
-    if (rawLen <= 1 || textLen <= 1) return
-    const textTarget = Math.round(highlightOffset * (textLen / rawLen))
-    let lo = 1
-    let hi = editor.state.doc.content.size
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi) / 2)
-      if (editor.state.doc.textBetween(0, mid).length < textTarget) lo = mid + 1
-      else hi = mid
-    }
-    const resolved = editor.state.doc.resolve(lo)
-    const domPos = editor.view.domAtPos(resolved.pos)
-    const node = domPos.node
-    const el =
-      node.nodeType === 3 /* TEXT_NODE */
-        ? node.parentElement
-        : (node as HTMLElement)
-    el?.scrollIntoView({ behavior: "smooth", block: "start" })
-  }, [previewContent, highlightOffset])
+    const root = document.querySelector("[data-parse-root]")
+    if (!(root instanceof HTMLElement)) return
+    const rawLen = Math.max(1, previewContent.length)
+    const ratio = Math.min(1, Math.max(0, highlightOffset / rawLen))
+    const max = root.scrollHeight - root.clientHeight
+    if (max > 0) root.scrollTop = ratio * max
+  }, [previewContent, highlightOffset, activeTab])
 
   const isParentChild = chunks.some((c) => c.chunk_type === "parent")
   const groupedChunks = useMemo(() => {

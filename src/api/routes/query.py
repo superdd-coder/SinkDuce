@@ -14,10 +14,11 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from src.api.schemas import QueryRequest
+from src.config import DATA_DIR
 
 router = APIRouter()
 
-HISTORY_DIR = Path("data/history")
+HISTORY_DIR = DATA_DIR / "history"
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 

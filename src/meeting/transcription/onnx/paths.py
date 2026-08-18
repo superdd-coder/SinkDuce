@@ -11,7 +11,9 @@ _WEIGHT_EXTS = {".safetensors", ".bin", ".pt", ".onnx"}
 
 
 def _hf_home() -> Path:
-    return Path(os.environ.get("HF_HOME", "data/models"))
+    from src.config import get_models_dir
+
+    return get_models_dir()
 
 
 def resolve_hf_snapshot(repo_id: str) -> Path | None:

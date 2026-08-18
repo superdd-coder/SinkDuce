@@ -53,6 +53,13 @@ class FunASROnnxFileTranscription(FileTranscriptionProvider):
             punc,
             spk,
         )
+        from src.meeting.transcription.onnx.threads import (
+            configure_host_math_threads,
+            file_asr_threads,
+        )
+
+        configure_host_math_threads()
+        threads = file_asr_threads()
         self._pipeline = FunAsrOnnxFilePipeline(
             asr_repo=asr,
             vad_repo=vad,
@@ -60,10 +67,10 @@ class FunASROnnxFileTranscription(FileTranscriptionProvider):
             spk_repo=spk or None,
             quantize=True,
             asr_quantize=True,  # SenseVoice int8 only
-            num_threads=4,
+            num_threads=threads,
             device_id=device_id,
         )
-        logger.info("FunASR ONNX file pipeline ready (SenseVoice int8)")
+        logger.info("FunASR ONNX file pipeline ready (SenseVoice int8, threads=%s)", threads)
 
     async def transcribe(
         self,

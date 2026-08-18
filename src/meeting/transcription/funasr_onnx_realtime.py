@@ -60,14 +60,21 @@ class FunASROnnxRealtimeTranscription(RealtimeTranscriptionProvider):
         # Online class is not re-exported in funasr_onnx.__init__
         from funasr_onnx.paraformer_online_bin import Paraformer as ParaformerOnline
 
+        from src.meeting.transcription.onnx.threads import (
+            configure_host_math_threads,
+            realtime_asr_threads,
+        )
+
+        configure_host_math_threads()
+        threads = realtime_asr_threads()
         self._model = ParaformerOnline(
             str(model_dir),
             chunk_size=list(_CHUNK_SIZE),
             quantize=quantize,
             device_id=device_id,
-            intra_op_num_threads=4,
+            intra_op_num_threads=threads,
         )
-        logger.info("FunASR ONNX realtime loaded from %s", model_dir)
+        logger.info("FunASR ONNX realtime loaded from %s threads=%s", model_dir, threads)
 
         self._on_segment: Callable | None = None
         self._param_dict: dict[str, Any] = {"cache": {}, "is_final": False}

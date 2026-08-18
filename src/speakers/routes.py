@@ -198,11 +198,14 @@ def _slice_audio_wav(path, start: float, end: float) -> bytes:
     import shutil
     import subprocess
 
-    if not shutil.which("ffmpeg"):
+    from src.runtime_bins import ffmpeg_bin
+
+    ff = ffmpeg_bin()
+    if ff == "ffmpeg" and not shutil.which("ffmpeg"):
         raise HTTPException(500, "ffmpeg is required to preview speaker audio")
     duration = max(0.3, end - start)
     cmd = [
-        "ffmpeg",
+        ff,
         "-v",
         "error",
         "-ss",

@@ -6,10 +6,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.config import DATA_DIR
+
 from .models import HotWordItem, HotWordsLibrary
 
 logger = logging.getLogger("hot_words.store")
-HOTWORDS_DIR = Path("data").resolve() / "hot_words"
+HOTWORDS_DIR = DATA_DIR / "hot_words"
 SETTINGS_PATH = HOTWORDS_DIR / "_settings.json"
 # JSON files that are not library documents
 _SKIP_FILENAMES = frozenset({"_settings.json"})

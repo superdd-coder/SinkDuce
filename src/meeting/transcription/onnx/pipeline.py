@@ -177,16 +177,21 @@ def _resample_mono_linear(audio: np.ndarray, sr: int, target_sr: int = 16000) ->
 
 def _load_via_ffmpeg(path: str, target_sr: int = 16000) -> np.ndarray:
     """Decode any ffmpeg-supported container (WebM/Opus, MP3, M4A, …) to mono float32."""
-    import shutil
     import subprocess
 
-    if not shutil.which("ffmpeg"):
-        raise RuntimeError(
-            "ffmpeg is required to decode non-WAV audio "
-            f"(got {Path(path).suffix or 'unknown format'}): {path}"
-        )
+    from src.runtime_bins import ffmpeg_bin
+
+    ff = ffmpeg_bin()
+    if ff == "ffmpeg":
+        import shutil
+
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError(
+                "ffmpeg is required to decode non-WAV audio "
+                f"(got {Path(path).suffix or 'unknown format'}): {path}"
+            )
     cmd = [
-        "ffmpeg",
+        ff,
         "-v",
         "error",
         "-i",
@@ -336,15 +341,21 @@ class FunAsrOnnxFilePipeline:
         self._spk = None
         if spk_repo:
             try:
-                spk_dir = ensure_onnx_model_dir(
-                    spk_repo, streaming=False, quantize=quantize, label="speaker"
-                )
+                from src.meeting.transcription.onnx.campplus import resolve_campplus_dir
+
+                spk_dir = resolve_campplus_dir()
+                if spk_dir is None:
+                    spk_dir = ensure_onnx_model_dir(
+                        spk_repo, streaming=False, quantize=quantize, label="speaker"
+                    )
                 self._spk = try_load_campplus(spk_dir, num_threads=num_threads)
                 if self._spk is None:
                     logger.warning(
                         "CAM++ ONNX not found under %s — diarization disabled",
                         spk_dir,
                     )
+                else:
+                    logger.info("CAM++ ready: %s", spk_dir)
             except Exception:
                 logger.warning("CAM++ load failed — diarization disabled", exc_info=True)
 
@@ -364,6 +375,79 @@ class FunAsrOnnxFilePipeline:
                 text = "".join(str(t) for t in text)
             return _clean_text(str(text))
         return _clean_text(str(first))
+
+    @staticmethod
+    def _length_batches(
+        wavs: list[np.ndarray],
+        *,
+        max_batch: int = 4,
+        max_spread: float = 2.0,
+        long_samples: int = 16_000 * 20,
+    ) -> list[list[int]]:
+        """Group similar-length clips so padded SenseVoice batches stay cheap."""
+        order = sorted(range(len(wavs)), key=lambda i: wavs[i].size)
+        groups: list[list[int]] = []
+        cur: list[int] = []
+        for i in order:
+            n = int(wavs[i].size)
+            if n >= long_samples:
+                if cur:
+                    groups.append(cur)
+                    cur = []
+                groups.append([i])
+                continue
+            if not cur:
+                cur = [i]
+                continue
+            shortest = int(wavs[cur[0]].size) or 1
+            if len(cur) >= max_batch or n > shortest * max_spread:
+                groups.append(cur)
+                cur = [i]
+            else:
+                cur.append(i)
+        if cur:
+            groups.append(cur)
+        return groups
+
+    def _decode_sensevoice_logits(self, ctc_logits: Any, encoder_out_lens: Any, b: int) -> str:
+        x = ctc_logits[b, : int(encoder_out_lens[b]), :]
+        yseq = np.argmax(x, axis=-1)
+        mask = np.concatenate(([True], np.diff(yseq) != 0))
+        yseq = yseq[mask]
+        token_int = yseq[yseq != getattr(self._asr, "blank_id", 0)].tolist()
+        return _clean_text(str(self._asr.tokenizer.decode(token_int)))
+
+    def _asr_many(self, wavs: list[np.ndarray], language: str = "auto") -> list[str]:
+        """Batch similar-length VAD clips through SenseVoice when possible."""
+        if not wavs:
+            return []
+        if len(wavs) == 1:
+            return [self._asr_segment(wavs[0], language=language)]
+
+        lid = int(getattr(self._asr, "lid_dict", {}).get(language, 0))
+        tnid = int(getattr(self._asr, "textnorm_dict", {}).get("woitn", 15))
+        out = [""] * len(wavs)
+        try:
+            for group in self._length_batches(wavs):
+                if len(group) == 1:
+                    out[group[0]] = self._asr_segment(wavs[group[0]], language=language)
+                    continue
+                batch = [wavs[i] for i in group]
+                feats, feats_len = self._asr.extract_feat(batch)
+                bsz = int(feats.shape[0])
+                langs = np.full((bsz,), lid, dtype=np.int32)
+                tns = np.full((bsz,), tnid, dtype=np.int32)
+                ctc_logits, encoder_out_lens = self._asr.infer(
+                    feats, feats_len, langs, tns
+                )
+                for j, idx in enumerate(group):
+                    out[idx] = self._decode_sensevoice_logits(
+                        ctc_logits, encoder_out_lens, j
+                    )
+        except Exception:
+            logger.warning("batched SenseVoice failed, falling back per segment", exc_info=True)
+            return [self._asr_segment(w, language=language) for w in wavs]
+        return out
 
     def _punctuate(self, text: str) -> str:
         if not text or self._punc is None:
@@ -395,19 +479,22 @@ class FunAsrOnnxFilePipeline:
         texts: list[str] = []
         times: list[tuple[float, float]] = []
         emb_list: list[np.ndarray] = []
+        chunks: list[tuple[float, float, np.ndarray]] = []
 
         for s_ms, e_ms in segs_ms:
             s = max(0, int(s_ms * sr / 1000))
             e = min(len(waveform), int(e_ms * sr / 1000))
             if e - s < sr // 20:
                 continue
-            chunk = waveform[s:e]
-            text = self._asr_segment(chunk, language=language)
+            chunks.append((s_ms / 1000.0, e_ms / 1000.0, waveform[s:e]))
+
+        raw_texts = self._asr_many([c[2] for c in chunks], language=language)
+        for (t0, t1, chunk), text in zip(chunks, raw_texts):
             if not text:
                 continue
             text = self._punctuate(text)
             texts.append(text)
-            times.append((s_ms / 1000.0, e_ms / 1000.0))
+            times.append((t0, t1))
             if self._spk is not None:
                 try:
                     emb_list.append(self._spk.embed(chunk, sample_rate=sr))

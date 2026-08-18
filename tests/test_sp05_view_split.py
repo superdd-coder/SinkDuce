@@ -85,6 +85,30 @@ def test_file_detail_parts_extracted():
     )
 
 
+def test_file_detail_and_chat_source_do_not_subscribe_whole_app_store():
+    """Chat token writes must not re-render the file preview (flicker)."""
+    dialog = (DETAIL / "file-detail-dialog.tsx").read_text(encoding="utf-8")
+    src_panel = (
+        ROOT / "frontend" / "src" / "components" / "chat" / "source-detail-panel.tsx"
+    ).read_text(encoding="utf-8")
+    raw = (
+        ROOT / "frontend" / "src" / "components" / "file-mgmt" / "raw-file-viewer.tsx"
+    ).read_text(encoding="utf-8")
+    assert "useAppStore()" not in dialog
+    assert "useAppStore()" not in src_panel
+    assert "ParseTextViewer" in src_panel
+    assert "TiptapEditor" not in src_panel
+    assert 'mo.observe(root, { childList: true, subtree: true })' not in raw
+
+
+def test_parse_text_viewer_is_lightweight():
+    viewer = (DETAIL / "parse-text-viewer.tsx").read_text(encoding="utf-8")
+    assert "pm-ws-parse-pre" in viewer
+    assert "ChunkMd" not in viewer
+    assert "useEditor" not in viewer
+    assert "TiptapEditor" not in viewer
+
+
 def test_file_detail_main_pane_extracted():
     pane = (DETAIL / "file-detail-main-pane.tsx").read_text(encoding="utf-8")
     dialog = (DETAIL / "file-detail-dialog.tsx").read_text(encoding="utf-8")
@@ -96,6 +120,8 @@ def test_file_detail_main_pane_extracted():
     assert 'value="ingest"' in pane
     assert "developerMode" in pane
     assert "<RawFileViewer" in pane
+    assert "ParseTextViewer" in pane
+    assert "TiptapEditor" not in pane
     assert "<FileDetailMainPane" in dialog
     assert "<RawFileViewer" not in dialog
     assert 'value="chunks"' not in dialog

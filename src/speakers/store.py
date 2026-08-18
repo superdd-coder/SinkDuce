@@ -6,12 +6,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.config import DATA_DIR
 from src.paths import assert_resource_id, confine
 
 from .models import Enrollment, Person
 
 logger = logging.getLogger("speakers.store")
-SPEAKERS_DIR = Path("data").resolve() / "speakers"
+SPEAKERS_DIR = DATA_DIR / "speakers"
 _SKIP_PREFIX = "_"
 
 

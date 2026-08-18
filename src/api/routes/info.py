@@ -15,13 +15,14 @@ from src.services import services
 from src.tasks import task_manager
 from src.rag.summary_manager import SummaryManager
 from src.collections import store as collections_store
+from src.config import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 # Resolve meetings directory (same convention as src/meeting/store.py)
-MEETINGS_DIR = Path("data").resolve() / "meetings"
+MEETINGS_DIR = DATA_DIR / "meetings"
 
 
 # ═══════════════════════════════════════════════════════════════

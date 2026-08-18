@@ -1,4 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from "react"
+import { getHealth } from "@/api/client"
+import { startDesktopSystemAudio } from "@/lib/desktop-system-audio"
 
 /** Number of bars exposed for the live capture waveform UI. */
 export const AUDIO_LEVEL_BAR_COUNT = 24
@@ -22,6 +24,15 @@ function emptyLevels(): number[] {
  * Map AnalyserNode frequency bins → bar heights 0–1.
  * Pure helper so tests can lock the scaling without Web Audio.
  */
+async function isDesktopRuntime(): Promise<boolean> {
+  try {
+    const h = await getHealth()
+    return h.desktop === true
+  } catch {
+    return false
+  }
+}
+
 export function binsToLevels(
   bins: ArrayLike<number>,
   barCount: number = AUDIO_LEVEL_BAR_COUNT,
@@ -96,6 +107,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
   const durationRef = useRef(0)
   const onAudioChunkRef = useRef(onAudioChunk)
   onAudioChunkRef.current = onAudioChunk
+  const sysAudioStopRef = useRef<(() => void) | null>(null)
 
   const stopLevelLoop = useCallback(() => {
     if (levelRafRef.current != null) {
@@ -146,40 +158,61 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
       // Step 1: mic — silent if already permitted, one-time prompt otherwise.
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
-      // Step 2: system audio — required.  Browser forces a picker dialog
-      // every time; user MUST pick a tab/window with "Share audio" checked.
-      let systemAudioStream: MediaStream
-      try {
-        const systemStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        })
-        systemStream.getVideoTracks().forEach((t) => t.stop())
-        const audioTracks = systemStream.getAudioTracks()
-        if (audioTracks.length === 0) {
+      // Step 2: system audio. Browser uses getDisplayMedia "Share audio".
+      // Desktop WKWebView cannot do that — mix the ScreenCaptureKit helper instead.
+      let finalStream: MediaStream = micStream
+      const desktop = await isDesktopRuntime()
+      if (desktop) {
+        sysAudioStopRef.current?.()
+        const sys = await startDesktopSystemAudio()
+        sysAudioStopRef.current = sys.stop
+        const audioCtxMix = new AudioContext({ sampleRate: 16000 })
+        audioCtxRef.current = audioCtxMix
+        const destination = audioCtxMix.createMediaStreamDestination()
+        audioCtxMix.createMediaStreamSource(micStream).connect(destination)
+        audioCtxMix.createMediaStreamSource(sys.stream).connect(destination)
+        finalStream = destination.stream
+      } else {
+        const display = navigator.mediaDevices?.getDisplayMedia?.bind(
+          navigator.mediaDevices
+        )
+        if (!display) {
           throw new Error(
-            "No system audio captured. Please check \"Share audio\" when selecting a window."
+            "Recording requires system audio. Please select a window and enable \"Share audio\"."
           )
         }
-        systemAudioStream = new MediaStream(audioTracks)
-      } catch (e) {
-        // If the inner error is already our "No system audio" message, re-throw it.
-        // Otherwise it's a DOMException (user cancelled) — throw a friendlier message.
-        if (e instanceof Error && e.message.startsWith("No system audio")) throw e
-        throw new Error(
-          "Recording requires system audio. Please select a window and enable \"Share audio\"."
-        )
+        try {
+          const systemStream = await display({
+            video: true,
+            audio: true,
+          })
+          systemStream.getVideoTracks().forEach((t) => t.stop())
+          const audioTracks = systemStream.getAudioTracks()
+          if (audioTracks.length === 0) {
+            throw new Error(
+              "No system audio captured. Please check \"Share audio\" when selecting a window."
+            )
+          }
+          const audioCtxMix = new AudioContext({ sampleRate: 16000 })
+          audioCtxRef.current = audioCtxMix
+          const destination = audioCtxMix.createMediaStreamDestination()
+          audioCtxMix.createMediaStreamSource(micStream).connect(destination)
+          audioCtxMix
+            .createMediaStreamSource(new MediaStream(audioTracks))
+            .connect(destination)
+          finalStream = destination.stream
+        } catch (e) {
+          if (e instanceof Error && e.message.startsWith("No system audio")) throw e
+          const cancelled =
+            e instanceof DOMException &&
+            (e.name === "NotAllowedError" || e.name === "AbortError")
+          throw new Error(
+            cancelled
+              ? "Screen share was cancelled. Select a window and enable \"Share audio\" to record."
+              : "Recording requires system audio. Please select a window and enable \"Share audio\"."
+          )
+        }
       }
-
-      // Mix mic + system audio
-      const audioCtx = new AudioContext({ sampleRate: 16000 })
-      audioCtxRef.current = audioCtx
-      const destination = audioCtx.createMediaStreamDestination()
-      const micSource = audioCtx.createMediaStreamSource(micStream)
-      micSource.connect(destination)
-      const sysSource = audioCtx.createMediaStreamSource(systemAudioStream)
-      sysSource.connect(destination)
-      const finalStream: MediaStream = destination.stream
 
       streamRef.current = finalStream
 
@@ -307,6 +340,8 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
       return true
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      sysAudioStopRef.current?.()
+      sysAudioStopRef.current = null
       stopLevelLoop()
       setState((prev) => ({ ...prev, error: msg, levels: emptyLevels() }))
       return false
@@ -316,6 +351,8 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
   const stopRecording = useCallback(() => {
     capturePausedRef.current = false
     stopLevelLoop()
+    sysAudioStopRef.current?.()
+    sysAudioStopRef.current = null
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop()
     }

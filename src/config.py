@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 
@@ -9,7 +10,101 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path("data").resolve()
+
+def get_data_dir() -> Path:
+    """Data root. ``SINKDUCE_DATA`` overrides; otherwise cwd ``data/`` (Docker)."""
+    raw = (os.environ.get("SINKDUCE_DATA") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path("data").resolve()
+
+
+def get_models_dir() -> Path:
+    """Model cache. ``HF_HOME`` wins (Docker sets it); else ``<data>/models``."""
+    raw = (os.environ.get("HF_HOME") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return get_data_dir() / "models"
+
+
+def get_frontend_dist() -> Path:
+    """SPA build. ``SINKDUCE_FRONTEND_DIST`` overrides; else repo ``frontend/dist``."""
+    raw = (os.environ.get("SINKDUCE_FRONTEND_DIST") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+def resolve_qdrant_host(cfg_host: str) -> str:
+    """Prefer ``SINKDUCE_QDRANT_HOST``. Ignore generic ``QDRANT_HOST``."""
+    return (os.environ.get("SINKDUCE_QDRANT_HOST") or "").strip() or cfg_host
+
+
+def resolve_qdrant_port(cfg_port: int) -> int:
+    raw = (os.environ.get("SINKDUCE_QDRANT_PORT") or "").strip()
+    return int(raw) if raw else cfg_port
+
+
+def resolve_bind_host(cfg_host: str) -> str:
+    return (os.environ.get("SINKDUCE_HOST") or "").strip() or cfg_host
+
+
+def resolve_bind_port(cfg_port: int) -> int:
+    raw = (os.environ.get("SINKDUCE_PORT") or "").strip()
+    return int(raw) if raw else cfg_port
+
+
+def is_desktop_runtime() -> bool:
+    return (os.environ.get("SINKDUCE_DESKTOP") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _advertise_host(bind_host: str) -> str:
+    """Host clients should use. Wildcard binds are not a connectable URL."""
+    host = (bind_host or "").strip()
+    if not host or host in {"0.0.0.0", "::", "[::]"}:
+        return "127.0.0.1"
+    return host
+
+
+def advertised_listen() -> tuple[str, int]:
+    """Public (host, port) for this process — env first, then config.yaml."""
+    env_host = (os.environ.get("SINKDUCE_HOST") or "").strip()
+    env_port = (os.environ.get("SINKDUCE_PORT") or "").strip()
+    cfg_host = ""
+    cfg_port = 18900
+    if not env_host or not env_port:
+        try:
+            cfg = get_config()
+            cfg_host = cfg.server.host
+            cfg_port = int(cfg.server.api_port)
+        except Exception:
+            pass
+    host = _advertise_host(env_host or cfg_host)
+    port = int(env_port) if env_port else cfg_port
+    return host, port
+
+
+def health_payload() -> dict:
+    host, port = advertised_listen()
+    body: dict = {
+        "status": "ok",
+        "host": host,
+        "port": port,
+        "mcp_url": f"http://{host}:{port}/mcp",
+    }
+    if is_desktop_runtime():
+        body["desktop"] = True
+        audio = (os.environ.get("SINKDUCE_SYS_AUDIO") or "").strip().rstrip("/")
+        if audio:
+            body["system_audio"] = audio
+    return body
+
+
+DATA_DIR = get_data_dir()
 CONFIG_PATH = DATA_DIR / "config.yaml"
 TEMPLATE_PATH = Path("config.yaml.template")
 

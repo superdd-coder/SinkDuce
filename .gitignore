@@ -78,3 +78,15 @@ videos/
 
 # Local contracts (enterprise IAM + frontend design). Not published with OSS.
 contracts/
+
+# Local macOS / Tauri packaging (never publish)
+desktop/
+src-tauri/
+*.app
+*.dmg
+
+# ONNX weights: only the two in-tree bundles (RapidOCR + CAM++).
+# Full ASR packs live in data/models/ (already ignored) or model_release/.
+*.onnx
+!src/parsers/ocr_models/*.onnx
+!src/meeting/transcription/onnx/campplus_models/*.onnx

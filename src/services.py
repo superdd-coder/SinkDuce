@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from src.config import get_config, save_config
+from src.config import get_config, resolve_qdrant_host, resolve_qdrant_port, save_config
 from src.db.qdrant import QdrantManager
 from src.providers.embedding import create_embedding_provider
 from src.providers.llm import create_llm_provider
@@ -501,7 +501,10 @@ def init_services(*, preload_transcription: bool = True):
     # silently keep being used after the user updates Settings.
     _invalidate_enrichment_llm_cache()
 
-    services.db = QdrantManager(host=config.qdrant.host, port=config.qdrant.port)
+    services.db = QdrantManager(
+        host=resolve_qdrant_host(config.qdrant.host),
+        port=resolve_qdrant_port(config.qdrant.port),
+    )
 
     # Embedding provider — only from user config
     emb_cfg = config.embedding.default

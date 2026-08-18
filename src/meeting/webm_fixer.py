@@ -12,6 +12,8 @@ import logging
 import subprocess
 from pathlib import Path
 
+from src.runtime_bins import ffmpeg_bin
+
 logger = logging.getLogger("meeting.webm_fixer")
 
 
@@ -27,7 +29,7 @@ def fix_webm_duration(audio_path: Path) -> None:
 
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
+                ffmpeg_bin(), "-y",
                 "-i", str(audio_path),
                 "-c", "copy",
                 "-map", "0",

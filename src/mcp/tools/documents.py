@@ -44,6 +44,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from src.config import DATA_DIR
 from src.mcp.common import (
     err,
     mcp_result,
@@ -56,7 +57,7 @@ from src.mcp.common import (
 
 logger = logging.getLogger(__name__)
 
-COLLECTIONS_DIR = Path("data").resolve() / "collections"
+COLLECTIONS_DIR = DATA_DIR / "collections"
 
 
 def _files_dir(collection_id: str) -> Path:

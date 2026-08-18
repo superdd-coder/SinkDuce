@@ -960,7 +960,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     const ok = await recorder.startRecording()
     if (!ok) {
       toast.error(
-        "Microphone and system audio permission are required to record. Allow access (and Share audio) then try again.",
+        recorder.error ||
+          "Could not start recording. Allow the microphone, then try again.",
         { duration: 6500 },
       )
       return

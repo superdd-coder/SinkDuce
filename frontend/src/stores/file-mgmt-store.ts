@@ -1430,14 +1430,14 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         }
         if (task.status === "completed") {
           clearIngesting()
-          await get().refreshFiles(collectionId)
+          await get().refreshFiles(collectionId, { silent: true })
           await get().refreshMessages(collectionId)
           if (!silentToast) {
             toast.success(`Ingest complete: ${task.filename}`)
           }
         } else if (task.status === "failed") {
           clearIngesting()
-          await get().refreshFiles(collectionId)
+          await get().refreshFiles(collectionId, { silent: true })
           await get().refreshMessages(collectionId)
           if (!silentToast) {
             toast.error(

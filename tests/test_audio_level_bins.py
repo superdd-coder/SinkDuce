@@ -63,3 +63,24 @@ def test_recorder_exports_bins_to_levels():
     )
     assert "export function binsToLevels" in src
     assert "AUDIO_LEVEL_BAR_COUNT" in src
+
+
+def test_desktop_recording_uses_system_audio_helper():
+    """WKWebView cannot Share audio; desktop mixes ScreenCaptureKit helper PCM."""
+    src = (ROOT / "frontend" / "src" / "hooks" / "use-audio-recorder.ts").read_text(
+        encoding="utf-8"
+    )
+    helper = (
+        ROOT / "frontend" / "src" / "lib" / "desktop-system-audio.ts"
+    ).read_text(encoding="utf-8")
+    assert "startDesktopSystemAudio" in src
+    assert "if (desktop)" in src
+    assert "getDisplayMedia" in src
+    desktop_idx = src.find("if (desktop)")
+    helper_idx = src.find("startDesktopSystemAudio", desktop_idx)
+    display_idx = src.find("getDisplayMedia", desktop_idx)
+    assert desktop_idx != -1
+    assert helper_idx > desktop_idx
+    assert display_idx > helper_idx
+    assert "system_audio" in helper
+    assert "/pcm" in helper

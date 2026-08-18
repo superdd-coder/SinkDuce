@@ -172,15 +172,34 @@ def update_session(session_id: str, body: SessionUpdateRequest = Body(...)):
     return _session_response(updated, store)
 
 
+def _fallback_session_title(question: str) -> str:
+    """Short title from the first user line when the LLM call fails."""
+    line = (question or "").strip().splitlines()[0].strip()
+    if line.startswith("[Current time:"):
+        rest = line.split("]", 1)
+        line = rest[1].strip() if len(rest) > 1 else line
+    line = line.strip("\"'.,;:!? ")
+    if len(line) > 60:
+        line = line[:60].rstrip()
+    return line or "New Chat"
+
+
+def _sanitize_session_title(raw: str, *, fallback: str) -> str:
+    title = (raw or "").strip().strip("\"'.,;:!? ")
+    title = " ".join(title.split())
+    if len(title) > 80:
+        title = title[:80].rstrip()
+    return title or fallback
+
+
 @router.post("/sessions/{session_id}/generate-title")
 def generate_title(session_id: str):
-    """Generate a concise title from the first Q&A exchange using the chat LLM."""
+    """Generate a concise title from the first Q&A using the default chat LLM."""
     store = _get_store()
     session = store.get_session(session_id)
     if session is None:
         raise HTTPException(404, f"Session {session_id} not found")
 
-    # Full history — title is from the *first* Q&A, not the recent window
     msgs = store.get_messages(session_id, limit=None)
     user_msg = None
     assistant_msg = None
@@ -188,7 +207,6 @@ def generate_title(session_id: str):
         if m.role == "user" and user_msg is None:
             user_msg = m
         elif m.role == "assistant" and user_msg is not None and assistant_msg is None:
-            # Prefer final answers over tool-call placeholders
             if not (m.content or "").strip():
                 continue
             assistant_msg = m
@@ -197,64 +215,35 @@ def generate_title(session_id: str):
     if not user_msg or not assistant_msg:
         raise HTTPException(400, "Need at least one Q&A exchange to generate a title")
 
+    question = (user_msg.content or "").strip()
+    answer = (assistant_msg.content or "").strip()
+    fallback = _fallback_session_title(question)
+
     agent = getattr(services, "chatbox_agent", None)
-    if agent is None:
-        raise HTTPException(503, "Chat agent not initialized")
-
-    llm = agent._llm
-    client = getattr(llm, "_client", None)
-    model = getattr(llm, "_model", "gpt-4")
-
-    # Reuse the chat agent's context builder for KV cache reuse
-    messages = agent._build_messages(session_id, "")
-    # Trim to just the first Q&A — keep everything up to (but not including)
-    # the second user message, so tool_call + tool_result pairs stay intact.
-    user_count = 0
-    cut_at = len(messages)
-    for i, m in enumerate(messages):
-        if m["role"] == "user":
-            user_count += 1
-            if user_count == 2:
-                cut_at = i
-                break
-    messages = messages[:cut_at]
-    messages.append({
-        "role": "user",
-        "content": "Write a short title (6 words max) for this conversation. Reply with ONLY the title, nothing else.",
-    })
-
-    try:
-        if client:
-            kwargs: dict = dict(
-                model=model, messages=messages,
-                temperature=0.3, max_tokens=30,
-            )
-            # MiniMax: thinking.type supports "adaptive" and "disabled" (not "enabled").
-            # All other providers: use "disabled" to skip reasoning overhead.
-            model_lower = (model or "").lower()
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            resp = client.chat.completions.create(**kwargs)
-            raw = resp.choices[0].message.content or ""
-            # Strip <think> tags — some models (MiniMax, R1-style) emit them
-            # even when thinking is nominally disabled.
+    llm = getattr(agent, "_llm", None) if agent is not None else None
+    title = fallback
+    if llm is not None:
+        try:
+            from src.prompts import SESSION_TITLE_SYSTEM, SESSION_TITLE_USER
             from src.providers.llm.openai_compat import _strip_think
-            title = _strip_think(raw).strip()
-        else:
-            title = llm.generate(
-                "Write a short title (6 words max) for this conversation. Reply with ONLY the title, nothing else.",
-                system="You write short conversation titles.",
-                thinking=False,
-            ).strip()
-    except Exception as e:
-        logger.exception("Title generation failed for session %s", session_id)
-        raise HTTPException(500, f"Title generation failed: {e}")
 
-    # Sanitize: strip quotes and limit length
-    title = title.strip("\"'.,;:!? ")
-    if len(title) > 80:
-        title = title[:80]
-    if not title:
-        title = "New Chat"
+            raw = llm.generate(
+                SESSION_TITLE_USER.format(
+                    question=question[:800],
+                    answer=answer[:800],
+                ),
+                system=SESSION_TITLE_SYSTEM,
+                temperature=0.3,
+                max_tokens=30,
+                thinking=False,
+            )
+            title = _sanitize_session_title(_strip_think(raw or ""), fallback=fallback)
+        except Exception:
+            logger.exception(
+                "Title LLM failed for session %s — using question fallback",
+                session_id,
+            )
+            title = fallback
 
     updated = store.update_session(session_id, title=title)
     logger.info("Generated title for session %s: %r", session_id, updated.title)

@@ -31,11 +31,12 @@ from src.rag.retriever import RetrievedChunk
 from src.prompts import RECALL_EVAL_CASE_PROMPT, RECALL_EVAL_JUDGE_PROMPT
 from src.services import services
 from src.collections import store as collections_store
+from src.config import DATA_DIR
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-EVAL_DIR = Path("data/eval")
+EVAL_DIR = DATA_DIR / "eval"
 EVAL_DIR.mkdir(parents=True, exist_ok=True)
 
 
