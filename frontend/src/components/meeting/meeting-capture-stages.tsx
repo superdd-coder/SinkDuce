@@ -19,7 +19,7 @@ export interface MeetingCaptureStagesProps {
   supportedLanguageHints: LanguageHintOption[]
   maxLanguageHints: number
   activeHotWordsSupported: boolean
-  handleSelectHotWordsLibrary: (id: string | null) => void
+  handleSelectHotWordsLibraries: (ids: string[]) => void
   emptyUploadRef: RefObject<HTMLInputElement | null>
   handleUploadAudio: (file: File) => void | Promise<void>
   startLiveChipOpen: boolean
@@ -41,11 +41,11 @@ export interface MeetingCaptureStagesProps {
   displaySegments: TranscriptSegment[]
   handleTranscriptSegmentClick: (start: number, end?: number) => void
   handleSpeakerSampleClick: (start: number, end?: number) => void
-  handleUpdateSpeakerName: (id: string, name: string) => void
+  onPersonAssigned: (meeting: Meeting) => void
   capturePlayerRef: RefObject<CaptureMiniPlayerHandle | null>
   setPlaybackTime: (t: number) => void
   playbackTime: number
-  handleHotWordsDraftChange: (draft: string | null | undefined) => void
+  handleHotWordsDraftChange: (draft: string[] | undefined) => void
   handleEnterStudio: () => void
   recorderLevels: number[]
   recorderDuration: number
@@ -71,7 +71,7 @@ export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
     supportedLanguageHints,
     maxLanguageHints,
     activeHotWordsSupported,
-    handleSelectHotWordsLibrary,
+    handleSelectHotWordsLibraries,
     emptyUploadRef,
     handleUploadAudio,
     startLiveChipOpen,
@@ -92,7 +92,7 @@ export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
     displaySegments,
     handleTranscriptSegmentClick,
     handleSpeakerSampleClick,
-    handleUpdateSpeakerName,
+    onPersonAssigned,
     capturePlayerRef,
     setPlaybackTime,
     playbackTime,
@@ -144,10 +144,10 @@ mode === "setup" ? (
                   <div className="pm-meeting-e-config" aria-label="Transcription settings">
                     <HotWordsSelector
                       meetingId={meeting.id}
-                      currentLibraryId={meeting.hot_words_library_id}
+                      currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
                       hasTranscript={false}
                       providerSupportsHotWords={activeHotWordsSupported}
-                      onSelectLibrary={handleSelectHotWordsLibrary}
+                      onSelectLibraries={handleSelectHotWordsLibraries}
                     />
                     {supportedLanguageHints.length > 0 && (
                       <LanguageHintsSelector
@@ -256,10 +256,10 @@ mode === "setup" ? (
                   <div className="pm-meeting-e-config" aria-label="Transcription settings">
                     <HotWordsSelector
                       meetingId={meeting.id}
-                      currentLibraryId={meeting.hot_words_library_id}
+                      currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
                       hasTranscript={false}
                       providerSupportsHotWords={activeHotWordsSupported}
-                      onSelectLibrary={handleSelectHotWordsLibrary}
+                      onSelectLibraries={handleSelectHotWordsLibraries}
                     />
                     {supportedLanguageHints.length > 0 && (
                       <LanguageHintsSelector
@@ -329,10 +329,10 @@ mode === "setup" ? (
                   <div className="pm-meeting-e-config" aria-label="Transcription settings">
                     <HotWordsSelector
                       meetingId={meeting.id}
-                      currentLibraryId={meeting.hot_words_library_id}
+                      currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
                       hasTranscript={false}
                       providerSupportsHotWords={activeHotWordsSupported}
-                      onSelectLibrary={handleSelectHotWordsLibrary}
+                      onSelectLibraries={handleSelectHotWordsLibraries}
                       disabled
                     />
                     {supportedLanguageHints.length > 0 && (
@@ -426,13 +426,26 @@ mode === "setup" ? (
                   <div className="pm-meeting-f-card">
                     <div className="pm-meeting-f-card-h">
                       <span className="pm-meeting-f-card-label">Speakers</span>
-                      <span className="pm-meeting-f-card-meta">configure</span>
+                      <span className="pm-meeting-f-card-meta">
+                        {meeting.speaker_slots_status === "computing"
+                          ? "Computing voiceprints…"
+                          : meeting.speaker_slots_status === "ready" &&
+                              meeting.speaker_slots_ms != null
+                            ? `Voiceprints ready · ${(meeting.speaker_slots_ms / 1000).toFixed(1)}s`
+                            : meeting.speaker_slots_status === "unavailable"
+                              ? "Voiceprints unavailable"
+                              : "configure"}
+                      </span>
                     </div>
                     <div className="pm-meeting-f-card-body">
                       <SpeakersTab
                         segments={displaySegments}
                         speakerNames={meeting.speaker_names ?? {}}
-                        onUpdateSpeakerName={handleUpdateSpeakerName}
+                        meetingId={meeting.id}
+                        speakerMatches={meeting.speaker_matches}
+                        slotsStatus={meeting.speaker_slots_status}
+                        slotsMs={meeting.speaker_slots_ms}
+                        onPersonAssigned={onPersonAssigned}
                         onSegmentClick={handleSpeakerSampleClick}
                       />
                     </div>
@@ -450,10 +463,10 @@ mode === "setup" ? (
                       <>
                         <HotWordsSelector
                           meetingId={meeting.id}
-                          currentLibraryId={meeting.hot_words_library_id}
+                          currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
                           hasTranscript={displaySegments.length > 0}
                           providerSupportsHotWords={activeHotWordsSupported}
-                          onSelectLibrary={handleSelectHotWordsLibrary}
+                          onSelectLibraries={handleSelectHotWordsLibraries}
                           onDraftChange={handleHotWordsDraftChange}
                           compact
                         />
@@ -495,10 +508,10 @@ mode === "setup" ? (
                     <div className="pm-meeting-review-tools">
                       <HotWordsSelector
                         meetingId={meeting.id}
-                        currentLibraryId={meeting.hot_words_library_id}
+                        currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
                         hasTranscript={displaySegments.length > 0}
                         providerSupportsHotWords={activeHotWordsSupported}
-                        onSelectLibrary={handleSelectHotWordsLibrary}
+                        onSelectLibraries={handleSelectHotWordsLibraries}
                         onDraftChange={handleHotWordsDraftChange}
                         compact
                       />

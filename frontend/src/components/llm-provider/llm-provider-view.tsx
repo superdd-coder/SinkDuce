@@ -44,6 +44,7 @@ import { LocalModelCard } from "./local-model-card"
 import type { LoadDetail, LoadState } from "./local-model-card"
 import { ModelDownloadDialog } from "@/components/model-download-dialog"
 import { HotWordsManager } from "./hot-words-manager"
+import { PeopleManager } from "./people-manager"
 import { OneShotDashscopeDialog } from "./oneshot-dashscope-dialog"
 import { OneShotOpenRouterDialog } from "./oneshot-openrouter-dialog"
 
@@ -570,6 +571,7 @@ export function LLMProviderView() {
 
   // Hot words manager
   const [hotWordsManagerOpen, setHotWordsManagerOpen] = useState(false)
+  const [peopleManagerOpen, setPeopleManagerOpen] = useState(false)
 
   // OneShot Dashscope dialog
   const [oneshotDialogOpen, setOneshotDialogOpen] = useState(false)
@@ -1649,6 +1651,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           </div>
         </section>
 
+        <section className="pm-settings-section">
+          <div className="pm-settings-card">
+            <div className="pm-settings-card-head">
+              <div className="pm-settings-card-head-text min-w-0">
+                <h2 className="pm-settings-card-kicker">People</h2>
+                <p className="pm-settings-card-desc">
+                  Voiceprint directory from Meetings — rename, listen, see which meetings they are in.
+                </p>
+              </div>
+              <Button variant="default" size="sm" onClick={() => setPeopleManagerOpen(true)}>
+                Manage
+              </Button>
+            </div>
+          </div>
+        </section>
+
         {/* Web search */}
         <section className="pm-settings-section">
         <div className="pm-settings-card">
@@ -2622,6 +2640,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         }}
       />
       <HotWordsManager open={hotWordsManagerOpen} onOpenChange={setHotWordsManagerOpen} />
+      <PeopleManager open={peopleManagerOpen} onOpenChange={setPeopleManagerOpen} />
       <OneShotDashscopeDialog
         open={oneshotDialogOpen}
         onOpenChange={setOneshotDialogOpen}

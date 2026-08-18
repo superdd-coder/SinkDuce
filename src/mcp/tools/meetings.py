@@ -54,7 +54,7 @@ async def list_meetings(
     _LIGHT_FIELDS = {
         "id", "title", "status", "mode",
         "processing_state", "summary_gen_state", "blueprint_gen_state",
-        "speaker_names", "hot_words_library_id",
+        "speaker_names", "hot_words_library_id", "hot_words_library_ids",
         "allocated_collections", "allocated_file_ids",
         "created_at", "updated_at",
     }
@@ -146,6 +146,7 @@ async def get_meeting(meeting_id: str) -> str:
             blueprint_gen_state=m.blueprint_gen_state,
             speaker_names=m.speaker_names,
             hot_words_library_id=m.hot_words_library_id,
+            hot_words_library_ids=list(m.hot_words_library_ids or []),
             tabs=tabs,
             allocated_collections=m.allocated_collections,
             allocated_file_ids=m.allocated_file_ids,
@@ -330,6 +331,7 @@ async def update_meeting(
     status: str | None = None,
     speaker_names: dict[str, str] | None = None,
     hot_words_library_id: str | None = None,
+    hot_words_library_ids: list[str] | None = None,
     notes_content: str | None = None,
 ) -> str:
     """Update editable meeting fields.
@@ -364,7 +366,10 @@ async def update_meeting(
         if speaker_names is not None:
             kwargs["speaker_names"] = speaker_names
             updated_fields.append("speaker_names")
-        if hot_words_library_id is not None:
+        if hot_words_library_ids is not None:
+            kwargs["hot_words_library_ids"] = hot_words_library_ids
+            updated_fields.append("hot_words_library_ids")
+        elif hot_words_library_id is not None:
             kwargs["hot_words_library_id"] = hot_words_library_id
             updated_fields.append("hot_words_library_id")
 

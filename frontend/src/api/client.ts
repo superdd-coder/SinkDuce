@@ -38,6 +38,7 @@ export const checkLatestRelease = async (repo: string): Promise<GitHubRelease | 
 export * from "./collections"
 export * from "./config"
 export * from "./meeting"
+export * from "./speakers"
 export * from "./notes"
 export * from "./chat"
 export * from "./recall"

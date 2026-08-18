@@ -332,6 +332,7 @@ class FunAsrOnnxFilePipeline:
             except Exception:
                 logger.warning("ONNX punctuation unavailable", exc_info=True)
 
+        self.last_segment_embeddings: list[np.ndarray] | None = None
         self._spk = None
         if spk_repo:
             try:
@@ -433,6 +434,7 @@ class FunAsrOnnxFilePipeline:
         full = "".join(s.text for s in segments) if any(
             self._is_cjk_text(s.text) for s in segments
         ) else " ".join(s.text for s in segments)
+        self.last_segment_embeddings = emb_list if emb_list and len(emb_list) == len(segments) else None
         logger.info(
             "ONNX file pipeline done: %d segments, speakers=%s",
             len(segments),

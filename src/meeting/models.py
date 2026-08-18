@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from src.speakers.models import SpeakerMatch, SpeakerSlotVector
 
 
 class MeetingStatus(str, Enum):
@@ -69,6 +71,21 @@ class Meeting(BaseModel):
     allocated_collections: list[str] = Field(default_factory=list)
     allocated_file_ids: list[str] = Field(default_factory=list)
     speaker_names: dict[str, str] | None = None
+    speaker_people: dict[str, str] | None = None
+    speaker_matches: dict[str, SpeakerMatch] | None = None
+    speaker_slots: dict[str, SpeakerSlotVector] | None = None
+    speaker_slots_status: str | None = None  # computing | ready | unavailable
+    speaker_slots_ms: int | None = None
     hot_words_library_id: str | None = None
+    hot_words_library_ids: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def _compat_hot_words(self):
+        if self.hot_words_library_ids:
+            if not self.hot_words_library_id:
+                self.hot_words_library_id = self.hot_words_library_ids[0]
+        elif self.hot_words_library_id:
+            self.hot_words_library_ids = [self.hot_words_library_id]
+        return self

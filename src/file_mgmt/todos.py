@@ -101,7 +101,33 @@ def _row_to_todo(row, conn) -> TodoOut:
         source_meeting_id=_opt("source_meeting_id"),
         source_section_tab_id=_opt("source_section_tab_id"),
         source_candidate_id=_opt("source_candidate_id"),
+        assignee_person_id=_opt("assignee_person_id"),
     )
+
+
+def _ensure_assignee(todo: TodoOut, conn) -> TodoOut:
+    if todo.assignee_person_id or not todo.source_meeting_id:
+        return todo
+    try:
+        from src.speakers.service import resolve_assignee_person_id
+
+        pid = resolve_assignee_person_id(
+            meeting_id=todo.source_meeting_id,
+            candidate_id=todo.source_candidate_id,
+        )
+    except Exception:
+        return todo
+    if not pid:
+        return todo
+    try:
+        conn.execute(
+            "UPDATE todos SET assignee_person_id=? WHERE todo_id=?",
+            (pid, todo.todo_id),
+        )
+        conn.commit()
+    except Exception:
+        logger.debug("todo assignee backfill skipped", exc_info=True)
+    return todo.model_copy(update={"assignee_person_id": pid})
 
 
 def list_todos(
@@ -131,7 +157,7 @@ def list_todos(
                 params.append(chain_id)
         rows = list(conn.execute(sql, params).fetchall())
         rows = _sort_todo_rows(rows)
-        return [_row_to_todo(r, conn) for r in rows]
+        return [_ensure_assignee(_row_to_todo(r, conn), conn) for r in rows]
     finally:
         conn.close()
 
@@ -165,12 +191,23 @@ def create_todo(collection_id: str, req: TodoCreate) -> TodoOut:
             src_m = (getattr(req, "source_meeting_id", None) or "").strip() or None
             src_t = (getattr(req, "source_section_tab_id", None) or "").strip() or None
             src_c = (getattr(req, "source_candidate_id", None) or "").strip() or None
+            assignee = (getattr(req, "assignee_person_id", None) or "").strip() or None
+            if not assignee and src_m:
+                try:
+                    from src.speakers.service import resolve_assignee_person_id
+
+                    assignee = resolve_assignee_person_id(
+                        meeting_id=src_m, candidate_id=src_c
+                    )
+                except Exception:
+                    logger.debug("todo assignee resolve skipped", exc_info=True)
             conn.execute(
                 """INSERT INTO todos
                    (todo_id, title, body, done, ddl, target_chain_id, completed_node_id,
                     sort_order, created_at, updated_at, completed_at,
-                    source_meeting_id, source_section_tab_id, source_candidate_id)
-                   VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?)""",
+                    source_meeting_id, source_section_tab_id, source_candidate_id,
+                    assignee_person_id)
+                   VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?)""",
                 (
                     todo_id,
                     title,
@@ -182,6 +219,7 @@ def create_todo(collection_id: str, req: TodoCreate) -> TodoOut:
                     src_m,
                     src_t,
                     src_c,
+                    assignee,
                 ),
             )
             row = conn.execute(

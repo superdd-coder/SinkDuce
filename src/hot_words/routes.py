@@ -25,10 +25,17 @@ def _safe_filename(name: str, fallback: str = "hot-words") -> str:
     return s[:80]
 
 
+def _public_lib(lib) -> dict:
+    pins = store.get_pinned_library_ids()
+    data = lib.model_dump()
+    data.update(store.library_summary(lib, pinned_ids=pins))
+    return data
+
+
 @router.get("")
 async def list_libraries():
-    default_id = store.get_default_library_id()
-    return [store.library_summary(lib, default_id) for lib in store.list_libraries()]
+    pins = store.get_pinned_library_ids()
+    return [store.library_summary(lib, pinned_ids=pins) for lib in store.list_libraries()]
 
 
 @router.get("/template.csv")
@@ -57,22 +64,50 @@ async def download_template_xlsx():
 
 @router.get("/default")
 async def get_default_library():
-    default_id = store.get_default_library_id()
-    return {"default_library_id": default_id}
+    pins = store.get_pinned_library_ids()
+    return {
+        "default_library_id": store.get_default_library_id(),
+        "pinned_library_ids": pins,
+    }
 
 
 @router.put("/default")
 async def set_default_library(body: dict = Body()):
-    """Set or clear the default hot-words library used for new meetings."""
+    """Pin a library (compat). Prefer PUT /hot-words/pins."""
     raw = body.get("library_id", body.get("default_library_id"))
     if raw is None or raw == "" or raw is False:
         store.set_default_library_id(None)
-        return {"default_library_id": None}
+        return {
+            "default_library_id": store.get_default_library_id(),
+            "pinned_library_ids": store.get_pinned_library_ids(),
+        }
     try:
         default_id = store.set_default_library_id(str(raw).strip())
     except FileNotFoundError:
         raise HTTPException(404, "Hot words library not found")
-    return {"default_library_id": default_id}
+    return {
+        "default_library_id": default_id,
+        "pinned_library_ids": store.get_pinned_library_ids(),
+    }
+
+
+@router.get("/pins")
+async def get_pins():
+    return {"pinned_library_ids": store.get_pinned_library_ids()}
+
+
+@router.put("/pins")
+async def set_pins(body: dict = Body()):
+    raw = body.get("library_ids", body.get("pinned_library_ids"))
+    if raw is None:
+        raise HTTPException(400, "library_ids is required")
+    if not isinstance(raw, list):
+        raise HTTPException(400, "library_ids must be a list")
+    try:
+        pins = store.set_pinned_library_ids([str(x) for x in raw])
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"pinned_library_ids": pins}
 
 
 @router.post("/import")
@@ -114,9 +149,7 @@ async def import_library(
         len(words),
         filename,
     )
-    data = lib.model_dump()
-    data["is_default"] = store.get_default_library_id() == lib.id
-    return data
+    return _public_lib(lib)
 
 
 @router.get("/{library_id}/export.xlsx")
@@ -140,9 +173,7 @@ async def get_library(library_id: str):
     lib = store.get_library(library_id)
     if lib is None:
         raise HTTPException(404, "Hot words library not found")
-    data = lib.model_dump()
-    data["is_default"] = store.get_default_library_id() == lib.id
-    return data
+    return _public_lib(lib)
 
 
 @router.post("")
@@ -153,25 +184,26 @@ async def create_library(body: dict = Body()):
     description = body.get("description", "")
     words = body.get("words")
     lib = store.create_library(name=name, description=description, words=words)
-    data = lib.model_dump()
-    data["is_default"] = False
-    return data
+    return _public_lib(lib)
 
 
 @router.put("/{library_id}")
 async def update_library(library_id: str, body: dict = Body()):
     try:
         lib = store.update_library(library_id, **body)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except FileNotFoundError:
         raise HTTPException(404, "Hot words library not found")
-    data = lib.model_dump()
-    data["is_default"] = store.get_default_library_id() == lib.id
-    return data
+    return _public_lib(lib)
 
 
 @router.delete("/{library_id}")
 async def delete_library(library_id: str):
-    deleted = store.delete_library(library_id)
+    try:
+        deleted = store.delete_library(library_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     if not deleted:
         raise HTTPException(404, "Hot words library not found")
     return {"message": "Hot words library deleted"}

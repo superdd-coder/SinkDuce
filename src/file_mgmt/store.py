@@ -155,7 +155,8 @@ _CREATE_TABLES = [
       completed_at      TEXT,
       source_meeting_id TEXT,
       source_section_tab_id TEXT,
-      source_candidate_id TEXT
+      source_candidate_id TEXT,
+      assignee_person_id TEXT
     )''',
     # Smart to-do suggestions cache (one row per chain)
     '''CREATE TABLE todo_suggestion_state (
@@ -435,6 +436,7 @@ def _ensure_todos_table(conn: sqlite3.Connection) -> None:
         "source_meeting_id",
         "source_section_tab_id",
         "source_candidate_id",
+        "assignee_person_id",
     ):
         if col not in cols:
             try:

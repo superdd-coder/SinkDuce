@@ -1,4 +1,5 @@
 import { API_BASE, request } from "./http"
+import type { SpeakerMatch } from "./speakers"
 
 // ── Meetings ──
 
@@ -75,7 +76,12 @@ export interface Meeting {
   allocated_collections: string[]
   allocated_file_ids: string[]
   speaker_names?: Record<string, string>
+  speaker_people?: Record<string, string>
+  speaker_matches?: Record<string, SpeakerMatch>
+  speaker_slots_status?: "computing" | "ready" | "unavailable" | null
+  speaker_slots_ms?: number | null
   hot_words_library_id?: string | null
+  hot_words_library_ids?: string[]
   created_at: string
   updated_at: string
 }
@@ -92,7 +98,14 @@ export const createMeeting = (title?: string) =>
     body: JSON.stringify(title ? { title } : {}),
   })
 
-export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "speaker_names" | "hot_words_library_id"> & { notes?: string; blueprint?: BlueprintItem[]; tabs?: MeetingTab[] }>) =>
+export function meetingHotWordIds(meeting: Pick<Meeting, "hot_words_library_id" | "hot_words_library_ids">): string[] {
+  if (meeting.hot_words_library_ids && meeting.hot_words_library_ids.length > 0) {
+    return meeting.hot_words_library_ids
+  }
+  return meeting.hot_words_library_id ? [meeting.hot_words_library_id] : []
+}
+
+export const updateMeeting = (id: string, data: Partial<Pick<Meeting, "title" | "speaker_names" | "hot_words_library_id" | "hot_words_library_ids"> & { notes?: string; blueprint?: BlueprintItem[]; tabs?: MeetingTab[] }>) =>
   request<Meeting>(`/meetings/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),

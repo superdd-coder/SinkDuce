@@ -197,6 +197,11 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
         blueprint_taxonomy=None,
         tabs=None,
         speaker_names=None,
+        speaker_people=None,
+        speaker_matches=None,
+        speaker_slots=None,
+        speaker_slots_status=None,
+        speaker_slots_ms=None,
     )
     update(5, "Loading transcription provider...")
 
@@ -252,12 +257,10 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
     # "auto" means auto-detect — strip it so the provider doesn't receive it
     if language_hints:
         language_hints = [h for h in language_hints if h != "auto"] or None
-    if meeting.hot_words_library_id:
-        from src.hot_words.store import get_library
-        lib = get_library(meeting.hot_words_library_id)
-        if lib and lib.words:
-            hot_words = [w.model_dump() for w in lib.words]
-            logger.info("[TRANSCRIBE-HANDLER] Loaded %d hot words from library %s", len(hot_words), lib.name)
+    from src.hot_words.store import collect_meeting_hot_words
+    hot_words = collect_meeting_hot_words(meeting) or None
+    if hot_words:
+        logger.info("[TRANSCRIBE-HANDLER] Loaded %d hot words", len(hot_words))
 
     if language_hints:
         logger.info("[TRANSCRIBE-HANDLER] Using language_hints=%s", language_hints)
@@ -308,6 +311,18 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
         "[PIPELINE] Node 0.0 done: %d sentences for meeting %s",
         len(sentences), meeting_id,
     )
+    update(90, "Matching speakers...")
+    try:
+        from src.speakers.service import attach_after_transcription
+
+        extra_embs = getattr(provider, "last_segment_embeddings", None)
+        attach_after_transcription(meeting_id, segment_embeddings=extra_embs)
+    except Exception:
+        logger.warning(
+            "[TRANSCRIBE-HANDLER] Speaker match skipped for %s",
+            meeting_id,
+            exc_info=True,
+        )
     update(95, "Updating meeting status...")
 
     # 5. Mark meeting as completed — Speakers gate first; user starts Summary.
@@ -864,15 +879,12 @@ class MeetingService(
                 return "\n".join(others) if others else "(No other sections)"
 
             # ── Hot words ─────────────────────────────────────────
-            hot_words_text = "(None)"
-            if meeting.hot_words_library_id:
-                try:
-                    from src.hot_words.store import get_library
-                    lib = get_library(meeting.hot_words_library_id)
-                    if lib and lib.words:
-                        hot_words_text = ", ".join(w.text for w in lib.words)
-                except Exception:
-                    logger.warning("[EXTRACT] Failed to load hot words", exc_info=True)
+            try:
+                from src.hot_words.store import hot_words_prompt_text
+                hot_words_text = hot_words_prompt_text(meeting)
+            except Exception:
+                logger.warning("[EXTRACT] Failed to load hot words", exc_info=True)
+                hot_words_text = "(None)"
 
             # ── Short-ID → full-ID lookup ────────────────────────
             short_to_full: dict[str, str] = {}
@@ -1210,6 +1222,8 @@ class MeetingService(
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
         if meeting.processing_state != ProcessingState.idle.value:
             raise RuntimeError(f"Meeting is busy: {meeting.processing_state}")
+        if tab_id in ("tab_general", "general"):
+            raise ValueError("Cannot delete the General summary")
 
         # Find the tab and check for allocated_file_id
         tab_meta: dict | None = None
@@ -1289,6 +1303,8 @@ class MeetingService(
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
         if meeting.processing_state != ProcessingState.idle.value:
             raise RuntimeError(f"Meeting is busy: {meeting.processing_state}")
+        if tab_id in ("tab_general", "general"):
+            raise ValueError("Re-summarize the meeting to refresh General")
 
         # Find this tab's metadata
         tab_meta: dict | None = None
@@ -1580,15 +1596,12 @@ class MeetingService(
                 taxonomy_text = f"Dimension: {dim}. {expl}" if expl else f"Dimension: {dim}."
 
         # ── Hot words ─────────────────────────────────────────
-        hot_words_text = "(None)"
-        if meeting.hot_words_library_id:
-            try:
-                from src.hot_words.store import get_library
-                lib = get_library(meeting.hot_words_library_id)
-                if lib and lib.words:
-                    hot_words_text = ", ".join(w.text for w in lib.words)
-            except Exception:
-                logger.warning("[SECTION-DESC] Failed to load hot words", exc_info=True)
+        try:
+            from src.hot_words.store import hot_words_prompt_text
+            hot_words_text = hot_words_prompt_text(meeting)
+        except Exception:
+            logger.warning("[SECTION-DESC] Failed to load hot words", exc_info=True)
+            hot_words_text = "(None)"
 
         from src.prompts import SECTION_DESC_PROMPT
 

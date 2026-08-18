@@ -783,8 +783,13 @@ Output EXACTLY this JSON (no markdown fences, no extra text):
 }}
 
 MANDATORY:
-- Every distinct entity from STEP 2 that passes verification
-  MUST appear as a separate entry in ``blueprint``.
+- If STEP 2 finds two or more verified entities, every one MUST
+  appear as a separate entry in ``blueprint``.
+- If STEP 2 finds zero or one verified entity, ``blueprint`` MUST
+  be [].  The General summary already covers a single-entity
+  meeting.  Prefer an empty array over a one-item blueprint that
+  restates the whole meeting.
+- Do not invent a second entity to justify a split.
 - ``tab_name`` follows the same naming convention as existing
   collections.
 - ``taxonomy.dimension`` is a short label describing the organizing

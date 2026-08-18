@@ -81,6 +81,10 @@ class FunASROnnxFileTranscription(FileTranscriptionProvider):
         if hot_words:
             logger.info("ONNX file ASR ignores hot words (%d)", len(hot_words))
 
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self._pipeline.transcribe, file_path, language=language
         )
+        self.last_segment_embeddings = getattr(
+            self._pipeline, "last_segment_embeddings", None
+        )
+        return result

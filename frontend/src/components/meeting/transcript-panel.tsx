@@ -1,11 +1,12 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronRight, ChevronLeft, Clock, Pencil, Check, Search } from "lucide-react"
+import { ChevronRight, ChevronLeft, Clock, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger, TabsIndicator, TabsContent } from "@/components/ui/tabs"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
-import type { TranscriptSegment } from "@/api/client"
+import type { Meeting, SpeakerMatch, TranscriptSegment } from "@/api/client"
+import { PeoplePicker } from "@/components/meeting/people-picker"
 
 interface TranscriptPanelProps {
   open: boolean
@@ -16,7 +17,9 @@ interface TranscriptPanelProps {
   focusRef?: { id: string; ts: number } | null
   activeSectionTag?: string
   speakerNames?: Record<string, string>
-  onUpdateSpeakerName?: (speakerId: string, name: string) => void
+  meetingId?: string
+  speakerMatches?: Record<string, SpeakerMatch>
+  onPersonAssigned?: (meeting: Meeting) => void
   isRealtime?: boolean
   tabs?: { tab_id: string; type?: string; md_file_path?: string }[]
 }
@@ -30,7 +33,9 @@ export function TranscriptPanel({
   focusRef,
   activeSectionTag,
   speakerNames = {},
-  onUpdateSpeakerName,
+  meetingId,
+  speakerMatches,
+  onPersonAssigned,
   isRealtime = false,
   tabs,
 }: TranscriptPanelProps) {
@@ -88,7 +93,9 @@ export function TranscriptPanel({
             <SpeakersTab
               segments={segments}
               speakerNames={speakerNames}
-              onUpdateSpeakerName={onUpdateSpeakerName}
+              meetingId={meetingId}
+              speakerMatches={speakerMatches}
+              onPersonAssigned={onPersonAssigned}
               onSegmentClick={onSegmentClick}
               activeSectionTag={activeSectionTag}
             />
@@ -472,13 +479,21 @@ export function TranscriptTab({
 export function SpeakersTab({
   segments,
   speakerNames,
-  onUpdateSpeakerName,
+  meetingId,
+  speakerMatches,
+  onPersonAssigned,
+  slotsStatus,
+  slotsMs,
   onSegmentClick,
   activeSectionTag,
 }: {
   segments: TranscriptSegment[]
   speakerNames: Record<string, string>
-  onUpdateSpeakerName?: (speakerId: string, name: string) => void
+  meetingId?: string
+  speakerMatches?: Record<string, SpeakerMatch>
+  onPersonAssigned?: (meeting: Meeting) => void
+  slotsStatus?: Meeting["speaker_slots_status"]
+  slotsMs?: number | null
   onSegmentClick?: (startTime: number, endTime?: number) => void
   activeSectionTag?: string
 }) {
@@ -527,6 +542,15 @@ export function SpeakersTab({
   return (
     <div className="pm-panel-scroll-shell h-full min-h-0">
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-2 space-y-3 pt-4">
+        {slotsStatus === "computing" && (
+          <p className="pm-meta px-1">Computing voiceprints…</p>
+        )}
+        {slotsStatus === "ready" && slotsMs != null && (
+          <p className="pm-meta px-1">Voiceprints ready · {(slotsMs / 1000).toFixed(1)}s</p>
+        )}
+        {slotsStatus === "unavailable" && (
+          <p className="pm-meta px-1">Voiceprints unavailable</p>
+        )}
         {speakers.map((speaker) => (
           <SpeakerCard
             key={speaker.id}
@@ -534,7 +558,9 @@ export function SpeakersTab({
             displayName={speakerNames[speaker.id]}
             segmentCount={speaker.segments.length}
             samples={speaker.samples}
-            onUpdateName={(name) => onUpdateSpeakerName?.(speaker.id, name)}
+            meetingId={meetingId}
+            match={speakerMatches?.[speaker.id]}
+            onPersonAssigned={onPersonAssigned}
             onSegmentClick={onSegmentClick}
             activeSectionTag={activeSectionTag}
           />
@@ -567,7 +593,9 @@ function SpeakerCard({
   displayName,
   segmentCount,
   samples,
-  onUpdateName,
+  meetingId,
+  match,
+  onPersonAssigned,
   onSegmentClick,
   activeSectionTag,
 }: {
@@ -575,55 +603,28 @@ function SpeakerCard({
   displayName?: string
   segmentCount: number
   samples: TranscriptSegment[]
+  meetingId?: string
+  match?: SpeakerMatch
+  onPersonAssigned?: (meeting: Meeting) => void
   activeSectionTag?: string
-  onUpdateName: (name: string) => void
   onSegmentClick?: (startTime: number, endTime?: number) => void
 }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(displayName ?? `Speaker ${speakerId}`)
-
-  const label = displayName ?? `Speaker ${speakerId}`
-
-  const handleSave = () => {
-    if (draft.trim()) {
-      onUpdateName(draft.trim())
-    }
-    setEditing(false)
-  }
-
   return (
     <div className="pm-meeting-nested space-y-2">
       <div className="flex items-center gap-2">
         <span className="pm-meeting-seg-speaker">{speakerId}</span>
-        {editing ? (
-          <div className="flex items-center gap-1 flex-1 min-w-0">
-            <input
-              className="flex-1 pm-title bg-transparent border-none border-b border-[var(--pm-green)] outline-none px-0 py-0.5 min-w-0"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSave()
-                if (e.key === "Escape") { setDraft(label); setEditing(false) }
-              }}
-              autoFocus
-            />
-            <Button type="button" variant="ghost" size="icon-xs" onClick={handleSave} aria-label="Save name">
-              <Check className="size-3.5" />
-            </Button>
-          </div>
+        {meetingId && onPersonAssigned ? (
+          <PeoplePicker
+            meetingId={meetingId}
+            speakerId={speakerId}
+            displayName={displayName}
+            match={match}
+            onAssigned={onPersonAssigned}
+          />
         ) : (
-          <div className="flex items-center gap-1 flex-1 min-w-0">
-            <span className="pm-title truncate">{label}</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => { setDraft(label); setEditing(true) }}
-              aria-label="Edit speaker name"
-            >
-              <Pencil className="size-3" />
-            </Button>
-          </div>
+          <span className="pm-title truncate flex-1 min-w-0">
+            {displayName ?? `Speaker ${speakerId}`}
+          </span>
         )}
         <span className="pm-meta shrink-0">
           {segmentCount} segments

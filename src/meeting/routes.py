@@ -27,6 +27,14 @@ def _serialize_meeting(meeting, *, include_transcript: bool = False) -> dict:
     client then ``setMeeting(m)`` and dropped live notes until a full refresh.
     """
     data = meeting.model_dump(mode="json")
+    data.pop("speaker_slots", None)
+    if meeting.speaker_people:
+        try:
+            from src.speakers.service import rebuild_speaker_names
+
+            data["speaker_names"] = rebuild_speaker_names(meeting.speaker_people)
+        except Exception:
+            logger.debug("speaker name rebuild skipped for %s", meeting.id, exc_info=True)
     notes = store.get_notes(meeting.id)
     if notes is not None:
         data["notes_content"] = notes
@@ -98,23 +106,19 @@ async def create_meeting(body: dict = Body()):
     meeting_mode = MeetingMode(mode) if mode else None
     meeting = store.create_meeting(title=title, mode=meeting_mode)
 
-    # Auto-select default hot-words library when active ASR supports hot words
+    # Copy pinned libraries onto the new meeting (user can turn them off)
     try:
         if _active_transcription_supports_hot_words():
-            from src.hot_words import store as hw_store
+            from src.hot_words.store import apply_pinned_libraries
 
-            default_hw = hw_store.get_default_library_id()
-            if default_hw:
-                meeting = store.update_meeting(
-                    meeting.id, hot_words_library_id=default_hw
-                )
-                logger.info(
-                    "[CREATE] Applied default hot-words library id=%s to meeting %s",
-                    default_hw,
-                    meeting.id,
-                )
+            meeting = apply_pinned_libraries(meeting.id)
+            logger.info(
+                "[CREATE] Applied pinned hot-words libraries %s to meeting %s",
+                meeting.hot_words_library_ids,
+                meeting.id,
+            )
     except Exception as exc:
-        logger.warning("[CREATE] Failed to apply default hot-words: %s", exc)
+        logger.warning("[CREATE] Failed to apply pinned hot-words: %s", exc)
 
     logger.info("[CREATE] Meeting '%s' id=%s mode=%s", title, meeting.id, meeting_mode)
     return meeting.model_dump()
@@ -133,6 +137,14 @@ async def get_meeting(meeting_id: str):
     if not meeting:
         logger.warning("[GET] Meeting %s NOT FOUND", meeting_id)
         raise HTTPException(404, "Meeting not found")
+    if meeting.speaker_slots:
+        try:
+            from src.speakers.service import apply_matches_from_slots
+
+            if apply_matches_from_slots(meeting_id):
+                meeting = store.get_meeting(meeting_id) or meeting
+        except Exception:
+            logger.debug("speaker rematch skipped for %s", meeting_id, exc_info=True)
     # Trust persisted needs_reingest / ingested_content_hash (set on save & allocate).
     # Do NOT re-hash every section MD here — that made GET/polling very slow.
     data = _serialize_meeting(meeting, include_transcript=True)
@@ -175,7 +187,16 @@ async def discard_meeting_recording(meeting_id: str):
 @router.put("/meetings/{meeting_id}")
 async def update_meeting(meeting_id: str, body: dict = Body()):
     logger.info("[UPDATE] Meeting %s fields=%s", meeting_id, list(body.keys()))
-    allowed_fields = {"title", "status", "mode", "speaker_names", "hot_words_library_id", "blueprint", "tabs"}
+    allowed_fields = {
+        "title",
+        "status",
+        "mode",
+        "speaker_names",
+        "hot_words_library_id",
+        "hot_words_library_ids",
+        "blueprint",
+        "tabs",
+    }
     fields = {k: v for k, v in body.items() if k in allowed_fields}
     # Handle notes separately -- save to file
     if "notes" in body:
@@ -243,7 +264,10 @@ async def serve_audio(meeting_id: str, token: str | None = None):
     meeting = store.get_meeting(meeting_id)
     if not meeting or not meeting.audio_path:
         raise HTTPException(400, "No audio file")
-    audio_path = Path(meeting.audio_path)
+    from src.speakers.service import resolve_meeting_audio_path
+
+    resolved = resolve_meeting_audio_path(meeting.audio_path)
+    audio_path = resolved if resolved is not None else Path(meeting.audio_path)
     if not audio_path.exists():
         raise HTTPException(404, "Audio file not found on disk")
     ext = audio_path.suffix.lstrip(".").lower()
@@ -701,11 +725,10 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         # Load hot words if meeting has a library assigned
         hot_words = None
         meeting = store.get_meeting(meeting_id)
-        if meeting and meeting.hot_words_library_id:
-            from src.hot_words.store import get_library
-            lib = get_library(meeting.hot_words_library_id)
-            if lib and lib.words:
-                hot_words = [w.model_dump() for w in lib.words]
+        if meeting:
+            from src.hot_words.store import collect_meeting_hot_words
+            hot_words = collect_meeting_hot_words(meeting) or None
+            if hot_words:
                 logger.info("[REALTIME-WS] Loaded %d hot words for meeting %s", len(hot_words), meeting_id)
 
         print(f"[REALTIME-WS] >>> calling provider.start()", flush=True)
@@ -909,6 +932,8 @@ async def delete_section(meeting_id: str, tab_id: str):
     try:
         meeting = await meeting_service.delete_section(meeting_id, tab_id)
     except FileNotFoundError as exc:
+        raise HTTPException(400, str(exc))
+    except ValueError as exc:
         raise HTTPException(400, str(exc))
     except RuntimeError as exc:
         raise HTTPException(400, str(exc))

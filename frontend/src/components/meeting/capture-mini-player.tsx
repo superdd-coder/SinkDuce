@@ -123,6 +123,7 @@ export const CaptureMiniPlayer = forwardRef<
       src={audioUrl}
       preload="metadata"
       className="sr-only"
+      data-meeting-audio=""
       onTimeUpdate={onTimeUpdateInternal}
       onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
       onEnded={() => {

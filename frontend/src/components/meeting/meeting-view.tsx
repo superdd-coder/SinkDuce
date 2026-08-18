@@ -9,7 +9,7 @@ import { useTranscription } from "@/hooks/use-transcription"
 import {
   getMeetings, getMeeting, deleteMeeting, discardMeetingRecording,
   uploadMeetingAudio, transcribeMeeting, cancelTranscribeMeeting,
-  getMeetingTranscript, updateMeeting,
+  getMeetingTranscript, updateMeeting, commitMeetingSpeakers,
   getRealtimeTranscriptionProviders, getFileTranscriptionProviders,
   getActiveProviderInfo, getHotWordsLibraries,
   type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary,
@@ -670,7 +670,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     const transcribing = meeting?.status === "transcribing"
     const processingBusy =
       !!meeting?.processing_state && meeting.processing_state !== "idle"
-    if (!transcribing && !processingBusy) {
+    const slotsBusy = meeting?.speaker_slots_status === "computing"
+    if (!transcribing && !processingBusy && !slotsBusy) {
       if (pollingRef.current) {
         clearInterval(pollingRef.current)
         pollingRef.current = null
@@ -695,6 +696,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     activeMeeting,
     meeting?.status,
     meeting?.processing_state,
+    meeting?.speaker_slots_status,
     fetchMeeting,
     fetchTranscript,
     fetchMeetings,
@@ -1012,9 +1014,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   ])
 
   /** Uncommitted hot-words pick when a transcript already exists (cleared on leave / refresh). */
-  const hotWordsDraftRef = useRef<string | null | undefined>(undefined)
+  const hotWordsDraftRef = useRef<string[] | undefined>(undefined)
 
-  const handleHotWordsDraftChange = useCallback((draft: string | null | undefined) => {
+  const handleHotWordsDraftChange = useCallback((draft: string[] | undefined) => {
     hotWordsDraftRef.current = draft
   }, [])
 
@@ -1030,7 +1032,10 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     const draft = hotWordsDraftRef.current
     if (draft !== undefined) {
       try {
-        const m = await updateMeeting(activeMeeting, { hot_words_library_id: draft })
+        const m = await updateMeeting(activeMeeting, {
+          hot_words_library_ids: draft,
+          hot_words_library_id: draft[0] ?? null,
+        })
         applyMeeting(m)
         hotWordsDraftRef.current = undefined
       } catch (err) {
@@ -1229,10 +1234,13 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     }
   }
 
-  const handleSelectHotWordsLibrary = async (libraryId: string | null) => {
+  const handleSelectHotWordsLibraries = async (libraryIds: string[]) => {
     if (!activeMeeting) return
     try {
-      const m = await updateMeeting(activeMeeting, { hot_words_library_id: libraryId })
+      const m = await updateMeeting(activeMeeting, {
+        hot_words_library_ids: libraryIds,
+        hot_words_library_id: libraryIds[0] ?? null,
+      })
       applyMeeting(m)
     } catch (err) {
       toast.error(`Failed to update hot words: ${err instanceof Error ? err.message : String(err)}`)
@@ -1430,33 +1438,31 @@ export function MeetingView({ active = true }: { active?: boolean }) {
 
   const handleEnterStudio = useCallback(() => {
     if (!meeting) return
-    // Speakers → Summarize: unlock Studio and start summary stream (no auto-start
-    // on mere transcript ready — that skipped Speakers and jumped into summarizing).
-    setStudioUnlocked((prev) => ({ ...prev, [meeting.id]: true }))
-    const hasExistingSummary =
-      !!meeting.tabs?.some((t) => !!(t as { md_file_path?: string }).md_file_path) ||
-      !!(meeting.blueprint && meeting.blueprint.length > 0)
-    if (!hasExistingSummary) {
-      startBlueprintStream(meeting.id)
+    const start = () => {
+      setStudioUnlocked((prev) => ({ ...prev, [meeting.id]: true }))
+      const hasExistingSummary =
+        !!meeting.tabs?.some((t) => !!(t as { md_file_path?: string }).md_file_path) ||
+        !!(meeting.blueprint && meeting.blueprint.length > 0)
+      if (!hasExistingSummary) {
+        startBlueprintStream(meeting.id)
+      }
     }
-  }, [meeting])
+    void commitMeetingSpeakers(meeting.id)
+      .then((m) => {
+        applyMeeting(m)
+        start()
+      })
+      .catch(() => start())
+  }, [meeting, applyMeeting])
 
-  const handleUpdateSpeakerName = useCallback(
-    (speakerId: string, name: string) => {
-      if (!meeting) return
-      const updated = { ...(meeting.speaker_names ?? {}), [speakerId]: name }
-      updateMeeting(meeting.id, { speaker_names: updated })
-        .then((m) => {
-          applyMeeting(m)
-          void import("@/components/ui/tiptap-editor").then((mod) => {
-            mod.invalidateMeetingSpeakerCache(meeting.id)
-          })
-        })
-        .catch(() => {
-          toast.error("Failed to save speaker name")
-        })
+  const handlePersonAssigned = useCallback(
+    (m: Meeting) => {
+      applyMeeting(m)
+      void import("@/components/ui/tiptap-editor").then((mod) => {
+        mod.invalidateMeetingSpeakerCache(m.id)
+      })
     },
-    [meeting],
+    [],
   )
 
   const emptyUploadRef = useRef<HTMLInputElement>(null)
@@ -1540,7 +1546,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 supportedLanguageHints={supportedLanguageHints}
                 maxLanguageHints={maxLanguageHints}
                 activeHotWordsSupported={activeHotWordsSupported}
-                handleSelectHotWordsLibrary={handleSelectHotWordsLibrary}
+                handleSelectHotWordsLibraries={handleSelectHotWordsLibraries}
                 emptyUploadRef={emptyUploadRef}
                 handleUploadAudio={handleUploadAudio}
                 startLiveChipOpen={startLiveChipOpen}
@@ -1562,7 +1568,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 displaySegments={displaySegments}
                 handleTranscriptSegmentClick={handleTranscriptSegmentClick}
                 handleSpeakerSampleClick={handleSpeakerSampleClick}
-                handleUpdateSpeakerName={handleUpdateSpeakerName}
+                onPersonAssigned={handlePersonAssigned}
                 capturePlayerRef={capturePlayerRef}
                 setPlaybackTime={setPlaybackTime}
                 playbackTime={playbackTime}
@@ -1638,7 +1644,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 realtimeEnabled={realtimeEnabled}
                 setRealtimeEnabled={setRealtimeEnabled}
                 hotWordsLibraries={hotWordsLibraries}
-                handleSelectHotWordsLibrary={handleSelectHotWordsLibrary}
+                handleSelectHotWordsLibraries={handleSelectHotWordsLibraries}
                 languageHints={languageHints}
                 supportedLanguageHints={supportedLanguageHints}
                 updateLanguageHints={updateLanguageHints}
