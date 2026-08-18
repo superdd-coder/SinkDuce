@@ -35,7 +35,11 @@ class Message:
 class SessionStore:
     """SQLite-backed session and message storage. Zero new dependencies."""
 
-    def __init__(self, db_path: str = "data/sessions.db"):
+    def __init__(self, db_path: str | None = None):
+        if db_path is None:
+            from src.config import get_data_dir
+
+            db_path = str(get_data_dir() / "sessions.db")
         self._db_path = Path(db_path)
         self._lock = threading.Lock()
         self._local = threading.local()

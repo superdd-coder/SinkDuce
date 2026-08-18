@@ -692,13 +692,40 @@ class ChatboxAgent:
         provider_id: str | None = None, model: str | None = None,
         web_search_enabled: bool = False,
     ) -> AsyncGenerator[dict, None]:
+        """Streaming chat — yields SSE event dicts.
+
+        Model override is scoped to this generator so title generation and
+        later turns always see the configured default ``self._llm``.
+        """
+        saved_llm = self._llm
+        try:
+            async for ev in self._chat_stream_body(
+                session_id,
+                user_message,
+                thinking=thinking,
+                collections=collections,
+                mode=mode,
+                provider_id=provider_id,
+                model=model,
+                web_search_enabled=web_search_enabled,
+            ):
+                yield ev
+        finally:
+            self._llm = saved_llm
+
+    async def _chat_stream_body(
+        self, session_id: str, user_message: str, *,
+        thinking: bool = True, collections: list[str] | None = None,
+        mode: str = "agentic",
+        provider_id: str | None = None, model: str | None = None,
+        web_search_enabled: bool = False,
+    ) -> AsyncGenerator[dict, None]:
         """Streaming chat — yields SSE event dicts."""
         if not user_message or not user_message.strip():
             yield {"type": "done", "sources": []}
             return
 
-        # Temporary model override: swap self._llm for this request, restore after
-        _saved_llm = self._llm
+        # Temporary model override for this request (chat_stream restores).
         if provider_id and model:
             from src.config import get_config as _get_cfg
             from src.providers.llm import create_llm_for_provider

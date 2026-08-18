@@ -648,6 +648,17 @@ def test_meeting_empty_and_live_modes_are_independent_stages():
     assert "is-mode-live" in css
 
 
+def test_soft_menu_layout_effect_does_not_depend_on_children():
+    """Portal SoftMenu setCoords + children dep = infinite render (white screen)."""
+    src = (
+        ROOT / "frontend" / "src" / "components" / "ui" / "menu.tsx"
+    ).read_text(encoding="utf-8")
+    assert "function SoftMenu" in src
+    # Must not list `children` next to matchAnchorWidth in the layout-effect deps
+    assert "matchAnchorWidth,\n    children," not in src
+    assert "visibility: \"hidden\"" in src or "visibility: 'hidden'" in src
+
+
 def test_live_capture_control_card_not_danger_banner():
     """Live record uses speaker-gate-style card + real waveform; no red alarm strip; no Chat."""
     view = MEETING_VIEW.read_text(encoding="utf-8")

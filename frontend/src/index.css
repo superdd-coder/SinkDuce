@@ -525,6 +525,24 @@ input[type="checkbox"] {
  * File / chunk previews: table-source images sit immediately above the table.
  * Global .prose img { 2em } creates a huge dead band — kill it in doc shells.
  */
+.pm-ws-parse-pre {
+  margin: 0;
+  padding: 1rem;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--pm-ink, #121410);
+  background: transparent;
+}
+.pm-ws-parse-seg {
+  padding-bottom: 0.75rem;
+}
+.pm-ws-parse-seg .pm-recall-md {
+  margin: 0;
+}
 .pm-ws-doc-stage .prose img,
 .pm-ws-doc-stage .ProseMirror img,
 .pm-ws-tile .prose img,
@@ -5870,6 +5888,29 @@ input[type="password"]::-webkit-credentials-auto-fill-button {
 .pm-shell-status.is-online {
   color: color-mix(in srgb, var(--pm-green, #1a5e3d) 70%, var(--pm-muted, #6a706a));
 }
+.pm-shell-refresh {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 4px 8px;
+  margin: 0;
+  font-family: var(--pm-ff, "Geist Variable", system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-muted, #6a706a);
+  border-radius: var(--pm-r-sm, 6px);
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 160ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.pm-shell-refresh:hover {
+  background: var(--pm-green, #1a5e3d);
+  color: var(--pm-on, #e8f0eb);
+}
 
 /* ═══════════════════════════════════════════════════════════════════
    Backend Logs — premium soft-float console (developer mode)
@@ -10462,6 +10503,98 @@ button.pm-rail-new:hover:not(:disabled) {
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+}
+.pm-settings-conn-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.pm-settings-conn-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.pm-settings-conn-value {
+  font: var(--pm-settings-t-name);
+  font-family: var(--pm-ff-prose, "Source Serif 4 Variable", Georgia, serif);
+  font-size: clamp(14.5px, 1.35vw, 15.5px);
+  font-weight: 300;
+  font-variation-settings: "wght" 300;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--pm-ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pm-settings-conn-url {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.pm-settings-conn-url-text {
+  min-width: 0;
+  word-break: break-all;
+}
+.pm-settings-conn-inline {
+  font: var(--pm-settings-t-meta);
+  font-weight: 300;
+  color: var(--pm-ink);
+}
+.pm-settings-conn-snippet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 4px;
+}
+.pm-settings-conn-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pm-settings-conn-pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 70%, #ffffff);
+  font: var(--pm-settings-t-meta);
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  line-height: 1.55;
+  color: var(--pm-ink);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.pm-settings-copy {
+  flex-shrink: 0;
+  height: 26px !important;
+  border-radius: 999px !important;
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  gap: 4px !important;
+  font: var(--pm-t-meta) !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  background: color-mix(in srgb, var(--pm-canvas, #f6f5f1) 55%, #ffffff) !important;
+  color: var(--pm-muted, #6b716b) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-ink, #121410) 8%, transparent) !important;
+}
+.pm-settings-copy:hover:not(:disabled) {
+  color: var(--pm-ink, #121410) !important;
+  background: #ffffff !important;
+}
+.pm-settings-copy.is-copied {
+  color: var(--pm-green, #1a5e3d) !important;
+  background: var(--pm-green-wash) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-green, #1a5e3d) 16%, transparent) !important;
 }
 .pm-settings-chip-row {
   display: flex;

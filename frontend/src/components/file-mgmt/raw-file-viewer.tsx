@@ -7,6 +7,7 @@
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -353,7 +354,7 @@ function friendlyRawError(status: number | null, body: string): string {
   return "Could not load preview"
 }
 
-export function RawFileViewer({
+function RawFileViewerInner({
   url,
   filename,
   className,
@@ -469,8 +470,25 @@ export function RawFileViewer({
 
     if (downloadSearchOnly) {
       scrubDownloadSearchChrome()
-      const mo = new MutationObserver(() => scrubDownloadSearchChrome())
-      mo.observe(root, { childList: true, subtree: true })
+      // Watch the toolbar only. Observing the whole viewer fires on every
+      // PDF page paint while scrolling and restyles chrome (flicker / jump).
+      let debounce: number | null = null
+      const attach = () => {
+        const bar =
+          root.querySelector(".file-viewer-web-toolbar") ||
+          root.querySelector(".pdf-toolbar")
+        if (bar) mo.observe(bar, { childList: true, subtree: true })
+      }
+      const mo = new MutationObserver(() => {
+        if (debounce != null) window.clearTimeout(debounce)
+        debounce = window.setTimeout(() => {
+          debounce = null
+          mo.disconnect()
+          scrubDownloadSearchChrome()
+          attach()
+        }, 80)
+      })
+      attach()
       const onInput = () => scrubDownloadSearchChrome()
       root.addEventListener("input", onInput, true)
       root.addEventListener("change", onInput, true)
@@ -479,6 +497,7 @@ export function RawFileViewer({
       const t3 = window.setTimeout(scrubDownloadSearchChrome, 1000)
       return () => {
         mo.disconnect()
+        if (debounce != null) window.clearTimeout(debounce)
         root.removeEventListener("input", onInput, true)
         root.removeEventListener("change", onInput, true)
         window.clearTimeout(t1)
@@ -488,15 +507,32 @@ export function RawFileViewer({
     }
 
     layoutPdfChrome(root)
+    // Only watch the chrome bars. Observing the whole viewer (subtree)
+    // fires on every PDF page paint while scrolling and re-lays out the
+    // toolbar — that flashes the preview, especially in WKWebView.
+    let debounce: number | null = null
     const mo = new MutationObserver(() => {
-      layoutPdfChrome(root)
+      if (debounce != null) window.clearTimeout(debounce)
+      debounce = window.setTimeout(() => {
+        debounce = null
+        mo.disconnect()
+        layoutPdfChrome(root)
+        const chrome =
+          root.querySelector(".file-viewer-web-toolbar") ||
+          root.querySelector(".pdf-toolbar")
+        if (chrome) mo.observe(chrome, { childList: true, subtree: true })
+      }, 80)
     })
-    mo.observe(root, { childList: true, subtree: true })
+    const chrome =
+      root.querySelector(".file-viewer-web-toolbar") ||
+      root.querySelector(".pdf-toolbar")
+    if (chrome) mo.observe(chrome, { childList: true, subtree: true })
     const t1 = window.setTimeout(() => layoutPdfChrome(root), 50)
     const t2 = window.setTimeout(() => layoutPdfChrome(root), 300)
     const t3 = window.setTimeout(() => layoutPdfChrome(root), 1000)
     return () => {
       mo.disconnect()
+      if (debounce != null) window.clearTimeout(debounce)
       window.clearTimeout(t1)
       window.clearTimeout(t2)
       window.clearTimeout(t3)
@@ -798,3 +834,5 @@ export function RawFileViewer({
     </div>
   )
 }
+
+export const RawFileViewer = memo(RawFileViewerInner)

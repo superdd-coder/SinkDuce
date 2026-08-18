@@ -12,8 +12,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.config import DATA_DIR
+
 logger = logging.getLogger("collections.store")
-COLLECTIONS_DIR = Path("data").resolve() / "collections"
+COLLECTIONS_DIR = DATA_DIR / "collections"
 
 
 def _meta_path(collection_id: str) -> Path:

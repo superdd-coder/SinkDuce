@@ -1652,18 +1652,28 @@ def mark_setup_complete():
 
 
 def _get_app_version() -> str:
-    """Read the application version from pyproject.toml."""
+    """Installed package metadata first; then nearest pyproject.toml."""
+    try:
+        from importlib.metadata import version
+
+        return version("sinkduce")
+    except Exception:
+        pass
     import re
     from pathlib import Path
-    pyproject = Path(__file__).resolve().parent.parent.parent.parent / "pyproject.toml"
-    if pyproject.exists():
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        pyproject = parent / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
         try:
             text = pyproject.read_text(encoding="utf-8")
             m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
             if m:
                 return m.group(1)
         except Exception:
-            pass
+            break
     return "0.0.0"
 
 

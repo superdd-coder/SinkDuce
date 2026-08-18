@@ -20,6 +20,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+def _desktop_ocr() -> bool:
+    from src.config import is_desktop_runtime
+
+    return is_desktop_runtime()
+
 OCR_MAX_SIDE = 1600
 OCR_ENGINE_COUNT = 3
 OCR_KEEP_ENGINES = 1
@@ -85,7 +91,10 @@ def _make_engine():
             "Cls.model_path": str(model_dir / _CLS),
             "Global.max_side_len": OCR_MAX_SIDE,
             # 3 engines × 1 thread keeps Docker's ~6 CPUs from thrashing.
-            "EngineConfig.onnxruntime.intra_op_num_threads": 1,
+            # Docker: 1 thread × 3 engines. Desktop: a bit more per engine.
+            "EngineConfig.onnxruntime.intra_op_num_threads": (
+                2 if _desktop_ocr() else 1
+            ),
             "EngineConfig.onnxruntime.inter_op_num_threads": 1,
         }
     )

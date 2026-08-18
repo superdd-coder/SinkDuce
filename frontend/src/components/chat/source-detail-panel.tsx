@@ -1,13 +1,11 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from "react"
+import { memo, useState, useMemo, useEffect, useCallback, useRef } from "react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger, TabsIndicator } from "@/components/ui/tabs"
 import { Loader2, X, ChevronRight, ChevronDown, Locate } from "lucide-react"
-import { TiptapEditor } from "@/components/ui/tiptap-editor"
-import type { Editor } from "@tiptap/core"
-import { transformImageBlocks } from "@/lib/utils"
+import { ParseTextViewer } from "@/components/file-mgmt/file-detail/parse-text-viewer"
 import { getFileChunks, getFilePreviewUrl, getDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
 import { useAppStore, type Source } from "@/stores/app-store"
 import {
@@ -58,7 +56,10 @@ function resolveCollectionId(
   return byName?.id || raw
 }
 
-export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
+export const SourceDetailPanel = memo(function SourceDetailPanel({
+  source,
+  onClose,
+}: SourceDetailPanelProps) {
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [chunks, setChunks] = useState<ChunkDetail[]>([])
@@ -72,11 +73,10 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
   // Force scroll effect to re-run on every locate click
   const [locateTick, setLocateTick] = useState(0)
   const sourceContentRef = useRef<HTMLDivElement>(null)
-  const sourceEditorRef = useRef<Editor | null>(null)
   // Store latest previewContent in ref so handleLocate can access it without stale closure
   const previewContentRef = useRef<string | null>(null)
 
-  const { collections } = useAppStore()
+  const collections = useAppStore((s) => s.collections)
   // sourceKey = canonical Qdrant source for API calls
   const sourceKey = resolveSourceKey(source?.metadata)
   // displayName = human-readable filename for UI
@@ -190,30 +190,20 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
     return () => { cancelled = true }
   }, [sourceKey, collectionId])
 
-  // Scroll to highlightOffset — map raw-markdown offset → ProseMirror position.
+  // Scroll Parse pane by character offset (plain-text viewer).
   useEffect(() => {
     const offset = highlightOffset
     if (offset === undefined) return
     const raw = previewContentRef.current
     if (!raw || raw.length <= 1) return
-    // Delay slightly to ensure React has committed the tab switch / DOM update
     const timer = setTimeout(() => {
-      const editor = sourceEditorRef.current
-      if (!editor || (editor as any).isDestroyed) return
-      const textLen = editor.state.doc.textContent.length
-      if (textLen <= 1) return
-      const textTarget = Math.round(offset * (textLen / raw.length))
-      let lo = 1, hi = editor.state.doc.content.size
-      while (lo < hi) {
-        const mid = Math.floor((lo + hi) / 2)
-        if (editor.state.doc.textBetween(0, mid).length < textTarget) lo = mid + 1
-        else hi = mid
-      }
-      const resolved = editor.state.doc.resolve(lo)
-      const domPos = editor.view.domAtPos(resolved.pos)
-      const node = domPos.node
-      const el = node.nodeType === 3 ? node.parentElement : node as HTMLElement
-      el?.scrollIntoView({ behavior: "smooth", block: "start" })
+      const root =
+        sourceContentRef.current?.querySelector("[data-parse-root]") ||
+        document.querySelector("[data-parse-root]")
+      if (!(root instanceof HTMLElement)) return
+      const ratio = Math.min(1, Math.max(0, offset / raw.length))
+      const max = root.scrollHeight - root.clientHeight
+      if (max > 0) root.scrollTop = ratio * max
     }, 100)
     return () => clearTimeout(timer)
   }, [previewContent, highlightOffset, locateTick])
@@ -335,28 +325,17 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
                   <span className="pm-meta">Loading…</span>
                 </div>
               ) : previewContent !== null ? (
-                <ScrollArea className="h-full">
-                  <div ref={sourceContentRef} className="p-3">
-                    <TiptapEditor
-                      value={
-                        previewContent
-                          ? transformImageBlocks(
-                              previewContent,
-                              collectionId,
-                              sourceKey.startsWith("__file__:")
-                                ? sourceKey.slice("__file__:".length)
-                                : undefined,
-                            )
-                          : ""
-                      }
-                      readonly
-                      showToolbar={false}
-                      onEditorReady={(e) => {
-                        sourceEditorRef.current = e
-                      }}
-                    />
-                  </div>
-                </ScrollArea>
+                <div ref={sourceContentRef} className="h-full min-h-0">
+                  <ParseTextViewer
+                    text={previewContent}
+                    collectionId={collectionId}
+                    fileId={
+                      sourceKey.startsWith("__file__:")
+                        ? sourceKey.slice("__file__:".length)
+                        : undefined
+                    }
+                  />
+                </div>
               ) : (
                 <ScrollArea className="h-full">
                   <CardContent className="p-4 space-y-2">
@@ -632,4 +611,4 @@ export function SourceDetailPanel({ source, onClose }: SourceDetailPanelProps) {
       </div>
     </div>
   )
-}
+})

@@ -29,9 +29,11 @@ import shutil
 import uuid
 from pathlib import Path
 
+from src.config import DATA_DIR
+
 logger = logging.getLogger("file_mgmt.storage_paths")
 
-COLLECTIONS_DIR = Path("data").resolve() / "collections"
+COLLECTIONS_DIR = DATA_DIR / "collections"
 
 # Process-local: collections whose disk layout migration already ran.
 _layout_migrated: set[str] = set()

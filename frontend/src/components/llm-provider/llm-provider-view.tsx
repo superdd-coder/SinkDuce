@@ -41,6 +41,7 @@ import { ProviderCard } from "./provider-card"
 import type { OneshotSlotSnapshot } from "./oneshot-slots"
 import { AddProviderDialog } from "./add-provider-dialog"
 import { LocalModelCard } from "./local-model-card"
+import { ConnectionInfoCard } from "./connection-info-card"
 import type { LoadDetail, LoadState } from "./local-model-card"
 import { ModelDownloadDialog } from "@/components/model-download-dialog"
 import { HotWordsManager } from "./hot-words-manager"
@@ -1887,6 +1888,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           </div>
         </div>
         </section>
+
+        <ConnectionInfoCard />
 
         {/* Advanced */}
         <section className="pm-settings-section">

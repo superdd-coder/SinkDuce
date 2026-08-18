@@ -135,6 +135,25 @@ function SoftMenu({
       if (!el) return
       const r = el.getBoundingClientRect()
       const gap = 6
+      const commit = (
+        next: { top: number; left: number; maxHeight?: number; flip?: "up" | "down" },
+        width: number | null,
+      ) => {
+        // Same numbers → keep previous object so we do not re-render forever.
+        setCoords((prev) => {
+          if (
+            prev &&
+            prev.top === next.top &&
+            prev.left === next.left &&
+            prev.maxHeight === next.maxHeight &&
+            prev.flip === next.flip
+          ) {
+            return prev
+          }
+          return next
+        })
+        setAnchorWidth((prev) => (prev === width ? prev : width))
+      }
       if (placement === "right") {
         // Prefer the parent SoftMenu's right edge (full column), not just the row.
         const parentMenu = el.closest(
@@ -156,8 +175,7 @@ function SoftMenu({
           top = Math.max(8, window.innerHeight - mh - 8)
         }
         if (top < 8) top = 8
-        setCoords({ top, left })
-        setAnchorWidth(null)
+        commit({ top, left }, null)
         return
       }
       // Match pill width + left-align under trigger (no translateX(-100%))
@@ -170,8 +188,7 @@ function SoftMenu({
           if (up >= 8) top = up
           else top = Math.max(8, window.innerHeight - mh - 8)
         }
-        setCoords({ top, left: r.left })
-        setAnchorWidth(Math.round(r.width))
+        commit({ top, left: r.left }, Math.round(r.width))
         return
       }
       const fly = menuRef.current
@@ -200,21 +217,30 @@ function SoftMenu({
       let top = flip === "up" ? r.top - gap - used : r.bottom + gap
       if (top < pad) top = pad
       if (top + used > vh - pad) top = Math.max(pad, vh - pad - used)
-      setCoords({
-        top,
-        left,
-        maxHeight: Math.max(160, Math.min(maxBox, vh - pad - top)),
-        flip,
-      })
-      setAnchorWidth(null)
+      commit(
+        {
+          top,
+          left,
+          maxHeight: Math.max(160, Math.min(maxBox, vh - pad - top)),
+          flip,
+        },
+        null,
+      )
     }
     place()
     // Second pass after paint — flyout has real width/height for flip/clamp
     const raf = requestAnimationFrame(() => place())
+    const menuEl = menuRef.current
+    const ro =
+      typeof ResizeObserver !== "undefined" && menuEl
+        ? new ResizeObserver(() => place())
+        : null
+    if (menuEl && ro) ro.observe(menuEl)
     window.addEventListener("scroll", place, true)
     window.addEventListener("resize", place)
     return () => {
       cancelAnimationFrame(raf)
+      ro?.disconnect()
       window.removeEventListener("scroll", place, true)
       window.removeEventListener("resize", place)
     }
@@ -229,14 +255,15 @@ function SoftMenu({
     fixedCoords?.top,
     fixedCoords?.left,
     matchAnchorWidth,
-    children,
   ])
 
   if (!mounted) return null
 
   const resolved = fixedCoords ?? coords
-  const portalStyle: React.CSSProperties | undefined =
-    portal && resolved
+  // CSS `.pm-menu--portal` is position:fixed. Without top/left/width a
+  // block-level fixed node fills the viewport (white screen) until measured.
+  const portalStyle: React.CSSProperties | undefined = portal
+    ? resolved
       ? {
           position: "fixed",
           top: resolved.top,
@@ -257,7 +284,15 @@ function SoftMenu({
               }
             : null),
         }
-      : undefined
+      : {
+          position: "fixed",
+          top: 0,
+          left: 0,
+          visibility: "hidden",
+          pointerEvents: "none",
+          width: "max-content",
+        }
+    : undefined
 
   const menu = (
     <Menu

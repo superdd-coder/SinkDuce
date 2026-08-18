@@ -10,10 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Meeting, MeetingMode, MeetingStatus, ProcessingState, GenerationState, TranscriptionResult
+from src.config import DATA_DIR
+
 from .webm_fixer import fix_webm_duration
 
 logger = logging.getLogger("meeting.store")
-MEETINGS_DIR = Path("data").resolve() / "meetings"
+MEETINGS_DIR = DATA_DIR / "meetings"
 
 
 def section_content_hash(content: str) -> str:

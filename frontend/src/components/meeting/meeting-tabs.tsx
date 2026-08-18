@@ -1375,15 +1375,15 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           </p>
         ) : null}
         <div className="pm-meeting-ingest-menu-scroll">
-          {collections.length === 0 && (
+          {(!Array.isArray(collections) || collections.length === 0) && (
             <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
               No collections yet
             </div>
           )}
-          {collections.map((col) => {
+          {(Array.isArray(collections) ? collections : []).map((col) => {
             const cached = chainsByCol[col.id]
             const multi =
-              cached != null && cached.some((c) => !c.is_main)
+              Array.isArray(cached) && cached.some((c) => !c.is_main)
             return (
               <MenuItem
                 key={col.id}

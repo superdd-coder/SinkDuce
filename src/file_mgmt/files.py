@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from src.file_mgmt.access import _actor_for, _actor_id, _now_iso, _open_db
 from src.file_mgmt.events import emit_event
+from src.file_mgmt.folders import get_folder_tree
 from src.file_mgmt.layout import (
     _assert_file_name_free,
     _assert_folder_name_free,

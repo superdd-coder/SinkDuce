@@ -433,14 +433,12 @@ def _load_campplus_embedder():
     with _embedder_lock:
         if _embedder is not None:
             return _embedder
-        from src.meeting.transcription.onnx.campplus import try_load_campplus
-        from src.meeting.transcription.onnx.paths import onnx_cache_dir, resolve_hf_snapshot
+        from src.meeting.transcription.onnx.campplus import (
+            resolve_campplus_dir,
+            try_load_campplus,
+        )
 
-        embedder = try_load_campplus(onnx_cache_dir("funasr/campplus"))
-        if embedder is None:
-            snap = resolve_hf_snapshot("funasr/campplus")
-            if snap is not None:
-                embedder = try_load_campplus(snap)
+        embedder = try_load_campplus(resolve_campplus_dir())
         _embedder = embedder
         return _embedder
 

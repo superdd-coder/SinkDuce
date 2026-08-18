@@ -75,7 +75,10 @@ def test_download_package_from_local_url(tmp_path, monkeypatch):
     # file:// URL so no network
     monkeypatch.setenv("SINKDUCE_ONNX_MODELS_URL", zip_file.as_uri())
 
-    assert not any(dl._is_downloaded(m) for m in dl.LOCAL_MODELS)
+    # CAM++ ships in the app; other ASR packs still require the release zip.
+    assert not any(
+        dl._is_downloaded(m) for m in dl.LOCAL_MODELS if m.id != "speaker"
+    )
 
     dl.download_all()
 

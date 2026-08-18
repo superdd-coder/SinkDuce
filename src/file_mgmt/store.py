@@ -13,9 +13,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.config import DATA_DIR
+
 logger = logging.getLogger("file_mgmt.store")
 
-COLLECTIONS_DIR = Path("data").resolve() / "collections"
+COLLECTIONS_DIR = DATA_DIR / "collections"
 
 # Process-local: collections whose schema backfill already ran successfully.
 # Avoids re-running ALTER on every API call (and races under concurrent open).
@@ -568,10 +570,9 @@ def _migrate_files_json_import(collection_id: str) -> None:
     for existing ones, and backfills missing file_paths for note/meeting
     files that were imported before routing was added.
     """
-    from pathlib import Path as _Path
     import json as _json
 
-    fj_path = _Path("data") / "collections" / collection_id / "files.json"
+    fj_path = COLLECTIONS_DIR / collection_id / "files.json"
     if not fj_path.exists():
         return
 
@@ -625,7 +626,7 @@ def _migrate_files_json_import(collection_id: str) -> None:
                 supported = True
             else:
                 original_ext = entry.get("original_ext", "")
-                if original_ext and not _Path(filename).suffix:
+                if original_ext and not Path(filename).suffix:
                     check_name = filename + ("" if original_ext.startswith(".") else ".") + str(original_ext)
                 else:
                     check_name = filename

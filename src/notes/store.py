@@ -20,10 +20,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.config import DATA_DIR
+
 from .models import Note
 
 logger = logging.getLogger("notes.store")
-NOTES_DIR = Path("data").resolve() / "notes"
+NOTES_DIR = DATA_DIR / "notes"
 
 
 def _note_dir(note_id: str) -> Path:

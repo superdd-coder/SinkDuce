@@ -31,17 +31,57 @@ logger = logging.getLogger(__name__)
 # ── Helpers ───────────────────────────────────────────────────
 
 
+def _file_id_from_source(source: str) -> str:
+    src = (source or "").strip()
+    if src.startswith("__file__:"):
+        return src[len("__file__:") :].strip()
+    if src.startswith("file:"):
+        return src[len("file:") :].strip()
+    return ""
+
+
+def _chunk_filename(collection: str, source: str, meta: dict) -> str:
+    """Human file name for MCP hits — never a raw ``__file__:{id}`` key."""
+    from src.collections.file_index import is_opaque_source_key, resolve_display_name
+
+    payload = meta.get("source_label") or meta.get("display_name") or ""
+    pl = str(payload).strip()
+    if pl and is_opaque_source_key(pl):
+        pl = ""
+    if collection and source:
+        try:
+            name = resolve_display_name(
+                str(collection), str(source), payload_label=pl or None
+            )
+            if name and not is_opaque_source_key(name):
+                return name
+        except Exception:
+            logger.debug("resolve_display_name failed for %s", source, exc_info=True)
+    if pl:
+        return pl
+    src = str(source or "")
+    if src and not is_opaque_source_key(src):
+        return src.replace("\\", "/").rsplit("/", 1)[-1]
+    return ""
+
+
 def _chunk_to_dict(c) -> dict:
     """Normalize a RetrievedChunk to a plain dict."""
+    meta = getattr(c, "metadata", None) or {}
+    source = meta.get("source", "") or ""
+    collection = meta.get("collection", "") or ""
+    file_id = (meta.get("file_id") or "").strip() or _file_id_from_source(source)
     return {
         "text": c.text,
         "score": c.score,
-        "source": c.metadata.get("source", ""),
-        "collection": c.metadata.get("collection", ""),
-        "chunk_type": c.metadata.get("chunk_type", "normal"),
-        "context": c.metadata.get("context"),
-        "id": c.metadata.get("id", ""),
-        "images": c.metadata.get("images", []),
+        "source": source,
+        "file_id": file_id,
+        "filename": _chunk_filename(collection, source, meta),
+        "collection": collection,
+        "chunk_type": meta.get("chunk_type", "normal"),
+        "context": meta.get("context"),
+        "id": meta.get("id", ""),
+        "images": meta.get("images", []),
     }
 
 
@@ -100,8 +140,8 @@ async def search_direct_chunks(
     - Complex multi-hop / rewrite needed → ``search_agentic_chunks``.
     - Only need folder layout → ``list_library_tree``; timeline → ``get_timeline``.
 
-    **After search:** each hit has ``source`` (prefer canonical
-    ``__file__:{file_id}``). Prefer following up with ``file_id`` on
+    **After search:** each hit has ``source`` (canonical ``__file__:{file_id}``),
+    plus ``file_id`` and ``filename`` (display name). Prefer ``file_id`` on
     get_document_text / get_file_chunks rather than re-searching the same file.
 
     The agent should read returned chunks and answer with its own LLM if needed.
@@ -183,8 +223,9 @@ async def search_agentic_chunks(
     - Known file_id → ``get_document_text`` / ``get_file_chunks`` (cheaper).
     - Library layout only → ``list_library_tree``; timeline → ``get_timeline``.
 
-    Same chunk structure as ``search_direct_chunks``; agent formats the answer
-    with its own LLM. No collection parameter — pipeline auto-discovers targets.
+    Same chunk structure as ``search_direct_chunks`` (``source``, ``file_id``,
+    ``filename``); agent formats the answer with its own LLM. No collection
+    parameter — pipeline auto-discovers targets.
 
     Args:
         query: The user question.
@@ -235,7 +276,9 @@ async def get_query_history(limit: int = 50, include_details: bool = False) -> s
     Reads from ``data/history/history.jsonl``.
     """
     def _run():
-        file = Path("data/history/history.jsonl")
+        from src.config import DATA_DIR
+
+        file = DATA_DIR / "history" / "history.jsonl"
         if not file.exists():
             return []
         entries = []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import struct
 import wave
 from pathlib import Path
@@ -12,9 +13,15 @@ import pytest
 from src.meeting.transcription.onnx.campplus import cluster_speakers
 from src.meeting.transcription.onnx.paths import has_onnx_artifacts, onnx_cache_dir
 from src.meeting.transcription.onnx.pipeline import (
+    FunAsrOnnxFilePipeline,
     _load_via_ffmpeg,
     _load_wav_mono16k,
     _resample_mono_linear,
+)
+from src.meeting.transcription.onnx.threads import (
+    configure_host_math_threads,
+    file_asr_threads,
+    realtime_asr_threads,
 )
 
 
@@ -75,6 +82,24 @@ def test_has_onnx_artifacts_loose_accepts_campplus_filename(tmp_path):
     assert has_onnx_artifacts(tmp_path, loose=True) is True
 
 
+def test_bundled_campplus_is_ready_without_asr_download():
+    from src.meeting.transcription.onnx.campplus import (
+        bundled_campplus_dir,
+        find_campplus_onnx,
+        resolve_campplus_dir,
+    )
+    from src.models.download import LOCAL_MODELS, _is_onnx_ready
+
+    bundled = bundled_campplus_dir()
+    assert bundled is not None
+    onnx = find_campplus_onnx(bundled)
+    assert onnx is not None
+    assert onnx.stat().st_size > 1_000_000
+    assert resolve_campplus_dir() == bundled
+    speaker = next(m for m in LOCAL_MODELS if m.id == "speaker")
+    assert _is_onnx_ready(speaker) is True
+
+
 def test_is_downloaded_prefers_onnx_pack(tmp_path, monkeypatch):
     """Status API should report ready when only ONNX pack exists (no hub .pt)."""
     from src.models import download as dl
@@ -112,6 +137,61 @@ def _write_sine_wav(path: Path, sr: int = 16000, seconds: float = 0.1) -> None:
         wf.setsampwidth(2)
         wf.setframerate(sr)
         wf.writeframes(pcm.tobytes())
+
+
+def test_file_asr_threads_desktop_leaves_cores_for_other_apps(monkeypatch):
+    monkeypatch.delenv("SINKDUCE_ORT_THREADS", raising=False)
+    monkeypatch.setenv("SINKDUCE_DESKTOP", "1")
+    monkeypatch.setattr(
+        "src.meeting.transcription.onnx.threads._cpu_count", lambda: 8
+    )
+    # M1-class 8 logical cores (4P+4E): about a third, not n-2.
+    assert file_asr_threads() == 2
+    assert realtime_asr_threads() == 2
+    monkeypatch.setattr(
+        "src.meeting.transcription.onnx.threads._cpu_count", lambda: 14
+    )
+    # M4 Pro-class: still cap at 4 / 3 so the rest of the Mac stays free.
+    assert file_asr_threads() == 4
+    assert realtime_asr_threads() == 3
+
+
+def test_file_asr_threads_docker_stays_capped(monkeypatch):
+    monkeypatch.delenv("SINKDUCE_ORT_THREADS", raising=False)
+    monkeypatch.delenv("SINKDUCE_DESKTOP", raising=False)
+    monkeypatch.setattr(
+        "src.meeting.transcription.onnx.threads._cpu_count", lambda: 16
+    )
+    assert file_asr_threads() == 4
+    assert realtime_asr_threads() == 4
+
+
+def test_ort_threads_env_override(monkeypatch):
+    monkeypatch.setenv("SINKDUCE_ORT_THREADS", "3")
+    monkeypatch.setenv("SINKDUCE_DESKTOP", "1")
+    assert file_asr_threads() == 3
+    assert realtime_asr_threads() == 3
+
+
+def test_configure_host_math_threads_does_not_clobber(monkeypatch):
+    monkeypatch.setenv("OMP_NUM_THREADS", "8")
+    configure_host_math_threads()
+    assert os.environ["OMP_NUM_THREADS"] == "8"
+    monkeypatch.delenv("VECLIB_MAXIMUM_THREADS", raising=False)
+    configure_host_math_threads()
+    assert os.environ["VECLIB_MAXIMUM_THREADS"] == "1"
+
+
+def test_length_batches_groups_similar_and_isolates_long():
+    short = np.zeros(8000, dtype=np.float32)
+    mid = np.zeros(9000, dtype=np.float32)
+    long = np.zeros(16_000 * 25, dtype=np.float32)
+    groups = FunAsrOnnxFilePipeline._length_batches([short, long, mid, short])
+    flat = [i for g in groups for i in g]
+    assert sorted(flat) == [0, 1, 2, 3]
+    assert any(g == [1] for g in groups)
+    shorts = [g for g in groups if 1 not in g]
+    assert any(len(g) >= 2 for g in shorts)
 
 
 def test_load_wav_mono16k_wav(tmp_path):

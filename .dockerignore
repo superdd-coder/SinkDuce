@@ -71,6 +71,23 @@ DESIGN_SYSTEM.html
 # Host packaging / test scripts (image uses root entrypoint.sh only)
 scripts/
 
+# Local macOS / Tauri packaging (gitignored; never part of the image).
+# Missing this sent ~5GB (SinkDuce.app + CPython + Qdrant + cargo target)
+# as `transferring context` on every docker build.
+desktop/
+src-tauri/
+*.app
+*.dmg
+
+# Local-only dirs (gitignored; keep out of COPY . .)
+contracts/
+deploy/
+
+# Accidental weight dumps. In-tree RapidOCR + CAM++ stay via negation.
+*.onnx
+!src/parsers/ocr_models/*.onnx
+!src/meeting/transcription/onnx/campplus_models/*.onnx
+
 # Docker / CI files
 Dockerfile
 docker-compose*.yml

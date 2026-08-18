@@ -1,0 +1,5 @@
+CAMPPlus zh-cn-common-200k (ONNX).
+Source: FunASR / ModelScope damo/speech_campplus_sv_zh-cn_16k-common
+License: Apache-2.0 (model card)
+Shipped with SinkDuce so speaker matching works without downloading the full ASR pack.
+See README.md in this directory.

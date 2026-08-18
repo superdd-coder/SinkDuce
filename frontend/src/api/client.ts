@@ -2,8 +2,21 @@ import { request } from "./http"
 
 // ── Health ──
 
+export interface HealthInfo {
+  status: string
+  desktop?: boolean
+  /** Advertised listen host for clients (wildcard binds become 127.0.0.1). */
+  host?: string
+  /** Actual API / MCP listen port (desktop is often 18910, not 18900). */
+  port?: number
+  /** Streamable HTTP MCP endpoint, e.g. http://127.0.0.1:18910/mcp */
+  mcp_url?: string
+  /** Desktop helper base URL, e.g. http://127.0.0.1:18950 */
+  system_audio?: string
+}
+
 export const getHealth = () =>
-  fetch("/health").then((r) => r.json()) as Promise<{ status: string }>
+  fetch("/health").then((r) => r.json()) as Promise<HealthInfo>
 
 // ── Version / Update ──
 

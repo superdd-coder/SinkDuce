@@ -15,12 +15,13 @@ from src.tasks import task_manager
 from src.tasks.handlers import consolidate_handler, doc_summary_handler, sparse_recalc_handler, upload_handler
 from src.rag.summary_manager import SummaryManager
 from src.collections import store as collection_store
+from src.config import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-COLLECTIONS_DIR = Path("data").resolve() / "collections"
+COLLECTIONS_DIR = DATA_DIR / "collections"
 
 def _files_dir(collection_id: str) -> Path:
     return COLLECTIONS_DIR / collection_id / "files"

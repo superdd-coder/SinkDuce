@@ -46,6 +46,38 @@ def _insert_file(cid: str, file_id: str, storage_name: str) -> None:
         conn.close()
 
 
+def test_migrate_files_json_import_handles_extensionless_label(isolated_col):
+    """Legacy files.json may have source_label without a suffix + original_ext."""
+    import json
+
+    from src.file_mgmt.store import _migrate_files_json_import, get_db
+
+    cid, coll_dir = isolated_col
+    (coll_dir / cid).mkdir(parents=True, exist_ok=True)
+    (coll_dir / cid / "files.json").write_text(
+        json.dumps(
+            {
+                "file_legacy": {
+                    "source": "__file__:old.pdf",
+                    "source_label": "old-scan",
+                    "original_ext": "pdf",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _migrate_files_json_import(cid)
+    conn = get_db(cid)
+    try:
+        row = conn.execute(
+            "SELECT file_id FROM files WHERE file_id=?",
+            ("file_legacy",),
+        ).fetchone()
+        assert row is not None
+    finally:
+        conn.close()
+
+
 def test_load_for_read_sqlite_wins_over_stale_json(isolated_col):
     from src.collections.file_index import add, load_for_read
 

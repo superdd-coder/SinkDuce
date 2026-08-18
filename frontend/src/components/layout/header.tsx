@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { Button } from "@/components/ui/button"
 import { Terminal } from "lucide-react"
@@ -16,14 +16,17 @@ export function Header() {
         developerMode: s.developerMode,
       }))
     )
+  const [desktop, setDesktop] = useState(false)
 
   useEffect(() => {
     const check = async () => {
       try {
         const h = await getHealth()
         setOnline(h.status === "ok")
+        setDesktop(h.desktop === true)
       } catch {
         setOnline(false)
+        setDesktop(false)
       }
     }
     check()
@@ -53,6 +56,17 @@ export function Header() {
         >
           <Terminal className="h-3.5 w-3.5" />
         </Button>
+      )}
+
+      {desktop && (
+        <button
+          type="button"
+          className="pm-shell-refresh"
+          title="Reload"
+          onClick={() => window.location.reload()}
+        >
+          Refresh
+        </button>
       )}
 
       <div

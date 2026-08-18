@@ -304,9 +304,9 @@ export function ChatView() {
     setSelectedSource(source)
   }
 
-  const handleClosePanel = () => {
+  const handleClosePanel = useCallback(() => {
     setSelectedSource(null)
-  }
+  }, [])
 
   const selectedSourceId = (selectedSource?.metadata?.id as string) || null
   const currentSession = sessions.find((s) => s.id === sessionId)

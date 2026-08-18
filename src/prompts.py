@@ -1742,6 +1742,23 @@ Extract action-item todos as JSON. Keep every responsible person's name
 """
 
 
+# SESSION_TITLE_SYSTEM / SESSION_TITLE_USER
+#   Purpose: Short session title from the first user question and answer.
+#   Role: SESSION_TITLE_SYSTEM → system; SESSION_TITLE_USER → user
+#   Called by: src/api/routes/sessions.py → generate_title
+#   Template vars:
+#     {question} — first user message
+#     {answer} — first assistant reply (plain text)
+SESSION_TITLE_SYSTEM = (
+    "You write short conversation titles. Reply with only the title. "
+    "At most 6 words. No quotes or trailing punctuation."
+)
+SESSION_TITLE_USER = (
+    "Question:\n{question}\n\nAnswer:\n{answer}\n\n"
+    "Write a short title (6 words max). Reply with ONLY the title."
+)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Chatbox — session / Quick Chat system prompts
 # ═══════════════════════════════════════════════════════════════════════

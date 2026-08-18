@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.config import get_config
+from src.config import DATA_DIR, get_config
 from src.meeting import store
 from src.meeting.models import (
     GenerationState,
@@ -119,7 +119,7 @@ def _detect_embedding_dim() -> int:
             )
     return dim if dim > 0 else 1024
 
-COLLECTIONS_DIR = Path("data").resolve() / "collections"
+COLLECTIONS_DIR = DATA_DIR / "collections"
 
 def _files_dir(collection_id: str) -> Path:
     return COLLECTIONS_DIR / collection_id / "files"

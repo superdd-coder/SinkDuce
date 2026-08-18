@@ -185,11 +185,11 @@ GitHub Release tag `onnx-models-v*` (asset `sinkduce-onnx-models-v*.zip`). That 
 | FunAudioLLM--SenseVoiceSmall | [SenseVoice](https://github.com/FunAudioLLM/SenseVoice), [FunASR](https://github.com/modelscope/FunASR) | **Model license** — [FunASR MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE) |
 | funasr--fsmn-vad | FunASR FSMN-VAD | Apache-2.0 (model card) |
 | funasr--ct-punc | FunASR punctuation | See upstream |
-| funasr--campplus | FunASR / ModelScope CAM++ | Apache-2.0 (model card) |
+| funasr--campplus | FunASR / ModelScope CAM++ | Apache-2.0 (model card). Also shipped in-tree at `src/meeting/transcription/onnx/campplus_models/` so speaker matching works without the ASR zip. |
 | funasr--paraformer-zh-streaming | FunASR Paraformer streaming | See upstream |
 
 - **Packaging / layout for SinkDuce**: this project (see Release notes + `ATTRIBUTION.md` inside the zip).
-- Weights are installed under the `data/` volume (or `HF_HOME`); they are **not** embedded in the default Docker image layers.
+- SenseVoice / VAD / punctuation / streaming Paraformer live under the `data/` volume (or `HF_HOME`); they are **not** in the default Docker image layers. CAM++ is also in that zip, and is additionally shipped in-tree (like RapidOCR) so speaker matching works without the ASR download.
 - Redistributors of the zip must retain upstream READMEs/licenses inside each pack and honor each model’s license (especially SenseVoice model-license).
 
 ---
