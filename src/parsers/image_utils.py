@@ -694,6 +694,69 @@ def _find_image_block_spans(content: str, image_id: str) -> list[tuple[int, int]
     return spans
 
 
+_IMG_HTML_RE = re.compile(r"<img\b[^>]*>", re.I)
+
+
+def _describe_stored_image(image_id: str, file_id: str) -> str:
+    """Best-effort 图片描述 for a stored raster. Empty if unset or failed."""
+    from src.prompts import VISUAL_PROMPT
+    from src.providers.llm import create_llm_for_provider
+    from src.rag.contextual import resolve_ingest_vision
+
+    provider, mid = resolve_ingest_vision()
+    if not provider or not mid or not image_id:
+        return ""
+    encoded = encode_image_base64(image_id, file_id)
+    if not encoded:
+        return ""
+    b64, mime = encoded
+    try:
+        llm = create_llm_for_provider(provider, model=mid)
+        return (llm.describe_image(b64, mime, prompt=VISUAL_PROMPT) or "").strip()
+    except Exception:
+        logger.debug("[Image] describe for text LLM failed", exc_info=True)
+        return ""
+
+
+def prepare_text_for_non_visual_llm(text: str) -> str:
+    """Replace image fences/tags with captions so a text-only LLM can read them.
+
+    Uses existing description / OCR first. Missing captions call Settings 图片描述
+    when that model is configured. Never raises.
+    """
+    if not text:
+        return text
+    out = text
+    if ":::image" in out:
+        for fields in iter_image_fence_fields(out):
+            img_id = fields.get("image_id") or ""
+            if not img_id:
+                continue
+            cap = (fields.get("description") or fields.get("ocr_text") or "").strip()
+            if not cap:
+                cap = _describe_stored_image(img_id, fields.get("file_id") or "")
+            label = cap or "undescribed figure"
+            for start, end in reversed(_find_image_block_spans(out, img_id)):
+                out = out[:start] + f"[Image: {label}]\n" + out[end:]
+
+    def _html_sub(match: re.Match) -> str:
+        tag = match.group(0)
+        desc = ""
+        dm = re.search(r'data-visual-desc="([^"]*)"', tag, re.I)
+        if dm:
+            from urllib.parse import unquote
+            try:
+                desc = unquote(dm.group(1)).strip()
+            except Exception:
+                desc = dm.group(1).strip()
+        if not desc:
+            am = re.search(r'\balt="([^"]*)"', tag, re.I)
+            desc = (am.group(1) if am else "").strip()
+        return f"[Image: {desc}]" if desc else "[Image: undescribed figure]"
+
+    return _IMG_HTML_RE.sub(_html_sub, out)
+
+
 # ── document-level image processing ─────────────────────────────────────
 
 def _safe_image_ext(declared: str) -> str:

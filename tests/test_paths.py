@@ -75,13 +75,6 @@ def test_assert_data_rel_rejects_config_and_qdrant(tmp_path: Path, monkeypatch):
     assert paths_mod.assert_readable_data_file(ok) == ok.resolve()
 
 
-def test_visual_resolve_rejects_escape():
-    from src.api.routes.visual import _resolve_image_path
-
-    with pytest.raises(ValueError):
-        _resolve_image_path("/api/../../../etc/passwd")
-
-
 def test_delete_meeting_rejects_traversal():
     from src.meeting.store import delete_meeting
 

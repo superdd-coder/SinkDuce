@@ -237,7 +237,7 @@ export function IngestTracePane({
             {cfg.tabular ? " · tabular (no Context LLM)" : ""}
             {cfg.vision_model
               ? ` · vision ${String(cfg.vision_model)}`
-              : " · no Visual model"}
+              : " · no image-description model"}
           </p>
           <p className="pm-meta">
             Time flows down. Overlapping steps sit side by side.

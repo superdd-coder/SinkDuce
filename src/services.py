@@ -275,7 +275,7 @@ def _resolve_chat_llm(config):
     """Find an LLM provider with function_call_model_ids for ChatboxAgent.
 
     Preference order:
-    1. Provider matching config.default_chat_model (by model name)
+    1. ``default_chat_model`` as ``providerId|model`` (or legacy bare name)
     2. Provider with is_default=True and function_call_model_ids
     3. First provider with function_call_model_ids
     """
@@ -285,22 +285,28 @@ def _resolve_chat_llm(config):
     if not eligible:
         return None
 
-    # Prefer default_chat_model
-    if config.default_chat_model:
-        for p in eligible:
-            if p.default_model == config.default_chat_model or p.model == config.default_chat_model:
-                return create_llm_for_provider(p)
-        # Try by provider id
-        for p in eligible:
-            if p.id == config.default_chat_model:
-                return create_llm_for_provider(p)
+    ref = str(getattr(config, "default_chat_model", "") or "").strip()
+    if ref:
+        pid, model = (ref.split("|", 1) + [""])[:2] if "|" in ref else (ref, None)
+        pid, model = pid.strip(), (model.strip() if model else None)
+        if model:
+            for p in eligible:
+                if p.id == pid and model in (p.function_call_model_ids or []):
+                    return create_llm_for_provider(p, model=model)
+        else:
+            name = pid
+            for p in eligible:
+                fc = p.function_call_model_ids or []
+                if name in fc or p.default_model == name or p.model == name:
+                    return create_llm_for_provider(p, model=name)
+            for p in eligible:
+                if p.id == name:
+                    return create_llm_for_provider(p)
 
-    # Prefer the is_default provider (same as RAG default)
     default_eligible = [p for p in eligible if p.is_default]
     if default_eligible:
         return create_llm_for_provider(default_eligible[0])
 
-    # Fallback: first eligible
     return create_llm_for_provider(eligible[0])
 
 
@@ -361,40 +367,43 @@ def _invalidate_enrichment_llm_cache() -> None:
     from src.providers.cache import invalidate as _cache_invalidate
 
     for _key in list(_provider_cache_snapshot()):
-        if _key.startswith("llm:enrich:"):
+        if _key.startswith(("llm:enrich:", "llm:agentic:", "llm:distill:")):
             _cache_invalidate(_key)
 
 
 def _bind_llm_dependents() -> None:
     """Wire RAG objects that hold an LLM instance."""
-    if services.llm and services.retriever:
+    from src.rag.contextual import get_agentic_query_llm
+
+    query_llm = get_agentic_query_llm() or services.llm
+    if query_llm and services.retriever:
         services.direct_query = DirectQueryModule(
             retriever=services.retriever,
             db=services.db,
             reranker=services.reranker,
-            llm=services.llm,
+            llm=query_llm,
         )
         services.variant_fetcher = VariantFetcher(
             direct_module=services.direct_query,
-            llm=services.llm,
+            llm=query_llm,
             reranker=services.reranker,
         )
         services.catalog = CollectionCatalog(
             db=services.db,
-            llm=services.llm,
+            llm=query_llm,
         )
-        services.decomposer = Decomposer(llm=services.llm)
-        services.aggregator = Aggregator(llm=services.llm)
+        services.decomposer = Decomposer(llm=query_llm)
+        services.aggregator = Aggregator(llm=query_llm)
         services.agentic_query = AgenticQueryService(
             direct_module=services.direct_query,
             variant_fetcher=services.variant_fetcher,
             catalog=services.catalog,
             decomposer=services.decomposer,
             aggregator=services.aggregator,
-            llm=services.llm,
+            llm=query_llm,
         )
         services.contextual = ContextualRetrieval(
-            llm=services.llm,
+            llm=query_llm,
             context_window=1,
         )
     else:

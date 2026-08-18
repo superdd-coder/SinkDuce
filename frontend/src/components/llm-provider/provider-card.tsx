@@ -69,7 +69,9 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
         toast.success(res.message || `Provider '${provider.name || "Unnamed"}' set as default`)
         if ((provider.function_call_model_ids ?? []).length > 0) {
           const chatModel = provider.default_model || provider.function_call_model_ids![0]
-          await updateConfig("default_chat_model", { default_chat_model: chatModel })
+          await updateConfig("default_chat_model", {
+            default_chat_model: `${provider.id}|${chatModel}`,
+          })
         }
         onRefresh()
       }

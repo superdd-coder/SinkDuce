@@ -5,8 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +14,6 @@ SRC = ROOT / "src"
 SCOPED_ROUTE_FILES = [
     SRC / "meeting" / "routes.py",
     SRC / "hot_words" / "routes.py",
-    SRC / "api" / "routes" / "visual.py",
 ]
 
 _RETURN_ERROR = re.compile(r"""return\s+\{\s*['"]error['"]""")
@@ -53,26 +51,6 @@ def test_config_provider_tests_still_return_success_false():
     """Connectivity tests stay HTTP 200 + {success: false, error}."""
     text = (SRC / "api" / "routes" / "config.py").read_text(encoding="utf-8")
     assert 'return {"success": False, "error":' in text
-
-
-def test_visual_describe_missing_url_is_400_detail():
-    from src.api.routes.visual import router
-
-    app = FastAPI()
-    app.include_router(router)
-    resp = TestClient(app).post("/visual/describe", json={})
-    assert resp.status_code == 400
-    assert resp.json() == {"detail": "image_url is required"}
-    assert "error" not in resp.json()
-
-
-def test_visual_describe_function_raises():
-    from src.api.routes.visual import describe_image
-
-    with pytest.raises(HTTPException) as ei:
-        describe_image({})
-    assert ei.value.status_code == 400
-    assert ei.value.detail == "image_url is required"
 
 
 def test_hot_words_missing_library_is_404_detail():

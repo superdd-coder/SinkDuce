@@ -414,7 +414,9 @@ def recall_search(req: RecallSearchRequest):
     if not services.direct_query:
         raise HTTPException(status_code=503, detail="Direct query module not available")
 
-    recall_llm = services.llm if params["sparse_llm_tokenize"] else None
+    from src.rag.contextual import get_agentic_query_llm
+
+    recall_llm = get_agentic_query_llm() if params["sparse_llm_tokenize"] else None
     dq_result = services.direct_query.retrieve(
         req.query, valid_collections, top_k=params["top_k"],
         embedding_overrides=embedding_overrides,
@@ -653,7 +655,12 @@ def generate_eval_cases(collection: str, regenerate: bool = False):
         parsed_items: list[dict] = []
         for _attempt in range(3):
             try:
-                response = services.llm.generate(prompt).strip()
+                from src.rag.contextual import get_agentic_query_llm
+
+                _aq = get_agentic_query_llm()
+                if _aq is None:
+                    continue
+                response = _aq.generate(prompt).strip()
             except Exception:
                 continue
             import re as re_mod, json as json_mod
@@ -777,7 +784,10 @@ def run_eval(collection: str, req: EvalRequest):
         negative_count = 0
         judged_count = 0
 
-        if retrieved_chunks and services.llm:
+        from src.rag.contextual import get_agentic_query_llm
+
+        _judge_llm = get_agentic_query_llm()
+        if retrieved_chunks and _judge_llm:
             chunks_text = "\n\n".join(
                 f"--- Chunk {i+1} (id: {c['id']}, source: {c['source'].split('/')[-1]}) ---\n{c['text'][:2000]}"
                 for i, c in enumerate(retrieved_chunks)
@@ -788,7 +798,7 @@ def run_eval(collection: str, req: EvalRequest):
                 chunks_text=chunks_text,
             )
             try:
-                judge_response = services.llm.generate(judge_prompt).strip()
+                judge_response = _judge_llm.generate(judge_prompt).strip()
                 import re as re_mod, json as json_mod
                 json_match = re_mod.search(r"\{[\s\S]*\}", judge_response)
                 if json_match:

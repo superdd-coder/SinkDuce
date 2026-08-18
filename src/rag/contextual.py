@@ -103,8 +103,33 @@ def _parse_model_ref(value: str) -> tuple[str, str | None]:
     return text, None
 
 
+def _default_provider(providers: list):
+    if not providers:
+        return None
+    return next((p for p in providers if p.is_default), providers[0])
+
+
+def _find_provider(providers: list, pid: str):
+    if not pid:
+        return None
+    return next((p for p in providers if p.id == pid), None)
+
+
+def resolve_named_slot(ref: str) -> tuple[object | None, str | None]:
+    """Resolve ``providerId|model`` (or bare provider id) → default card."""
+    from src.config import get_config
+
+    providers = list(get_config().llm.providers or [])
+    pid, model = _parse_model_ref(ref)
+    if pid:
+        found = _find_provider(providers, pid)
+        if found is not None:
+            return found, model
+    return _default_provider(providers), None
+
+
 def resolve_enrichment_target(config: dict | None) -> tuple[object | None, str | None]:
-    """Collection override → global Settings item → default LLM provider.
+    """Library LLM: collection override → Settings → default card.
 
     Returns ``(provider_cfg, model_name)``. *model_name* may be None (use
     the provider default).
@@ -117,63 +142,112 @@ def resolve_enrichment_target(config: dict | None) -> tuple[object | None, str |
 
     pid = str(config.get("enriching_llm_provider") or "").strip()
     if pid:
-        for p in providers:
-            if p.id == pid:
-                model = str(config.get("enriching_llm_model") or "").strip() or None
-                return p, model
+        found = _find_provider(providers, pid)
+        if found is not None:
+            model = str(config.get("enriching_llm_model") or "").strip() or None
+            return found, model
 
-    ref = getattr(cfg.enrichment, "enrichment_model", "") or ""
-    pid, model = _parse_model_ref(ref)
-    if pid:
-        for p in providers:
-            if p.id == pid:
-                return p, model
-
-    if providers:
-        default_p = next((p for p in providers if p.is_default), providers[0])
-        return default_p, None
-    return None, None
+    return resolve_named_slot(getattr(cfg.enrichment, "enrichment_model", "") or "")
 
 
-def get_enriching_llm(config: dict | None):
-    """LLM used for ingest Summary + Context (and collection consolidate)."""
+def resolve_agentic_query_target() -> tuple[object | None, str | None]:
+    """Settings Agentic query → default card. No tool-calling requirement."""
+    from src.config import get_config
+
+    ref = getattr(get_config().enrichment, "agentic_query_model", "") or ""
+    return resolve_named_slot(ref)
+
+
+def resolve_note_distill_target() -> tuple[object | None, str | None]:
+    """Settings Note distill → default card. No tool-calling requirement."""
+    from src.config import get_config
+
+    ref = getattr(get_config().enrichment, "note_distill_model", "") or ""
+    return resolve_named_slot(ref)
+
+
+def resolve_ingest_vision() -> tuple[object | None, str]:
+    """Settings 图片描述 model used by file / note / meeting ingest.
+
+    Accepts ``providerId|model`` (preferred) or a legacy bare model name
+    (first provider that lists that visual id).
+    """
+    from src.config import get_config
+
+    cfg = get_config()
+    raw = str(getattr(cfg, "visual_model_id", "") or "").strip()
+    if not raw:
+        return None, ""
+    providers = list(cfg.llm.providers or [])
+    pid, model = _parse_model_ref(raw)
+    if model and pid:
+        found = _find_provider(providers, pid)
+        if found is not None and model in (getattr(found, "visual_model_ids", None) or []):
+            return found, model
+        return None, ""
+    # Legacy: model name only — first card that marks it visual.
+    for p in providers:
+        if pid in (getattr(p, "visual_model_ids", None) or []):
+            return p, pid
+    return None, ""
+
+
+def provider_model_is_visual(provider_cfg, model: str | None) -> bool:
+    if provider_cfg is None:
+        return False
+    mid = (
+        (model or "").strip()
+        or getattr(provider_cfg, "default_model", None)
+        or getattr(provider_cfg, "model", None)
+        or ""
+    )
+    return bool(mid) and mid in (getattr(provider_cfg, "visual_model_ids", None) or [])
+
+
+def _cached_slot_llm(cache_prefix: str, provider_cfg, model: str | None):
     from src.providers.cache import get_or_create as cached_provider
     from src.providers.llm import create_llm_for_provider
     from src.services import services
 
-    provider_cfg, model = resolve_enrichment_target(config)
     if provider_cfg is None:
         return services.llm
-    effective = model or getattr(provider_cfg, "default_model", None) or getattr(provider_cfg, "model", None) or ""
-    cache_key = f"llm:enrich:{provider_cfg.id}:{effective}"
+    effective = (
+        model
+        or getattr(provider_cfg, "default_model", None)
+        or getattr(provider_cfg, "model", None)
+        or ""
+    )
+    cache_key = f"{cache_prefix}:{provider_cfg.id}:{effective}"
     return cached_provider(
         cache_key,
         lambda: create_llm_for_provider(provider_cfg, model=model),
     )
 
 
+def get_enriching_llm(config: dict | None):
+    """Library LLM: ingest Summary + Context, consolidate, catalog."""
+    return _cached_slot_llm("llm:enrich", *resolve_enrichment_target(config))
+
+
+def get_agentic_query_llm():
+    """Agentic / Direct RAG, variants, keywords, recall eval."""
+    return _cached_slot_llm("llm:agentic", *resolve_agentic_query_target())
+
+
+def get_note_distill_llm():
+    """Note distillation (no tool-calling requirement)."""
+    return _cached_slot_llm("llm:distill", *resolve_note_distill_target())
+
+
 def enrichment_model_is_visual(config: dict | None) -> bool:
-    """True if the selected enrich model is in that provider's visual_model_ids."""
-    provider_cfg, model = resolve_enrichment_target(config)
-    if provider_cfg is None:
-        return False
-    mid = model or getattr(provider_cfg, "default_model", None) or getattr(provider_cfg, "model", None) or ""
-    visual_ids = getattr(provider_cfg, "visual_model_ids", None) or []
-    return bool(mid) and mid in visual_ids
+    """True if the selected Library LLM is in that provider's visual_model_ids."""
+    return provider_model_is_visual(*resolve_enrichment_target(config))
 
 
 def vision_description_configured() -> bool:
-    """True if Settings has a Visual model (eye icon) selected."""
-    from src.config import get_config
-
-    cfg = get_config()
-    vision_model_id = getattr(cfg, "visual_model_id", "") or ""
-    if not vision_model_id:
-        return False
-    for p in cfg.llm.providers or []:
-        if vision_model_id in (getattr(p, "visual_model_ids", None) or []):
-            return True
-    return False
+    """True if Settings 图片描述 is set to a model marked visual."""
+    provider, mid = resolve_ingest_vision()
+    return bool(provider and mid)
 
 
 _DESC_LINE = re.compile(r"^description:\s*\S", re.I | re.M)

@@ -368,6 +368,29 @@ class TestMeetingStore:
         meeting = create_meeting("No Transcript")
         assert get_transcript(meeting.id) is None
 
+    def test_save_note_image_and_get_path(self):
+        from src.meeting.store import create_meeting, save_note_image, get_note_image_path
+
+        meeting = create_meeting("Image Notes")
+        name = save_note_image(meeting.id, "shot.PNG", b"\x89PNG\r\n")
+        assert name.endswith(".png")
+        path = get_note_image_path(meeting.id, name)
+        assert path.exists()
+        assert path.read_bytes().startswith(b"\x89PNG")
+
+    def test_save_note_image_missing_meeting_raises(self):
+        from src.meeting.store import save_note_image
+
+        with pytest.raises(FileNotFoundError):
+            save_note_image("nope", "a.png", b"x")
+
+    def test_get_note_image_path_rejects_escape(self):
+        from src.meeting.store import create_meeting, get_note_image_path
+
+        meeting = create_meeting("Escape")
+        with pytest.raises(ValueError):
+            get_note_image_path(meeting.id, "../secret.png")
+
     def test_save_notes_missing_meeting_raises(self):
         """save_notes raises FileNotFoundError for missing meeting."""
         from src.meeting.store import save_notes
@@ -1156,6 +1179,39 @@ class TestMeetingRoutes:
 
         mock_store.save_notes.assert_called_once_with("abc123", "New notes")
         assert result["notes_content"] == "New notes"
+
+    def test_upload_meeting_note_image_route(self):
+        from src.meeting.routes import upload_meeting_note_image
+
+        meeting = _make_meeting()
+        upload = MagicMock()
+        upload.filename = "pic.jpg"
+        upload.read = AsyncMock(return_value=b"jpegdata")
+        with patch("src.meeting.routes.store") as mock_store:
+            mock_store.get_meeting.return_value = meeting
+            mock_store.save_note_image.return_value = "aabbccddee.jpg"
+            import asyncio
+            result = asyncio.get_event_loop().run_until_complete(
+                upload_meeting_note_image("abc123", upload)
+            )
+        assert result["url"] == "/api/meetings/abc123/images/aabbccddee.jpg"
+        assert result["filename"] == "aabbccddee.jpg"
+        mock_store.save_note_image.assert_called_once_with("abc123", "pic.jpg", b"jpegdata")
+
+    def test_upload_meeting_note_image_missing_meeting(self):
+        from src.meeting.routes import upload_meeting_note_image
+
+        upload = MagicMock()
+        upload.filename = "pic.jpg"
+        upload.read = AsyncMock(return_value=b"jpegdata")
+        with patch("src.meeting.routes.store") as mock_store:
+            mock_store.get_meeting.return_value = None
+            import asyncio
+            with pytest.raises(HTTPException) as exc:
+                asyncio.get_event_loop().run_until_complete(
+                    upload_meeting_note_image("missing", upload)
+                )
+        assert exc.value.status_code == 404
 
     def test_start_transcription_route(self):
         """POST /meetings/{id}/transcribe creates a task."""

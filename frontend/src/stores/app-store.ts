@@ -635,7 +635,7 @@ export const useAppStore = create<AppState>((set) => ({
   logPanelOpen: false,
   toggleLogPanel: () => set((s) => ({ logPanelOpen: !s.logPanelOpen })),
 
-  developerMode: true,
+  developerMode: loadPersisted<boolean>("developerMode", false),
   toggleDeveloperMode: () => set((s) => ({ developerMode: !s.developerMode })),
 
   activeMeeting: null,
@@ -853,5 +853,6 @@ useAppStore.subscribe((state) => {
     localStorage.setItem("rag_activeModel", JSON.stringify(state.activeModel))
     localStorage.setItem("rag_selectedCollections", JSON.stringify(state.selectedCollections))
     localStorage.setItem("rag_sessionId", JSON.stringify(state.sessionId))
+    localStorage.setItem("rag_developerMode", JSON.stringify(state.developerMode))
   }, 500)
 })

@@ -200,6 +200,35 @@ def save_audio(meeting_id: str, file_bytes: bytes, ext: str, original_filename: 
     return str(audio_path)
 
 
+_IMAGE_EXTS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"})
+
+
+def save_note_image(meeting_id: str, filename: str, content: bytes) -> str:
+    """Save a notes image under ``meetings/{id}/images/`` and return the stored name."""
+    meeting = get_meeting(meeting_id)
+    if meeting is None:
+        raise FileNotFoundError(f"Meeting {meeting_id} not found")
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in (filename or "") else "png"
+    if ext not in _IMAGE_EXTS:
+        ext = "png"
+    safe_name = f"{uuid.uuid4().hex[:10]}.{ext}"
+    images_dir = _meeting_dir(meeting_id) / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    from src.paths import confine
+
+    path = confine(images_dir / safe_name, images_dir)
+    path.write_bytes(content)
+    logger.info("Saved note image: %s (%d bytes) for meeting %s", path, len(content), meeting_id)
+    return safe_name
+
+
+def get_note_image_path(meeting_id: str, filename: str) -> Path:
+    from src.paths import confine
+
+    images_dir = _meeting_dir(meeting_id) / "images"
+    return confine(images_dir / filename, images_dir)
+
+
 def save_notes(meeting_id: str, content: str) -> str:
     meeting = get_meeting(meeting_id)
     if meeting is None:

@@ -7,6 +7,15 @@ from unittest.mock import MagicMock, patch
 from src.rag.catalog import CollectionCatalog, CatalogEntry
 
 
+@pytest.fixture(autouse=True)
+def _no_library_llm(monkeypatch):
+    """Default: coverage uses the catalog's injected llm (Library LLM unset)."""
+    monkeypatch.setattr(
+        "src.rag.contextual.get_enriching_llm",
+        lambda _cfg: None,
+    )
+
+
 def _make_catalog(db=None, llm=None):
     db = db or MagicMock()
     llm = llm or MagicMock()
@@ -274,6 +283,22 @@ class TestCoverageLogic:
         cat.update_coverage("col_a")
         prompt = llm.generate.call_args[0][0]
         assert "aspect" in prompt.lower()
+
+    def test_coverage_prefers_library_llm(self, monkeypatch):
+        db = MagicMock()
+        db.get_collection_config.return_value = {"coverage": ""}
+        fallback = MagicMock()
+        library = MagicMock()
+        library.generate.return_value = "aspect from library llm"
+        monkeypatch.setattr("src.rag.contextual.get_enriching_llm", lambda _cfg: library)
+        cat = CollectionCatalog(db, fallback)
+        cat._collect_file_infos = MagicMock(return_value=[
+            {"filename": "a.md", "chunk0_text": "hello"},
+        ])
+        cat._count_active_upload_tasks = MagicMock(return_value=0)
+        cat.update_coverage("col_a")
+        library.generate.assert_called_once()
+        fallback.generate.assert_not_called()
 
     def test_truncation_safety_net(self):
         db = MagicMock()

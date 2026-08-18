@@ -708,13 +708,15 @@ def test_generate_eval_cases_skips_archived_points():
         '"target_chunk_index": 1}]'
     )
 
+    mock_llm = MagicMock()
+    mock_llm.generate.return_value = llm_out
     with patch("src.api.routes.recall.services") as mock_svc, \
          patch("src.api.routes.recall._save_cases") as mock_save, \
          patch("src.api.routes.recall._load_cases", return_value=[]), \
-         patch("src.api.routes.recall._is_specific_query", return_value=True):
+         patch("src.api.routes.recall._is_specific_query", return_value=True), \
+         patch("src.rag.contextual.get_agentic_query_llm", return_value=mock_llm):
         mock_svc.db.collection_exists.return_value = True
         mock_svc.db.scroll_points.side_effect = fake_scroll
-        mock_svc.llm.generate.return_value = llm_out
 
         resp = client.post("/api/recall/eval/col_test/cases/generate")
         assert resp.status_code == 200
@@ -726,7 +728,7 @@ def test_generate_eval_cases_skips_archived_points():
         assert saved[0]["target_chunk_id"] == "cur-1"
         assert saved[0]["target_source"] == "__file__:new"
         # LLM prompt must not include archived OPEX text
-        prompt = mock_svc.llm.generate.call_args[0][0]
+        prompt = mock_llm.generate.call_args[0][0]
         assert "246498" not in prompt
         assert "Screening table" in prompt or "water tariff" in prompt.lower() or "current version" in prompt
 

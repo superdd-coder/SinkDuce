@@ -153,16 +153,20 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         default_model: form.default_model || form.selected_models[0],
         visual_model_ids: form.visual_model_ids,
       }
+      let savedId = provider?.id || ""
       if (provider) {
         await updateLLMProvider(provider.id, data)
         toast.success("Provider updated")
       } else {
-        await createLLMProvider(data)
+        const created = await createLLMProvider(data)
+        savedId = created?.id || ""
         toast.success("Provider created")
       }
       if (form.is_default && form.function_call_model_ids.length > 0) {
         const chatModel = form.default_model || form.function_call_model_ids[0]
-        await updateConfig("default_chat_model", { default_chat_model: chatModel })
+        await updateConfig("default_chat_model", {
+          default_chat_model: savedId ? `${savedId}|${chatModel}` : chatModel,
+        })
       }
       onSaved()
     } catch (err) {

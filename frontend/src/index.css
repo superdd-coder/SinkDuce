@@ -23016,39 +23016,46 @@ button.pm-ws-path-row {
   border-bottom: none; /* no hard rule under tabs — Collection language */
   isolation: auto;
 }
+/* Notes format strip sits immediately under the pills */
+.pm-meeting-tabs-shell:has(> .is-notes) .pm-meeting-tabs-bar {
+  padding-bottom: 2px;
+}
 /*
  * Meeting Summary edit: format strip sits under tab bar, above section title.
  * Sticky within content scroll; solid paper fill (never transparent over prose).
  * Height token lives on the scroll shell (see below) so the top edge-fade can
  * offset with :has(.pm-meeting-summary-fmt-bar).
  */
-.pm-meeting-summary-fmt-bar {
+.pm-meeting-summary-fmt-bar,
+.pm-meeting-notes-fmt-bar {
   position: sticky;
   top: 0;
   z-index: 8;
   flex-shrink: 0;
   margin: 0;
-  padding: 6px 14px 8px;
+  padding: 4px 14px 6px;
   box-sizing: border-box;
-  min-height: var(--pm-meeting-summary-fmt-h, 42px);
+  min-height: var(--pm-meeting-summary-fmt-h, 38px);
   background: #ffffff !important;
   background-color: #ffffff !important;
   /* Soft separation from title / prose below — not a hard hairline */
   box-shadow: 0 1px 0 color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
   isolation: isolate;
 }
-.pm-meeting-summary-fmt-bar .pm-fmt-toolbar {
+.pm-meeting-summary-fmt-bar .pm-fmt-toolbar,
+.pm-meeting-notes-fmt-bar .pm-fmt-toolbar {
   position: relative !important;
   top: auto !important;
   z-index: auto;
-  /* Always visible while edit session is open (parent hosts bar only when editing) */
+  /* Always visible — solid paper parent, never a transparent whisper */
   opacity: 1 !important;
   pointer-events: auto !important;
   padding: 0 !important;
   min-height: 28px;
   background: transparent !important;
 }
-.pm-meeting-summary-fmt-bar .pm-fmt-inner {
+.pm-meeting-summary-fmt-bar .pm-fmt-inner,
+.pm-meeting-notes-fmt-bar .pm-fmt-inner {
   min-height: 28px;
   height: 28px;
 }
@@ -23070,7 +23077,7 @@ button.pm-ws-path-row {
   overflow: hidden;
   --pm-edge-fade-color: #ffffff;
   /* Shared with .pm-meeting-summary-fmt-bar + top edge-fade offset while editing */
-  --pm-meeting-summary-fmt-h: 42px;
+  --pm-meeting-summary-fmt-h: 38px;
 }
 .pm-meeting-content-scroll-shell > .pm-rail-edge-fade {
   --pm-edge-fade-color: #ffffff;
@@ -23085,8 +23092,9 @@ button.pm-ws-path-row {
  * scroll viewport — shift the top edge-fade to sit under that bar so the
  * toolbar is not washed out.
  */
-.pm-meeting-content-scroll-shell:has(.pm-meeting-summary-fmt-bar) > .pm-rail-edge-fade--top {
-  top: var(--pm-meeting-summary-fmt-h, 42px);
+.pm-meeting-content-scroll-shell:has(.pm-meeting-summary-fmt-bar) > .pm-rail-edge-fade--top,
+.pm-meeting-content-scroll-shell.is-notes > .pm-rail-edge-fade--top {
+  top: var(--pm-meeting-summary-fmt-h, 38px);
 }
 .pm-meeting-content-scroll-shell > .pm-rail-edge-fade--bottom {
   height: 36px;
@@ -23179,10 +23187,14 @@ button.pm-ws-path-row {
 .pm-meeting-content-card .pm-meeting-notes-card,
 .pm-meeting-content-card .pm-meeting-panel-card {
   margin: 0;
-  padding: 8px 12px 20px;
+  padding: 4px 12px 20px;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+/* Format strip is hosted above the card — hide the nested whisper toolbar */
+.pm-meeting-notes-card .pm-fmt-toolbar {
+  display: none !important;
 }
 .pm-meeting-tabs-actions {
   margin-left: auto;
@@ -23937,7 +23949,7 @@ button.pm-ws-path-row {
 /* Notes editor host */
 .pm-meeting-notes-card {
   margin: 0 20px 28px;
-  padding: 8px 10px 16px;
+  padding: 4px 10px 16px;
   border-radius: var(--pm-r-lg, 20px);
   background: #ffffff;
   box-shadow: var(--pm-shadow-sm);

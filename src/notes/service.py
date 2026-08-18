@@ -50,21 +50,21 @@ def get_distillation_prompt(source_content: str) -> tuple[str, str]:
 
 
 def get_llm():
-    """Get the default LLM provider for distillation."""
-    from src.config import get_config
-    from src.providers.llm import create_llm_for_provider
+    """Note distill slot → default card."""
+    from src.rag.contextual import get_note_distill_llm
 
-    cfg = get_config()
-    if cfg.llm.providers:
-        default_p = next((p for p in cfg.llm.providers if p.is_default), cfg.llm.providers[0])
-        return create_llm_for_provider(default_p)
-    from src.services import services
-    return services.llm
+    return get_note_distill_llm()
 
 
 def _run_distill_llm(source_content: str, log_label: str) -> str:
     """Call the distill LLM and strip common preambles. Synchronous."""
+    from src.parsers.image_utils import prepare_text_for_non_visual_llm
+    from src.rag.contextual import provider_model_is_visual, resolve_note_distill_target
+
     logger.info("Generating distillation for %s (%d chars)", log_label, len(source_content))
+    target = resolve_note_distill_target()
+    if not provider_model_is_visual(*target):
+        source_content = prepare_text_for_non_visual_llm(source_content)
     llm = get_llm()
     system_prompt, user_prompt = get_distillation_prompt(source_content)
     result = llm.generate(user_prompt, system=system_prompt, max_tokens=4096, thinking=False)

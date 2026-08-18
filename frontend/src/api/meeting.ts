@@ -123,6 +123,20 @@ export const uploadMeetingAudio = async (id: string, file: File) => {
   return res.json() as Promise<Meeting>
 }
 
+export const uploadMeetingImage = async (id: string, file: File) => {
+  const formData = new FormData()
+  formData.append("file", file)
+  const res = await fetch(`${API_BASE}/meetings/${id}/images`, {
+    method: "POST",
+    body: formData,
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`Image upload failed (${res.status}): ${body}`)
+  }
+  return res.json() as Promise<{ url: string; filename: string }>
+}
+
 export const uploadMeetingNotes = async (id: string, file: File) => {
   const formData = new FormData()
   formData.append("file", file)

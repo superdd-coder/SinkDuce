@@ -663,14 +663,14 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           </div>
         </section>
 
-        {/* ── Enriching LLM ── */}
+        {/* ── Library LLM ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Enriching LLM</span>
+            <span className="pm-config-card-kicker">Library LLM</span>
           </header>
           <p className="pm-meta pm-config-card-desc">
-            Overrides Settings → Contextual enrichment & Summary. Leave empty
-            for the global default.
+            Overrides Settings → Library LLM for this collection (Summary,
+            Context, consolidate, coverage). Leave empty for the global default.
           </p>
           <div className="pm-config-grid">
             <div className="pm-config-field">
