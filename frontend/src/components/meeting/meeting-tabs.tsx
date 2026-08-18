@@ -33,6 +33,7 @@ import {
   extract, deleteSection,
   regenerateSection, getSectionMd,
   saveSectionMd, updateMeeting, getMeeting,
+  uploadMeetingImage,
   allocateSection, deleteSectionAllocation, createCollection,
   generateSectionDescription, getSummaryTranslations, getActiveTranslations,
   getTask, getSectionTodoCandidates,
@@ -2172,6 +2173,7 @@ export function MeetingTabs({
   const summaryBarRef = useRef<HTMLDivElement>(null)
   const [ingestingTabs, setIngestingTabs] = useState<Set<string>>(new Set())
 
+  const [notesEditor, setNotesEditor] = useState<Editor | null>(null)
   const [notesDraft, setNotesDraft] = useState(notesContent)
   const notesBaselineRef = useRef(notesContent)
   const notesSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -2277,6 +2279,11 @@ export function MeetingTabs({
       scheduleNotesSave(value)
     }
   }
+
+  const handleNotesImageUpload = useCallback(async (file: File) => {
+    const result = await uploadMeetingImage(meetingId, file)
+    return result.url
+  }, [meetingId])
 
   useEffect(() => {
     return () => { if (notesSaveTimerRef.current) clearTimeout(notesSaveTimerRef.current) }
@@ -3095,8 +3102,16 @@ export function MeetingTabs({
         )}
       </div>
 
-      {/* Body scrolls inside the content card; tab bar stays fixed above */}
-      <div className="pm-meeting-content-scroll-shell">
+      {mainTab === "notes" ? (
+        <div className="pm-meeting-notes-fmt-bar">
+          {notesEditor && !notesEditor.isDestroyed ? (
+            <EditorToolbar editor={notesEditor} stickyOffset={0} />
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Body scrolls inside the content card; tab bar + notes fmt stay fixed above */}
+      <div className={cn("pm-meeting-content-scroll-shell", mainTab === "notes" && "is-notes")}>
         <div
           ref={contentScrollRef}
           className="pm-meeting-content-scroll"
@@ -3285,8 +3300,10 @@ export function MeetingTabs({
             value={notesDraft}
             onChange={handleNotesChange}
             minHeight="400px"
-            stickyToolbarOffset={contentStickyOffset}
+            showToolbar={false}
             placeholder="Write your meeting notes here (Markdown supported)…"
+            onImageUpload={handleNotesImageUpload}
+            onEditorReady={(ed) => setNotesEditor(ed as Editor)}
           />
         </div>
       </div>

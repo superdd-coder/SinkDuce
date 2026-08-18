@@ -164,6 +164,7 @@ def test_meeting_nested_paper_cards_exist():
         ".pm-meeting-media",
         ".pm-meeting-panel-card",
         ".pm-meeting-notes-card",
+        ".pm-meeting-notes-fmt-bar",
         ".pm-meeting-player-zone-card",
         ".pm-meeting-content-card",
         ".pm-meeting-title-card",
@@ -224,6 +225,19 @@ def test_meeting_main_tabs_are_summary_and_notes_only():
     assert "exportSummaryAsPdf" in src
     assert "pm-meeting-export-menu" in src
     assert "Save as PDF" in src
+    assert "onImageUpload={handleNotesImageUpload}" in src
+    assert "uploadMeetingImage" in src
+    assert "pm-meeting-notes-fmt-bar" in src
+    assert 'showToolbar={false}' in src
+    assert 'mainTab === "notes" && "is-notes"' in src
+
+
+def test_live_capture_notes_upload_images():
+    capture = (
+        ROOT / "frontend" / "src" / "components" / "meeting" / "meeting-capture-stages.tsx"
+    ).read_text(encoding="utf-8")
+    assert "uploadMeetingImage" in capture
+    assert "onImageUpload=" in capture
 
 
 def test_meeting_stage_mode_sequential_fade():

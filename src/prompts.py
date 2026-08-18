@@ -13,11 +13,10 @@ via .format() or f-strings.
 
 # VISUAL_PROMPT
 #   Purpose: Generates a natural-language description of an image via a Vision LLM.
-#            Used by the "Visual Translate" feature in the Tiptap notes editor.
-#            When the user clicks the AI button on an image, the Vision LLM receives
-#            this prompt along with the base64-encoded image.
+#            Used at ingest (file / note / meeting) and as a prepass when the
+#            Meeting Summary or Note distill model cannot see images.
 #   Role: user (single message, with image base64 attached)
-#   Called by: src/api/routes/visual.py → llm.describe_image(prompt=VISUAL_PROMPT)
+#   Called by: src/parsers/image_utils.py → describe_images / _describe_stored_image
 #   Fallback: src/providers/llm/openai_compat.py has an identical _DEFAULT_VISUAL_PROMPT
 #   Template vars: none
 VISUAL_PROMPT = (

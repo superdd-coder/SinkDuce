@@ -15,11 +15,12 @@ import {
 } from "@/api/client"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { oneshotSlotSnapshot, type OneshotSlotSnapshot } from "./oneshot-slots"
 
 interface OneShotDashscopeDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSaved: () => void
+  onSaved: (slots?: OneshotSlotSnapshot) => void
 }
 
 const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -27,13 +28,46 @@ const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 // OneShot defaults to Fun-ASR (precompiled hot words + the same Recognition API).
 const FILE_TRANS_MODEL = "fun-asr"
 const RT_TRANS_MODEL = "fun-asr-realtime"
-const MEETING_MODEL = "deepseek-v4-pro"
+const DEFAULT_MODEL = "deepseek-v4-flash-0731"
+const CHAT_MODEL = "qwen3.7-plus"
+const LIBRARY_MODEL = "qwen3.7-flash"
+const MEETING_MODEL = "qwen3.7-plus"
+// qwen3.7-plus / qwen3.7-flash: vision + tools. DeepSeek: tools only, no vision.
+const DASHSCOPE_VISION_AND_TOOLS = ["qwen3.7-plus", "qwen3.7-flash"]
+
+function uniqueModels(names: string[]): string[] {
+  return [...new Set(names.map((n) => n.trim()).filter(Boolean))]
+}
+
+function dashscopeIsVisionAndTools(name: string): boolean {
+  return DASHSCOPE_VISION_AND_TOOLS.includes(name)
+}
+
+function dashscopeIsToolsOnly(name: string): boolean {
+  return name.toLowerCase().includes("deepseek")
+}
+
+function dashscopeCapabilityTags(selected: string[], chatModel: string, imageModel: string) {
+  const visual_model_ids = uniqueModels([
+    ...selected.filter(dashscopeIsVisionAndTools),
+    dashscopeIsToolsOnly(imageModel) ? "" : imageModel,
+  ])
+  const function_call_model_ids = uniqueModels([
+    ...selected.filter((m) => dashscopeIsVisionAndTools(m) || dashscopeIsToolsOnly(m)),
+    chatModel,
+  ])
+  return { visual_model_ids, function_call_model_ids }
+}
 
 export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotDashscopeDialogProps) {
   const [apiKey, setApiKey] = useState("")
-  const [llmModel, setLlmModel] = useState("deepseek-v4-flash")
-  const [chatModel, setChatModel] = useState("deepseek-v4-flash")
-  const [visualModel, setVisualModel] = useState("qwen3.5-flash")
+  const [llmModel, setLlmModel] = useState(DEFAULT_MODEL)
+  const [agenticModel, setAgenticModel] = useState(DEFAULT_MODEL)
+  const [chatModel, setChatModel] = useState(CHAT_MODEL)
+  const [visualModel, setVisualModel] = useState(LIBRARY_MODEL)
+  const [libraryModel, setLibraryModel] = useState(LIBRARY_MODEL)
+  const [distillModel, setDistillModel] = useState(LIBRARY_MODEL)
+  const [meetingModel, setMeetingModel] = useState(MEETING_MODEL)
   const [embModel, setEmbModel] = useState("text-embedding-v4")
   const [rerankerModel, setRerankerModel] = useState("qwen3-rerank")
   const [showApiKey, setShowApiKey] = useState(false)
@@ -74,23 +108,41 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
         await updateRealtimeTranscriptionProvider(p.id, { ...p, is_active: false })
       }
 
-      // Build selected_models: all models (deduplicate)
-      const selectedModels = [...new Set([llmModel.trim(), chatModel.trim(), visualModel.trim(), MEETING_MODEL].filter(Boolean))]
-      const visualModelIds = visualModel.trim() ? [visualModel.trim()] : []
+      const defaultRef = llmModel.trim() || DEFAULT_MODEL
+      const agenticRef = agenticModel.trim() || defaultRef
+      const chatRef = chatModel.trim() || CHAT_MODEL
+      const visualRef = visualModel.trim() || LIBRARY_MODEL
+      const libraryRef = libraryModel.trim() || LIBRARY_MODEL
+      const distillRef = distillModel.trim() || LIBRARY_MODEL
+      const meetingRef = meetingModel.trim() || MEETING_MODEL
+      const selectedModels = uniqueModels([
+        defaultRef,
+        agenticRef,
+        chatRef,
+        visualRef,
+        libraryRef,
+        distillRef,
+        meetingRef,
+      ])
+      const { visual_model_ids, function_call_model_ids } = dashscopeCapabilityTags(
+        selectedModels,
+        chatRef,
+        visualRef,
+      )
 
       // Create new providers with default/active set
       const [llmCreated] = await Promise.all([
         createLLMProvider({
           name: "Dashscope",
           provider: "openai_compatible",
-          model: llmModel.trim(),
+          model: defaultRef,
           base_url: DASHSCOPE_BASE_URL,
           api_key: apiKey.trim(),
           is_default: true,
           selected_models: selectedModels,
-          default_model: llmModel.trim(),
-          visual_model_ids: visualModelIds,
-          function_call_model_ids: [chatModel.trim()],
+          default_model: defaultRef,
+          visual_model_ids,
+          function_call_model_ids,
         }),
         createEmbeddingProvider({
           name: "Dashscope",
@@ -138,18 +190,26 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
               is_active: true,
             }),
       ])
-      // Set global model configs
-      await updateConfig("default_chat_model", { default_chat_model: chatModel.trim() })
-      if (visualModel.trim()) {
-        await updateConfig("visual_model_id", { visual_model_id: visualModel.trim() })
+      const slots = oneshotSlotSnapshot(llmCreated?.id, {
+        chat: chatRef,
+        visual: visualRef,
+        library: libraryRef,
+        meeting: meetingRef,
+        agentic: agenticRef,
+        distill: distillRef,
+      })
+      await updateConfig("default_chat_model", { default_chat_model: slots.default_chat_model })
+      if (slots.visual_model_id) {
+        await updateConfig("visual_model_id", { visual_model_id: slots.visual_model_id })
       }
-      if (llmCreated?.id) {
-        await updateConfig("enrichment", {
-          meeting_model: `${llmCreated.id}|${MEETING_MODEL}`,
-        })
-      }
+      await updateConfig("enrichment", {
+        meeting_model: slots.meeting_model,
+        enrichment_model: slots.enrichment_model,
+        agentic_query_model: slots.agentic_query_model,
+        note_distill_model: slots.note_distill_model,
+      })
       toast.success("All Dashscope providers created")
-      onSaved()
+      onSaved(slots)
       onOpenChange(false)
       // Reset form
       setApiKey("")
@@ -165,7 +225,7 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
       <DialogContent
         className={cn(
           "pm-dialog pm-dialog--silk pm-settings-dlg",
-          "sm:max-w-md",
+          "sm:max-w-lg",
           "!animate-none data-open:!animate-none data-closed:!animate-none",
         )}
         overlayClassName="pm-dialog-overlay--silk"
@@ -174,7 +234,7 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
           <DialogKicker>Settings</DialogKicker>
           <DialogTitle>OneShot Dashscope</DialogTitle>
           <DialogDescription>
-            One API key configures LLM, embedding, rerank, and transcription defaults.
+            One API key configures each slot: type the model name for every function.
           </DialogDescription>
         </DialogHeader>
 
@@ -207,32 +267,46 @@ export function OneShotDashscopeDialog({ open, onOpenChange, onSaved }: OneShotD
               <span className="pm-settings-dlg-card-kicker">Models</span>
               <div className="pm-settings-dlg-fields">
                 <div className="pm-settings-dlg-field">
-                  <FieldLabel>LLM</FieldLabel>
-                  <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="deepseek-v4-flash" />
+                  <FieldLabel>Default</FieldLabel>
+                  <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder={DEFAULT_MODEL} />
                 </div>
                 <div className="pm-settings-dlg-field">
-                  <FieldLabel>Chat (tools)</FieldLabel>
-                  <Input value={chatModel} onChange={(e) => setChatModel(e.target.value)} placeholder="deepseek-v4-flash" />
-                  <p className="pm-settings-dlg-card-hint mt-1.5">Must support function calling.</p>
+                  <FieldLabel>Agentic query</FieldLabel>
+                  <Input value={agenticModel} onChange={(e) => setAgenticModel(e.target.value)} placeholder={DEFAULT_MODEL} />
                 </div>
                 <div className="pm-settings-dlg-field">
-                  <FieldLabel>Visual</FieldLabel>
-                  <Input value={visualModel} onChange={(e) => setVisualModel(e.target.value)} placeholder="qwen3.5-flash" />
+                  <FieldLabel>Chat</FieldLabel>
+                  <Input value={chatModel} onChange={(e) => setChatModel(e.target.value)} placeholder={CHAT_MODEL} />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Image description</FieldLabel>
+                  <Input value={visualModel} onChange={(e) => setVisualModel(e.target.value)} placeholder={LIBRARY_MODEL} />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Library LLM</FieldLabel>
+                  <Input value={libraryModel} onChange={(e) => setLibraryModel(e.target.value)} placeholder={LIBRARY_MODEL} />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Note distill</FieldLabel>
+                  <Input value={distillModel} onChange={(e) => setDistillModel(e.target.value)} placeholder={LIBRARY_MODEL} />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Meeting summary</FieldLabel>
+                  <Input value={meetingModel} onChange={(e) => setMeetingModel(e.target.value)} placeholder={MEETING_MODEL} />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Embedding</FieldLabel>
+                  <Input value={embModel} onChange={(e) => setEmbModel(e.target.value)} placeholder="text-embedding-v4" />
+                </div>
+                <div className="pm-settings-dlg-field">
+                  <FieldLabel>Reranker</FieldLabel>
+                  <Input value={rerankerModel} onChange={(e) => setRerankerModel(e.target.value)} placeholder="qwen3-rerank" />
                 </div>
                 <p className="pm-settings-dlg-card-hint">
-                  Meeting summary · <span className="font-mono">{MEETING_MODEL}</span>
+                  qwen3.7-plus / flash: vision + tools · DeepSeek: tools only
+                  {" · "}
+                  Base URL · {DASHSCOPE_BASE_URL}
                 </p>
-                <div className="pm-settings-dlg-grid">
-                  <div className="pm-settings-dlg-field">
-                    <FieldLabel>Embedding</FieldLabel>
-                    <Input value={embModel} onChange={(e) => setEmbModel(e.target.value)} placeholder="text-embedding-v4" />
-                  </div>
-                  <div className="pm-settings-dlg-field">
-                    <FieldLabel>Reranker</FieldLabel>
-                    <Input value={rerankerModel} onChange={(e) => setRerankerModel(e.target.value)} placeholder="qwen3-rerank" />
-                  </div>
-                </div>
-                <p className="pm-settings-dlg-card-hint">Base URL · {DASHSCOPE_BASE_URL}</p>
               </div>
             </section>
 

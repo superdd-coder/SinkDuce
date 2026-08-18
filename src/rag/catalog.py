@@ -237,8 +237,18 @@ class CollectionCatalog:
             f"- Target ~250 characters, maximum 400."
         )
 
+        llm = self.llm
         try:
-            new_coverage = self.llm.generate(
+            from src.rag.contextual import get_enriching_llm
+
+            llm = get_enriching_llm(self.db.get_collection_config(collection_id)) or self.llm
+        except Exception:
+            logger.debug("[Coverage] Library LLM resolve failed; using fallback", exc_info=True)
+        if llm is None:
+            logger.warning("[Coverage] no LLM for %r", collection_id)
+            return
+        try:
+            new_coverage = llm.generate(
                 prompt,
                 system=(
                     "You produce compact aspect inventories of document collections. "

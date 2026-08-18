@@ -301,6 +301,32 @@ def test_ocr_classify_scales_workers_to_backlog(monkeypatch):
     _reset_ocr_pool()
 
 
+def test_prepare_text_for_non_visual_uses_existing_caption():
+    from src.parsers.image_utils import prepare_text_for_non_visual_llm
+
+    text = (
+        "Intro\n"
+        ":::image\n"
+        "image_id: aabbccddeeff00112233445566778899\n"
+        "file_id: file001\n"
+        "description: A process figure.\n"
+        ":::\n"
+        "After\n"
+    )
+    out = prepare_text_for_non_visual_llm(text)
+    assert ":::image" not in out
+    assert "[Image: A process figure.]" in out
+    assert "Intro" in out and "After" in out
+
+
+def test_prepare_text_for_non_visual_html_alt():
+    from src.parsers.image_utils import prepare_text_for_non_visual_llm
+
+    out = prepare_text_for_non_visual_llm('<p>Hi</p><img alt="Chart of IRR" src="x.png">')
+    assert "<img" not in out
+    assert "[Image: Chart of IRR]" in out
+
+
 def test_looks_like_has_text_skips_flat_and_keeps_bars():
     import numpy as np
     from src.parsers.rapid_ocr import looks_like_has_text

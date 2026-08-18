@@ -91,6 +91,18 @@ def _resolve_meeting_llm() -> "LLMProvider":
     raise RuntimeError("No LLM provider configured. Add one in Settings first.")
 
 
+def _notes_for_meeting_llm(notes_text: str) -> str:
+    """If Meeting Summary cannot see images, flatten figures via 图片描述."""
+    from src.config import get_config
+    from src.parsers.image_utils import prepare_text_for_non_visual_llm
+    from src.rag.contextual import provider_model_is_visual, resolve_named_slot
+
+    ref = getattr(get_config().enrichment, "meeting_model", "") or ""
+    if provider_model_is_visual(*resolve_named_slot(ref)):
+        return notes_text
+    return prepare_text_for_non_visual_llm(notes_text)
+
+
 def _detect_embedding_dim() -> int:
     """Detect actual embedding dimension by test embedding."""
     dim = getattr(services.embedding, 'dimensions', 0) if services.embedding else 0
@@ -1670,6 +1682,7 @@ def _bind_meeting_mixins() -> None:
         "services",
         "get_config",
         "_resolve_meeting_llm",
+        "_notes_for_meeting_llm",
         "_thinking_max_tokens",
         "_thinking_for_meeting_call",
         "_meeting_thinking_effort",

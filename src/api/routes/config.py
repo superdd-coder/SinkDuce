@@ -245,7 +245,7 @@ def _set_exclusive_flag(providers: list, provider_id: str, *, flag: str = "is_de
 def get_current_config():
     from src.secrets import redact_mapping
 
-    config = get_config()
+    config = reload_config()
     data = config.model_dump(exclude_none=True)
     return redact_mapping(data)
 
@@ -298,8 +298,29 @@ def list_provider_types():
 _TOP_LEVEL_FIELDS = {"visual_model_id", "default_chat_model"}
 
 
+def _slot_ref_valid(ref: str | None, providers: list, kind: str) -> bool:
+    """True if *ref* is empty, a live ``providerId|model``, or a legacy bare name."""
+    raw = (ref or "").strip()
+    if not raw:
+        return True
+    if "|" in raw:
+        pid, model = raw.split("|", 1)
+        pid, model = pid.strip(), model.strip()
+        found = next((p for p in providers if p.id == pid), None)
+        if found is None or not model:
+            return False
+        ids = (
+            found.visual_model_ids if kind == "visual" else found.function_call_model_ids
+        ) or []
+        return model in ids
+    if kind == "visual":
+        return any(raw in (p.visual_model_ids or []) for p in providers)
+    return any(raw in (p.function_call_model_ids or []) for p in providers)
+
+
 @router.put("/config")
 async def update_config(req: ConfigUpdateRequest):
+    reload_config()
     config = get_config()
 
     # Handle top-level AppConfig fields
@@ -557,7 +578,7 @@ async def get_available_models(section: str, data: dict | None = Body(default=No
 
 @router.get("/llm/providers")
 def list_llm_providers():
-    config = get_config()
+    config = reload_config()
     result = []
     from src.secrets import redact_mapping
 
@@ -593,20 +614,10 @@ async def update_llm_provider(provider_id: str, update: dict = Body()):
     if not found:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
     if "visual_model_ids" in update:
-        all_visual = {
-            m
-            for prov in config.llm.providers
-            for m in (prov.visual_model_ids or [])
-        }
-        if config.visual_model_id and config.visual_model_id not in all_visual:
+        if not _slot_ref_valid(config.visual_model_id, config.llm.providers, "visual"):
             config.visual_model_id = None
     if "function_call_model_ids" in update:
-        all_chat = {
-            m
-            for prov in config.llm.providers
-            for m in (prov.function_call_model_ids or [])
-        }
-        if config.default_chat_model and config.default_chat_model not in all_chat:
+        if not _slot_ref_valid(config.default_chat_model, config.llm.providers, "chat"):
             config.default_chat_model = None
     save_config(config)
     reload_config()
@@ -631,11 +642,9 @@ async def delete_llm_provider(provider_id: str):
         raise HTTPException(404, f"Provider '{provider_id}' not found")
     label = _provider_display_name(target, provider_id)
     config.llm.providers = rest
-    all_visual = {m for prov in config.llm.providers for m in (prov.visual_model_ids or [])}
-    if config.visual_model_id and config.visual_model_id not in all_visual:
+    if not _slot_ref_valid(config.visual_model_id, config.llm.providers, "visual"):
         config.visual_model_id = None
-    all_chat = {m for prov in config.llm.providers for m in (prov.function_call_model_ids or [])}
-    if config.default_chat_model and config.default_chat_model not in all_chat:
+    if not _slot_ref_valid(config.default_chat_model, config.llm.providers, "chat"):
         config.default_chat_model = None
     save_config(config)
     reload_config()

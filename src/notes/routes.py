@@ -175,9 +175,12 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
         ocr_classify_document_images,
         process_document_images,
     )
-    from src.config import get_config
     from src.prompts import VISUAL_PROMPT
-    from src.rag.contextual import enrichment_model_is_visual, run_ingest_summary
+    from src.rag.contextual import (
+        enrichment_model_is_visual,
+        resolve_ingest_vision,
+        run_ingest_summary,
+    )
 
     _note_doc = None
     vision_provider = None
@@ -187,13 +190,7 @@ def _do_ingest_note(collection: str, note_id: str, note_title: str, content: str
         _note_doc = ParsedDocument(
             content=content, file_type="note", images=note_images,
         )
-        cfg = get_config()
-        vision_model_id = cfg.visual_model_id if hasattr(cfg, "visual_model_id") else ""
-        if vision_model_id:
-            for p in cfg.llm.providers:
-                if hasattr(p, "visual_model_ids") and vision_model_id in p.visual_model_ids:
-                    vision_provider = p
-                    break
+        vision_provider, vision_model_id = resolve_ingest_vision()
         _note_doc = process_document_images(
             _note_doc, file_id, snapshot_dir, describe=False, ocr=False,
         )

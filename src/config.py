@@ -99,8 +99,10 @@ class EnrichmentConfig(BaseModel):
     use_batch: bool = False
     batch_poll_interval: int = 30
     max_parallel_context: int = 50
-    enrichment_model: str = ""  # "providerId|modelName" or provider id; "" = default LLM
-    meeting_model: str = ""     # provider id for meeting summary LLM; "" = use default LLM
+    enrichment_model: str = ""  # Library LLM: "providerId|modelName"; "" = default card
+    meeting_model: str = ""     # Meeting Summary: "providerId|modelName"; "" = default card
+    agentic_query_model: str = ""  # Agentic/Direct/recall/variants/keywords; "" = default card
+    note_distill_model: str = ""   # Note distillation; "" = default card
     meeting_thinking: bool = False  # meeting summary thinking (off by default)
     meeting_thinking_effort: str = "low"  # low | medium | high (DeepSeek: low/high/max; DashScope token budget)
 
@@ -360,10 +362,12 @@ _config: AppConfig | None = None
 
 
 def get_config() -> AppConfig:
-    global _config
-    if _config is None:
-        _config = load_config()
-    return _config
+    """Read the on-disk config.
+
+    Always reload so a stale in-memory snapshot cannot be saved back and
+    wipe providers written by a concurrent request (oneshot / Settings).
+    """
+    return reload_config()
 
 
 def reload_config() -> AppConfig:

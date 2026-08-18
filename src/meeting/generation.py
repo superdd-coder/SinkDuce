@@ -110,7 +110,7 @@ class MeetingGenerationMixin:
                 transcript_result.text if transcript_result else "(No transcript available)"
             )
 
-        notes_text = store.get_notes(meeting_id) or "(No notes)"
+        notes_text = _notes_for_meeting_llm(store.get_notes(meeting_id) or "(No notes)")
 
         # Collection catalog
         alias_to_real: dict[str, str] = {}
@@ -508,7 +508,7 @@ class MeetingGenerationMixin:
                     else "(No transcript available)"
                 )
 
-            notes_text = store.get_notes(meeting_id) or "(No notes)"
+            notes_text = _notes_for_meeting_llm(store.get_notes(meeting_id) or "(No notes)")
             logger.info(
                 "[BLUEPRINT] Transcript: %d chars, Notes: %d chars",
                 len(transcript_text),

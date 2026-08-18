@@ -37,6 +37,7 @@ import {
   resolveRawFilename,
 } from "@/components/file-mgmt/raw-file-viewer"
 import { toast } from "sonner"
+import { useAppStore } from "@/stores/app-store"
 import { _genKey, _markGenerating, _unmarkGenerating } from "./file-detail-utils"
 
 export interface FileDetailMainPaneProps {
@@ -125,6 +126,8 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
     highlightedIdx,
     toggleChunkExpand,
   } = p
+
+  const developerMode = useAppStore((s) => s.developerMode)
 
   // Recreated each render so list order still shows the first table-source figure.
   const seenChunkImageIds = new Set<string>()
@@ -217,7 +220,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           </span>
                         )}
                       </TabsTrigger>
-                      {fileId ? (
+                      {fileId && developerMode ? (
                         <TabsTrigger
                           value="ingest"
                           disabled={isIngesting}
@@ -747,6 +750,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                     </div>
                   </TabsContent>
 
+                  {developerMode ? (
                   <TabsContent
                     value="ingest"
                     className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
@@ -763,6 +767,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                       </div>
                     )}
                   </TabsContent>
+                  ) : null}
                 </Tabs>
               </div>
   )

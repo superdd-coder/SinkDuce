@@ -1,6 +1,6 @@
 /**
  * Unified file detail dialog (folder / timeline / All Files / Quick Chat).
- * Left: Preview / Parse / Summary / Chunks.
+ * Left: Preview / Parse / Summary / Chunks (Ingest run if developer mode).
  * Right: paths, nodes, version + message timeline (when file-mgmt file_id exists).
  * Bottom: update / promote / archive / permanent delete (managed files only).
  *
@@ -156,6 +156,11 @@ export function FileMgmtDetailDialog({
   useEffect(() => {
     if (isIngesting && activeTab !== "raw") setActiveTab("raw")
   }, [isIngesting, activeTab])
+
+  const developerMode = useAppStore((s) => s.developerMode)
+  useEffect(() => {
+    if (!developerMode && activeTab === "ingest") setActiveTab("raw")
+  }, [developerMode, activeTab])
 
   /**
    * Source used for chunks / extracted text / doc summary.
@@ -813,6 +818,10 @@ export function FileMgmtDetailDialog({
   const handleTabChange = (tab: string) => {
     if (isIngesting && tab !== "raw") {
       toast.info("Still ingesting — only Preview is available for now.")
+      setActiveTab("raw")
+      return
+    }
+    if (tab === "ingest" && !developerMode) {
       setActiveTab("raw")
       return
     }

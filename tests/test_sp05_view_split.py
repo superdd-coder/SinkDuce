@@ -93,6 +93,8 @@ def test_file_detail_main_pane_extracted():
     assert 'value="source"' in pane
     assert 'value="summary"' in pane
     assert 'value="chunks"' in pane
+    assert 'value="ingest"' in pane
+    assert "developerMode" in pane
     assert "<RawFileViewer" in pane
     assert "<FileDetailMainPane" in dialog
     assert "<RawFileViewer" not in dialog

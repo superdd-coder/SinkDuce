@@ -38,6 +38,7 @@ import {
 import { useProviderTypes } from "@/hooks/use-provider-types"
 import { toast } from "sonner"
 import { ProviderCard } from "./provider-card"
+import type { OneshotSlotSnapshot } from "./oneshot-slots"
 import { AddProviderDialog } from "./add-provider-dialog"
 import { LocalModelCard } from "./local-model-card"
 import type { LoadDetail, LoadState } from "./local-model-card"
@@ -616,6 +617,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const [dirTopK,setDirTopK]=useState("20");const [dirRerankTopK,setDirRerankTopK]=useState("5");const [dirSearchMode,setDirSearchMode]=useState("hybrid");const [dirRerankEnabled,setDirRerankEnabled]=useState(true);const [dirMinScore,setDirMinScore]=useState("25")
   const [enrichMaxParallel,setEnrichMaxParallel]=useState("50");const [enrichModel,setEnrichModel]=useState("")
   const [meetingModel,setMeetingModel]=useState("")
+  const [agenticQueryModel,setAgenticQueryModel]=useState("")
+  const [noteDistillModel,setNoteDistillModel]=useState("")
   const [showAdvanced,setShowAdvanced]=useState(false)
   const [showModelConfig,setShowModelConfig]=useState(false)
   const _saveRag=(mode?:string)=>updateConfig("rag",{top_k:parseInt(ragTopK)||20,rerank_top_k:parseInt(ragRerankTopK)||5,max_parallel_queries:parseInt(ragMaxParallel)||10,max_iterations:parseInt(ragMaxIter)||8,default_search_mode:mode??ragSearchMode,min_score:(parseInt(ragMinScore)||0)/100}).catch(()=>{})
@@ -828,6 +831,53 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     try { setRtTransProviders(await getRealtimeTranscriptionProviders()) } catch { /* ignore */ }
   }
 
+  const applyLlmSlotConfig = (c: Awaited<ReturnType<typeof getConfig>>) => {
+    setVisualModelId(typeof c.visual_model_id === "string" ? c.visual_model_id : "")
+    setChatModelId(typeof c.default_chat_model === "string" ? c.default_chat_model : "")
+    const e = c.enrichment
+    if (!e) return
+    if (typeof e.max_parallel_context === "number") setEnrichMaxParallel(String(e.max_parallel_context))
+    if (typeof e.enrichment_model === "string") setEnrichModel(e.enrichment_model)
+    if (typeof e.meeting_model === "string") setMeetingModel(e.meeting_model)
+    if (typeof e.agentic_query_model === "string") setAgenticQueryModel(e.agentic_query_model)
+    if (typeof e.note_distill_model === "string") setNoteDistillModel(e.note_distill_model)
+  }
+
+  const applyOneshotSlots = (slots?: OneshotSlotSnapshot) => {
+    if (!slots) return
+    setVisualModelId(slots.visual_model_id)
+    setChatModelId(slots.default_chat_model)
+    setEnrichModel(slots.enrichment_model)
+    setMeetingModel(slots.meeting_model)
+    setAgenticQueryModel(slots.agentic_query_model)
+    setNoteDistillModel(slots.note_distill_model)
+  }
+
+  const refreshAfterOneshot = (slots?: OneshotSlotSnapshot) => {
+    applyOneshotSlots(slots)
+    fetchProviders()
+    fetchEmbProviders()
+    fetchRerankProviders()
+    fetchFileTransProviders()
+    fetchRtTransProviders()
+    getConfig()
+      .then((c) => {
+        if (!slots) {
+          applyLlmSlotConfig(c)
+          return
+        }
+        if (typeof c.visual_model_id === "string" && c.visual_model_id) setVisualModelId(c.visual_model_id)
+        if (typeof c.default_chat_model === "string" && c.default_chat_model) setChatModelId(c.default_chat_model)
+        const e = c.enrichment
+        if (!e) return
+        if (typeof e.enrichment_model === "string" && e.enrichment_model) setEnrichModel(e.enrichment_model)
+        if (typeof e.meeting_model === "string" && e.meeting_model) setMeetingModel(e.meeting_model)
+        if (typeof e.agentic_query_model === "string" && e.agentic_query_model) setAgenticQueryModel(e.agentic_query_model)
+        if (typeof e.note_distill_model === "string" && e.note_distill_model) setNoteDistillModel(e.note_distill_model)
+      })
+      .catch(() => {})
+  }
+
   useEffect(() => {
     fetchProviders()
     fetchEmbProviders()
@@ -836,12 +886,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     fetchRtTransProviders()
     refreshModelDownloaded()
     getConfig().then((c) => {
-      // Load Visual Model config
-      if (c.visual_model_id && typeof c.visual_model_id === "string") setVisualModelId(c.visual_model_id)
-      if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
+      applyLlmSlotConfig(c)
       if(c.rag){if(typeof c.rag.top_k==="number")setRagTopK(String(c.rag.top_k));if(typeof c.rag.rerank_top_k==="number")setRagRerankTopK(String(c.rag.rerank_top_k));if(typeof c.rag.max_parallel_queries==="number")setRagMaxParallel(String(c.rag.max_parallel_queries));if(typeof c.rag.max_iterations==="number")setRagMaxIter(String(c.rag.max_iterations));if(typeof c.rag.default_search_mode==="string")setRagSearchMode(c.rag.default_search_mode);if(typeof c.rag.min_score==="number")setRagMinScore(String(c.rag.min_score))}
       if(c.direct_rag){if(typeof c.direct_rag.top_k==="number")setDirTopK(String(c.direct_rag.top_k));if(typeof c.direct_rag.rerank_top_k==="number")setDirRerankTopK(String(c.direct_rag.rerank_top_k));if(typeof c.direct_rag.default_search_mode==="string")setDirSearchMode(c.direct_rag.default_search_mode);setDirRerankEnabled(c.direct_rag.use_reranker!==false);if(typeof c.direct_rag.min_score==="number")setDirMinScore(String(c.direct_rag.min_score))}
-      if(c.enrichment){if(typeof c.enrichment.max_parallel_context==="number")setEnrichMaxParallel(String(c.enrichment.max_parallel_context));if(typeof c.enrichment.enrichment_model==="string")setEnrichModel(c.enrichment.enrichment_model);if(typeof c.enrichment.meeting_model==="string")setMeetingModel(c.enrichment.meeting_model)}
       // Load MinerU config
       if (c.mineru) {
         setMineruEnabled(!!c.mineru.enabled)
@@ -972,7 +1019,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const visualModelOptions = (() => {
     const visualModels = providers.flatMap((p) =>
       (p.visual_model_ids || []).map((m) => ({
-        value: m,
+        value: `${p.id}|${m}`,
         label: `${p.name || p.id} / ${m}`,
       })),
     )
@@ -983,7 +1030,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     const chatModels = providers
       .flatMap((p) =>
         (p.selected_models || (p.model ? [p.model] : [])).map((m) => ({
-          value: m,
+          value: `${p.id}|${m}`,
           label: `${p.name || p.id} / ${m}`,
           isFunctionCall: ((p as { function_call_model_ids?: string[] }).function_call_model_ids || []).includes(m),
         })),
@@ -991,6 +1038,13 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       .filter((cm) => cm.isFunctionCall)
     return [{ value: "", label: "Default" }, ...chatModels.map(({ value, label }) => ({ value, label }))]
   })()
+
+  const coerceSlotValue = (stored: string, options: { value: string }[]) => {
+    if (!stored) return ""
+    if (options.some((o) => o.value === stored)) return stored
+    const hit = options.find((o) => o.value.endsWith(`|${stored}`))
+    return hit?.value ?? stored
+  }
 
   const meetingModelOptions = (() => {
     const meetingModels = providers.flatMap((p) =>
@@ -1092,16 +1146,16 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   onClick={() => setShowModelConfig(!showModelConfig)}
                   aria-expanded={showModelConfig}
                 >
-                  <span className="pm-settings-subhead">More · visual · chat · meeting · ingest</span>
+                  <span className="pm-settings-subhead">More · image · chat · meeting · library · query · distill</span>
                   <ChevronRight className="pm-settings-fold-chev" strokeWidth={1.75} />
                 </button>
                 <div className={cn("pm-config-fold", showModelConfig && "is-open")}>
                   <div className="pm-config-fold-inner">
                     <div className="pm-settings-fold-body">
                       <div className="pm-settings-model-fields">
-                        {/* Visual model */}
+                        {/* Image description */}
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Visual model</FieldLabel>
+                          <FieldLabel>Image description</FieldLabel>
                           {visualModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
                               <Sparkles className="h-5 w-5" />
@@ -1109,14 +1163,14 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             </div>
                           ) : (
                             <DropdownSelect
-                              value={visualModelId}
+                              value={coerceSlotValue(visualModelId, visualModelOptions)}
                               onChange={async (v) => {
                                 setVisualModelId(v)
                                 try {
                                   await updateConfig("visual_model_id", { visual_model_id: v || null })
-                                  toast.success("Visual model updated")
+                                  toast.success("Image description model updated")
                                 } catch {
-                                  toast.error("Failed to update visual model")
+                                  toast.error("Failed to update image description model")
                                 }
                               }}
                               options={visualModelOptions}
@@ -1135,7 +1189,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             </div>
                           ) : (
                             <DropdownSelect
-                              value={chatModelId}
+                              value={coerceSlotValue(chatModelId, chatModelOptions)}
                               onChange={async (v) => {
                                 setChatModelId(v)
                                 try {
@@ -1159,7 +1213,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             </div>
                           ) : (
                             <DropdownSelect
-                              value={meetingModel}
+                              value={coerceSlotValue(meetingModel, meetingModelOptions)}
                               onChange={async (v) => {
                                 setMeetingModel(v)
                                 try {
@@ -1178,23 +1232,73 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         </div>
 
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Contextual enrichment & Summary</FieldLabel>
+                          <FieldLabel>Library LLM</FieldLabel>
                           {enrichModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
                               <p className="pm-meta">No LLM providers configured.</p>
                             </div>
                           ) : (
                             <DropdownSelect
-                              value={enrichModel}
+                              value={coerceSlotValue(enrichModel, enrichModelOptions)}
                               onChange={async (v) => {
                                 setEnrichModel(v)
                                 try {
                                   await updateConfig("enrichment", {
                                     enrichment_model: v,
-                                    max_parallel_context: parseInt(enrichMaxParallel) || 50,
-                                    batch_poll_interval: 30,
                                   })
-                                  toast.success("Ingest model updated")
+                                  toast.success("Library LLM updated")
+                                } catch {
+                                  toast.error("Failed to update")
+                                }
+                              }}
+                              options={enrichModelOptions}
+                              placeholder="Default"
+                            />
+                          )}
+                        </div>
+
+                        <div className="pm-settings-model-field">
+                          <FieldLabel>Agentic query</FieldLabel>
+                          {enrichModelOptions.length <= 1 ? (
+                            <div className="pm-settings-empty">
+                              <p className="pm-meta">No LLM providers configured.</p>
+                            </div>
+                          ) : (
+                            <DropdownSelect
+                              value={coerceSlotValue(agenticQueryModel, enrichModelOptions)}
+                              onChange={async (v) => {
+                                setAgenticQueryModel(v)
+                                try {
+                                  await updateConfig("enrichment", {
+                                    agentic_query_model: v,
+                                  })
+                                  toast.success("Agentic query model updated")
+                                } catch {
+                                  toast.error("Failed to update")
+                                }
+                              }}
+                              options={enrichModelOptions}
+                              placeholder="Default"
+                            />
+                          )}
+                        </div>
+
+                        <div className="pm-settings-model-field">
+                          <FieldLabel>Note distill</FieldLabel>
+                          {enrichModelOptions.length <= 1 ? (
+                            <div className="pm-settings-empty">
+                              <p className="pm-meta">No LLM providers configured.</p>
+                            </div>
+                          ) : (
+                            <DropdownSelect
+                              value={coerceSlotValue(noteDistillModel, enrichModelOptions)}
+                              onChange={async (v) => {
+                                setNoteDistillModel(v)
+                                try {
+                                  await updateConfig("enrichment", {
+                                    note_distill_model: v,
+                                  })
+                                  toast.success("Note distill model updated")
                                 } catch {
                                   toast.error("Failed to update")
                                 }
@@ -1802,9 +1906,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                     <div className="pm-settings-adv-head">
                       <h3 className="pm-settings-subhead">Enrichment</h3>
                       <p className="pm-settings-adv-desc">
-                        Global cap on concurrent Summary, Context, and Vision
-                        LLM requests across all files (default 50). The model
-                        is set under Contextual enrichment & Summary.
+                        Global cap on concurrent Summary, Context, and image
+                        description requests across all files (default 50).
+                        The Library LLM is set in the model list above.
                       </p>
                     </div>
                     <div className="pm-settings-adv-grid">
@@ -2322,7 +2426,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   <div className="pm-settings-adv-row">
                     <div className="pm-settings-adv-row-text">
                       <h3 className="pm-settings-subhead">Developer mode</h3>
-                      <p className="pm-settings-adv-desc">Enable developer tools in the shell.</p>
+                      <p className="pm-settings-adv-desc">
+                        Backend logs and the file-detail Ingest run timeline.
+                      </p>
                     </div>
                     <div className="pm-settings-adv-row-actions">
                       <SettingsSwitch
@@ -2519,39 +2625,12 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       <OneShotDashscopeDialog
         open={oneshotDialogOpen}
         onOpenChange={setOneshotDialogOpen}
-        onSaved={() => {
-          fetchProviders()
-          fetchEmbProviders()
-          fetchRerankProviders()
-          fetchFileTransProviders()
-          fetchRtTransProviders()
-          getConfig()
-            .then((c) => {
-              if (c.visual_model_id && typeof c.visual_model_id === "string")
-                setVisualModelId(c.visual_model_id)
-              if (c.default_chat_model && typeof c.default_chat_model === "string")
-                setChatModelId(c.default_chat_model)
-            })
-            .catch(() => {})
-        }}
+        onSaved={refreshAfterOneshot}
       />
       <OneShotOpenRouterDialog
         open={openrouterDialogOpen}
         onOpenChange={setOpenrouterDialogOpen}
-        onSaved={() => {
-          fetchProviders()
-          fetchEmbProviders()
-          fetchRerankProviders()
-          fetchFileTransProviders()
-          getConfig()
-            .then((c) => {
-              if (c.visual_model_id && typeof c.visual_model_id === "string")
-                setVisualModelId(c.visual_model_id)
-              if (c.default_chat_model && typeof c.default_chat_model === "string")
-                setChatModelId(c.default_chat_model)
-            })
-            .catch(() => {})
-        }}
+        onSaved={refreshAfterOneshot}
       />
 
     </div>

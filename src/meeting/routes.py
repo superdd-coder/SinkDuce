@@ -492,6 +492,38 @@ async def upload_notes(meeting_id: str, file: UploadFile = File(...)):
     return {"message": "Notes uploaded", "path": path, "notes_content": content}
 
 
+@router.post("/meetings/{meeting_id}/images")
+async def upload_meeting_note_image(meeting_id: str, file: UploadFile = File(...)):
+    """Upload an image for meeting notes. Returns the URL to insert in markdown."""
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(404, "Meeting not found")
+    content_bytes = await file.read()
+    if not content_bytes:
+        raise HTTPException(400, "Empty file")
+    try:
+        safe_name = store.save_note_image(meeting_id, file.filename or "image.png", content_bytes)
+    except FileNotFoundError:
+        raise HTTPException(404, "Meeting not found")
+    except ValueError:
+        raise HTTPException(400, "Invalid image path")
+    url = f"/api/meetings/{meeting_id}/images/{safe_name}"
+    logger.info("[IMAGE] Uploaded %s (%d bytes) for meeting %s", safe_name, len(content_bytes), meeting_id)
+    return {"url": url, "filename": safe_name}
+
+
+@router.get("/meetings/{meeting_id}/images/{filename}")
+async def serve_meeting_note_image(meeting_id: str, filename: str):
+    """Serve an uploaded meeting-notes image."""
+    try:
+        image_path = store.get_note_image_path(meeting_id, filename)
+    except ValueError:
+        raise HTTPException(400, "Invalid image path")
+    if not image_path.exists():
+        raise HTTPException(404, "Image not found")
+    return FileResponse(str(image_path))
+
+
 # ── Transcription ─────────────────────────────────────────────
 
 

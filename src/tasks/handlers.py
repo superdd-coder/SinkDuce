@@ -1374,19 +1374,11 @@ async def upload_handler(task: Task, file_path: str, collection: str, filename_p
         # OCR / Vision / enrich of *this* file no longer occupy the upload slot.
         task_manager.release_upload_slot(task.id)
 
-        from src.config import get_config
         from src.parsers.image_utils import apply_image_updates_to_chunks, describe_document_images
         from src.prompts import VISUAL_PROMPT
-        from src.rag.contextual import enrichment_model_is_visual
+        from src.rag.contextual import enrichment_model_is_visual, resolve_ingest_vision
 
-        cfg = get_config()
-        vision_provider = None
-        vision_model_id = cfg.visual_model_id if hasattr(cfg, "visual_model_id") else ""
-        if vision_model_id:
-            for p in cfg.llm.providers:
-                if hasattr(p, "visual_model_ids") and vision_model_id in p.visual_model_ids:
-                    vision_provider = p
-                    break
+        vision_provider, vision_model_id = resolve_ingest_vision()
         is_visual = enrichment_model_is_visual(config)
         from src.rag.contextual import resolve_enrichment_target
 

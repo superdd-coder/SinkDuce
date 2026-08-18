@@ -1,7 +1,7 @@
 import type { Dispatch, RefObject, SetStateAction } from "react"
 import { Loader2, Mic, Play, Sparkles, Square, Upload, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { Meeting, TranscriptSegment, LanguageHintOption } from "@/api/client"
+import { uploadMeetingImage, type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
 import { TranscriptTab, SpeakersTab } from "./transcript-panel"
 import { CaptureMiniPlayer, type CaptureMiniPlayerHandle } from "./capture-mini-player"
 import { LanguageHintsSelector } from "./language-hints-selector"
@@ -578,6 +578,10 @@ mode === "setup" ? (
                         onChange={handleLiveNotesChange}
                         minHeight="200px"
                         placeholder="Write notes while recording…"
+                        onImageUpload={async (file) => {
+                          const result = await uploadMeetingImage(meeting.id, file)
+                          return result.url
+                        }}
                       />
                     </div>
                   </div>
