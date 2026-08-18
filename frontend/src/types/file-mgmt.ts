@@ -316,6 +316,7 @@ export interface TodoItem {
   source_meeting_id?: string | null
   source_section_tab_id?: string | null
   source_candidate_id?: string | null
+  assignee_person_id?: string | null
 }
 
 export interface TodoCreateRequest {
@@ -328,6 +329,7 @@ export interface TodoCreateRequest {
   source_meeting_id?: string | null
   source_section_tab_id?: string | null
   source_candidate_id?: string | null
+  assignee_person_id?: string | null
 }
 
 export interface MeetingTodoCandidate {

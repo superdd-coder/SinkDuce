@@ -12,6 +12,76 @@ from src.prompts import (
 )
 
 
+def keep_split_blueprint(items: list[dict]) -> list[dict]:
+    """Topic pills only when the meeting has at least two real entities."""
+    return items if len(items) >= 2 else []
+
+
+_GENERAL_ALLOC_KEYS = (
+    "associated_collection_id",
+    "associated_collection_name",
+    "allocated_file_id",
+    "allocated_chain_id",
+    "allocated_node_id",
+    "ingested_content_hash",
+    "todo_candidates",
+)
+
+
+def _tab_as_dict(tab) -> dict:
+    if isinstance(tab, dict):
+        return tab
+    if hasattr(tab, "model_dump"):
+        return tab.model_dump()
+    return {}
+
+
+def carry_general_tab_allocation(old_tabs) -> dict:
+    """Keep General ingest binding across re-summarize; mark dirty if bound."""
+    for tab in old_tabs or []:
+        td = _tab_as_dict(tab)
+        if td.get("tab_id") != "tab_general":
+            continue
+        out: dict = {}
+        for key in _GENERAL_ALLOC_KEYS:
+            if key == "todo_candidates":
+                out[key] = list(td.get(key) or [])
+            else:
+                out[key] = td.get(key, "") or ""
+        if (out.get("allocated_file_id") or "").strip():
+            out["needs_reingest"] = True
+        return out
+    return {}
+
+
+def build_general_tab(md_path: str, old_tabs) -> dict:
+    tab = {
+        "tab_id": "tab_general",
+        "type": "general",
+        "blueprint_id": "",
+        "name": "General",
+        "description": "",
+        "processing_state": "idle",
+        "associated_collection_id": "",
+        "associated_collection_name": "",
+        "allocated_file_id": "",
+        "allocated_chain_id": "",
+        "allocated_node_id": "",
+        "ingested_content_hash": "",
+        "needs_reingest": False,
+        "is_dirty": False,
+        "md_file_path": md_path,
+        "payload_ref": [],
+        "todo_candidates": [],
+    }
+    tab.update(carry_general_tab_allocation(old_tabs))
+    tab["tab_id"] = "tab_general"
+    tab["type"] = "general"
+    tab["name"] = "General"
+    tab["md_file_path"] = md_path
+    return tab
+
+
 class MeetingGenerationMixin:
 
     def generate_blueprint_stream(self, meeting_id: str):
@@ -153,15 +223,12 @@ class MeetingGenerationMixin:
             logger.warning("[STREAM] Failed to build catalog: %s", e)
 
         # Hot words
-        hot_words_text = "(None)"
-        if meeting.hot_words_library_id:
-            try:
-                from src.hot_words.store import get_library
-                lib = get_library(meeting.hot_words_library_id)
-                if lib and lib.words:
-                    hot_words_text = ", ".join(w.text for w in lib.words)
-            except Exception:
-                logger.warning("[STREAM] Failed to load hot words", exc_info=True)
+        try:
+            from src.hot_words.store import hot_words_prompt_text
+            hot_words_text = hot_words_prompt_text(meeting)
+        except Exception:
+            logger.warning("[STREAM] Failed to load hot words", exc_info=True)
+            hot_words_text = "(None)"
 
         llm = _resolve_meeting_llm()
         think_summary = _thinking_for_meeting_call("summary")
@@ -222,7 +289,7 @@ class MeetingGenerationMixin:
                 })
             return {
                 "bp_data": bp_data,
-                "blueprint": bp_list,
+                "blueprint": keep_split_blueprint(bp_list),
                 "taxonomy": taxonomy,
                 "title": parsed_title,
             }
@@ -365,19 +432,13 @@ class MeetingGenerationMixin:
                 taxonomy = parsed.get("taxonomy", None)
 
                 # ── Build tabs ──────────────────────────────
-                old_tabs: list[dict] = list(meeting.tabs or [])
+                fresh = store.get_meeting(meeting_id) or meeting
+                old_tabs: list[dict] = list(fresh.tabs or [])
                 is_re_summarize = any(
                     (t["tab_id"] if isinstance(t, dict) else t.tab_id) != "tab_general"
                     for t in old_tabs
                 )
-                tabs: list[dict] = [{
-                    "tab_id": "tab_general", "type": "general",
-                    "blueprint_id": "", "name": "General", "description": "",
-                    "processing_state": "idle",
-                    "associated_collection_id": "", "associated_collection_name": "",
-                    "allocated_file_id": "", "is_dirty": False,
-                    "md_file_path": general_tab_path, "payload_ref": [],
-                }]
+                tabs: list[dict] = [build_general_tab(general_tab_path, old_tabs)]
                 old_section_tabs: list[dict] = []
                 for t in old_tabs:
                     td = t if isinstance(t, dict) else (
@@ -571,16 +632,12 @@ class MeetingGenerationMixin:
                 logger.warning("[BLUEPRINT] Failed to build collection catalog: %s", e)
 
             # ── Hot words ─────────────────────────────────────────
-            hot_words_text = "(None)"
-            if meeting.hot_words_library_id:
-                try:
-                    from src.hot_words.store import get_library
-
-                    lib = get_library(meeting.hot_words_library_id)
-                    if lib and lib.words:
-                        hot_words_text = ", ".join(w.text for w in lib.words)
-                except Exception:
-                    logger.warning("[BLUEPRINT] Failed to load hot words", exc_info=True)
+            try:
+                from src.hot_words.store import hot_words_prompt_text
+                hot_words_text = hot_words_prompt_text(meeting)
+            except Exception:
+                logger.warning("[BLUEPRINT] Failed to load hot words", exc_info=True)
+                hot_words_text = "(None)"
 
             llm = _resolve_meeting_llm()
             think_summary = _thinking_for_meeting_call("summary")
@@ -680,9 +737,11 @@ class MeetingGenerationMixin:
                     ),
                 }
                 blueprint.append(bp_entry)
+            blueprint = keep_split_blueprint(blueprint)
 
             # ── Build tabs: preserve existing section tabs ────────
-            old_tabs: list[dict] = list(meeting.tabs or [])
+            fresh = store.get_meeting(meeting_id) or meeting
+            old_tabs: list[dict] = list(fresh.tabs or [])
             is_re_summarize = any(
                 (t["tab_id"] if isinstance(t, dict) else t.tab_id) != "tab_general"
                 for t in old_tabs
@@ -692,22 +751,7 @@ class MeetingGenerationMixin:
             general_tab_path = store.save_section_md(
                 meeting_id, "tab_general", general_md
             )
-            tabs.append(
-                {
-                    "tab_id": "tab_general",
-                    "type": "general",
-                    "blueprint_id": "",
-                    "name": "General",
-                    "description": "",
-                    "processing_state": "idle",
-                    "associated_collection_id": "",
-                    "associated_collection_name": "",
-                    "allocated_file_id": "",
-                    "is_dirty": False,
-                    "md_file_path": general_tab_path,
-                    "payload_ref": [],
-                }
-            )
+            tabs.append(build_general_tab(general_tab_path, old_tabs))
 
             for t in old_tabs:
                 tid = t["tab_id"] if isinstance(t, dict) else (
@@ -888,15 +932,12 @@ class MeetingGenerationMixin:
                     return "\n".join(others) if others else "(No other sections)"
 
                 # ── Hot words ─────────────────────────────────
-                hot_words_text = "(None)"
-                if meeting.hot_words_library_id:
-                    try:
-                        from src.hot_words.store import get_library
-                        lib = get_library(meeting.hot_words_library_id)
-                        if lib and lib.words:
-                            hot_words_text = ", ".join(w.text for w in lib.words)
-                    except Exception:
-                        logger.warning("[SECTION-STREAM] Failed to load hot words", exc_info=True)
+                try:
+                    from src.hot_words.store import hot_words_prompt_text
+                    hot_words_text = hot_words_prompt_text(meeting)
+                except Exception:
+                    logger.warning("[SECTION-STREAM] Failed to load hot words", exc_info=True)
+                    hot_words_text = "(None)"
 
                 other_secs = _other_sections_text(tab_id)
 

@@ -37,15 +37,9 @@ async def list_hot_words_libraries() -> str:
         from src.hot_words import store as hstore
 
         libs = hstore.list_libraries()
+        pins = hstore.get_pinned_library_ids()
         items = [
-            {
-                "id": lib.id,
-                "name": lib.name,
-                "description": lib.description,
-                "word_count": len(lib.words),
-                "created_at": lib.created_at,
-                "updated_at": lib.updated_at,
-            }
+            hstore.library_summary(lib, pinned_ids=pins)
             for lib in libs
         ]
         return ok(libraries=items, total=len(items))
@@ -146,6 +140,8 @@ async def update_hot_words_library(
 
         try:
             lib = hstore.update_library(library_id, **kwargs)
+        except PermissionError as exc:
+            return err(str(exc))
         except FileNotFoundError:
             return err(f"Hot-words library '{library_id}' not found")
 
@@ -167,7 +163,10 @@ async def delete_hot_words_library(library_id: str) -> str:
     def _run() -> dict[str, Any]:
         from src.hot_words import store as hstore
 
-        deleted = hstore.delete_library(library_id)
+        try:
+            deleted = hstore.delete_library(library_id)
+        except PermissionError as exc:
+            return err(str(exc))
         if not deleted:
             return err(f"Hot-words library '{library_id}' not found")
         return ok(message=f"Hot-words library '{library_id}' deleted", id=library_id)

@@ -27,6 +27,8 @@ import {
   listTodos,
   updateTodo,
 } from "@/api/file-mgmt"
+import { getMePerson } from "@/api/client"
+import { onMePersonRefresh } from "@/lib/me-person-refresh"
 import type { Node, NodeGroup, TodoItem } from "@/types/file-mgmt"
 import { AddNodeDialog } from "@/components/file-mgmt/timeline-view/add-node-dialog"
 import { CreateTodoDialog } from "./create-todo-dialog"
@@ -147,6 +149,8 @@ export function TodoCard({
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [loading, setLoading] = useState(true)
   const [groupByChain, setGroupByChain] = useState(false)
+  const [mineOnly, setMineOnly] = useState(false)
+  const [meId, setMeId] = useState<string | null>(null)
   const [completedOpen, setCompletedOpen] = useState(false)
   const [justCompletedIds, setJustCompletedIds] = useState<Set<string>>(
     () => new Set()
@@ -230,10 +234,21 @@ export function TodoCard({
       .catch(() => setGroups([]))
   }, [collection])
 
+  useEffect(() => {
+    const apply = (personId: string | null) => setMeId(personId)
+    void getMePerson()
+      .then((res) => apply(res.person_id))
+      .catch(() => apply(null))
+    return onMePersonRefresh((detail) => apply(detail.personId))
+  }, [])
+
   const { openRows, completedRows } = useMemo(() => {
-    const { open, completed } = splitTodoSections(todos, justCompletedIds)
+    const scoped = mineOnly && meId
+      ? todos.filter((t) => t.assignee_person_id === meId)
+      : todos
+    const { open, completed } = splitTodoSections(scoped, justCompletedIds)
     return { openRows: open, completedRows: completed }
-  }, [todos, justCompletedIds])
+  }, [todos, justCompletedIds, mineOnly, meId])
 
   const toggleDone = async (t: TodoItem) => {
     setBusyId(t.todo_id)
@@ -319,6 +334,7 @@ export function TodoCard({
       ? t.chain_title || "Main"
       : t.chain_title || "Branch"
     const busy = busyId === t.todo_id
+    const mine = !!(meId && t.assignee_person_id === meId)
     return (
       <li
         key={t.todo_id}
@@ -366,7 +382,8 @@ export function TodoCard({
           <div
             className={cn(
               "text-xs leading-snug",
-              t.done && "line-through text-muted-foreground"
+              t.done && "line-through text-muted-foreground",
+              mine && !t.done && "text-[var(--pm-green,#1a5e3d)]",
             )}
           >
             {t.title}
@@ -498,6 +515,27 @@ export function TodoCard({
         <div className="flex items-center gap-1">
           <button
             type="button"
+            title={
+              meId
+                ? mineOnly
+                  ? "Show all todos"
+                  : "Only todos assigned to you"
+                : "Mark yourself in People first"
+            }
+            disabled={!meId}
+            onClick={() => setMineOnly((v) => !v)}
+            className={cn(
+              "px-1.5 h-6 rounded-md text-[10px] tracking-[0.04em] uppercase border-none transition-colors",
+              mineOnly
+                ? "text-[var(--pm-green)] bg-[var(--pm-green-soft)]"
+                : "text-[var(--pm-faint)] hover:text-[var(--pm-text)] bg-transparent",
+              !meId && "opacity-40 cursor-default"
+            )}
+          >
+            Mine
+          </button>
+          <button
+            type="button"
             title={groupByChain ? "Ungroup" : "Group by chain"}
             onClick={() => setGroupByChain((v) => !v)}
             className={cn(
@@ -529,7 +567,9 @@ export function TodoCard({
       ) : (
         <div className="todo-card-body min-h-0 flex flex-col flex-1 overflow-auto">
           {openRows.length === 0 && completedRows.length === 0 ? (
-            <p className="pm-meta py-2">No todos yet.</p>
+            <p className="pm-meta py-2">
+              {mineOnly ? "No todos assigned to you." : "No todos yet."}
+            </p>
           ) : (
             renderList(openRows)
           )}

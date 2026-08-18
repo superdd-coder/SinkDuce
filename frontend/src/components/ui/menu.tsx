@@ -79,9 +79,12 @@ function SoftMenu({
   const [mounted, setMounted] = useState(false)
   const [shown, setShown] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
-    null
-  )
+  const [coords, setCoords] = useState<{
+    top: number
+    left: number
+    maxHeight?: number
+    flip?: "up" | "down"
+  } | null>(null)
   const [anchorWidth, setAnchorWidth] = useState<number | null>(null)
 
   useEffect(() => {
@@ -171,10 +174,38 @@ function SoftMenu({
         setAnchorWidth(Math.round(r.width))
         return
       }
+      const fly = menuRef.current
+      const pad = 8
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const mw = fly?.offsetWidth || 288
+      const mh = fly?.offsetHeight || 320
       let left = r.left
       if (align === "center") left = r.left + r.width / 2
       else if (align === "end") left = r.right
-      setCoords({ top: r.bottom + 6, left })
+      else {
+        left = Math.min(Math.max(pad, left), Math.max(pad, vw - pad - mw))
+      }
+
+      const spaceBelow = vh - pad - (r.bottom + gap)
+      const spaceAbove = r.top - gap - pad
+      const flip: "up" | "down" =
+        mh > spaceBelow && spaceAbove > spaceBelow ? "up" : "down"
+      const side = flip === "up" ? spaceAbove : spaceBelow
+      const maxBox = Math.max(
+        160,
+        Math.min(vh - pad * 2, side > 0 ? side : vh - pad * 2),
+      )
+      const used = Math.min(mh, maxBox)
+      let top = flip === "up" ? r.top - gap - used : r.bottom + gap
+      if (top < pad) top = pad
+      if (top + used > vh - pad) top = Math.max(pad, vh - pad - used)
+      setCoords({
+        top,
+        left,
+        maxHeight: Math.max(160, Math.min(maxBox, vh - pad - top)),
+        flip,
+      })
       setAnchorWidth(null)
     }
     place()
@@ -212,6 +243,11 @@ function SoftMenu({
           left: resolved.left,
           zIndex: placement === "right" ? 420 : 400,
           margin: 0,
+          ...("maxHeight" in resolved && resolved.maxHeight
+            ? {
+                ["--pm-menu-viewport-max" as string]: `${resolved.maxHeight}px`,
+              }
+            : null),
           ...(matchAnchorWidth && anchorWidth
             ? {
                 width: anchorWidth,
@@ -231,6 +267,15 @@ function SoftMenu({
         portal ? (matchAnchorWidth ? "start" : align) : undefined
       }
       data-menu-placement={portal ? placement : undefined}
+      data-menu-flip={
+        portal &&
+        placement === "bottom" &&
+        resolved &&
+        "flip" in resolved &&
+        resolved.flip
+          ? resolved.flip
+          : undefined
+      }
       data-menu-match-width={matchAnchorWidth ? "true" : undefined}
       className={cn(
         "pm-menu--soft",

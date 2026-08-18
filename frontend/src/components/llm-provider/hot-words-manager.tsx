@@ -26,13 +26,13 @@ import {
   FileUp,
   FileSpreadsheet,
   FileText,
-  Star,
+  Pin,
 } from "lucide-react"
 import {
   getHotWordsLibraries, getHotWordsLibrary, createHotWordsLibrary,
   updateHotWordsLibrary, deleteHotWordsLibrary,
   downloadHotWordsTemplate, importHotWordsLibrary,
-  setDefaultHotWordsLibrary, exportHotWordsLibrary,
+  setPinnedHotWordsLibraries, exportHotWordsLibrary,
   type HotWordsLibrary, type HotWordsLibrarySummary, type HotWordItem,
 } from "@/api/client"
 import {
@@ -264,8 +264,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
     try {
       const list = await getHotWordsLibraries()
       setLibraries(list)
-      const def = list.find((l) => l.is_default)
-      setDefaultLibraryId(def?.id ?? null)
+      setPinnedIds(list.filter((l) => l.is_pinned).map((l) => l.id))
     } catch { /* ignore */ }
   }, [])
 
@@ -282,7 +281,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
     const id = selectedIdRef.current
     const lib = selectedLibRef.current
     const rows = wordRowsRef.current
-    if (!id || !lib || !isDirtyRef.current) return
+    if (!id || !lib || !isDirtyRef.current || lib.is_system) return
     if (saveInFlightRef.current) {
       saveTimerRef.current = setTimeout(() => {
         void flushSave()
@@ -402,8 +401,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
         setLeavingUid(null)
         setIsDirty(false)
         isDirtyRef.current = false
-        if (typeof lib.is_default === "boolean" && lib.is_default) {
-          setDefaultLibraryId(lib.id)
+        if (lib.is_pinned) {
+          setPinnedIds((ids) => (ids.includes(lib.id) ? ids : [...ids, lib.id]))
         }
 
         /* Content at opacity 0 → next frames fade in */
@@ -499,8 +498,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
 
   const [importMenuOpen, setImportMenuOpen] = useState(false)
   const [importing, setImporting] = useState(false)
-  const [defaultLibraryId, setDefaultLibraryId] = useState<string | null>(null)
-  const [settingDefault, setSettingDefault] = useState(false)
+  const [pinnedIds, setPinnedIds] = useState<string[]>([])
+  const [settingPin, setSettingPin] = useState(false)
   const importAnchorRef = useRef<HTMLDivElement>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
 
@@ -561,24 +560,26 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
     }
   }
 
-  const handleSetDefault = async () => {
+  const handleTogglePin = async () => {
     if (!selectedId) return
-    const next = defaultLibraryId === selectedId ? null : selectedId
-    setSettingDefault(true)
+    const next = pinnedIds.includes(selectedId)
+      ? pinnedIds.filter((id) => id !== selectedId)
+      : [...pinnedIds, selectedId]
+    setSettingPin(true)
     try {
       await flushSave()
-      const res = await setDefaultHotWordsLibrary(next)
-      setDefaultLibraryId(res.default_library_id)
+      const res = await setPinnedHotWordsLibraries(next)
+      setPinnedIds(res.pinned_library_ids)
       await fetchList()
       toast.success(
-        next
-          ? "Default library set — applied on new meetings when ASR supports hot words"
-          : "Default library cleared",
+        next.includes(selectedId)
+          ? "Pinned — new meetings start with this library on (you can turn it off per meeting)"
+          : "Unpinned — new meetings will not include this library",
       )
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set default")
+      toast.error(err instanceof Error ? err.message : "Failed to update pin")
     } finally {
-      setSettingDefault(false)
+      setSettingPin(false)
     }
   }
 
@@ -865,19 +866,26 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                     <div className="truncate flex-1 min-w-0">
                       <div className="pm-title truncate flex items-center gap-1.5">
                         <span className="truncate">{lib.name}</span>
-                        {(lib.is_default || lib.id === defaultLibraryId) && (
-                          <span className="pm-settings-hw-default-pill" title="Default library">
-                            Default
+                        {lib.is_system && (
+                          <span className="pm-settings-hw-default-pill" title="System library">
+                            System
+                          </span>
+                        )}
+                        {(lib.is_pinned || pinnedIds.includes(lib.id)) && (
+                          <span className="pm-settings-hw-default-pill" title="Pinned for new meetings">
+                            Pin
                           </span>
                         )}
                       </div>
                       <div className="pm-meta">{lib.word_count} words</div>
                     </div>
-                    <SlideConfirmDeleteButton
-                      className="shrink-0 ml-1"
-                      title="Delete library"
-                      onConfirm={() => { void handleDelete(lib.id) }}
-                    />
+                    {!lib.is_system && (
+                      <SlideConfirmDeleteButton
+                        className="shrink-0 ml-1"
+                        title="Delete library"
+                        onConfirm={() => { void handleDelete(lib.id) }}
+                      />
+                    )}
                   </div>
                 ))}
                 {libraries.length === 0 && (
@@ -909,6 +917,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                           onChange={(e) => updateField("name", e.target.value)}
                           className="pm-settings-hw-input"
                           placeholder="Library name"
+                          readOnly={!!selectedLib.is_system}
+                          disabled={!!selectedLib.is_system}
                         />
                       </div>
                       <div className="pm-settings-hw-meta-actions">
@@ -918,22 +928,22 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                           size="sm"
                           className={cn(
                             "pm-settings-hw-action-btn",
-                            defaultLibraryId === selectedId && "is-default",
+                            pinnedIds.includes(selectedId ?? "") && "is-default",
                           )}
-                          disabled={settingDefault || !selectedId}
+                          disabled={settingPin || !selectedId}
                           title={
-                            defaultLibraryId === selectedId
-                              ? "Clear default (new meetings will not auto-select)"
-                              : "Set as default for new meetings (when ASR supports hot words)"
+                            pinnedIds.includes(selectedId ?? "")
+                              ? "Unpin — new meetings will not include this library"
+                              : "Pin for new meetings (can still turn off per meeting)"
                           }
-                          onClick={() => { void handleSetDefault() }}
+                          onClick={() => { void handleTogglePin() }}
                         >
-                          <Star
+                          <Pin
                             className="h-3.5 w-3.5"
                             strokeWidth={1.75}
-                            fill={defaultLibraryId === selectedId ? "currentColor" : "none"}
+                            fill={pinnedIds.includes(selectedId ?? "") ? "currentColor" : "none"}
                           />
-                          {defaultLibraryId === selectedId ? "Default" : "Set default"}
+                          {pinnedIds.includes(selectedId ?? "") ? "Pinned" : "Pin"}
                         </Button>
                         <Button
                           type="button"
@@ -956,6 +966,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                         onChange={(e) => updateField("description", e.target.value)}
                         className="pm-settings-hw-textarea"
                         placeholder="Optional note for this library"
+                        readOnly={!!selectedLib.is_system}
+                        disabled={!!selectedLib.is_system}
                       />
                     </div>
                   </section>
@@ -983,16 +995,18 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                               : "Saved"}
                         </span>
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        className="pm-settings-hw-add"
-                        onClick={addWord}
-                      >
-                        <Plus className="h-3 w-3" strokeWidth={1.75} />
-                        Add
-                      </Button>
+                      {!selectedLib.is_system && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          className="pm-settings-hw-add"
+                          onClick={addWord}
+                        >
+                          <Plus className="h-3 w-3" strokeWidth={1.75} />
+                          Add
+                        </Button>
+                      )}
                     </div>
                     <ScrollArea className="pm-settings-hw-words-scroll">
                       <div ref={wordListRef} className="pm-settings-hw-words-list">
@@ -1011,6 +1025,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                                 onChange={(e) => updateWord(word.uid, "text", e.target.value)}
                                 placeholder="Hot word"
                                 className="pm-settings-hw-word-text"
+                                readOnly={!!selectedLib.is_system}
+                                disabled={!!selectedLib.is_system}
                               />
                               <div className="pm-settings-hw-weight" title="Weight 1–10">
                                 <span className="pm-settings-hw-weight-label">W</span>
@@ -1054,6 +1070,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                                 placeholder="Lang"
                                 className="pm-settings-hw-lang"
                               />
+                              {!selectedLib.is_system && (
                               <button
                                 type="button"
                                 className="pm-settings-hw-word-del"
@@ -1064,6 +1081,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                               >
                                 <Trash2 className="h-3 w-3" strokeWidth={1.75} />
                               </button>
+                              )}
                             </div>
                           </div>
                         ))}

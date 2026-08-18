@@ -41,9 +41,9 @@ interface MediaBarProps {
   realtimeEnabled?: boolean
   onToggleRealtime?: () => void
   hasTranscript?: boolean
-  hotWordsLibraryId?: string | null
+  hotWordsLibraryIds?: string[]
   hotWordsLibraries?: HotWordsLibrarySummary[]
-  onSelectHotWords?: (libraryId: string | null) => void
+  onSelectHotWords?: (libraryIds: string[]) => void
   languageHints?: string[]
   languageHintOptions?: LanguageHintOption[]
   onChangeLanguageHints?: (hints: string[]) => void
@@ -83,7 +83,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   realtimeEnabled,
   onToggleRealtime,
   hasTranscript,
-  hotWordsLibraryId,
+  hotWordsLibraryIds = [],
   hotWordsLibraries = [],
   onSelectHotWords,
   languageHints = [],
@@ -391,6 +391,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             src={audioUrl}
             preload="metadata"
             className="sr-only"
+            data-meeting-audio=""
             aria-hidden
           >
             <track kind="captions" />
@@ -496,7 +497,10 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 
   // Has audio — custom player card (tools row + scrubbable progress row)
   if (hasAudio) {
-    const hwSelectedLabel = hotWordsLibraries.find((l) => l.id === hotWordsLibraryId)?.name
+    const hwSelectedLabel = hotWordsLibraryIds
+      .map((id) => hotWordsLibraries.find((l) => l.id === id)?.name)
+      .filter(Boolean)
+      .join(" · ")
     const langCount = languageHints.length
     const langCustomized = langCount > 0 && !(langCount === 1 && languageHints[0] === "auto")
     const dur = audioDuration > 0 && Number.isFinite(audioDuration) ? audioDuration : 0
@@ -523,6 +527,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             src={audioUrl}
             preload="metadata"
             className="sr-only"
+            data-meeting-audio=""
             aria-hidden
           >
             <track kind="captions" />
@@ -650,7 +655,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                       type="button"
                       className={cn(
                         "pm-meeting-player-chip",
-                        hotWordsLibraryId && "is-active",
+                        hotWordsLibraryIds.length > 0 && "is-active",
                       )}
                       onClick={() => { setHwOpen(!hwOpen); setLangOpen(false) }}
                       aria-label="Hot words"
@@ -660,7 +665,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   }
                 />
                 <TooltipContent side="top">
-                  Hot Words{hotWordsLibraryId ? ` · ${hwSelectedLabel}` : ""}
+                  Hot Words{hwSelectedLabel ? ` · ${hwSelectedLabel}` : ""}
                 </TooltipContent>
               </Tooltip>
               <SoftMenu
@@ -674,9 +679,9 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   <button
                     type="button"
                     role="option"
-                    aria-selected={!hotWordsLibraryId}
-                    className={cn("pm-hw-option", !hotWordsLibraryId ? "is-on" : "is-off")}
-                    onClick={() => { onSelectHotWords(null); setHwOpen(false) }}
+                    aria-selected={hotWordsLibraryIds.length === 0}
+                    className={cn("pm-hw-option", hotWordsLibraryIds.length === 0 ? "is-on" : "is-off")}
+                    onClick={() => { onSelectHotWords([]) }}
                   >
                     <span className="pm-hw-option-icon" aria-hidden>
                       <Ban className="size-3.5" />
@@ -687,7 +692,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                     </span>
                   </button>
                   {hotWordsLibraries.map((lib) => {
-                    const isOn = hotWordsLibraryId === lib.id
+                    const isOn = hotWordsLibraryIds.includes(lib.id)
                     return (
                       <button
                         key={lib.id}
@@ -695,7 +700,13 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                         role="option"
                         aria-selected={isOn}
                         className={cn("pm-hw-option", isOn ? "is-on" : "is-off")}
-                        onClick={() => { onSelectHotWords(lib.id); setHwOpen(false) }}
+                        onClick={() => {
+                          onSelectHotWords(
+                            isOn
+                              ? hotWordsLibraryIds.filter((id) => id !== lib.id)
+                              : [...hotWordsLibraryIds, lib.id],
+                          )
+                        }}
                       >
                         <span className="pm-hw-option-icon" aria-hidden>
                           <BookOpen className="size-3.5" />

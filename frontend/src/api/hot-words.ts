@@ -13,6 +13,8 @@ export interface HotWordsLibrary {
   name: string
   description: string
   words: HotWordItem[]
+  is_system?: boolean
+  is_pinned?: boolean
   is_default?: boolean
   created_at: string
   updated_at: string
@@ -23,6 +25,8 @@ export interface HotWordsLibrarySummary {
   name: string
   description: string
   word_count: number
+  is_system?: boolean
+  is_pinned?: boolean
   is_default?: boolean
   created_at: string
   updated_at: string
@@ -51,11 +55,20 @@ export const deleteHotWordsLibrary = (id: string) =>
     method: "DELETE",
   })
 
-/** Set or clear the default hot-words library (auto-selected on new meetings). */
+/** Set or clear the default hot-words library (compat — prefer setPinnedHotWordsLibraries). */
 export const setDefaultHotWordsLibrary = (libraryId: string | null) =>
-  request<{ default_library_id: string | null }>("/hot-words/default", {
+  request<{ default_library_id: string | null; pinned_library_ids: string[] }>("/hot-words/default", {
     method: "PUT",
     body: JSON.stringify({ library_id: libraryId }),
+  })
+
+export const getPinnedHotWordsLibraries = () =>
+  request<{ pinned_library_ids: string[] }>("/hot-words/pins")
+
+export const setPinnedHotWordsLibraries = (libraryIds: string[]) =>
+  request<{ pinned_library_ids: string[] }>("/hot-words/pins", {
+    method: "PUT",
+    body: JSON.stringify({ library_ids: libraryIds }),
   })
 
 /** Download CSV / Excel hot-words import template (attachment). */

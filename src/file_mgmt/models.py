@@ -350,6 +350,7 @@ class TodoCreate(BaseModel):
     source_meeting_id: str | None = None
     source_section_tab_id: str | None = None
     source_candidate_id: str | None = None
+    assignee_person_id: str | None = None
 
 
 class TodoSuggestionItem(BaseModel):
@@ -399,6 +400,7 @@ class TodoOut(BaseModel):
     source_meeting_id: str | None = None
     source_section_tab_id: str | None = None
     source_candidate_id: str | None = None
+    assignee_person_id: str | None = None
 
 
 # Resolve forward references for recursive models

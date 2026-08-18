@@ -15,7 +15,7 @@ import {
   MeetingQcFab,
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
-import { updateMeeting, type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary } from "@/api/client"
+import { type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary } from "@/api/client"
 import type { SidebarView } from "@/stores/app-store"
 
 export type MeetingStudioSideTab = "sections" | "transcript" | "speaker"
@@ -86,7 +86,7 @@ export interface MeetingStudioStageProps {
   realtimeEnabled: boolean
   setRealtimeEnabled: Dispatch<SetStateAction<boolean>>
   hotWordsLibraries: HotWordsLibrarySummary[]
-  handleSelectHotWordsLibrary: (id: string | null) => void
+  handleSelectHotWordsLibraries: (ids: string[]) => void
   languageHints: string[]
   supportedLanguageHints: LanguageHintOption[]
   updateLanguageHints: (next: string[]) => void
@@ -175,7 +175,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
     realtimeEnabled,
     setRealtimeEnabled,
     hotWordsLibraries,
-    handleSelectHotWordsLibrary,
+    handleSelectHotWordsLibraries,
     languageHints,
     supportedLanguageHints,
     updateLanguageHints,
@@ -412,9 +412,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                       realtimeEnabled={realtimeEnabled}
                       onToggleRealtime={() => setRealtimeEnabled((v) => !v)}
                       hasTranscript={displaySegments.length > 0}
-                      hotWordsLibraryId={meeting.hot_words_library_id}
+                      hotWordsLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
                       hotWordsLibraries={hotWordsLibraries}
-                      onSelectHotWords={handleSelectHotWordsLibrary}
+                      onSelectHotWords={handleSelectHotWordsLibraries}
                       languageHints={languageHints}
                       languageHintOptions={supportedLanguageHints}
                       onChangeLanguageHints={updateLanguageHints}
@@ -623,7 +623,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                         isNav &&
                                         (item.generating === true || item.ready === false) &&
                                         !isStreaming
-                                      const isIngested = item.kind === "section" && item.ingested === true
+                                      const isIngested =
+                                        (item.kind === "section" || item.kind === "general") &&
+                                        item.ingested === true
                                       const clickable =
                                         (isNav && (isReady || isStreaming || isGenerating)) ||
                                         ((isPick || isCustom) && !sectionRailModel.busy)
@@ -811,14 +813,15 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                               <SpeakersTab
                                 segments={displaySegments}
                                 speakerNames={meeting.speaker_names ?? {}}
-                                onUpdateSpeakerName={(id, name) => {
-                                  const updated = { ...meeting.speaker_names, [id]: name }
-                                  updateMeeting(meeting.id, { speaker_names: updated }).then((m) => {
-                                    handleMeetingUpdate(m)
-                                    void import("@/components/ui/tiptap-editor").then((mod) => {
-                                      mod.invalidateMeetingSpeakerCache(meeting.id)
-                                    })
-                                  }).catch(() => {})
+                                meetingId={meeting.id}
+                                speakerMatches={meeting.speaker_matches}
+                                slotsStatus={meeting.speaker_slots_status}
+                                slotsMs={meeting.speaker_slots_ms}
+                                onPersonAssigned={(m) => {
+                                  handleMeetingUpdate(m)
+                                  void import("@/components/ui/tiptap-editor").then((mod) => {
+                                    mod.invalidateMeetingSpeakerCache(meeting.id)
+                                  })
                                 }}
                                 onSegmentClick={handleSegmentClick}
                                 activeSectionTag={activeSectionTag}

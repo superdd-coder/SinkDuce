@@ -159,6 +159,18 @@ def update_meeting(meeting_id: str, **fields) -> Meeting:
         meeting = get_meeting(meeting_id)
         if meeting is None:
             raise FileNotFoundError(f"Meeting {meeting_id} not found")
+        if "hot_words_library_ids" in fields:
+            ids = [
+                str(x).strip()
+                for x in (fields.get("hot_words_library_ids") or [])
+                if str(x).strip()
+            ]
+            fields["hot_words_library_ids"] = ids
+            fields["hot_words_library_id"] = ids[0] if ids else None
+        elif "hot_words_library_id" in fields:
+            one = fields.get("hot_words_library_id") or None
+            fields["hot_words_library_id"] = one
+            fields["hot_words_library_ids"] = [one] if one else []
         for key, value in fields.items():
             setattr(meeting, key, value)
         meeting.updated_at = datetime.now(timezone.utc)
@@ -452,6 +464,11 @@ def discard_recording(meeting_id: str) -> Meeting:
         allocated_collections=[],
         allocated_file_ids=[],
         speaker_names=None,
+        speaker_people=None,
+        speaker_matches=None,
+        speaker_slots=None,
+        speaker_slots_status=None,
+        speaker_slots_ms=None,
     )
     logger.info("[DISCARD] Meeting %s fully discarded, reset to 'created'", meeting_id)
     return updated

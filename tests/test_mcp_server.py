@@ -427,6 +427,7 @@ def _patch_context():
         "blueprint_gen_state": "idle",
         "speaker_names": None,
         "hot_words_library_id": None,
+        "hot_words_library_ids": [],
         "tabs": [],
         "allocated_collections": [],
         "allocated_file_ids": [],
@@ -448,6 +449,7 @@ def _patch_context():
     _mock_meeting.blueprint_gen_state = MagicMock(value="idle")
     _mock_meeting.speaker_names = None
     _mock_meeting.hot_words_library_id = None
+    _mock_meeting.hot_words_library_ids = []
     _mock_meeting.tabs = []
     _mock_meeting.allocated_collections = []
     _mock_meeting.allocated_file_ids = []

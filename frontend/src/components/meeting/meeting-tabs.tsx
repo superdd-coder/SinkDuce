@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils"
 import {
   Loader2, RefreshCw, Plus, Pencil, Sparkles, ChevronDown, ChevronRight,
   FileText, FolderOpen, GitBranch, Trash2, Download, FileType2,
-  ListTodo,
+  ListTodo, ArrowLeftRight,
 } from "lucide-react"
 import {
   extract, deleteSection,
@@ -480,6 +480,8 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   hideTitle?: boolean
   /** Portal collection pill into title-row host; Choose a collection stays on description row. */
   ingestHostRef?: RefObject<HTMLDivElement | null>
+  /** True while General is being rewritten — ingest would snapshot stale MD. */
+  ingestLocked?: boolean
 }>(function SectionMetadata({
   tab,
   blueprint,
@@ -490,6 +492,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   parentIngesting = false,
   hideTitle,
   ingestHostRef,
+  ingestLocked = false,
 }, ref) {
   const bpEntry = (blueprint ?? []).find((b) => b.blueprint_id === tab.blueprint_id)
   // Tab now carries its own description (set at extract time).
@@ -545,6 +548,17 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         setPendingOpenFile: s.setPendingOpenFile,
       }))
     )
+  const generalAlloc = tabs.find(
+    (t) => t.tab_id === "tab_general" && !!(t.allocated_file_id || "").trim(),
+  )
+  const generalAllocColId = generalAlloc?.associated_collection_id || ""
+  const generalAllocColName =
+    generalAlloc?.associated_collection_name ||
+    collections.find((c) => c.id === generalAllocColId)?.name ||
+    ""
+  const sectionAllocs = tabs.filter(
+    (t) => t.tab_id !== "tab_general" && !!(t.allocated_file_id || "").trim(),
+  )
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState(tab.name)
   // 首次 ingest：还没 associated collection 时，选中后立刻在顶部按钮显示 pending 名称
@@ -917,7 +931,23 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   const handleIngest = async (colId: string, chainId?: string | null) => {
     // Capture tab id for this job — survives section switch / remount
     const jobTabId = tab.tab_id
-    if (localIngesting || parentIngesting) return
+    if (localIngesting || parentIngesting || ingestLocked) return
+    const overlap = tabs.filter(
+      (t) =>
+        t.tab_id !== jobTabId &&
+        !!(t.allocated_file_id || "").trim() &&
+        (t.associated_collection_id || "") === colId,
+    )
+    if (overlap.length > 0) {
+      const generalIn = overlap.some((t) => t.tab_id === "tab_general")
+      toast.info(
+        jobTabId !== "tab_general" && generalIn
+          ? "General is already in this collection"
+          : jobTabId === "tab_general"
+            ? "A section from this meeting is already in this collection"
+            : "This collection already has another part of this meeting",
+      )
+    }
     setLocalIngesting(true)
     onIngestingChangeRef.current?.(jobTabId, true)
     try {
@@ -1172,7 +1202,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       <button
         type="button"
         ref={topPillRef}
-        disabled={ingesting}
+        disabled={ingesting || ingestLocked}
         onClick={() => {
           if (displayActive) {
             setDropdownOpen(false)
@@ -1223,7 +1253,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         {needsReingest && (
           <MenuItem
             className="pm-meeting-ingest-menu-item"
-            disabled={ingesting}
+            disabled={ingesting || ingestLocked}
             onClick={() => void handleUpdateCollection()}
           >
             <RefreshCw strokeWidth={1.75} />
@@ -1254,6 +1284,19 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           <ListTodo strokeWidth={1.75} />
           Create todos…
         </MenuItem>
+        {(tab.tab_id === "tab_general" || tab.type === "general") && (
+          <MenuItem
+            className="pm-meeting-ingest-menu-item"
+            disabled={ingesting || ingestLocked}
+            onClick={() => {
+              setActionsOpen(false)
+              setDropdownOpen(true)
+            }}
+          >
+            <ArrowLeftRight strokeWidth={1.75} />
+            Change collection
+          </MenuItem>
+        )}
         <div className="pm-meeting-ingest-menu-sep" role="separator" />
         <MenuItem
           className="pm-meeting-ingest-menu-item"
@@ -1270,6 +1313,10 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     </div>
   ) : null
 
+  const isGeneralTab = tab.tab_id === "tab_general" || tab.type === "general"
+  /** General + already ingested: menus stay mounted, trigger lives on the title-row pill. */
+  const hideChooseTrigger = isGeneralTab && showTopButton && portalIngest
+
   /** Choose a collection — description row (portal layout) or under pill (legacy) */
   const chooseControls = (
     <div
@@ -1278,12 +1325,14 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         portalIngest
           ? "pm-meeting-ingest-col pm-meeting-ingest-col--choose w-full"
           : "w-full",
+        hideChooseTrigger && "hidden",
       )}
     >
+      {!hideChooseTrigger && (
       <div ref={buttonRef as RefObject<HTMLDivElement>} className="w-full">
         <button
           type="button"
-          disabled={ingesting}
+          disabled={ingesting || ingestLocked}
           onClick={() => {
             setActionsOpen(false)
             setDropdownOpen(!dropdownOpen)
@@ -1299,15 +1348,32 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           </span>
         </button>
       </div>
+      )}
       <SoftMenu
         open={dropdownOpen}
         portal
-        anchorRef={buttonRef}
+        anchorRef={
+          (tab.tab_id === "tab_general" || tab.type === "general") && showTopButton
+            ? topPillRef
+            : buttonRef
+        }
         matchAnchorWidth
         exitMs={MENU_SILK_MS}
         className="pm-meeting-ingest-menu"
       >
         <div className="pm-meeting-ingest-menu-label">Collections</div>
+        {tab.tab_id !== "tab_general" && generalAllocColName ? (
+          <p className="pm-meeting-ingest-menu-hint">
+            General is already in {generalAllocColName}
+          </p>
+        ) : null}
+        {tab.tab_id === "tab_general" && sectionAllocs.length > 0 ? (
+          <p className="pm-meeting-ingest-menu-hint">
+            {sectionAllocs.length === 1
+              ? `${sectionAllocs[0].name || "A section"} is already in a collection`
+              : `${sectionAllocs.length} sections are already in collections`}
+          </p>
+        ) : null}
         <div className="pm-meeting-ingest-menu-scroll">
           {collections.length === 0 && (
             <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
@@ -1335,6 +1401,11 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
                 <span className="truncate min-w-0 flex-1 text-left">
                   {col.name}
                 </span>
+                {tab.tab_id !== "tab_general" &&
+                generalAllocColId &&
+                col.id === generalAllocColId ? (
+                  <span className="pm-meeting-ingest-menu-tag">General</span>
+                ) : null}
                 {multi ? (
                   <ChevronRight
                     className="pm-meeting-ingest-menu-chevron"
@@ -1418,7 +1489,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           <MenuItem
             key={ch.chain_id}
             className="pm-meeting-ingest-menu-item"
-            disabled={ingesting}
+            disabled={ingesting || ingestLocked}
             onClick={() => {
               if (!flyoutColId) return
               commitCollectionAndChain(flyoutColId, ch.chain_id)
@@ -1461,12 +1532,14 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       ref={containerRef}
       className={cn(
         "group relative",
-        portalIngest
-          ? "pm-meeting-section-meta pm-meeting-section-meta--split"
-          : "px-6 py-3 pb-4 flex gap-4",
+        !isGeneralTab &&
+          (portalIngest
+            ? "pm-meeting-section-meta pm-meeting-section-meta--split"
+            : "px-6 py-3 pb-4 flex gap-4"),
       )}
     >
       {/* Left: section title (optional) + click-to-edit description */}
+      {!isGeneralTab && (
       <div className="pm-meeting-section-meta-main flex-1 min-w-0 flex flex-col gap-1 relative items-start">
         {!hideTitle && (
           <div className="pm-meeting-title whitespace-normal break-words w-full text-left">
@@ -1526,18 +1599,31 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           </div>
         )}
       </div>
+      )}
 
       {/* Ingest:
-          - portal: pill → title-row host; Choose → description-row right
-          - legacy: stacked side column */}
+          - section: pill → title-row host; Choose → description-row right
+          - general: Choose or pill on the General title row (no description) */}
       {portalIngest ? (
         <>
-          {showTopButton && ingestPortalReady && ingestHostRef?.current
-            ? createPortal(pillControls, ingestHostRef.current)
+          {ingestPortalReady && ingestHostRef?.current
+            ? createPortal(
+                isGeneralTab
+                  ? showTopButton
+                    ? pillControls
+                    : chooseControls
+                  : showTopButton
+                    ? pillControls
+                    : null,
+                ingestHostRef.current,
+              )
             : null}
-          <div className="pm-meeting-section-meta-choose shrink-0">
-            {chooseControls}
-          </div>
+          {isGeneralTab && showTopButton ? chooseControls : null}
+          {!isGeneralTab ? (
+            <div className="pm-meeting-section-meta-choose shrink-0">
+              {chooseControls}
+            </div>
+          ) : null}
         </>
       ) : (
         legacyIngestColumn
@@ -1559,7 +1645,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           <MenuItem
             key={ch.chain_id}
             className="pm-meeting-ingest-menu-item"
-            disabled={ingesting || pillChainLoading}
+            disabled={ingesting || ingestLocked || pillChainLoading}
             onClick={() => {
               if (!pillChainColId) return
               commitCollectionAndChain(pillChainColId, ch.chain_id)
@@ -2671,6 +2757,7 @@ export function MeetingTabs({
         ready: !!(hasGeneralMd || genStreaming || genGenerating || bpStream.isStreaming),
         streaming: genStreaming,
         generating: genGenerating,
+        ingested: !!(generalTab?.allocated_file_id) && !ingestingTabs.has("tab_general"),
       })
     }
 
@@ -3240,7 +3327,7 @@ export function MeetingTabs({
                 editDisabled={viewingTranslation}
                 hideInlineEdit
                 stickyOffset={contentStickyOffset}
-                ingestHostRef={!isGeneral && selectedTab ? sectionIngestHostRef : undefined}
+                ingestHostRef={selectedTab ? sectionIngestHostRef : undefined}
                 title={isGeneral ? "General" : undefined}
                 titlePrefix={
                   !isGeneral && selectedTab ? tabShortLabel(selectedTab) : undefined
@@ -3258,7 +3345,7 @@ export function MeetingTabs({
                     : undefined
                 }
                 metadata={
-                  !isGeneral && selectedTab ? (
+                  selectedTab ? (
                     <SectionMetadata
                       key={selectedTab.tab_id}
                       ref={sectionMetaRef}
@@ -3269,6 +3356,7 @@ export function MeetingTabs({
                       onMeetingUpdate={onMeetingUpdate}
                       hideTitle
                       ingestHostRef={sectionIngestHostRef}
+                      ingestLocked={isGeneral && generalSummaryWriting}
                       parentIngesting={ingestingTabs.has(selectedTab.tab_id)}
                       onIngestingChange={(tabId, v) => {
                         setIngestingTabs((prev) => {
@@ -3337,14 +3425,15 @@ export function MeetingTabs({
               <SpeakersTab
                 segments={transcriptSegments}
                 speakerNames={speakerNames}
-                onUpdateSpeakerName={(id, name) => {
-                  const updated = { ...meeting.speaker_names, [id]: name }
-                  updateMeeting(meetingId, { speaker_names: updated }).then((m) => {
-                    onMeetingUpdate(m)
-                    void import("@/components/ui/tiptap-editor").then((mod) => {
-                      mod.invalidateMeetingSpeakerCache(meetingId)
-                    })
-                  }).catch(() => {})
+                meetingId={meetingId}
+                speakerMatches={meeting.speaker_matches}
+                slotsStatus={meeting.speaker_slots_status}
+                slotsMs={meeting.speaker_slots_ms}
+                onPersonAssigned={(m) => {
+                  onMeetingUpdate(m)
+                  void import("@/components/ui/tiptap-editor").then((mod) => {
+                    mod.invalidateMeetingSpeakerCache(meetingId)
+                  })
                 }}
                 onSegmentClick={onSeekTo}
                 activeSectionTag={activeSectionTag}
