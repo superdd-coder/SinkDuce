@@ -11,10 +11,12 @@ CLIENT = ROOT / "frontend" / "src" / "api" / "client.ts"
 PICKER = ROOT / "frontend" / "src" / "lib" / "update-release.ts"
 
 
-def test_picker_module_exports_stable_dmg_name():
+def test_picker_module_exports_versioned_dmg_name():
     text = PICKER.read_text(encoding="utf-8")
-    assert 'SinkDuce-macos-arm64.dmg' in text
+    assert "desktopDmgAssetName" in text
+    assert "SinkDuce-macos-arm64-v" in text
     assert "export function pickDesktopDownloadUrl" in text
+    assert "export function shouldOfferUpdate" in text
 
 
 def test_github_release_type_keeps_assets():
@@ -26,6 +28,7 @@ def test_github_release_type_keeps_assets():
 def test_update_check_attaches_download_url_and_desktop_flag():
     text = HOOK.read_text(encoding="utf-8")
     assert "pickDesktopDownloadUrl" in text
+    assert "shouldOfferUpdate" in text
     assert "getHealth" in text
     assert "downloadUrl" in text
     assert "desktop" in text

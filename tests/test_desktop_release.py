@@ -31,9 +31,10 @@ def test_reads_pyproject_version(tmp_path: Path):
     assert mod.read_pyproject_version(pyproject) == "1.2.3"
 
 
-def test_stable_dmg_asset_name():
+def test_dmg_asset_name_includes_version():
     mod = _load()
-    assert mod.DESKTOP_DMG_ASSET == "SinkDuce-macos-arm64.dmg"
+    assert mod.desktop_dmg_asset("1.2.3") == "SinkDuce-macos-arm64-v1.2.3.dmg"
+    assert mod.desktop_dmg_asset("v1.2.3") == "SinkDuce-macos-arm64-v1.2.3.dmg"
 
 
 def test_upload_command_uses_github_name_alias(tmp_path: Path):
@@ -42,8 +43,9 @@ def test_upload_command_uses_github_name_alias(tmp_path: Path):
     dmg.write_bytes(b"x")
     cmd = mod.upload_command("v1.2.3", dmg)
     assert cmd[:4] == ["gh", "release", "upload", "v1.2.3"]
-    assert f"{dmg}#{mod.DESKTOP_DMG_ASSET}" in cmd
+    assert f"{dmg}#{mod.desktop_dmg_asset('1.2.3')}" in cmd
     assert "--clobber" in cmd
+    assert ".app" not in " ".join(cmd)
 
 
 def test_check_release_git_rejects_dirty_and_wrong_tag():

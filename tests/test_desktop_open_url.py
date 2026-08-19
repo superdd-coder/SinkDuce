@@ -18,7 +18,7 @@ from src.desktop_open import allowed_external_url, open_external_url
         "https://mineru.net/apiManage/token",
         "https://tavily.com",
         "http://example.com/a",
-        "https://github.com/superdd-coder/sinkduce/releases/download/v1.2.0/SinkDuce-macos-arm64.dmg",
+        "https://github.com/superdd-coder/sinkduce/releases/download/v1.2.0/SinkDuce-macos-arm64-v1.2.0.dmg",
     ],
 )
 def test_https_links_are_allowed(url: str):

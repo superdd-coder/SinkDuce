@@ -105,7 +105,7 @@ jobs:
   # Desktop DMG is uploaded afterwards on an Apple Silicon machine:
   #   git checkout <tag> && ./desktop/package_macos.sh
   #   ./scripts/desktop_release upload
-  # Asset name must stay SinkDuce-macos-arm64.dmg (in-app Download button).
+  # Asset name: SinkDuce-macos-arm64-vX.Y.Z.dmg (DMG only — never the .app).
   release:
     name: GitHub Release
     needs: docker

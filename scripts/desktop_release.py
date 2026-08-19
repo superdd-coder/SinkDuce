@@ -2,7 +2,7 @@
 """Keep Docker and the macOS desktop build on the same application tag.
 
 Source of truth: pyproject.toml version.
-GitHub Release asset: SinkDuce-macos-arm64.dmg
+GitHub Release asset: SinkDuce-macos-arm64-vX.Y.Z.dmg (DMG only, never the .app).
 
 Usage (repo root; wrapper finds Python 3.10+):
   ./scripts/desktop_release version
@@ -20,7 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-DESKTOP_DMG_ASSET = "SinkDuce-macos-arm64.dmg"
+def desktop_dmg_asset(version: str) -> str:
+    ver = (version or "").strip().lstrip("vV")
+    return f"SinkDuce-macos-arm64-v{ver}.dmg"
 _VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"', re.MULTILINE)
 
 
@@ -102,13 +104,14 @@ def _stamp_cargo_package_version(text: str, version: str) -> str:
     return "".join(out)
 
 
-def upload_command(tag: str, dmg_path: Path, asset_name: str = DESKTOP_DMG_ASSET) -> list[str]:
+def upload_command(tag: str, dmg_path: Path, asset_name: str | None = None) -> list[str]:
+    name = asset_name or desktop_dmg_asset(tag)
     return [
         "gh",
         "release",
         "upload",
         tag,
-        f"{dmg_path}#{asset_name}",
+        f"{dmg_path}#{name}",
         "--clobber",
     ]
 
@@ -176,8 +179,9 @@ def main(argv: list[str] | None = None) -> int:
                     f"missing {dmg}; run ./desktop/package_macos.sh on the v{version} tag first"
                 )
             tag = f"v{version}"
-            subprocess.run(upload_command(tag, dmg), check=True)
-            print(f"uploaded {DESKTOP_DMG_ASSET} to {tag}")
+            asset = desktop_dmg_asset(version)
+            subprocess.run(upload_command(tag, dmg, asset), check=True)
+            print(f"uploaded {asset} to {tag}")
             return 0
         print(__doc__.strip(), file=sys.stderr)
         return 2

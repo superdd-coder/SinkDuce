@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react"
 import { getHealth, getVersion, checkLatestRelease, type GitHubRelease } from "@/api/client"
-import { pickDesktopDownloadUrl } from "@/lib/update-release"
+import { pickDesktopDownloadUrl, shouldOfferUpdate } from "@/lib/update-release"
 
 const IGNORED_KEY = "sinkduce-ignored-versions"
 const MOCK_KEY = "sinkduce-mock-update"
@@ -62,7 +62,7 @@ export function useUpdateCheck() {
                 releaseUrl: "https://github.com/superdd-coder/sinkduce/releases",
                 releaseBody: "### Features\n- Added visual model support for Dashscope one-shot setup\n- Improved local model load/download separation\n\n### Fixes\n- Fixed transcription model auto-download on load click",
                 downloadUrl:
-                  "https://github.com/superdd-coder/sinkduce/releases/download/v0.2.0/SinkDuce-macos-arm64.dmg",
+                  "https://github.com/superdd-coder/sinkduce/releases/download/v0.2.0/SinkDuce-macos-arm64-v0.2.0.dmg",
                 desktop,
               })
               setIgnored(getIgnoredVersions().has("v0.2.0"))
@@ -80,18 +80,19 @@ export function useUpdateCheck() {
         const release: GitHubRelease | null = await checkLatestRelease(info.repo)
         if (!release || cancelled) return
         const latest = release.tag_name
-        if (compareVersions(latest, info.version) > 0) {
-          const ignoredVersions = getIgnoredVersions()
-          setUpdate({
-            currentVersion: info.version,
-            latestVersion: latest,
-            releaseUrl: release.html_url,
-            releaseBody: release.body || "",
-            downloadUrl: pickDesktopDownloadUrl(release.assets),
-            desktop,
-          })
-          setIgnored(ignoredVersions.has(latest))
-        }
+        const versionNewer = compareVersions(latest, info.version) > 0
+        const downloadUrl = pickDesktopDownloadUrl(release.assets, latest)
+        if (!shouldOfferUpdate({ desktop, versionNewer, downloadUrl })) return
+        const ignoredVersions = getIgnoredVersions()
+        setUpdate({
+          currentVersion: info.version,
+          latestVersion: latest,
+          releaseUrl: release.html_url,
+          releaseBody: release.body || "",
+          downloadUrl,
+          desktop,
+        })
+        setIgnored(ignoredVersions.has(latest))
       } catch {
         // Silently ignore
       }
