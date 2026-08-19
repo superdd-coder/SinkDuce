@@ -21,6 +21,14 @@ export function pickDesktopDownloadUrl(
   return named?.browser_download_url || null
 }
 
+export function detectDesktopClient(healthDesktop?: boolean): boolean {
+  if (healthDesktop === true) return true
+  if (typeof window === "undefined") return false
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown }
+  return Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__)
+}
+
+
 /** Desktop waits for the versioned DMG; Docker only needs a newer tag. */
 export function shouldOfferUpdate(opts: {
   desktop: boolean

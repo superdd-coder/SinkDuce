@@ -3,6 +3,7 @@ import { test } from "node:test"
 
 import {
   desktopDmgAssetName,
+  detectDesktopClient,
   pickDesktopDownloadUrl,
   shouldOfferUpdate,
 } from "../frontend/src/lib/update-release.ts"
@@ -70,4 +71,10 @@ test("docker update still shows when there is no dmg", () => {
     shouldOfferUpdate({ desktop: false, versionNewer: false, downloadUrl: null }),
     false,
   )
+})
+
+test("desktop client is true when health says so", () => {
+  assert.equal(detectDesktopClient(true), true)
+  assert.equal(detectDesktopClient(false), false)
+  assert.equal(detectDesktopClient(undefined), false)
 })

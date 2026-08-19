@@ -29,6 +29,7 @@ def test_update_check_attaches_download_url_and_desktop_flag():
     text = HOOK.read_text(encoding="utf-8")
     assert "pickDesktopDownloadUrl" in text
     assert "shouldOfferUpdate" in text
+    assert "detectDesktopClient" in text
     assert "getHealth" in text
     assert "downloadUrl" in text
     assert "desktop" in text
@@ -38,6 +39,7 @@ def test_dialog_branches_desktop_download_vs_docker_compose():
     text = DIALOG.read_text(encoding="utf-8")
     assert "update.desktop" in text
     assert "update.downloadUrl" in text
+    assert "desktopDmgAssetName" in text
     assert "Download" in text
     assert "git pull &&" in text
     assert "docker compose pull" in text

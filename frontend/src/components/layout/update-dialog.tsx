@@ -9,6 +9,8 @@ import {
 } from "@/components/ui/dialog"
 import { Copy, Check, ExternalLink, ArrowRight, Download } from "lucide-react"
 import type { UpdateInfo } from "@/hooks/use-update-check"
+import { openDesktopExternalUrl } from "@/api/client"
+import { desktopDmgAssetName } from "@/lib/update-release"
 import { cn } from "@/lib/utils"
 
 /** Default path: pull Hub image (docker-compose.yml). Source builds use docker-compose.build.yml. */
@@ -106,18 +108,16 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
             <section className="pm-update-card" aria-label="How to update">
               <h3 className="pm-update-card-label">How to update</h3>
               <p className="pm-update-help">
-                Download the disk image, open it, and drag SinkDuce to
-                Applications. Quit the running app with{" "}
-                <code className="pm-update-inline-code">Cmd+Q</code> before
-                replacing it — the red window button only hides to the menu bar.
+                Download{" "}
+                <code className="pm-update-inline-code">
+                  {desktopDmgAssetName(update.latestVersion)}
+                </code>
+                , open the disk image, and drag SinkDuce into Applications.
+                Then quit with{" "}
+                <code className="pm-update-inline-code">Cmd+Q</code> and
+                reopen — the red window button only hides to the menu bar.
                 If macOS blocks the app, right-click → Open.
               </p>
-              {!update.downloadUrl ? (
-                <p className="pm-update-help" style={{ marginTop: "0.65rem" }}>
-                  The installer is not on this GitHub Release yet. Use View on
-                  GitHub, or wait for the desktop package to be uploaded.
-                </p>
-              ) : null}
             </section>
           ) : (
             <section className="pm-update-card" aria-label="How to update">
@@ -198,7 +198,9 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
                   disabled={!update.downloadUrl}
                   onClick={() => {
                     if (!update.downloadUrl) return
-                    window.open(update.downloadUrl, "_blank", "noopener,noreferrer")
+                    void openDesktopExternalUrl(update.downloadUrl).catch(() => {
+                      window.open(update.downloadUrl!, "_blank", "noopener,noreferrer")
+                    })
                   }}
                 >
                   <Download className="h-3.5 w-3.5" strokeWidth={1.75} />

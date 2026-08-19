@@ -1,6 +1,10 @@
 import { useEffect, useState, useCallback } from "react"
 import { getHealth, getVersion, checkLatestRelease, type GitHubRelease } from "@/api/client"
-import { pickDesktopDownloadUrl, shouldOfferUpdate } from "@/lib/update-release"
+import {
+  detectDesktopClient,
+  pickDesktopDownloadUrl,
+  shouldOfferUpdate,
+} from "@/lib/update-release"
 
 const IGNORED_KEY = "sinkduce-ignored-versions"
 const MOCK_KEY = "sinkduce-mock-update"
@@ -42,12 +46,12 @@ export function useUpdateCheck() {
     let cancelled = false
 
     const check = async () => {
-      let desktop = false
+      let desktop = detectDesktopClient()
       try {
         const health = await getHealth()
-        desktop = health.desktop === true
+        desktop = detectDesktopClient(health.desktop === true)
       } catch {
-        /* Docker / health unavailable — treat as server deploy */
+        /* health unavailable — keep Tauri/shell detection */
       }
 
       // Dev mock first — takes priority
