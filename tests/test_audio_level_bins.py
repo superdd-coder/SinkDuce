@@ -84,3 +84,4 @@ def test_desktop_recording_uses_system_audio_helper():
     assert display_idx > helper_idx
     assert "system_audio" in helper
     assert "/pcm" in helper
+    assert "Cmd+Q" in helper

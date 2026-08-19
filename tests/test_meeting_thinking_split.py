@@ -15,7 +15,7 @@ def test_oneshot_sets_meeting_pro():
     dash = (root / "oneshot-dashscope-dialog.tsx").read_text(encoding="utf-8")
     opr = (root / "oneshot-openrouter-dialog.tsx").read_text(encoding="utf-8")
     view = (root / "llm-provider-view.tsx").read_text(encoding="utf-8")
-    assert 'MEETING_MODEL = "qwen3.7-plus"' in dash
+    assert 'MEETING_MODEL = "deepseek-v4-pro-0813"' in dash
     assert 'DEFAULT_MODEL = "deepseek-v4-flash-0731"' in dash
     assert 'CHAT_MODEL = "qwen3.7-plus"' in dash
     assert 'LIBRARY_MODEL = "qwen3.7-flash"' in dash
@@ -28,7 +28,7 @@ def test_oneshot_sets_meeting_pro():
     assert 'DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731"' in opr
     assert 'CHAT_MODEL = "qwen/qwen3.7-plus"' in opr
     assert 'LIBRARY_MODEL = "qwen/qwen3.7-flash"' in opr
-    assert 'MEETING_MODEL = "qwen/qwen3.7-plus"' in opr
+    assert 'MEETING_MODEL = "deepseek/deepseek-v4-pro-0813"' in opr
     assert 'OPENROUTER_VISION_AND_TOOLS = ["qwen/qwen3.7-plus", "qwen/qwen3.7-flash"]' in opr
     assert "openrouterCapabilityTags" in opr
     assert "enrichment_model:" in opr

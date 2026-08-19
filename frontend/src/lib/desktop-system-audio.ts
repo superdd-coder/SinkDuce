@@ -39,7 +39,7 @@ registerProcessor('system-pcm-player', SystemPcmPlayer)
 `
 
 export const SCREEN_RECORDING_HELP =
-  "Screen Recording permission is required to capture system audio. Open System Settings → Privacy & Security → Screen Recording, enable SinkDuce, then try again."
+  "Could not capture system audio. Quit SinkDuce with Cmd+Q, reopen, and try again. If macOS asks to record audio, click Allow."
 
 export interface DesktopSystemAudio {
   stream: MediaStream

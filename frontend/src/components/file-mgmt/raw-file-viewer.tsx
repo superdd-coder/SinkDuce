@@ -158,6 +158,17 @@ function attachPdfPinchAndWheelZoom(root: HTMLElement) {
   viewport.addEventListener("touchcancel", onTouchEnd, { passive: true })
 }
 
+/** Raster images — native <img>, not File Viewer. */
+const IMAGE_PREVIEW_EXTS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "bmp",
+])
+
 /** Extensions we open with File Viewer in Raw. */
 const RAW_VIEWER_EXTS = new Set([
   "pdf",
@@ -185,7 +196,14 @@ const RAW_VIEWER_EXTS = new Set([
   "jsonl",
   "html",
   "htm",
+  ...IMAGE_PREVIEW_EXTS,
 ])
+
+export function isImagePreviewFilename(filename: string | null | undefined): boolean {
+  if (!filename) return false
+  const ext = filename.split(".").pop()?.toLowerCase() || ""
+  return IMAGE_PREVIEW_EXTS.has(ext)
+}
 
 export function isRawViewerSupported(filename: string | null | undefined): boolean {
   if (!filename) return false
@@ -331,6 +349,13 @@ const MIME_BY_EXT: Record<string, string> = {
   json: "application/json",
   html: "text/html",
   htm: "text/html",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
 }
 
 function mimeForName(name: string, fallback = "application/octet-stream"): string {
@@ -371,6 +396,7 @@ function RawFileViewerInner({
 
   const supported = isRawViewerSupported(filename)
   const safeName = resolveRawFilename(filename)
+  const isImage = isImagePreviewFilename(filename) || isImagePreviewFilename(safeName)
 
   // PDF chrome layout: top row search+zoom+rotate (full tools only).
   // download-search: strip residual print/zoom nodes the library may still mount.
@@ -540,7 +566,7 @@ function RawFileViewerInner({
   }, [viewerFile, hideChrome, downloadSearchOnly])
 
   useEffect(() => {
-    if (!url || !supported) {
+    if (!url || !supported || isImage) {
       setViewerFile(null)
       setErrorTitle(null)
       setLoading(false)
@@ -618,7 +644,7 @@ function RawFileViewerInner({
     return () => {
       cancelled = true
     }
-  }, [url, supported, safeName])
+  }, [url, supported, safeName, isImage])
 
   /** PDF owns zoom/rotate on its left float pill — web bar is Search + Download + Print only. */
   const isPdfFile = useMemo(
@@ -745,6 +771,23 @@ function RawFileViewerInner({
         )}
       >
         No file to preview.
+      </div>
+    )
+  }
+
+  if (isImage) {
+    return (
+      <div
+        className={cn(
+          "h-full overflow-auto flex items-center justify-center p-4",
+          className
+        )}
+      >
+        <img
+          src={url}
+          alt={downloadName}
+          className="max-w-full max-h-full object-contain"
+        />
       </div>
     )
   }

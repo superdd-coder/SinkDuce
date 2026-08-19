@@ -18,7 +18,7 @@ import {
   Loader2,
   Star,
 } from "lucide-react"
-import { cn, chunkHasImageFence, isImageOnlyChunk } from "@/lib/utils"
+import { cn, chunkHasImageFence, collapsedChunkPreview } from "@/lib/utils"
 import { SummarySection } from "./file-detail-parts"
 import { ChunkInspect } from "./chunk-inspect"
 import { IngestTracePane } from "./ingest-trace-pane"
@@ -513,9 +513,8 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                     className="flex-1 overflow-hidden min-h-0 data-[state=inactive]:hidden"
                   >
                     <div className="pm-ws-doc-stage flex flex-col">
-                      <ScrollArea className="flex-1 min-h-0">
                         <TooltipProvider delay={320} closeDelay={80}>
-                        <div className="p-3 space-y-2">
+                        <div className="pm-ws-chunk-list p-3 space-y-2">
                           {chunksLoading ? (
                             <div className="pm-ws-loading py-12">
                               <Loader2 className="h-5 w-5 animate-spin" />
@@ -547,7 +546,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                               return (
                                 <div
                                   key={group.parent.id}
-                                  className="pm-ws-tile !p-0 overflow-hidden"
+                                  className="pm-ws-tile pm-ws-chunk-tile !p-0 overflow-hidden"
                                 >
                                   <ChunkInspect chunk={group.parent}>
                                   <button
@@ -599,21 +598,12 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                           <Crosshair className="h-3.5 w-3.5" />
                                         </div>
                                       </div>
-                                      <div
-                                        className={cn(
-                                          !isImageOnlyChunk(group.parent.text) &&
-                                            !chunkHasImageFence(group.parent.text) &&
-                                            "line-clamp-3 overflow-hidden",
-                                          "text-[var(--pm-muted)]"
-                                        )}
-                                      >
-                                        <ChunkMd
-                                          text={group.parent.text}
-                                          collection={collectionId}
-                                          fileId={fileId || undefined}
-                                          source={docSource || undefined}
-                                        />
-                                      </div>
+                                      <p className="pm-ws-chunk-preview line-clamp-3">
+                                        {collapsedChunkPreview(group.parent.text) ||
+                                          (chunkHasImageFence(group.parent.text)
+                                            ? "Figure"
+                                            : "")}
+                                      </p>
                                     </div>
                                   </button>
                                   </ChunkInspect>
@@ -623,7 +613,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                         <ChunkInspect
                                           key={child.id}
                                           chunk={child}
-                                          className="pm-ws-tile cursor-pointer"
+                                          className="pm-ws-tile pm-ws-chunk-tile cursor-pointer"
                                         >
                                           <div
                                             onClick={() => handleLocate(child)}
@@ -670,7 +660,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                   key={chunk.id}
                                   chunk={chunk}
                                   className={cn(
-                                    "pm-ws-tile transition-all",
+                                    "pm-ws-tile pm-ws-chunk-tile",
                                     highlightedIdx === chunk.chunk_index
                                       ? "is-on"
                                       : ""
@@ -702,14 +692,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                     className="w-full text-left"
                                     onClick={() => toggleChunkExpand(chunk.id)}
                                   >
-                                    <div
-                                      className={cn(
-                                        !expanded &&
-                                          !isImageOnlyChunk(chunk.text) &&
-                                          !chunkHasImageFence(chunk.text) &&
-                                          "line-clamp-4 overflow-hidden"
-                                      )}
-                                    >
+                                    {expanded ? (
                                       <ChunkMd
                                         text={chunk.text}
                                         collection={collectionId}
@@ -718,7 +701,14 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                         skipImageIds={seenChunkImageIds}
                                         recordSeen
                                       />
-                                    </div>
+                                    ) : (
+                                      <p className="pm-ws-chunk-preview line-clamp-4">
+                                        {collapsedChunkPreview(chunk.text) ||
+                                          (chunkHasImageFence(chunk.text)
+                                            ? "Figure"
+                                            : "")}
+                                      </p>
+                                    )}
                                     {!expanded &&
                                       (chunk.text?.length ?? 0) > 200 && (
                                         <span className="pm-ws-link mt-1 inline-block">
@@ -732,7 +722,6 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           )}
                         </div>
                         </TooltipProvider>
-                      </ScrollArea>
                     </div>
                   </TabsContent>
 

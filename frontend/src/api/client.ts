@@ -28,10 +28,23 @@ export interface VersionInfo {
 export const getVersion = () =>
   request<VersionInfo>("/version")
 
+export const openDesktopExternalUrl = (url: string) =>
+  request<{ ok: boolean }>("/desktop/open-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  })
+
+export interface GitHubReleaseAsset {
+  name: string
+  browser_download_url: string
+}
+
 export interface GitHubRelease {
   tag_name: string
   html_url: string
   body: string
+  assets?: GitHubReleaseAsset[]
 }
 
 /**

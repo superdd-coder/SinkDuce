@@ -8,6 +8,7 @@
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -59,6 +60,7 @@ import type {
   FileVersion,
   Message,
 } from "@/types/file-mgmt"
+import { useShallow } from "zustand/react/shallow"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { NodePreviewSheet } from "@/components/file-mgmt/node-preview-sheet"
 import { UpdateFileDialog } from "@/components/file-mgmt/file-detail/update-file-dialog"
@@ -114,7 +116,7 @@ export interface FileMgmtDetailDialogProps {
   contextNodeId?: string | null
 }
 
-export function FileMgmtDetailDialog({
+export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
   collectionId,
   fileId: fileIdProp = null,
   source: sourceProp = null,
@@ -151,8 +153,12 @@ export function FileMgmtDetailDialog({
    * are not ready yet). Subscribe to this file only — other files' ingest
    * polls must not re-render the open dialog (causes preview flicker).
    */
-  const ingestProgress = useFileMgmtStore((s) =>
-    fileId ? s.ingestingFiles[fileId] : undefined
+  const ingestProgress = useFileMgmtStore(
+    useShallow((s) => {
+      const p = fileId ? s.ingestingFiles[fileId] : undefined
+      if (!p) return null
+      return { taskId: p.taskId, progress: p.progress, message: p.message }
+    }),
   )
   const isIngesting = !!ingestProgress
 
@@ -1436,4 +1442,4 @@ export function FileMgmtDetailDialog({
       )}
     </>
   )
-}
+})

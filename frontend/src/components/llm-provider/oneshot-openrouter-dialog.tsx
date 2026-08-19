@@ -24,7 +24,7 @@ const BASE_URL = "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731"
 const CHAT_MODEL = "qwen/qwen3.7-plus"
 const LIBRARY_MODEL = "qwen/qwen3.7-flash"
-const MEETING_MODEL = "qwen/qwen3.7-plus"
+const MEETING_MODEL = "deepseek/deepseek-v4-pro-0813"
 // qwen3.7-plus / flash: vision + tools. DeepSeek: tools only, no vision.
 const OPENROUTER_VISION_AND_TOOLS = ["qwen/qwen3.7-plus", "qwen/qwen3.7-flash"]
 

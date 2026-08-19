@@ -31,7 +31,7 @@ const RT_TRANS_MODEL = "fun-asr-realtime"
 const DEFAULT_MODEL = "deepseek-v4-flash-0731"
 const CHAT_MODEL = "qwen3.7-plus"
 const LIBRARY_MODEL = "qwen3.7-flash"
-const MEETING_MODEL = "qwen3.7-plus"
+const MEETING_MODEL = "deepseek-v4-pro-0813"
 // qwen3.7-plus / qwen3.7-flash: vision + tools. DeepSeek: tools only, no vision.
 const DASHSCOPE_VISION_AND_TOOLS = ["qwen3.7-plus", "qwen3.7-flash"]
 

@@ -168,6 +168,10 @@ async def provider_error_middleware(request: Request, call_next):
     # Prevent CDN/browser from caching API JSON as HTML (or vice versa)
     if path.startswith("/api/") or path == "/health":
         response.headers["Cache-Control"] = "no-store"
+    # Desktop WKWebView otherwise keeps a stale SPA shell (toolbar / fonts look unchanged)
+    if path == "/" or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
     return response
 
 from src.api.routes.query import router as query_router
@@ -274,8 +278,13 @@ if FRONTEND_DIST.exists():
         except ValueError:
             return FileResponse(FRONTEND_DIST / "index.html")
         if confined.is_file():
-            return FileResponse(confined)
-        return FileResponse(FRONTEND_DIST / "index.html")
+            resp = FileResponse(confined)
+            if confined.suffix.lower() in {".html", ".htm"}:
+                resp.headers["Cache-Control"] = "no-store, max-age=0"
+            return resp
+        html = FileResponse(FRONTEND_DIST / "index.html")
+        html.headers["Cache-Control"] = "no-store, max-age=0"
+        return html
 
 
 if __name__ == "__main__":

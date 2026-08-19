@@ -37,6 +37,12 @@ jobs:
             exit 1
           fi
           echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
+          PKG_VER=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match frontend/package.json version '$PKG_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches frontend/package.json $PKG_VER"
 
       - name: Create or update Release
         uses: softprops/action-gh-release@v2

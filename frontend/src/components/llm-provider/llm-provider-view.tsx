@@ -49,6 +49,23 @@ import { PeopleManager } from "./people-manager"
 import { OneShotDashscopeDialog } from "./oneshot-dashscope-dialog"
 import { OneShotOpenRouterDialog } from "./oneshot-openrouter-dialog"
 
+const LOCAL_MODEL_BUNDLES = [
+  {
+    id: "file",
+    label: "File transcription pack",
+    description: "SenseVoice + VAD + speaker + punctuation",
+    modelIds: ["transcription", "vad", "speaker", "punc"] as const,
+  },
+  {
+    id: "realtime",
+    label: "Realtime transcription",
+    description: "Paraformer streaming",
+    modelIds: ["realtime"] as const,
+  },
+] as const
+
+const LOCAL_MODEL_IDS = LOCAL_MODEL_BUNDLES.flatMap((b) => [...b.modelIds])
+
 // OpenRouter transcription models suitable for long audio (file transcription)
 const OPENROUTER_TRANSCRIPTION_MODELS = [
   { value: "openai/whisper-large-v3-turbo", label: "OpenAI: Whisper Large V3 Turbo" },
@@ -584,6 +601,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   // Local model catalog (download management)
   const [localModelCatalog, setLocalModelCatalog] = useState<ModelStatus[]>([])
   const [deletingModelIds, setDeletingModelIds] = useState<Set<string>>(new Set())
+  const [deleteLocalModelsOpen, setDeleteLocalModelsOpen] = useState(false)
 
   // Visual Model selection
   const [visualModelId, setVisualModelId] = useState<string>("")
@@ -832,6 +850,42 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   // ── Realtime Transcription ──
   const fetchRtTransProviders = async () => {
     try { setRtTransProviders(await getRealtimeTranscriptionProviders()) } catch { /* ignore */ }
+  }
+
+  const confirmDeleteLocalModels = async () => {
+    const ids = [...LOCAL_MODEL_IDS]
+    const hasFiles = ids.some((id) => {
+      const m = localModelCatalog.find((x) => x.id === id)
+      return m?.downloaded || m?.status === "error"
+    })
+    if (!hasFiles) {
+      setDeleteLocalModelsOpen(false)
+      toast.message("Nothing to delete")
+      return
+    }
+    setDeletingModelIds((prev) => new Set([...prev, ...ids]))
+    try {
+      const res = await deleteLocalModels(ids)
+      if (!res.success) {
+        toast.error(res.error || "Delete failed")
+      } else {
+        const freed = res.freed_mb ? ` (~${res.freed_mb} MB)` : ""
+        toast.success(`Local models deleted${freed}`)
+        setDeleteLocalModelsOpen(false)
+      }
+      await refreshModelDownloaded()
+      await refreshLoadStates()
+      fetchFileTransProviders()
+      fetchRtTransProviders()
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setDeletingModelIds((prev) => {
+        const next = new Set(prev)
+        ids.forEach((id) => next.delete(id))
+        return next
+      })
+    }
   }
 
   const applyLlmSlotConfig = (c: Awaited<ReturnType<typeof getConfig>>) => {
@@ -2160,21 +2214,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   {/* Local model download management */}
                   <div className="pm-settings-adv-block">
                     {(() => {
-                      const LOCAL_BUNDLES = [
-                        {
-                          id: "file",
-                          label: "File transcription pack",
-                          description: "SenseVoice + VAD + speaker + punctuation",
-                          modelIds: ["transcription", "vad", "speaker", "punc"] as const,
-                        },
-                        {
-                          id: "realtime",
-                          label: "Realtime transcription",
-                          description: "Paraformer streaming",
-                          modelIds: ["realtime"] as const,
-                        },
-                      ] as const
-                      const allIds = LOCAL_BUNDLES.flatMap((b) => [...b.modelIds])
+                      const LOCAL_BUNDLES = LOCAL_MODEL_BUNDLES
+                      const allIds = LOCAL_MODEL_IDS
                       const allMembers = allIds
                         .map((id) => localModelCatalog.find((m) => m.id === id))
                         .filter(Boolean) as ModelStatus[]
@@ -2215,50 +2256,6 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           ? "downloading"
                           : "idle"
 
-                      const handleDeleteAll = async () => {
-                        const ids = [...allIds]
-                        const hasFiles = ids.some((id) => {
-                          const m = localModelCatalog.find((x) => x.id === id)
-                          return m?.downloaded || m?.status === "error"
-                        })
-                        if (!hasFiles) {
-                          toast.message("Nothing to delete")
-                          return
-                        }
-                        if (
-                          !confirm(
-                            "Delete all local FunASR models from disk?\n\n" +
-                              "File and realtime packs will be removed. You can re-download later."
-                          )
-                        ) {
-                          return
-                        }
-                        setDeletingModelIds((prev) => new Set([...prev, ...ids]))
-                        try {
-                          const res = await deleteLocalModels(ids)
-                          if (!res.success) {
-                            toast.error(res.error || "Delete failed")
-                          } else {
-                            const freed = res.freed_mb
-                              ? ` (~${res.freed_mb} MB)`
-                              : ""
-                            toast.success(`Local models deleted${freed}`)
-                          }
-                          await refreshModelDownloaded()
-                          await refreshLoadStates()
-                          fetchFileTransProviders()
-                          fetchRtTransProviders()
-                        } catch (e) {
-                          toast.error(String(e))
-                        } finally {
-                          setDeletingModelIds((prev) => {
-                            const next = new Set(prev)
-                            ids.forEach((id) => next.delete(id))
-                            return next
-                          })
-                        }
-                      }
-
                       return (
                         <>
                     <div className="pm-settings-adv-head">
@@ -2284,7 +2281,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={handleDeleteAll}
+                            onClick={() => setDeleteLocalModelsOpen(true)}
                             disabled={deletingAll || anyDownloading}
                           >
                             {deletingAll ? (
@@ -2626,6 +2623,51 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           modelFetchSection="transcription"
         />
       </div>
+
+      <Dialog
+        open={deleteLocalModelsOpen}
+        onOpenChange={(v) => {
+          if (deletingModelIds.size > 0) return
+          setDeleteLocalModelsOpen(v)
+        }}
+      >
+        <DialogContent
+          className="pm-dialog pm-dialog-confirm sm:max-w-[320px]"
+          showCloseButton={false}
+        >
+          <DialogHeader>
+            <DialogKicker>Local models</DialogKicker>
+            <DialogTitle>Delete local models?</DialogTitle>
+            <DialogDescription>
+              File and realtime FunASR packs will be removed from disk. You can
+              re-download later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={deletingModelIds.size > 0}
+              onClick={() => setDeleteLocalModelsOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive-solid"
+              size="sm"
+              disabled={deletingModelIds.size > 0}
+              onClick={() => void confirmDeleteLocalModels()}
+            >
+              {deletingModelIds.size > 0 ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ModelDownloadDialog
         open={modelDownloadOpen}

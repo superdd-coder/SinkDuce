@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronRight, ChevronLeft, Clock, Search } from "lucide-react"
+import { ChevronRight, ChevronLeft, Clock, Search, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger, TabsIndicator, TabsContent } from "@/compo
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import type { Meeting, SpeakerMatch, TranscriptSegment } from "@/api/client"
 import { PeoplePicker } from "@/components/meeting/people-picker"
+import { PeopleManager } from "@/components/llm-provider/people-manager"
 
 interface TranscriptPanelProps {
   open: boolean
@@ -498,6 +499,7 @@ export function SpeakersTab({
   activeSectionTag?: string
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [peopleOpen, setPeopleOpen] = useState(false)
 
   // Unique speakers + up to 5 sample sentences each (stable order — never Math.random)
   const speakers = useMemo(() => {
@@ -542,15 +544,32 @@ export function SpeakersTab({
   return (
     <div className="pm-panel-scroll-shell h-full min-h-0">
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-2 space-y-3 pt-4">
-        {slotsStatus === "computing" && (
-          <p className="pm-meta px-1">Computing voiceprints…</p>
-        )}
-        {slotsStatus === "ready" && slotsMs != null && (
-          <p className="pm-meta px-1">Voiceprints ready · {(slotsMs / 1000).toFixed(1)}s</p>
-        )}
-        {slotsStatus === "unavailable" && (
-          <p className="pm-meta px-1">Voiceprints unavailable</p>
-        )}
+        <div className="pm-speakers-status">
+          {slotsStatus === "computing" ? (
+            <p className="pm-meta min-w-0 truncate">Computing voiceprints…</p>
+          ) : slotsStatus === "ready" && slotsMs != null ? (
+            <p className="pm-meta min-w-0 truncate">
+              Voiceprints ready · {(slotsMs / 1000).toFixed(1)}s
+            </p>
+          ) : slotsStatus === "unavailable" ? (
+            <p className="pm-meta min-w-0 truncate">Voiceprints unavailable</p>
+          ) : (
+            <span />
+          )}
+          <button
+            type="button"
+            className="pm-speakers-people-btn"
+            onClick={() => setPeopleOpen(true)}
+          >
+            <Users className="size-3.5" strokeWidth={1.75} />
+            People
+          </button>
+        </div>
+        <PeopleManager
+          open={peopleOpen}
+          onOpenChange={setPeopleOpen}
+          nested
+        />
         {speakers.map((speaker) => (
           <SpeakerCard
             key={speaker.id}

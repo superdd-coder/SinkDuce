@@ -100,7 +100,9 @@ function SlideConfirmDelete({
     <button
       ref={btnRef}
       type="button"
-      className={cn("pm-people-pill", armed && "is-danger")}
+      className={cn("pm-people-pill pm-people-delete", armed && "is-armed")}
+      aria-expanded={armed}
+      aria-label={armed ? "Confirm delete" : label}
       onClick={() => {
         if (!armed) {
           setArmed(true)
@@ -110,8 +112,15 @@ function SlideConfirmDelete({
         onConfirm()
       }}
     >
-      <Trash2 className="size-3.5" />
-      {armed ? "Confirm delete" : label}
+      <Trash2 className="size-3.5 shrink-0" />
+      <span className="pm-people-delete-track">
+        <span className="pm-people-delete-idle" aria-hidden={armed}>
+          {label}
+        </span>
+        <span className="pm-people-delete-ask" aria-hidden={!armed}>
+          Confirm
+        </span>
+      </span>
     </button>
   )
 }
@@ -370,7 +379,7 @@ export function PeopleManager({
                       {initialOf(p.label || p.display_name)}
                     </span>
                     <span className="min-w-0 flex-1 text-left">
-                      <span className="pm-people-rail-name">
+                      <span className="pm-people-rail-name pm-rail-name">
                         {p.label}
                         {p.is_me && <span className="pm-people-me-tag">Me</span>}
                       </span>
@@ -470,7 +479,7 @@ export function PeopleManager({
                       <ul className="pm-people-meetings">
                         {detail.meetings.map((row) => (
                           <li key={row.meeting_id} className="pm-people-meeting-card">
-                            <span className="pm-people-meeting-title">{row.title}</span>
+                            <span className="pm-people-meeting-title pm-rail-name">{row.title}</span>
                             <span className="pm-meta">
                               {row.speaker_id ? `Slot ${row.speaker_id}` : "Seen"}
                               {row.speech_sec ? ` · ${formatSpeech(row.speech_sec)}` : ""}

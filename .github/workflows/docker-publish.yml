@@ -48,6 +48,12 @@ jobs:
             exit 1
           fi
           echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
+          PKG_VER=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match frontend/package.json version '$PKG_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches frontend/package.json $PKG_VER"
           echo "TAG_VER=$TAG_VER" >> "$GITHUB_ENV"
 
       # Multi-arch: amd64 (servers) + arm64 (Apple Silicon). Without this,
@@ -96,6 +102,10 @@ jobs:
           cache-to: type=gha,mode=max
 
   # After Hub image is available — then open GitHub Release (update popup).
+  # Desktop DMG is uploaded afterwards on an Apple Silicon machine:
+  #   git checkout <tag> && ./desktop/package_macos.sh
+  #   ./scripts/desktop_release upload
+  # Asset name must stay SinkDuce-macos-arm64.dmg (in-app Download button).
   release:
     name: GitHub Release
     needs: docker
@@ -114,6 +124,12 @@ jobs:
             exit 1
           fi
           echo "✅ Tag $TAG matches pyproject.toml $TOML_VER"
+          PKG_VER=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "❌ Tag version '$TAG' does not match frontend/package.json version '$PKG_VER'"
+            exit 1
+          fi
+          echo "✅ Tag $TAG matches frontend/package.json $PKG_VER"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

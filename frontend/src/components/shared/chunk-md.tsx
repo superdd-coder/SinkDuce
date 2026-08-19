@@ -2,6 +2,7 @@
  * Shared chunk body renderer — same pipeline as Recall result cards:
  * :::image fences → <img>, GFM tables, markdown/HTML via rehype-raw.
  */
+import { memo } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeRaw from "rehype-raw"
@@ -72,7 +73,7 @@ export interface ChunkMdProps {
  * Render chunk text: expand :::image fences → <img>, markdown/HTML tables.
  * Images load from /api/documents/{collection}/{file_id}/images/{image_id}.
  */
-export function ChunkMd({
+export const ChunkMd = memo(function ChunkMd({
   text,
   collection,
   fileId,
@@ -189,4 +190,4 @@ export function ChunkMd({
       </ReactMarkdown>
     </div>
   )
-}
+})

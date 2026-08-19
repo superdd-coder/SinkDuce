@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react"
-import { getVersion, checkLatestRelease, type GitHubRelease } from "@/api/client"
+import { getHealth, getVersion, checkLatestRelease, type GitHubRelease } from "@/api/client"
+import { pickDesktopDownloadUrl } from "@/lib/update-release"
 
 const IGNORED_KEY = "sinkduce-ignored-versions"
 const MOCK_KEY = "sinkduce-mock-update"
@@ -28,6 +29,8 @@ export interface UpdateInfo {
   latestVersion: string
   releaseUrl: string
   releaseBody: string
+  downloadUrl: string | null
+  desktop: boolean
 }
 
 export function useUpdateCheck() {
@@ -39,6 +42,14 @@ export function useUpdateCheck() {
     let cancelled = false
 
     const check = async () => {
+      let desktop = false
+      try {
+        const health = await getHealth()
+        desktop = health.desktop === true
+      } catch {
+        /* Docker / health unavailable — treat as server deploy */
+      }
+
       // Dev mock first — takes priority
       if (typeof window !== "undefined" && window.localStorage) {
         try {
@@ -50,6 +61,9 @@ export function useUpdateCheck() {
                 latestVersion: "v0.2.0",
                 releaseUrl: "https://github.com/superdd-coder/sinkduce/releases",
                 releaseBody: "### Features\n- Added visual model support for Dashscope one-shot setup\n- Improved local model load/download separation\n\n### Fixes\n- Fixed transcription model auto-download on load click",
+                downloadUrl:
+                  "https://github.com/superdd-coder/sinkduce/releases/download/v0.2.0/SinkDuce-macos-arm64.dmg",
+                desktop,
               })
               setIgnored(getIgnoredVersions().has("v0.2.0"))
             }
@@ -73,6 +87,8 @@ export function useUpdateCheck() {
             latestVersion: latest,
             releaseUrl: release.html_url,
             releaseBody: release.body || "",
+            downloadUrl: pickDesktopDownloadUrl(release.assets),
+            desktop,
           })
           setIgnored(ignoredVersions.has(latest))
         }

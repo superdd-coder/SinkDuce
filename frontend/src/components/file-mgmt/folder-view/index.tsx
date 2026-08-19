@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { useShallow } from "zustand/react/shallow"
 import { PanelRight } from "lucide-react"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { Breadcrumb } from "./breadcrumb"
@@ -16,7 +17,7 @@ import { cn } from "@/lib/utils"
  * Soft rail collapse (ENGINEERING §4.5) — curtain clip:
  * - Right track width animates; panel keeps fixed width + pin-right
  * - overflow:hidden clips without content reflow (no half-size squish)
- * - Reopen pill on .pm-files top-right
+ * - Reopen pill in the toolbar band, right-aligned
  */
 export function FolderView({
   collectionId,
@@ -35,7 +36,18 @@ export function FolderView({
     messageSidebarOpen,
     toggleMessageSidebar,
     currentFolderMessages,
-  } = useFileMgmtStore()
+  } = useFileMgmtStore(
+    useShallow((s) => ({
+      fetchFolderTree: s.fetchFolderTree,
+      navigateToRoot: s.navigateToRoot,
+      selectFolder: s.selectFolder,
+      perCollectionFolderCache: s.perCollectionFolderCache,
+      hydrateFolderFileSort: s.hydrateFolderFileSort,
+      messageSidebarOpen: s.messageSidebarOpen,
+      toggleMessageSidebar: s.toggleMessageSidebar,
+      currentFolderMessages: s.currentFolderMessages,
+    })),
+  )
 
   /** Phase 8: file detail dialog (local — does not touch folder grid layout). */
   const [detailFileId, setDetailFileId] = useState<string | null>(null)
@@ -64,6 +76,16 @@ export function FolderView({
   const msgCollapsed = !messageSidebarOpen
   const msgCount = currentFolderMessages.length
   const setMessageSidebarOpen = useFileMgmtStore((s) => s.setMessageSidebarOpen)
+  const handleDetailOpenChange = useCallback((next: boolean) => {
+    if (!next) setDetailFileId(null)
+  }, [])
+  const handleDetailDeleted = useCallback(() => setDetailFileId(null), [])
+  const handleNavigateToFolder = useCallback(
+    (folderId: string) => {
+      void selectFolder(collectionId, folderId)
+    },
+    [collectionId, selectFolder],
+  )
 
   /*
    * Quick Chat portals into [data-pm-rail-anchor] on .pm-files-right.
@@ -84,7 +106,25 @@ export function FolderView({
       <div className="pm-files-left">
         <div className="pm-files-browser">
           <div className="pm-files-browser-toolbar relative z-20 shrink-0">
-            <Toolbar collectionId={collectionId} />
+            <Toolbar
+              collectionId={collectionId}
+              trailing={
+                <button
+                  type="button"
+                  onClick={toggleMessageSidebar}
+                  title="Show messages"
+                  className="pm-files-msg-reopen"
+                  tabIndex={msgCollapsed ? 0 : -1}
+                  aria-hidden={!msgCollapsed}
+                >
+                  <PanelRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span>Messages</span>
+                  {msgCount > 0 && (
+                    <span className="pm-files-msg-count">{msgCount}</span>
+                  )}
+                </button>
+              }
+            />
           </div>
           <div className="pm-files-browser-body flex-1 min-h-0 overflow-hidden">
             <IconGrid
@@ -120,22 +160,6 @@ export function FolderView({
         </div>
       </aside>
 
-      {/* Reopen pill — .pm-files top-right; visible only when collapsed */}
-      <button
-        type="button"
-        onClick={toggleMessageSidebar}
-        title="Show messages"
-        className="pm-files-msg-reopen"
-        tabIndex={msgCollapsed ? 0 : -1}
-        aria-hidden={!msgCollapsed}
-      >
-        <PanelRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span>Messages</span>
-        {msgCount > 0 && (
-          <span className="pm-files-msg-count">{msgCount}</span>
-        )}
-      </button>
-
       <NameConflictDialog />
       <FolderUploadConfirmDialog />
 
@@ -143,13 +167,9 @@ export function FolderView({
         collectionId={collectionId}
         fileId={detailFileId}
         open={!!detailFileId}
-        onOpenChange={(open) => {
-          if (!open) setDetailFileId(null)
-        }}
-        onDeleted={() => setDetailFileId(null)}
-        onNavigateToFolder={(folderId) => {
-          void selectFolder(collectionId, folderId)
-        }}
+        onOpenChange={handleDetailOpenChange}
+        onDeleted={handleDetailDeleted}
+        onNavigateToFolder={handleNavigateToFolder}
       />
     </div>
   )
