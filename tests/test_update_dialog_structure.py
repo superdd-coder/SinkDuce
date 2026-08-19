@@ -30,6 +30,7 @@ def test_update_check_attaches_download_url_and_desktop_flag():
     assert "pickDesktopDownloadUrl" in text
     assert "shouldOfferUpdate" in text
     assert "detectDesktopClient" in text
+    assert "mock_update" in text
     assert "getHealth" in text
     assert "downloadUrl" in text
     assert "desktop" in text

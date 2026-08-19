@@ -47,33 +47,38 @@ export function useUpdateCheck() {
 
     const check = async () => {
       let desktop = detectDesktopClient()
+      let mockUpdate = false
       try {
         const health = await getHealth()
         desktop = detectDesktopClient(health.desktop === true)
+        mockUpdate = health.mock_update === true
       } catch {
         /* health unavailable — keep Tauri/shell detection */
       }
 
-      // Dev mock first — takes priority
-      if (typeof window !== "undefined" && window.localStorage) {
-        try {
-          if (localStorage.getItem(MOCK_KEY) === "1") {
-            if (!cancelled) {
-              setCurrentVersion("0.1.0")
-              setUpdate({
-                currentVersion: "0.1.0",
-                latestVersion: "v0.2.0",
-                releaseUrl: "https://github.com/superdd-coder/sinkduce/releases",
-                releaseBody: "### Features\n- Added visual model support for Dashscope one-shot setup\n- Improved local model load/download separation\n\n### Fixes\n- Fixed transcription model auto-download on load click",
-                downloadUrl:
-                  "https://github.com/superdd-coder/sinkduce/releases/download/v0.2.0/SinkDuce-macos-arm64-v0.2.0.dmg",
-                desktop,
-              })
-              setIgnored(getIgnoredVersions().has("v0.2.0"))
-            }
-            return
-          }
-        } catch {}
+      let storageMock = false
+      try {
+        storageMock =
+          typeof window !== "undefined" &&
+          window.localStorage?.getItem(MOCK_KEY) === "1"
+      } catch {
+        storageMock = false
+      }
+      if (mockUpdate || storageMock) {
+        if (!cancelled) {
+          setCurrentVersion("0.1.0")
+          setUpdate({
+            currentVersion: "0.1.0",
+            latestVersion: "v0.2.0",
+            releaseUrl: "https://github.com/superdd-coder/sinkduce/releases",
+            releaseBody: "### Features\n- Added visual model support for Dashscope one-shot setup\n- Improved local model load/download separation\n\n### Fixes\n- Fixed transcription model auto-download on load click",
+            downloadUrl:
+              "https://github.com/superdd-coder/sinkduce/releases/download/v0.2.0/SinkDuce-macos-arm64-v0.2.0.dmg",
+            desktop,
+          })
+          setIgnored(getIgnoredVersions().has("v0.2.0"))
+        }
+        return
       }
 
       // Real check

@@ -101,6 +101,8 @@ def health_payload() -> dict:
         audio = (os.environ.get("SINKDUCE_SYS_AUDIO") or "").strip().rstrip("/")
         if audio:
             body["system_audio"] = audio
+    if (get_data_dir() / "mock-update").is_file():
+        body["mock_update"] = True
     return body
 
 

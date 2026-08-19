@@ -5,6 +5,8 @@ import { request } from "./http"
 export interface HealthInfo {
   status: string
   desktop?: boolean
+  /** Dev-only: data/mock-update file present — force the update dialog. */
+  mock_update?: boolean
   /** Advertised listen host for clients (wildcard binds become 127.0.0.1). */
   host?: string
   /** Actual API / MCP listen port (desktop is often 18910, not 18900). */
