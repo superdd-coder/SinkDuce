@@ -102,10 +102,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   # After Hub image is available — then open GitHub Release (update popup).
-  # Desktop DMG is uploaded afterwards on an Apple Silicon machine:
-  #   git checkout <tag> && ./desktop/package_macos.sh
-  #   ./desktop/desktop_release upload   # local-only; desktop/ is gitignored
-  # Asset name: SinkDuce-macos-arm64-vX.Y.Z.dmg (DMG only — never the .app).
+  # Desktop installer is uploaded later as SinkDuce-macos-arm64-vX.Y.Z.dmg only.
   release:
     name: GitHub Release
     needs: docker
