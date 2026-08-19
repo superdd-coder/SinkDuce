@@ -864,7 +864,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                     }}
                   >
                     <div className="truncate flex-1 min-w-0">
-                      <div className="pm-title truncate flex items-center gap-1.5">
+                      <div className="pm-rail-name truncate flex items-center gap-1.5">
                         <span className="truncate">{lib.name}</span>
                         {lib.is_system && (
                           <span className="pm-settings-hw-default-pill" title="System library">

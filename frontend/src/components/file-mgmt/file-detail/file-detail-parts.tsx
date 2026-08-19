@@ -7,11 +7,6 @@ import {
 } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  MenuItem,
-  MenuItemDescription,
-  MenuItemTitle,
-} from "@/components/ui/menu"
 import { cn } from "@/lib/utils"
 import {
   ArrowUpRight,
@@ -128,24 +123,25 @@ export function ActionMenuItem({
   destructive?: boolean
 }) {
   return (
-    <MenuItem destructive={destructive} onClick={onClick}>
+    <button
+      type="button"
+      role="menuitem"
+      className={cn("pm-files-menu-item", destructive && "is-danger")}
+      onClick={onClick}
+    >
       <span
         className={cn(
           "mt-0.5 shrink-0",
-          destructive ? "text-[var(--pm-danger)]" : "text-[var(--pm-faint)]"
+          destructive ? "text-[var(--pm-danger)]" : "text-[var(--pm-muted)]"
         )}
       >
         {icon}
       </span>
       <span className="min-w-0">
-        <MenuItemTitle
-          className={destructive ? "text-[var(--pm-danger)]" : undefined}
-        >
-          {title}
-        </MenuItemTitle>
-        <MenuItemDescription>{description}</MenuItemDescription>
+        <span className="pm-files-menu-item-title">{title}</span>
+        <span className="pm-files-menu-item-desc">{description}</span>
       </span>
-    </MenuItem>
+    </button>
   )
 }
 

@@ -93,6 +93,31 @@ export function isImageOnlyChunk(text?: string | null): boolean {
   return !stripImageBlocks(raw)
 }
 
+/**
+ * Cheap collapsed-tile preview: no markdown parse, no images.
+ * Strips :::image fences and light markup so the list can scroll as text.
+ */
+export function collapsedChunkPreview(
+  text?: string | null,
+  maxChars = 280,
+): string {
+  let s = stripImageBlocks(text || "").replace(/\r\n/g, "\n")
+  if (!s) return ""
+  s = s.replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+  s = s.replace(/<[^>]+>/g, " ")
+  s = s.replace(/^#{1,6}\s+/gm, "")
+  s = s.replace(/[*_~`]+/g, "")
+  s = s.replace(/\|/g, " ")
+  s = s.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ")
+  s = s.trim()
+  if (!s) return ""
+  if (s.length <= maxChars) return s
+  const cut = s.slice(0, maxChars)
+  const sp = cut.lastIndexOf(" ")
+  const head = (sp > maxChars * 0.6 ? cut.slice(0, sp) : cut).trimEnd()
+  return `${head}…`
+}
+
 function renderImageHtml(
   collection: string,
   fallbackFileId: string,
@@ -130,6 +155,45 @@ export function listImageFenceFields(text?: string | null) {
     ocrText: f.ocrText,
     description: f.description,
   }))
+}
+
+export type ExtractPart =
+  | { kind: "text"; text: string }
+  | { kind: "image"; src: string; alt: string; imageId: string }
+
+/** Split extracted text so Source / Parse can show images as real files. */
+export function splitExtractParts(
+  text: string,
+  collection: string,
+  fallbackFileId?: string | null,
+): ExtractPart[] {
+  const raw = text || ""
+  const fences = parseImageFences(raw)
+  if (!fences.length) return raw ? [{ kind: "text", text: raw }] : []
+  const col = (collection || "").trim()
+  const fallback = (fallbackFileId || "").trim()
+  const parts: ExtractPart[] = []
+  let cursor = 0
+  for (const f of fences) {
+    const before = raw.slice(cursor, f.start)
+    if (before) parts.push({ kind: "text", text: before })
+    const fid = (f.fileId || "").trim() || fallback
+    if (col && fid && f.imageId) {
+      parts.push({
+        kind: "image",
+        src: `/api/documents/${encodeURIComponent(col)}/${encodeURIComponent(fid)}/images/${encodeURIComponent(f.imageId)}`,
+        alt: (f.ocrText || f.description || f.imageId).trim(),
+        imageId: f.imageId,
+      })
+    } else {
+      const label = (f.description || f.ocrText || f.imageId || "Image").trim()
+      parts.push({ kind: "text", text: `[Image: ${label}]` })
+    }
+    cursor = f.end
+  }
+  const tail = raw.slice(cursor)
+  if (tail) parts.push({ kind: "text", text: tail })
+  return parts
 }
 
 export function transformImageBlocks(

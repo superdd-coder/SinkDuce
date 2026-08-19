@@ -7,8 +7,10 @@ import {
   DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Copy, Check, ExternalLink, ArrowRight } from "lucide-react"
+import { Copy, Check, ExternalLink, ArrowRight, Download } from "lucide-react"
 import type { UpdateInfo } from "@/hooks/use-update-check"
+import { openDesktopExternalUrl } from "@/api/client"
+import { desktopDmgAssetName } from "@/lib/update-release"
 import { cn } from "@/lib/utils"
 
 /** Default path: pull Hub image (docker-compose.yml). Source builds use docker-compose.build.yml. */
@@ -102,50 +104,67 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
             </section>
           ) : null}
 
-          <section className="pm-update-card" aria-label="How to update">
-            <div className="pm-update-card-head-row">
+          {update.desktop ? (
+            <section className="pm-update-card" aria-label="How to update">
               <h3 className="pm-update-card-label">How to update</h3>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "pm-update-cmd-copy",
-                  copied && "is-copied",
-                )}
-                onClick={() => { void handleCopy() }}
-              >
-                {copied ? (
-                  <>
-                    <Check className="h-3.5 w-3.5" strokeWidth={2} />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    Copy
-                  </>
-                )}
-              </Button>
-            </div>
-            <p className="pm-update-help">
-              On the server,{" "}
-              <code className="pm-update-inline-code">cd</code> into the project
-              directory (where{" "}
-              <code className="pm-update-inline-code">docker-compose.yml</code>{" "}
-              lives), then run:
-            </p>
-            <div className="pm-update-cmd">
-              <pre className="pm-update-cmd-pre">{UPDATE_COMMAND}</pre>
-            </div>
-            <p className="pm-update-help" style={{ marginTop: "0.65rem" }}>
-              Building from source instead? Use{" "}
-              <code className="pm-update-inline-code">
-                docker compose -f docker-compose.build.yml up -d --build
-              </code>
-              .
-            </p>
-          </section>
+              <p className="pm-update-help">
+                Download{" "}
+                <code className="pm-update-inline-code">
+                  {desktopDmgAssetName(update.latestVersion)}
+                </code>
+                , open the disk image, and drag SinkDuce into Applications.
+                Then quit with{" "}
+                <code className="pm-update-inline-code">Cmd+Q</code> and
+                reopen — the red window button only hides to the menu bar.
+                If macOS blocks the app, right-click → Open.
+              </p>
+            </section>
+          ) : (
+            <section className="pm-update-card" aria-label="How to update">
+              <div className="pm-update-card-head-row">
+                <h3 className="pm-update-card-label">How to update</h3>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "pm-update-cmd-copy",
+                    copied && "is-copied",
+                  )}
+                  onClick={() => { void handleCopy() }}
+                >
+                  {copied ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" strokeWidth={2} />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      Copy
+                    </>
+                  )}
+                </Button>
+              </div>
+              <p className="pm-update-help">
+                On the server,{" "}
+                <code className="pm-update-inline-code">cd</code> into the project
+                directory (where{" "}
+                <code className="pm-update-inline-code">docker-compose.yml</code>{" "}
+                lives), then run:
+              </p>
+              <div className="pm-update-cmd">
+                <pre className="pm-update-cmd-pre">{UPDATE_COMMAND}</pre>
+              </div>
+              <p className="pm-update-help" style={{ marginTop: "0.65rem" }}>
+                Building from source instead? Use{" "}
+                <code className="pm-update-inline-code">
+                  docker compose -f docker-compose.build.yml up -d --build
+                </code>
+                .
+              </p>
+            </section>
+          )}
         </div>
 
         {/* Plain footer — avoid DialogFooter flex-col-reverse / justify-end defaults */}
@@ -161,14 +180,49 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
             <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
           </Button>
           <div className="pm-update-foot-actions">
-            <Button
-              type="button"
-              size="sm"
-              className="pm-update-foot-close"
-              onClick={() => onOpenChange(false)}
-            >
-              Close
-            </Button>
+            {update.desktop ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="pm-update-foot-link"
+                  onClick={() => onOpenChange(false)}
+                >
+                  Close
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="pm-update-foot-close"
+                  disabled={!update.downloadUrl}
+                  onClick={() => {
+                    if (!update.downloadUrl) return
+                    void openDesktopExternalUrl(update.downloadUrl).catch(() => {
+                      window.open(update.downloadUrl!, "_blank", "noopener,noreferrer")
+                    })
+                  }}
+                >
+                  <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  {update.downloadUrl
+                    ? `Download ${
+                        update.latestVersion.startsWith("v")
+                          ? update.latestVersion
+                          : `v${update.latestVersion}`
+                      }`
+                    : "Installer not on this release yet"}
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                className="pm-update-foot-close"
+                onClick={() => onOpenChange(false)}
+              >
+                Close
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>

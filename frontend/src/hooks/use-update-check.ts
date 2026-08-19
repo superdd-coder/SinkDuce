@@ -1,5 +1,10 @@
 import { useEffect, useState, useCallback } from "react"
-import { getVersion, checkLatestRelease, type GitHubRelease } from "@/api/client"
+import { getHealth, getVersion, checkLatestRelease, type GitHubRelease } from "@/api/client"
+import {
+  detectDesktopClient,
+  pickDesktopDownloadUrl,
+  shouldOfferUpdate,
+} from "@/lib/update-release"
 
 const IGNORED_KEY = "sinkduce-ignored-versions"
 const MOCK_KEY = "sinkduce-mock-update"
@@ -28,6 +33,8 @@ export interface UpdateInfo {
   latestVersion: string
   releaseUrl: string
   releaseBody: string
+  downloadUrl: string | null
+  desktop: boolean
 }
 
 export function useUpdateCheck() {
@@ -39,23 +46,39 @@ export function useUpdateCheck() {
     let cancelled = false
 
     const check = async () => {
-      // Dev mock first — takes priority
-      if (typeof window !== "undefined" && window.localStorage) {
-        try {
-          if (localStorage.getItem(MOCK_KEY) === "1") {
-            if (!cancelled) {
-              setCurrentVersion("0.1.0")
-              setUpdate({
-                currentVersion: "0.1.0",
-                latestVersion: "v0.2.0",
-                releaseUrl: "https://github.com/superdd-coder/sinkduce/releases",
-                releaseBody: "### Features\n- Added visual model support for Dashscope one-shot setup\n- Improved local model load/download separation\n\n### Fixes\n- Fixed transcription model auto-download on load click",
-              })
-              setIgnored(getIgnoredVersions().has("v0.2.0"))
-            }
-            return
-          }
-        } catch {}
+      let desktop = detectDesktopClient()
+      let mockUpdate = false
+      try {
+        const health = await getHealth()
+        desktop = detectDesktopClient(health.desktop === true)
+        mockUpdate = health.mock_update === true
+      } catch {
+        /* health unavailable — keep Tauri/shell detection */
+      }
+
+      let storageMock = false
+      try {
+        storageMock =
+          typeof window !== "undefined" &&
+          window.localStorage?.getItem(MOCK_KEY) === "1"
+      } catch {
+        storageMock = false
+      }
+      if (mockUpdate || storageMock) {
+        if (!cancelled) {
+          setCurrentVersion("0.1.0")
+          setUpdate({
+            currentVersion: "0.1.0",
+            latestVersion: "v0.2.0",
+            releaseUrl: "https://github.com/superdd-coder/sinkduce/releases",
+            releaseBody: "### Features\n- Added visual model support for Dashscope one-shot setup\n- Improved local model load/download separation\n\n### Fixes\n- Fixed transcription model auto-download on load click",
+            downloadUrl:
+              "https://github.com/superdd-coder/sinkduce/releases/download/v0.2.0/SinkDuce-macos-arm64-v0.2.0.dmg",
+            desktop,
+          })
+          setIgnored(getIgnoredVersions().has("v0.2.0"))
+        }
+        return
       }
 
       // Real check
@@ -66,16 +89,19 @@ export function useUpdateCheck() {
         const release: GitHubRelease | null = await checkLatestRelease(info.repo)
         if (!release || cancelled) return
         const latest = release.tag_name
-        if (compareVersions(latest, info.version) > 0) {
-          const ignoredVersions = getIgnoredVersions()
-          setUpdate({
-            currentVersion: info.version,
-            latestVersion: latest,
-            releaseUrl: release.html_url,
-            releaseBody: release.body || "",
-          })
-          setIgnored(ignoredVersions.has(latest))
-        }
+        const versionNewer = compareVersions(latest, info.version) > 0
+        const downloadUrl = pickDesktopDownloadUrl(release.assets, latest)
+        if (!shouldOfferUpdate({ desktop, versionNewer, downloadUrl })) return
+        const ignoredVersions = getIgnoredVersions()
+        setUpdate({
+          currentVersion: info.version,
+          latestVersion: latest,
+          releaseUrl: release.html_url,
+          releaseBody: release.body || "",
+          downloadUrl,
+          desktop,
+        })
+        setIgnored(ignoredVersions.has(latest))
       } catch {
         // Silently ignore
       }

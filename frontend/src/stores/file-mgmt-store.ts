@@ -739,10 +739,23 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   removeFolder: async (collectionId: string, folderId: string) => {
     try {
       await deleteFolder(collectionId, folderId)
-      await get().fetchFolderTree(collectionId)
+      // Sole-path files become root orphans — reload the file grid, not just the tree.
       if (get().currentFolderId === folderId) {
-        set({ currentFolderId: null, currentFolder: null, currentFolderFiles: [], currentFolderMessages: [] })
+        set({
+          currentFolderId: null,
+          currentFolder: null,
+          currentFolderMessages: [],
+          selectedFileIds: new Set(),
+          selectedFolderIds: new Set(),
+          multiSelectMode: false,
+          perCollectionFolderCache: {
+            ...get().perCollectionFolderCache,
+            [collectionId]: null,
+          },
+        })
       }
+      await get().fetchFolderTree(collectionId)
+      await get().refreshFiles(collectionId)
       toast.success("Folder deleted")
     } catch (err) {
       toast.error(`Failed to delete folder: ${err instanceof Error ? err.message : String(err)}`)

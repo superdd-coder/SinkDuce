@@ -358,8 +358,7 @@ def _describe_one(
 
     for attempt in range(1, retries + 1):
         try:
-            # Same 50-request cap as Summary/Context so one file's Vision
-            # fan-out cannot 429 / stall every other ingest.
+            # Compete with Summary/Context for Settings Parallel slots.
             with ingest_request_limiter:
                 description = visual_llm.describe_image(image_base64, mime, prompt=prompt)
             logger.info(
@@ -396,7 +395,7 @@ def describe_images(
     provider,
     model_id: str,
     prompt: str,
-    max_workers: int = 5,
+    max_workers: int | None = None,
     on_image_done: Callable[[], None] | None = None,
 ) -> list[ImageInfo]:
     """Concurrently describe images using a Vision LLM.
@@ -406,8 +405,8 @@ def describe_images(
         provider: The LLM provider config object (has visual_model_ids).
         model_id: The specific vision model ID to use.
         prompt: The system/user prompt for image description.
-        max_workers: Max concurrent Vision LLM calls (also gated by the
-            process-wide ingest request limiter).
+        max_workers: Thread fan-out. ``None`` follows Settings Parallel
+            (``ingest_parallel_limit``), the same slots Summary/Context use.
         on_image_done: Called once per image when its describe attempt finishes
             (success or failure) — for completed-work progress tracking.
 
@@ -419,6 +418,17 @@ def describe_images(
         return []
 
     from src.providers.llm import create_llm_for_provider
+    from src.rag.contextual import ingest_parallel_limit
+
+    if max_workers is None:
+        max_workers = ingest_parallel_limit()
+    workers = min(max_workers, len(images))
+    logger.info(
+        "[ImageDescribe] starting %d image(s) workers=%d parallel_cap=%d",
+        len(images),
+        workers,
+        ingest_parallel_limit(),
+    )
 
     try:
         visual_llm = create_llm_for_provider(provider, model=model_id)
@@ -434,7 +444,7 @@ def describe_images(
         return []
 
     results: list[ImageInfo] = []
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(images))) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(_describe_one, img, visual_llm, prompt): img
             for img in images

@@ -42,7 +42,6 @@ export function PeoplePicker({
   const [query, setQuery] = useState("")
   const [people, setPeople] = useState<SpeakerPerson[]>([])
   const [busy, setBusy] = useState(false)
-  const [needDisambiguator, setNeedDisambiguator] = useState(false)
   const [disambiguator, setDisambiguator] = useState("")
   const [playing, setPlaying] = useState<string | null>(null)
   const [managerOpen, setManagerOpen] = useState(false)
@@ -103,14 +102,8 @@ export function PeoplePicker({
   useEffect(() => {
     if (open) return
     stopPreview()
-    setNeedDisambiguator(false)
     setDisambiguator("")
   }, [open, stopPreview])
-
-  useEffect(() => {
-    if (!needDisambiguator) return
-    noteRef.current?.focus()
-  }, [needDisambiguator])
 
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people])
   const q = query.trim().toLowerCase()
@@ -146,7 +139,6 @@ export function PeoplePicker({
       onAssigned(meeting)
       setOpen(false)
       setQuery("")
-      setNeedDisambiguator(false)
       setDisambiguator("")
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to assign person"
@@ -171,10 +163,6 @@ export function PeoplePicker({
     const name = query.trim()
     if (!name) {
       setQuery("")
-      return
-    }
-    if (!needDisambiguator) {
-      setNeedDisambiguator(true)
       return
     }
     const note = disambiguator.trim()
@@ -289,25 +277,42 @@ export function PeoplePicker({
         data-people-picker-menu=""
         className="pm-people-picker-menu"
       >
-        <div className="pm-people-picker-search">
-          <Search className="size-3.5 shrink-0 opacity-40" />
-          <input
-            placeholder="Search or add a name"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value)
-              if (!e.target.value.trim()) {
-                setNeedDisambiguator(false)
-                setDisambiguator("")
+        <div className="pm-people-picker-compose">
+          <div className="pm-people-picker-search">
+            <Search className="size-3.5 shrink-0 opacity-40" />
+            <input
+              placeholder="Search or add a name"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                if (!e.target.value.trim()) setDisambiguator("")
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === "Escape") setOpen(false)
+                if (e.key === "Enter") void handleAdd()
+              }}
+              autoFocus
+            />
+          </div>
+          {query.trim() ? (
+            <input
+              ref={noteRef}
+              className="pm-people-picker-note"
+              placeholder={
+                nameTaken
+                  ? "Note to tell them apart — Engineering"
+                  : "Note — Engineering, Client…"
               }
-            }}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === "Escape") setOpen(false)
-              if (e.key === "Enter") void handleAdd()
-            }}
-            autoFocus
-          />
+              value={disambiguator}
+              onChange={(e) => setDisambiguator(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === "Enter") void handleAdd()
+                if (e.key === "Escape") setOpen(false)
+              }}
+            />
+          ) : null}
         </div>
         <div className="pm-people-picker-list">
           {topRows.length > 0 && (
@@ -318,39 +323,18 @@ export function PeoplePicker({
             <div className="pm-people-picker-sec">Directory</div>
           )}
           {rest.map((person) => row(person))}
-          {people.length === 0 && !query.trim() && (
-            <p className="pm-people-picker-empty">
-              Type a name to add the first person.
-            </p>
-          )}
         </div>
-        <button
-          type="button"
-          className="pm-people-picker-add"
-          disabled={busy || !query.trim()}
-          onClick={() => void handleAdd()}
-        >
-          <Plus className="size-3.5 shrink-0" />
-          {query.trim() ? `Add “${query.trim()}”` : "Type a name to add"}
-        </button>
-        {needDisambiguator && (
-          <input
-            ref={noteRef}
-            className="pm-people-picker-note"
-            placeholder={
-              nameTaken
-                ? "Note to tell them apart — Engineering"
-                : "Note — Engineering, Client…"
-            }
-            value={disambiguator}
-            onChange={(e) => setDisambiguator(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === "Enter") void handleAdd()
-              if (e.key === "Escape") setOpen(false)
-            }}
-          />
-        )}
+        {query.trim() ? (
+          <button
+            type="button"
+            className="pm-people-picker-add"
+            disabled={busy}
+            onClick={() => void handleAdd()}
+          >
+            <Plus className="size-3.5 shrink-0" />
+            {`Add “${query.trim()}”`}
+          </button>
+        ) : null}
         {assigned && (
           <button
             type="button"

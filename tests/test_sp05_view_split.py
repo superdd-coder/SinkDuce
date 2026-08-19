@@ -101,12 +101,38 @@ def test_file_detail_and_chat_source_do_not_subscribe_whole_app_store():
     assert 'mo.observe(root, { childList: true, subtree: true })' not in raw
 
 
+def test_folder_view_does_not_subscribe_whole_file_mgmt_store():
+    """Other-file ingest polls must not re-render FolderView (chunks flicker)."""
+    view = (
+        ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "file-mgmt"
+        / "folder-view"
+        / "index.tsx"
+    ).read_text(encoding="utf-8")
+    dialog = (DETAIL / "file-detail-dialog.tsx").read_text(encoding="utf-8")
+    assert "useFileMgmtStore()" not in view
+    assert "useShallow" in view
+    assert "memo(" in dialog
+
+
 def test_parse_text_viewer_is_lightweight():
     viewer = (DETAIL / "parse-text-viewer.tsx").read_text(encoding="utf-8")
     assert "pm-ws-parse-pre" in viewer
+    assert "splitExtractParts" in viewer
     assert "ChunkMd" not in viewer
     assert "useEditor" not in viewer
     assert "TiptapEditor" not in viewer
+
+
+def test_raw_viewer_can_preview_images():
+    raw = (
+        ROOT / "frontend" / "src" / "components" / "file-mgmt" / "raw-file-viewer.tsx"
+    ).read_text(encoding="utf-8")
+    assert '"png"' in raw
+    assert "isImagePreviewFilename" in raw
 
 
 def test_file_detail_main_pane_extracted():
@@ -163,3 +189,148 @@ def test_meeting_view_overlays_extracted():
     assert "Delete meeting?" not in view
     assert "Re-transcribe meeting?" not in view
     assert "pm-meeting-section-tip" not in view
+
+
+def test_people_picker_shows_note_while_typing_and_add_saves():
+    picker = (
+        ROOT / "frontend" / "src" / "components" / "meeting" / "people-picker.tsx"
+    ).read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    assert "needDisambiguator" not in picker
+    assert "Type a name to add" not in picker
+    assert "Type a name to add the first person" not in picker
+    assert "query.trim()" in picker
+    assert "pm-people-picker-note" in picker
+    name_css = css.split(".pm-people-picker-name {", 1)[1].split("}", 1)[0]
+    assert "font-weight: 300" in name_css
+
+
+def test_speakers_tab_opens_people_manager_inline():
+    panel = (
+        ROOT / "frontend" / "src" / "components" / "meeting" / "transcript-panel.tsx"
+    ).read_text(encoding="utf-8")
+    assert "PeopleManager" in panel
+    assert "pm-speakers-people-btn" in panel
+    assert 'setSidebarView' not in panel
+    assert "llm_provider" not in panel
+
+
+def test_people_delete_pill_expands_to_confirm():
+    people = (
+        ROOT / "frontend" / "src" / "components" / "llm-provider" / "people-manager.tsx"
+    ).read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    assert "pm-people-delete" in people
+    assert "pm-people-delete-ask" in people
+    assert "is-armed" in people
+    assert ".pm-people-delete {" in css
+    assert ".pm-people-delete.is-armed" in css
+    assert "max-width" in css.split(".pm-people-delete {", 1)[1][:800]
+
+
+def test_people_and_hot_words_rails_use_collection_name_type():
+    """People / Hot words list names match Collections (pm-rail-name, 300 serif)."""
+    people = (
+        ROOT / "frontend" / "src" / "components" / "llm-provider" / "people-manager.tsx"
+    ).read_text(encoding="utf-8")
+    hot = (
+        ROOT / "frontend" / "src" / "components" / "llm-provider" / "hot-words-manager.tsx"
+    ).read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    assert "pm-rail-name" in people
+    assert "pm-people-meeting-title pm-rail-name" in people
+    assert "pm-rail-name" in hot
+    assert ".pm-people-meeting-title {" in css
+    rail_block = css.split(".pm-rail-name,", 1)[1].split("}", 1)[0]
+    assert "pm-people-meeting-title" in rail_block
+    assert "font-weight: 300" in css.split(".pm-rail-name,", 1)[1].split(".pm-rail-list-shell", 1)[0]
+
+
+def test_meeting_ingest_menu_uses_rail_name_type():
+    """Choose-a-collection dropdown names match Collections rail (serif 300)."""
+    tabs = (MEETING / "meeting-tabs.tsx").read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    assert "pm-meeting-ingest-menu-name" in tabs
+    assert ".pm-meeting-ingest-menu-name {" in css
+    name_css = css.split(".pm-meeting-ingest-menu-name {", 1)[1].split("}", 1)[0]
+    assert "pm-ff-prose" in name_css
+    assert "font-weight: 300" in name_css
+    assert "font-size: 14px" in name_css
+
+
+def test_file_detail_and_folder_toolbar_menus_share_type_and_motion():
+    """File-detail Archive/Delete use folder title type; folder menus use SoftMenu + inset hover."""
+    parts = (DETAIL / "file-detail-parts.tsx").read_text(encoding="utf-8")
+    toolbar = (
+        ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "file-mgmt"
+        / "folder-view"
+        / "toolbar.tsx"
+    ).read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    assert "pm-files-menu-item-title" in parts
+    assert "pm-files-menu-item-desc" in parts
+    assert "SoftMenu" in toolbar
+    assert "openMenu === \"archive\" && (" not in toolbar
+    menu_css = css.split(".pm-files-menu {", 1)[1].split("}", 1)[0]
+    assert "padding: 4px 0" not in menu_css
+    assert "padding: 4px" in menu_css
+    item_css = css.split(".pm-files-menu-item {", 1)[1].split("}", 1)[0]
+    assert "border-radius" in item_css
+    parts = (DETAIL / "file-detail-parts.tsx").read_text(encoding="utf-8")
+    rail = (DETAIL / "file-detail-side-rail.tsx").read_text(encoding="utf-8")
+    assert 'from "@/components/ui/menu"' not in parts
+    assert 'cn("pm-files-menu-item"' in parts
+    assert "pm-files-menu" in rail
+    title_css = css.split(".pm-files-menu-item-title {", 1)[1].split("}", 1)[0]
+    desc_css = css.split(".pm-files-menu-item-desc {", 1)[1].split("}", 1)[0]
+    assert "pm-t-title" in title_css
+    assert "pm-t-meta" in desc_css
+    assert "font-weight: 300" in desc_css
+    ws_desc = css.split(".pm-workspace .pm-files-menu-item-desc {", 1)[1].split("}", 1)[0]
+    assert "font-weight: 300" in ws_desc
+    assert "font-size: 11px" in ws_desc
+    assert "!important" in ws_desc
+
+
+def test_folder_message_reopen_lives_in_toolbar_row():
+    """Collapsed Messages pill sits in the toolbar band, right-aligned with fade."""
+    folder = (
+        ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "file-mgmt"
+        / "folder-view"
+        / "index.tsx"
+    ).read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "src" / "index.css").read_text(encoding="utf-8")
+    toolbar_block = folder.split("pm-files-browser-toolbar", 1)[1].split(
+        "pm-files-browser-body", 1
+    )[0]
+    assert "pm-files-msg-reopen" in toolbar_block
+    assert "pm-files-msg-reopen" not in folder.split("</aside>", 1)[1]
+    band = css.split(".pm-files-browser-toolbar {", 1)[1].split("}", 1)[0]
+    assert "align-items: center" in band
+    assert "--pm-files-tb-inset" in band
+    reopen = css.split(".pm-files-msg-reopen {", 1)[1].split("}", 1)[0]
+    assert "top: 4px" not in reopen
+    assert "right: 4px" not in reopen
+    assert "opacity" in reopen
+    assert "margin-left: auto" in reopen
+    pill = css.split(".pm-files-toolbar {", 1)[1].split("}", 1)[0]
+    assert "width: 100%" in pill
+    assert "0 0 0 1px" not in pill
+    toolbar_src = (
+        ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "file-mgmt"
+        / "folder-view"
+        / "toolbar.tsx"
+    ).read_text(encoding="utf-8")
+    assert "trailing" in toolbar_src

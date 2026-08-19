@@ -32,9 +32,10 @@ _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cpu-worker
 _enrich_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="enrich-worker")
 # Separate pools so one file's OCR never blocks that file's Vision.
 # OCR is CPU-heavy (RapidOCR ONNX): 3 file workers match 3 engines.
-# Vision is I/O-bound and shares the ingest LLM request limiter.
+# Vision is I/O-bound: files enter like Summary (enrich pool size) and
+# individual image calls compete for ingest_request_limiter.
 _ocr_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ocr-worker")
-_vision_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="vision-worker")
+_vision_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="vision-worker")
 # Do not wait forever for OCR/Vision before embed/store.
 IMAGE_JOB_DEADLINE_SEC = 180.0
 

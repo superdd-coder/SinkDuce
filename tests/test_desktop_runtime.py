@@ -165,6 +165,16 @@ def test_desktop_flag_and_health_payload(monkeypatch):
     assert health_payload()["port"] == 18910
 
 
+def test_health_mock_update_flag_follows_data_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("SINKDUCE_DATA", str(tmp_path))
+    monkeypatch.setenv("SINKDUCE_DESKTOP", "1")
+    monkeypatch.setenv("SINKDUCE_HOST", "127.0.0.1")
+    monkeypatch.setenv("SINKDUCE_PORT", "18910")
+    assert "mock_update" not in health_payload()
+    (tmp_path / "mock-update").write_text("", encoding="utf-8")
+    assert health_payload()["mock_update"] is True
+
+
 def test_health_wildcard_bind_advertises_loopback(monkeypatch):
     monkeypatch.delenv("SINKDUCE_DESKTOP", raising=False)
     monkeypatch.setenv("SINKDUCE_HOST", "0.0.0.0")

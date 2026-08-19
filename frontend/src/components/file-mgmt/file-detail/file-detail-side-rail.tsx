@@ -830,7 +830,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                           </button>
                           <SoftMenu
                             open={actionMenu === "archive"}
-                            className="absolute left-0 bottom-full mb-1.5 z-50 min-w-[260px] pm-menu--drop-up"
+                            className="absolute left-0 bottom-full mb-1.5 z-50 min-w-[260px] pm-menu--drop-up pm-files-menu"
                           >
                             {canRestore && (
                               <ActionMenuItem
@@ -903,7 +903,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                         </button>
                         <SoftMenu
                           open={actionMenu === "delete"}
-                          className="absolute right-0 bottom-full mb-1.5 z-50 min-w-[260px] pm-menu--drop-up"
+                          className="absolute right-0 bottom-full mb-1.5 z-50 min-w-[260px] pm-menu--drop-up pm-files-menu"
                         >
                           {canRemoveCurrentPath && (
                             <ActionMenuItem

@@ -1,9 +1,11 @@
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WebSearchConfirmDialog } from "@/components/chat/web-search-confirm-dialog"
+import { useDesktopExternalLinks } from "@/hooks/use-desktop-external-links"
 import { Toaster } from "sonner"
 
 export default function App() {
+  useDesktopExternalLinks()
   return (
     <TooltipProvider>
       <AppLayout />

@@ -1686,3 +1686,19 @@ def get_version():
     }
 
 
+@router.post("/desktop/open-url")
+def desktop_open_url(payload: dict = Body(...)):
+    """Open an http(s) URL in the system browser. Desktop runtime only."""
+    from src.config import is_desktop_runtime
+    from src.desktop_open import allowed_external_url, open_external_url
+
+    if not is_desktop_runtime():
+        raise HTTPException(status_code=403, detail="desktop only")
+    raw = payload.get("url") if isinstance(payload, dict) else None
+    url = allowed_external_url(raw if isinstance(raw, str) else "")
+    if not url:
+        raise HTTPException(status_code=400, detail="url must be http(s)")
+    open_external_url(url)
+    return {"ok": True}
+
+

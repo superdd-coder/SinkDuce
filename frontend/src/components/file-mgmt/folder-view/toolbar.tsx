@@ -8,6 +8,7 @@ import {
 } from "react"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { Button } from "@/components/ui/button"
+import { SoftMenu } from "@/components/ui/menu"
 import {
   FolderPlus,
   Upload,
@@ -196,7 +197,13 @@ function MenuItem({
   )
 }
 
-export function Toolbar({ collectionId }: { collectionId: string }) {
+export function Toolbar({
+  collectionId,
+  trailing,
+}: {
+  collectionId: string
+  trailing?: ReactNode
+}) {
   const {
     currentFolderId,
     currentFolder,
@@ -586,10 +593,10 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
               Sort
               <ChevronDown className="size-3 opacity-60" />
             </Button>
-            {opts.menus && openMenu === "sort" && (
-              <div
+            {opts.menus && (
+              <SoftMenu
+                open={openMenu === "sort"}
                 className={cn(tbMenuPanel, "min-w-[200px]")}
-                role="menu"
               >
                 {(
                   [
@@ -661,7 +668,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                     <span className="text-[var(--pm-faint)]"> · oldest</span>
                   )}
                 </button>
-              </div>
+              </SoftMenu>
             )}
           </div>
           <Button
@@ -862,10 +869,10 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                     Move
                     <ChevronDown className="size-3 opacity-60" />
                   </Button>
-                  {opts.menus && openMenu === "move" && (
-                    <div
+                  {opts.menus && (
+                    <SoftMenu
+                      open={openMenu === "move"}
                       className={cn(tbMenuPanel, "min-w-[240px]")}
-                      role="menu"
                     >
                       <MenuItem
                         icon={<MoveRight className="h-3.5 w-3.5" />}
@@ -885,7 +892,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                           setCopyDialogOpen(true)
                         }}
                       />
-                    </div>
+                    </SoftMenu>
                   )}
                 </div>
 
@@ -906,8 +913,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                       Archive
                       <ChevronDown className="size-3 opacity-60" />
                     </Button>
-                    {opts.menus && openMenu === "archive" && (
-                      <div className={tbMenuPanel} role="menu">
+                    {opts.menus && (
+                      <SoftMenu open={openMenu === "archive"} className={tbMenuPanel}>
                         {filePart.archive.showUnarchive && (
                           <MenuItem
                             icon={<ArchiveRestore className="h-3.5 w-3.5" />}
@@ -936,7 +943,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                             onClick={() => pickMenuAction("excludeSearch")}
                           />
                         )}
-                      </div>
+                      </SoftMenu>
                     )}
                   </div>
                 )}
@@ -958,8 +965,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                     Delete
                     <ChevronDown className="size-3 opacity-60" />
                   </Button>
-                  {opts.menus && openMenu === "delete" && (
-                    <div className={tbMenuPanel} role="menu">
+                  {opts.menus && (
+                    <SoftMenu open={openMenu === "delete"} className={tbMenuPanel}>
                       {!filePart.isArchivedView && (
                         <MenuItem
                           icon={<X className="h-3.5 w-3.5" />}
@@ -975,7 +982,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
                         destructive
                         onClick={() => pickMenuAction("delete")}
                       />
-                    </div>
+                    </SoftMenu>
                   )}
                 </div>
               </>
@@ -1024,6 +1031,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
   }
 
   return (
+    <>
     <div className="pm-files-toolbar">
       {/* Nav well — stays put while tool chrome crossfades */}
       <div className="pm-files-tb-nav">
@@ -1042,7 +1050,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
       <div className="pm-files-tb-sep" aria-hidden />
 
       {/* Primary tool strip — dual-layer crossfade on mode swap */}
-      <div className="pm-files-toolbar-tools relative flex-1 min-w-0 overflow-visible" ref={menusRef}>
+      <div className="pm-files-toolbar-tools relative min-w-0 overflow-visible" ref={menusRef}>
         {leaving && (
           <div
             key={`leave-${leaving.swapId}`}
@@ -1066,6 +1074,8 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
           })}
         </div>
       </div>
+      {trailing}
+    </div>
 
       <input
         ref={fileInputRef}
@@ -1311,7 +1321,7 @@ export function Toolbar({ collectionId }: { collectionId: string }) {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }
 

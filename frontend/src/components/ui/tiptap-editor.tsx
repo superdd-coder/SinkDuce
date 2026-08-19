@@ -27,6 +27,7 @@ import {
   List, ListOrdered, ListTodo,
 } from "lucide-react"
 import { SoftMenu, MenuItem } from "@/components/ui/menu"
+import { scrollCaretIntoNearestView } from "@/lib/editor-scroll"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -3861,6 +3862,9 @@ export function TiptapEditor({
     },
     editorProps: {
       attributes: { class: "focus:outline-none" },
+      // "## " → heading reports a tall empty-block box; default PM pins it to the
+      // scroller top. Only nudge the editor overflow parent if the caret left view.
+      handleScrollToSelection: (view) => scrollCaretIntoNearestView(view),
       handleDOMEvents: {
         // Empty pad under last line → caret at end (not stuck mid-void)
         mousedown: (view, event) => {
@@ -4103,6 +4107,7 @@ export function TiptapEditor({
       <style>{`
         .tiptap-editor .ProseMirror {
           min-height: 100%;
+          overflow-anchor: none;
         }
         /* TipTap Placeholder extension — without this, data-placeholder is invisible */
         .tiptap-editor .ProseMirror p.is-editor-empty:first-child::before,

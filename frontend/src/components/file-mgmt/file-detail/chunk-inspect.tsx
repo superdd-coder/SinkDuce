@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import type { ChunkDetail } from "@/api/client"
 import { listImageFenceFields } from "@/lib/utils"
 import {
@@ -187,6 +187,20 @@ export function ChunkInspect({
   children: ReactNode
   className?: string
 }) {
+  const [armed, setArmed] = useState(false)
+  if (!armed) {
+    return (
+      <div
+        className={className}
+        data-chunk-index={chunk.chunk_index}
+        onPointerEnter={() => setArmed(true)}
+        onFocusCapture={() => setArmed(true)}
+      >
+        {children}
+      </div>
+    )
+  }
+
   const rows = collectChunkMeta(chunk)
   const images = collectImageInspect(chunk)
   const kind = String(chunk.chunk_type || "chunk")

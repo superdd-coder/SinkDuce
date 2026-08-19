@@ -1376,7 +1376,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         ) : null}
         <div className="pm-meeting-ingest-menu-scroll">
           {(!Array.isArray(collections) || collections.length === 0) && (
-            <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
+            <div className="pm-meeting-ingest-menu-empty">
               No collections yet
             </div>
           )}
@@ -1398,7 +1398,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
                   void handleSelectCollection(col.id, e.currentTarget)
                 }}
               >
-                <span className="truncate min-w-0 flex-1 text-left">
+                <span className="pm-meeting-ingest-menu-name truncate min-w-0 flex-1 text-left">
                   {col.name}
                 </span>
                 {tab.tab_id !== "tab_general" &&
@@ -1433,7 +1433,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           </MenuItem>
         ) : (
           <div
-            className="px-2.5 py-2 flex items-center gap-1.5"
+            className="pm-meeting-ingest-create"
             onClick={(e) => e.stopPropagation()}
             onMouseEnter={() => {
               clearFlyoutCloseTimer()
@@ -1442,7 +1442,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             }}
           >
             <Input
-              className="h-8 flex-1 text-[13px] min-w-0"
+              className="pm-meeting-ingest-create-input"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Collection name"
@@ -1453,8 +1453,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             />
             <Button
               type="button"
-              variant="default"
+              variant="ghost"
               size="xs"
+              className="pm-meeting-ingest-create-btn"
               onClick={handleCreateAndSelect}
               disabled={!newName.trim() || !!pendingName}
             >
@@ -1496,7 +1497,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             }}
           >
             <GitBranch strokeWidth={1.75} />
-            <span className="truncate min-w-0">
+            <span className="pm-meeting-ingest-menu-name truncate min-w-0">
               {ch.is_main
                 ? ch.title?.trim()
                   ? `Main · ${ch.title}`
@@ -1652,7 +1653,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             }}
           >
             <GitBranch strokeWidth={1.75} />
-            <span className="truncate min-w-0">
+            <span className="pm-meeting-ingest-menu-name truncate min-w-0">
               {ch.is_main
                 ? ch.title?.trim()
                   ? `Main · ${ch.title}`
