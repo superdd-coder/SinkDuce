@@ -127,6 +127,22 @@ def test_session_store_default_follows_data_dir(tmp_path, monkeypatch):
     assert store._db_path == tmp_path.resolve() / "sessions.db"
 
 
+def test_sysaudio_helper_reachable_false_on_closed_port():
+    from src.config import sysaudio_helper_reachable
+
+    assert sysaudio_helper_reachable("http://127.0.0.1:1") is False
+    assert sysaudio_helper_reachable("") is False
+
+
+def test_sysaudio_watchdog_noop_outside_desktop(monkeypatch):
+    monkeypatch.delenv("SINKDUCE_DESKTOP", raising=False)
+    from src import desktop_sysaudio as mod
+
+    monkeypatch.setattr(mod, "_thread", None)
+    mod.start_sysaudio_watchdog()
+    assert mod._thread is None
+
+
 def test_desktop_flag_and_health_payload(monkeypatch):
     monkeypatch.delenv("SINKDUCE_DESKTOP", raising=False)
     monkeypatch.delenv("SINKDUCE_PORT", raising=False)
@@ -151,6 +167,7 @@ def test_desktop_flag_and_health_payload(monkeypatch):
     }
 
     monkeypatch.setenv("SINKDUCE_SYS_AUDIO", "http://127.0.0.1:18950/")
+    monkeypatch.setattr("src.config.sysaudio_helper_reachable", lambda _url: True)
     assert health_payload() == {
         "status": "ok",
         "host": "127.0.0.1",
@@ -159,6 +176,11 @@ def test_desktop_flag_and_health_payload(monkeypatch):
         "desktop": True,
         "system_audio": "http://127.0.0.1:18950",
     }
+
+    monkeypatch.setattr("src.config.sysaudio_helper_reachable", lambda _url: False)
+    omitted = health_payload()
+    assert omitted["desktop"] is True
+    assert "system_audio" not in omitted
 
     monkeypatch.delenv("SINKDUCE_DESKTOP", raising=False)
     assert "system_audio" not in health_payload()

@@ -168,6 +168,152 @@ def test_audio_recorder_uses_microphone_helper():
     assert "getUserMedia({ audio: true })" not in src
 
 
+def test_desktop_system_audio_avoids_blob_worklet():
+    """WKWebView addModule(blob:) throws TypeError: Load failed."""
+    helper = (
+        ROOT / "frontend" / "src" / "lib" / "desktop-system-audio.ts"
+    ).read_text(encoding="utf-8")
+    assert "createObjectURL" not in helper
+    assert "createScriptProcessor" in helper
+    assert "Load failed" in helper or "isWkLoadFailed" in helper
+    assert "warmupDesktopSystemAudio" in helper
+    assert "/api/desktop/pcm" in helper
+    assert "/api/desktop/sysaudio-warmup" in helper
+    assert "helper is not running" in helper
+
+
+def test_desktop_helper_feeds_raw_pcm_not_mediastream_roundtrip():
+    """WKWebView ScriptProcessor→MediaStreamDestination is often silent.
+    Desktop capture must take s16le from the helper fetch and push it to
+    pcmChunksRef / live captions without a second Web Audio graph.
+    """
+    helper = (
+        ROOT / "frontend" / "src" / "lib" / "desktop-system-audio.ts"
+    ).read_text(encoding="utf-8")
+    src = RECORDER_TS.read_text(encoding="utf-8")
+    assert "onPcm" in helper
+    assert "handlers?.onPcm" in helper or "handlers.onPcm" in helper
+    desktop_idx = src.find("if (desktop)")
+    else_idx = src.find("} else {", desktop_idx)
+    desktop_block = src[desktop_idx:else_idx]
+    assert "onPcm:" in desktop_block
+    assert "attachPcmScriptProcessor" not in desktop_block
+    assert "createMediaStreamSource" not in desktop_block
+
+
+def test_desktop_pcm_capture_skips_blob_worklet():
+    """Desktop PCM must not call audioWorklet.addModule(blob:) — WKWebView
+    throws TypeError: Load failed and the toast shows that raw string.
+    """
+    src = RECORDER_TS.read_text(encoding="utf-8")
+    assert "audioWorklet.addModule" in src
+    assert "if (!desktop)" in src
+    gated = src.split("if (!desktop)", 1)[1][:1200]
+    assert "addModule" in gated
+    desktop_idx = src.find("if (desktop)")
+    else_idx = src.find("} else {", desktop_idx)
+    desktop_block = src[desktop_idx:else_idx]
+    assert "addModule" not in desktop_block
+    assert "createObjectURL" not in desktop_block
+
+
+def test_desktop_recording_skips_webkit_microphone():
+    """WKWebView getUserMedia never shows the macOS TCC dialog and stays
+    OverconstrainedError even after the user enables Microphone in Settings.
+    Desktop must record via the native helper only.
+    """
+    src = RECORDER_TS.read_text(encoding="utf-8")
+    desktop_idx = src.find("if (desktop)")
+    else_idx = src.find("} else {", desktop_idx)
+    mic_idx = src.find("requestMicrophoneStream(", desktop_idx)
+    assert desktop_idx != -1
+    assert else_idx > desktop_idx
+    assert mic_idx > else_idx
+    desktop_block = src[desktop_idx:else_idx]
+    assert "startDesktopSystemAudio" in desktop_block
+    assert "requestMicrophoneStream" not in desktop_block
+    assert "getUserMedia" not in desktop_block
+
+
+_WAV = r"""
+import { pcmInt16ToWav } from "./src/lib/microphone.ts";
+const samples = new Int16Array(16000);
+for (let i = 0; i < samples.length; i++) samples[i] = i % 2 ? 1000 : -1000;
+const blob = pcmInt16ToWav([samples], 16000);
+const buf = new Uint8Array(await blob.arrayBuffer());
+if (blob.type !== "audio/wav") process.exit(2);
+if (buf.length !== 44 + 16000 * 2) {
+  console.error("size", buf.length);
+  process.exit(3);
+}
+const ascii = String.fromCharCode(...buf.subarray(0, 12));
+if (!ascii.startsWith("RIFF") || ascii.slice(8) !== "WAVE") {
+  console.error("header", ascii);
+  process.exit(4);
+}
+const rate = buf[24] | (buf[25] << 8) | (buf[26] << 16) | (buf[27] << 24);
+if (rate !== 16000) process.exit(5);
+process.stdout.write("ok");
+"""
+
+
+def test_pcm_int16_encodes_16k_mono_wav():
+    proc = _node(_WAV)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+
+
+def test_client_persists_live_pcm():
+    client = (ROOT / "frontend" / "src" / "api" / "meeting.ts").read_text(encoding="utf-8")
+    view = MEETING_VIEW.read_text(encoding="utf-8")
+    assert "appendRecordingPcm" in client
+    assert "finalizeMeetingRecording" in client
+    assert "appendRecordingPcm" in view
+    assert "finalizeMeetingRecording" in view
+    assert "recording-pcm" in client
+
+
+def test_recorder_buffers_pcm_for_upload():
+    src = RECORDER_TS.read_text(encoding="utf-8")
+    assert "pcmInt16ToWav" in src
+    assert "pcmChunksRef" in src
+    view = MEETING_VIEW.read_text(encoding="utf-8")
+    assert "recording.webm" not in view
+    assert "audioBlob.type" in view
+
+
+def test_sysaudio_helper_requests_microphone_tcc():
+    swift_path = ROOT / "desktop" / "sysaudio" / "main.swift"
+    build_path = ROOT / "desktop" / "sysaudio" / "build.sh"
+    if not swift_path.is_file():
+        pytest.skip("desktop/ is local-only")
+    swift = swift_path.read_text(encoding="utf-8")
+    build = build_path.read_text(encoding="utf-8")
+    assert "AVFoundation" in build
+    assert "AVCaptureDevice" in swift
+    assert "requestAccess" in swift
+    assert "NSApp.activate(" not in swift
+    assert "mic only" in swift or "tap skipped" in swift
+    assert "AVAudioEngine" in swift
+    assert "microphone_permission" in swift
+    assert "runOnMain" in swift
+    assert "/warmup" in swift
+    # Input tap is silent on macOS unless the node is in the graph.
+    assert "mainMixerNode" in swift
+    assert "outputVolume" in swift
+    # Warmup must not start+stop capture (that tears down the aggregate).
+    warmup = swift.split("func warmup()", 1)[1].split("private func startTap", 1)[0]
+    assert "self.stop()" not in warmup
+    assert "mic.stop()" not in warmup
+    assert "try start()" not in warmup
+    # Mic must be written even if the Core Audio tap delivers zeros.
+    assert "flushMix" in swift or "startWriter" in swift
+    # Never pad a 20ms frame with zeros when both rings are short — that
+    # chops phonemes and the next ASR sentence starts with the previous tail.
+    flush = swift.split("private func flushMix()", 1)[1].split("private func startTap", 1)[0]
+    assert "repeating: 0" not in flush
+    assert "available" in flush or "have <" in flush
+
+
 def test_meeting_view_toasts_start_recording_error():
     """React state is stale right after await startRecording(); toast must use the return value."""
     src = MEETING_VIEW.read_text(encoding="utf-8")
@@ -177,3 +323,4 @@ def test_meeting_view_toasts_start_recording_error():
     chunk = src[start : start + 1800]
     assert "recorder.error" not in chunk
     assert "toast.error" in chunk
+    assert "No audio detected" in src

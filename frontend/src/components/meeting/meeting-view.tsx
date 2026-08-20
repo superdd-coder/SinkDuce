@@ -5,10 +5,12 @@ import { useShallow } from "zustand/react/shallow"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/stores/app-store"
 import { useAudioRecorder } from "@/hooks/use-audio-recorder"
+import { warmupDesktopSystemAudio } from "@/lib/desktop-system-audio"
 import { useTranscription } from "@/hooks/use-transcription"
 import {
   getMeetings, getMeeting, deleteMeeting, discardMeetingRecording,
-  uploadMeetingAudio, transcribeMeeting, cancelTranscribeMeeting,
+  uploadMeetingAudio, appendRecordingPcm, finalizeMeetingRecording,
+  transcribeMeeting, cancelTranscribeMeeting,
   getMeetingTranscript, updateMeeting, commitMeetingSpeakers,
   getRealtimeTranscriptionProviders, getFileTranscriptionProviders,
   getActiveProviderInfo, getHotWordsLibraries,
@@ -102,6 +104,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const [recordingMeetingId, setRecordingMeetingId] = useState<string | null>(null)
   /** Survives clearRecordingOwner until audioBlob upload finishes (may stop while viewing another meeting). */
   const captureOwnerRef = useRef<string | null>(null)
+  const levelsRef = useRef<number[]>([])
+  /** Serializes live PCM POSTs so disk order matches capture order. */
+  const persistChainRef = useRef(Promise.resolve())
   const [hasFileProvider, setHasFileProvider] = useState(true) // optimistic — avoids flash on remount; config check corrects if needed
   const [supportedLanguageHints, setSupportedLanguageHints] = useState<LanguageHintOption[]>([])
   const [maxLanguageHints, setMaxLanguageHints] = useState(1)
@@ -395,7 +400,19 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   // switching the list selection does not reset WS / wipe live segments.
   const transcriptionMeetingId = recordingMeetingId ?? activeMeeting
   const transcription = useTranscription(transcriptionMeetingId)
-  const recorder = useAudioRecorder(realtimeEnabled && hasRealtimeProvider ? transcription.sendAudioData : undefined)
+  const recorder = useAudioRecorder((pcm) => {
+    const owner = captureOwnerRef.current
+    if (owner) {
+      const copy = pcm.slice(0)
+      persistChainRef.current = persistChainRef.current
+        .then(() => appendRecordingPcm(owner, copy))
+        .catch(() => undefined)
+    }
+    if (realtimeEnabled && hasRealtimeProvider) {
+      transcription.sendAudioData(pcm)
+    }
+  })
+  levelsRef.current = recorder.levels
   const mediaBarRef = useRef<MediaBarHandle>(null)
   const capturePlayerRef = useRef<CaptureMiniPlayerHandle>(null)
   /** Latest segments for resolving end times when only start is passed */
@@ -580,6 +597,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       setTranscript([])
     }
   }, [])
+
+  useEffect(() => {
+    if (!active) return
+    void warmupDesktopSystemAudio()
+  }, [active])
 
   // Refresh transcription provider status when Meeting tab becomes active.
   // Views are keep-alive mounted, so a mount-only check would stay stale after
@@ -853,7 +875,15 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         recorder.reset()
         return
       }
-      const file = new File([recorder.audioBlob], "recording.webm", { type: recorder.audioBlob.type })
+      const blobType = recorder.audioBlob.type || "audio/wav"
+      const ext = blobType.includes("wav")
+        ? "wav"
+        : blobType.includes("mp4")
+          ? "m4a"
+          : blobType.includes("webm")
+            ? "webm"
+            : "wav"
+      const file = new File([recorder.audioBlob], `recording.${ext}`, { type: blobType })
       const uploadTo = ownerId
       captureOwnerRef.current = null
       uploadMeetingAudio(uploadTo, file)
@@ -956,17 +986,30 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       toast.message("Recording already in progress")
       return
     }
+    toast.message("Starting capture…")
+    // Bind owner before start so the first PCM chunks persist to this meeting.
+    if (ownerId) {
+      captureOwnerRef.current = ownerId
+      setRecordingMeetingId(ownerId)
+    }
     // Permission / share dialog first — stay on setup if denied / cancelled
     const startError = await recorder.startRecording()
     if (startError) {
+      captureOwnerRef.current = null
+      setRecordingMeetingId(null)
       toast.error(startError, { duration: 6500 })
       return
     }
-    // Bind stream to this meeting so other meetings do not show live waveform / pause chrome
-    if (ownerId) {
-      setRecordingMeetingId(ownerId)
-      captureOwnerRef.current = ownerId
-    }
+    window.setTimeout(() => {
+      if (!captureOwnerRef.current) return
+      const peak = Math.max(0, ...(levelsRef.current ?? [0]))
+      if (peak < 0.02) {
+        toast.warning(
+          "No audio detected. Allow SinkDuce in System Settings → Privacy & Security → Microphone and Screen Recording, then Cmd+Q and try again.",
+          { duration: 8000 },
+        )
+      }
+    }, 3500)
     // Do not force realtime on — respect pre-start preference (hover chip / default)
   }
 
@@ -999,6 +1042,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     transcription.stopTranscription()
     recorder.stopRecording()
     setRealtimeEnabled(hasRealtimeProvider)
+    if (owner) {
+      void persistChainRef.current
+        .then(() => finalizeMeetingRecording(owner))
+        .then((m) => applyMeeting(m))
+        .catch(() => undefined)
+    }
     clearRecordingOwner()
   }, [
     transcription,
@@ -1051,7 +1100,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       toast.info("Transcription started")
       fetchMeeting(activeMeeting)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const raw = err instanceof Error ? err.message : String(err)
+      const msg = /No audio/i.test(raw)
+        ? "This meeting has no saved audio file. Record again or upload audio, then re-transcribe."
+        : /No active file transcription provider/i.test(raw)
+          ? "No file transcription provider is set. Go to Settings → Transcription and set a Default for File."
+          : raw.replace(/^API \d+:\s*/, "")
       toast.error(`Transcription failed: ${msg}`)
     }
   }
@@ -1384,16 +1438,16 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   ])
 
   /**
-   * Hot words enablement from adapter class flags (supports_hot_words).
-   * Setup: either path may use the library → enable if file OR realtime supports.
-   * Live: realtime only. File / re-tx / speakers: file model only.
+   * Hot words follow the path-appropriate adapter (same as language hints).
+   * Setup / live / empty → realtime model. Audio / re-tx / studio → file model.
+   * Local ONNX adapters set supports_hot_words=false; do not OR the other path.
    */
   const activeHotWordsSupported =
-    displayStageMode === "setup" || displayStageMode === "empty"
-      ? fileSupportsHotWords || rtSupportsHotWords
-      : displayStageMode === "live"
-        ? rtSupportsHotWords
-        : fileSupportsHotWords
+    displayStageMode === "setup" ||
+    displayStageMode === "empty" ||
+    displayStageMode === "live"
+      ? rtSupportsHotWords
+      : fileSupportsHotWords
 
   const captureAudioUrl =
     meeting?.audio_path
@@ -1641,6 +1695,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 realtimeEnabled={realtimeEnabled}
                 setRealtimeEnabled={setRealtimeEnabled}
                 hotWordsLibraries={hotWordsLibraries}
+                activeHotWordsSupported={activeHotWordsSupported}
                 handleSelectHotWordsLibraries={handleSelectHotWordsLibraries}
                 languageHints={languageHints}
                 supportedLanguageHints={supportedLanguageHints}

@@ -4,6 +4,7 @@ import { startDesktopSystemAudio } from "@/lib/desktop-system-audio"
 import {
   createCaptureAudioContext,
   microphoneErrorMessage,
+  pcmInt16ToWav,
   pickRecorderMimeType,
   requestMicrophoneStream,
 } from "@/lib/microphone"
@@ -114,6 +115,8 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
   const onAudioChunkRef = useRef(onAudioChunk)
   onAudioChunkRef.current = onAudioChunk
   const sysAudioStopRef = useRef<(() => void) | null>(null)
+  const pcmChunksRef = useRef<Int16Array[]>([])
+  const recordingFinalizedRef = useRef(false)
 
   const stopLevelLoop = useCallback(() => {
     if (levelRafRef.current != null) {
@@ -158,35 +161,77 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
     levelRafRef.current = requestAnimationFrame(tick)
   }, [])
 
+  const finalizeRecordingBlob = useCallback(() => {
+    if (recordingFinalizedRef.current) return
+    recordingFinalizedRef.current = true
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    const wav = pcmInt16ToWav(pcmChunksRef.current, 16000)
+    pcmChunksRef.current = []
+    const recType = mediaRecorderRef.current?.mimeType || "audio/webm"
+    const recBlob =
+      chunksRef.current.length > 0 ? new Blob(chunksRef.current, { type: recType }) : null
+    const blob = wav.size > 44 ? wav : recBlob
+    if (!blob || blob.size === 0) {
+      setState((prev) => ({
+        ...prev,
+        isRecording: false,
+        isPaused: false,
+        error: prev.error || "Recording produced no audio. Try again.",
+      }))
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    setState((prev) => ({
+      ...prev,
+      audioBlob: blob,
+      audioUrl: url,
+      isRecording: false,
+      isPaused: false,
+    }))
+  }, [])
+
   /** @returns null if recording started; otherwise a user-facing error message */
   const startRecording = useCallback(async (): Promise<string | null> => {
     try {
-      // Step 1: mic — silent if already permitted, one-time prompt otherwise.
-      // WKWebView often rejects `{ audio: true }` with OverconstrainedError:
-      // "Invalid constraint". Retry with relaxed constraints.
-      const gum = navigator.mediaDevices?.getUserMedia?.bind(
-        navigator.mediaDevices,
-      )
-      if (!gum) {
-        throw new Error("This browser cannot access the microphone.")
-      }
-      const micStream = await requestMicrophoneStream(gum)
-
-      // Step 2: system audio. Browser uses getDisplayMedia "Share audio".
-      // Desktop WKWebView cannot do that — mix the ScreenCaptureKit helper instead.
-      let finalStream: MediaStream = micStream
+      // Desktop WKWebView getUserMedia never shows the macOS TCC dialog and
+      // stays OverconstrainedError even after Microphone is enabled in Settings.
+      // The native helper captures mic + system audio and prompts via AVFoundation.
+      let finalStream: MediaStream
       const desktop = await isDesktopRuntime()
+      chunksRef.current = []
+      pcmChunksRef.current = []
+      recordingFinalizedRef.current = false
+      durationRef.current = 0
       if (desktop) {
         sysAudioStopRef.current?.()
-        const sys = await startDesktopSystemAudio()
+        let lastLevelAt = 0
+        const sys = await startDesktopSystemAudio({
+          onPcm: (buf) => {
+            if (capturePausedRef.current) return
+            pcmChunksRef.current.push(new Int16Array(buf.slice(0)))
+            onAudioChunkRef.current?.(buf)
+          },
+          onLevel: (level) => {
+            const now = performance.now()
+            if (now - lastLevelAt < 80) return
+            lastLevelAt = now
+            const bars = emptyLevels().map(() => level)
+            setState((prev) => ({ ...prev, levels: bars }))
+          },
+        })
         sysAudioStopRef.current = sys.stop
-        const audioCtxMix = createCaptureAudioContext()
-        audioCtxRef.current = audioCtxMix
-        const destination = audioCtxMix.createMediaStreamDestination()
-        audioCtxMix.createMediaStreamSource(micStream).connect(destination)
-        audioCtxMix.createMediaStreamSource(sys.stream).connect(destination)
-        finalStream = destination.stream
+        finalStream = sys.stream
       } else {
+        const gum = navigator.mediaDevices?.getUserMedia?.bind(
+          navigator.mediaDevices,
+        )
+        if (!gum) {
+          throw new Error("This browser cannot access the microphone.")
+        }
+        const micStream = await requestMicrophoneStream(gum)
         const display = navigator.mediaDevices?.getDisplayMedia?.bind(
           navigator.mediaDevices
         )
@@ -230,80 +275,82 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
 
       streamRef.current = finalStream
 
-      // Set up real-time PCM capture via AudioWorklet for streaming transcription.
+      // Real-time PCM for live captions + waveform.
       // ALWAYS build the pipeline — even if Live captions is off at record start.
       // The user may toggle it on mid-recording; without the pipeline PCM chunks
       // would never reach the WebSocket.
-      {
-        try {
-          const workletCtx = createCaptureAudioContext()
-          audioCtxRef.current = workletCtx
-          const source = workletCtx.createMediaStreamSource(finalStream)
+      const attachPcmScriptProcessor = (scriptCtx: AudioContext) => {
+        const source = scriptCtx.createMediaStreamSource(finalStream)
+        const processor = scriptCtx.createScriptProcessor(8192, 1, 1)
+        let buffer: number[] = []
+        const chunkSamples = 8000 // 500ms at 16kHz
 
+        processor.onaudioprocess = (e) => {
+          if (capturePausedRef.current) {
+            buffer = []
+            return
+          }
+          const input = e.inputBuffer.getChannelData(0)
+          for (let i = 0; i < input.length; i++) {
+            buffer.push(input[i])
+            if (buffer.length >= chunkSamples) {
+              const pcm = new Int16Array(buffer.length)
+              for (let j = 0; j < buffer.length; j++) {
+                const s = Math.max(-1, Math.min(1, buffer[j]))
+                pcm[j] = s < 0 ? s * 0x8000 : s * 0x7FFF
+              }
+              pcmChunksRef.current.push(new Int16Array(pcm))
+              if (onAudioChunkRef.current) {
+                onAudioChunkRef.current(pcm.buffer.slice(0) as ArrayBuffer)
+              }
+              buffer = []
+            }
+          }
+        }
+        source.connect(processor)
+        processor.connect(scriptCtx.destination)
+
+        const levelSource = scriptCtx.createMediaStreamSource(finalStream)
+        const analyser = scriptCtx.createAnalyser()
+        analyser.fftSize = 128
+        analyser.smoothingTimeConstant = 0.72
+        levelSource.connect(analyser)
+        startLevelLoop(analyser)
+      }
+
+      if (!desktop) {
+        const pcmCtx = audioCtxRef.current || createCaptureAudioContext()
+        audioCtxRef.current = pcmCtx
+        try {
+          const source = pcmCtx.createMediaStreamSource(finalStream)
           const blob = new Blob([WORKLET_CODE], { type: "application/javascript" })
           const url = URL.createObjectURL(blob)
-          await workletCtx.audioWorklet.addModule(url)
+          await pcmCtx.audioWorklet.addModule(url)
           URL.revokeObjectURL(url)
 
-          const node = new AudioWorkletNode(workletCtx, "pcm-capture")
+          const node = new AudioWorkletNode(pcmCtx, "pcm-capture")
           node.port.onmessage = (e) => {
-            // Pause freezes MediaRecorder only — also gate live-caption PCM
             if (capturePausedRef.current) return
-            if (onAudioChunkRef.current && e.data instanceof ArrayBuffer) {
-              console.log("[AudioRecorder] Sending PCM chunk:", e.data.byteLength, "bytes")
-              onAudioChunkRef.current(e.data)
+            if (e.data instanceof ArrayBuffer) {
+              pcmChunksRef.current.push(new Int16Array(e.data.slice(0)))
+              if (onAudioChunkRef.current) {
+                console.log("[AudioRecorder] Sending PCM chunk:", e.data.byteLength, "bytes")
+                onAudioChunkRef.current(e.data)
+              }
             }
           }
           source.connect(node)
-          node.connect(workletCtx.destination)
+          node.connect(pcmCtx.destination)
 
-          // Real waveform: AnalyserNode on the same mixed stream
-          const levelSource = workletCtx.createMediaStreamSource(finalStream)
-          const analyser = workletCtx.createAnalyser()
+          const levelSource = pcmCtx.createMediaStreamSource(finalStream)
+          const analyser = pcmCtx.createAnalyser()
           analyser.fftSize = 128
           analyser.smoothingTimeConstant = 0.72
           levelSource.connect(analyser)
           startLevelLoop(analyser)
         } catch {
-          // AudioWorklet not supported — fall back to ScriptProcessorNode
           try {
-            const scriptCtx = audioCtxRef.current || createCaptureAudioContext()
-            if (!audioCtxRef.current) audioCtxRef.current = scriptCtx
-            const source = scriptCtx.createMediaStreamSource(finalStream)
-            const processor = scriptCtx.createScriptProcessor(8192, 1, 1)
-            let buffer: number[] = []
-            const chunkSamples = 8000 // 500ms at 16kHz
-
-            processor.onaudioprocess = (e) => {
-              if (capturePausedRef.current) {
-                buffer = []
-                return
-              }
-              const input = e.inputBuffer.getChannelData(0)
-              for (let i = 0; i < input.length; i++) {
-                buffer.push(input[i])
-                if (buffer.length >= chunkSamples) {
-                  const pcm = new Int16Array(buffer.length)
-                  for (let j = 0; j < buffer.length; j++) {
-                    const s = Math.max(-1, Math.min(1, buffer[j]))
-                    pcm[j] = s < 0 ? s * 0x8000 : s * 0x7FFF
-                  }
-                  if (onAudioChunkRef.current) {
-                    onAudioChunkRef.current(pcm.buffer.slice(0) as ArrayBuffer)
-                  }
-                  buffer = []
-                }
-              }
-            }
-            source.connect(processor)
-            processor.connect(scriptCtx.destination)
-
-            const levelSource = scriptCtx.createMediaStreamSource(finalStream)
-            const analyser = scriptCtx.createAnalyser()
-            analyser.fftSize = 128
-            analyser.smoothingTimeConstant = 0.72
-            levelSource.connect(analyser)
-            startLevelLoop(analyser)
+            attachPcmScriptProcessor(pcmCtx)
           } catch {
             // Neither supported — no real-time transcription / levels
           }
@@ -315,27 +362,21 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
       const mimeType = pickRecorderMimeType((t) =>
         MediaRecorder.isTypeSupported(t),
       )
-
-      const recorder = mimeType
-        ? new MediaRecorder(finalStream, { mimeType })
-        : new MediaRecorder(finalStream)
-      chunksRef.current = []
-      durationRef.current = 0
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data)
+      try {
+        const recorder = mimeType
+          ? new MediaRecorder(finalStream, { mimeType })
+          : new MediaRecorder(finalStream)
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunksRef.current.push(e.data)
+        }
+        recorder.onstop = () => {
+          finalizeRecordingBlob()
+        }
+        recorder.start(1000)
+        mediaRecorderRef.current = recorder
+      } catch {
+        mediaRecorderRef.current = null
       }
-
-      recorder.onstop = () => {
-        const blobType = mimeType || recorder.mimeType || "audio/webm"
-        const blob = new Blob(chunksRef.current, { type: blobType })
-        const url = URL.createObjectURL(blob)
-        setState((prev) => ({ ...prev, audioBlob: blob, audioUrl: url, isRecording: false, isPaused: false }))
-        if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-      }
-
-      recorder.start(1000)
-      mediaRecorderRef.current = recorder
 
       timerRef.current = setInterval(() => {
         durationRef.current += 1
@@ -362,20 +403,27 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
       setState((prev) => ({ ...prev, error: msg, levels: emptyLevels() }))
       return msg
     }
-  }, [startLevelLoop, stopLevelLoop])
+  }, [startLevelLoop, stopLevelLoop, finalizeRecordingBlob])
 
   const stopRecording = useCallback(() => {
     capturePausedRef.current = false
     stopLevelLoop()
     sysAudioStopRef.current?.()
     sysAudioStopRef.current = null
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop()
+    const rec = mediaRecorderRef.current
+    if (rec && rec.state !== "inactive") {
+      rec.stop()
+      window.setTimeout(() => finalizeRecordingBlob(), 800)
+    } else {
+      finalizeRecordingBlob()
     }
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
-    if (audioCtxRef.current) { audioCtxRef.current.close(); audioCtxRef.current = null }
-  }, [stopLevelLoop])
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close()
+      audioCtxRef.current = null
+    }
+  }, [stopLevelLoop, finalizeRecordingBlob])
 
   const pauseRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === "recording") {

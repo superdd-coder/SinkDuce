@@ -128,7 +128,7 @@ export function HotWordsSelector({
       draftIds.some((id) => !serverIds.includes(id)))
   const hasSelection = providerSupportsHotWords && activeIds.length > 0
   const displayName = !providerSupportsHotWords
-    ? "Hot Words"
+    ? "Hot Words · unavailable"
     : hotWordsSelectionLabel(activeIds)
 
   const persistOrDraft = (next: string[]) => {
@@ -175,6 +175,7 @@ export function HotWordsSelector({
           "pm-meeting-pill",
           compact && "is-compact",
           hasSelection && providerSupportsHotWords && "is-active",
+          !providerSupportsHotWords && "is-unsupported",
         )}
         onClick={() => {
           if (isDisabled) return

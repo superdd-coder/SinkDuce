@@ -9,7 +9,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 
 from src.meeting import store
@@ -248,6 +248,28 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
     return _serialize_meeting(updated)
 
 
+@router.post("/meetings/{meeting_id}/recording-pcm")
+async def ingest_recording_pcm(meeting_id: str, request: Request):
+    """Append live 16 kHz s16le PCM so a crash still leaves recoverable audio."""
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(404, "Meeting not found")
+    chunk = await request.body()
+    store.append_recording_pcm(meeting_id, chunk)
+    return {"ok": True, "bytes": len(chunk)}
+
+
+@router.post("/meetings/{meeting_id}/finalize-recording")
+def finalize_recording(meeting_id: str):
+    meeting = store.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(404, "Meeting not found")
+    path = store.finalize_recording_pcm(meeting_id)
+    updated = store.get_meeting(meeting_id)
+    logger.info("[FINALIZE-RECORDING] Meeting %s audio_path=%s", meeting_id, path)
+    return _serialize_meeting(updated)
+
+
 @router.get("/meetings/{meeting_id}/audio")
 async def serve_audio(meeting_id: str, token: str | None = None):
     """Serve the audio file for playback and for external transcription services.
@@ -446,6 +468,12 @@ async def save_realtime_transcript(meeting_id: str, body: dict = Body()):
         "[SAVE-TRANSCRIPT] Saved %d segments (%d chars) for meeting %s",
         len(segments), len(text), meeting_id,
     )
+    try:
+        recovered = store.finalize_recording_pcm(meeting_id)
+        if recovered:
+            logger.info("[SAVE-TRANSCRIPT] Finalized live PCM → %s", recovered)
+    except Exception as exc:
+        logger.warning("[SAVE-TRANSCRIPT] PCM finalize failed (non-fatal): %s", exc)
 
     # Phase 0: clean old pipeline data + normalize. Speakers gate next (or file-tx);
     # do not leave stale tabs/blueprint that would auto-unlock Studio.
@@ -559,8 +587,16 @@ async def start_transcription(meeting_id: str, body: dict | None = Body(None)):
         logger.warning("[TRANSCRIBE] Meeting %s NOT FOUND", meeting_id)
         raise HTTPException(404, "Meeting not found")
     if not meeting.audio_path:
+        recovered = store.finalize_recording_pcm(meeting_id)
+        if recovered:
+            meeting = store.get_meeting(meeting_id)
+            logger.info("[TRANSCRIBE] Recovered live PCM → %s", recovered)
+    if not meeting or not meeting.audio_path:
         logger.warning("[TRANSCRIBE] Meeting %s has NO AUDIO", meeting_id)
-        raise HTTPException(400, "No audio file uploaded")
+        raise HTTPException(
+            400,
+            "No audio file was saved for this meeting. Record again or upload an audio file, then re-transcribe.",
+        )
 
     # Check active provider exists
     provider = meeting_service.get_active_file_provider()
@@ -722,10 +758,10 @@ async def realtime_transcribe(websocket: WebSocket, meeting_id: str):
         logger.info("[REALTIME-WS] Language hints from client: %s", language_hints)
 
     try:
-        # Load hot words if meeting has a library assigned
+        # Load hot words only when the active realtime adapter can apply them
         hot_words = None
         meeting = store.get_meeting(meeting_id)
-        if meeting:
+        if meeting and getattr(provider, "supports_hot_words", False):
             from src.hot_words.store import collect_meeting_hot_words
             hot_words = collect_meeting_hot_words(meeting) or None
             if hot_words:

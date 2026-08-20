@@ -251,16 +251,17 @@ async def transcribe_handler(task: Task, meeting_id: str, **kwargs) -> dict:
     logger.info("[TRANSCRIBE-HANDLER] Using local file mode: %s", meeting.audio_path)
     source = meeting.audio_path
 
-    # Load hot words if meeting has a library assigned
+    # Load hot words only when the active file adapter can apply them
     hot_words = None
     language_hints = kwargs.get("language_hints")  # user-selected from frontend
     # "auto" means auto-detect — strip it so the provider doesn't receive it
     if language_hints:
         language_hints = [h for h in language_hints if h != "auto"] or None
-    from src.hot_words.store import collect_meeting_hot_words
-    hot_words = collect_meeting_hot_words(meeting) or None
-    if hot_words:
-        logger.info("[TRANSCRIBE-HANDLER] Loaded %d hot words", len(hot_words))
+    if getattr(provider, "supports_hot_words", False):
+        from src.hot_words.store import collect_meeting_hot_words
+        hot_words = collect_meeting_hot_words(meeting) or None
+        if hot_words:
+            logger.info("[TRANSCRIBE-HANDLER] Loaded %d hot words", len(hot_words))
 
     if language_hints:
         logger.info("[TRANSCRIBE-HANDLER] Using language_hints=%s", language_hints)

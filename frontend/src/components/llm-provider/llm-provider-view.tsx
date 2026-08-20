@@ -29,7 +29,7 @@ import {
   deleteFileTranscriptionProvider, setActiveFileTranscriptionProvider, testFileTranscriptionProvider,
   getRealtimeTranscriptionProviders, createRealtimeTranscriptionProvider, updateRealtimeTranscriptionProvider,
   deleteRealtimeTranscriptionProvider, setActiveRealtimeTranscriptionProvider,
-  testRealtimeTranscriptionProvider,
+  testRealtimeTranscriptionProvider, getActiveProviderInfo,
   type TranscriptionProvider, type LanguageHintOption,
   getConfig, updateConfig, toggleModelLoad, getModelState, getModelStatus, getAvailableModels,
   deleteLocalModels,
@@ -589,6 +589,7 @@ export function LLMProviderView() {
 
   // Hot words manager
   const [hotWordsManagerOpen, setHotWordsManagerOpen] = useState(false)
+  const [hotWordsSupported, setHotWordsSupported] = useState(false)
   const [peopleManagerOpen, setPeopleManagerOpen] = useState(false)
 
   // OneShot Dashscope dialog
@@ -842,14 +843,27 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     try { setRerankProviders(await getRerankProviders()) } catch { /* ignore */ }
   }
 
+  const refreshHotWordsSupport = async () => {
+    try {
+      const info = await getActiveProviderInfo()
+      setHotWordsSupported(
+        !!info.file?.supports_hot_words || !!info.realtime?.supports_hot_words,
+      )
+    } catch {
+      setHotWordsSupported(false)
+    }
+  }
+
   // ── File Transcription ──
   const fetchFileTransProviders = async () => {
     try { setFileTransProviders(await getFileTranscriptionProviders()) } catch { /* ignore */ }
+    void refreshHotWordsSupport()
   }
 
   // ── Realtime Transcription ──
   const fetchRtTransProviders = async () => {
     try { setRtTransProviders(await getRealtimeTranscriptionProviders()) } catch { /* ignore */ }
+    void refreshHotWordsSupport()
   }
 
   const confirmDeleteLocalModels = async () => {
@@ -1691,15 +1705,30 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
         {/* Hot words */}
         <section className="pm-settings-section">
-          <div className="pm-settings-card">
+          <div className={cn("pm-settings-card", !hotWordsSupported && "opacity-60")}>
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text min-w-0">
                 <h2 className="pm-settings-card-kicker">Hot words</h2>
                 <p className="pm-settings-card-desc">
-                  Libraries for domain terms — names, acronyms, jargon — to improve transcription.
+                  {hotWordsSupported
+                    ? "Libraries for domain terms — names, acronyms, jargon — to improve transcription."
+                    : "Unavailable — the active local transcription models do not apply hot-word vocabularies."}
                 </p>
               </div>
-              <Button variant="default" size="sm" onClick={() => setHotWordsManagerOpen(true)}>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={!hotWordsSupported}
+                title={
+                  hotWordsSupported
+                    ? "Manage hot-word libraries"
+                    : "Active transcription model does not support hot words"
+                }
+                onClick={() => {
+                  if (!hotWordsSupported) return
+                  setHotWordsManagerOpen(true)
+                }}
+              >
                 Manage
               </Button>
             </div>

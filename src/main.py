@@ -75,6 +75,9 @@ async def lifespan(app: FastAPI):
 
     configure_host_math_threads()
     init_services()
+    from src.desktop_sysaudio import start_sysaudio_watchdog, stop_sysaudio_watchdog
+
+    start_sysaudio_watchdog()
     await task_manager.start()
     # Load RapidOCR weights in the background so the first upload is not
     # blocked by ONNX session init. Failure is non-fatal (retried on ingest).
@@ -99,6 +102,7 @@ async def lifespan(app: FastAPI):
 
     await _staging_store.stop()
     await task_manager.stop()
+    stop_sysaudio_watchdog()
 
 
 app = FastAPI(title="SinkDuce", version="1.1.0", lifespan=lifespan)
@@ -229,6 +233,90 @@ app.router.routes.append(
 
 # OpenRouter CORS proxy — registered directly on app so it's guaranteed
 # to match before the SPA catch-all below.
+def _sysaudio_base() -> str:
+    import os
+
+    from src.config import is_desktop_runtime
+
+    if not is_desktop_runtime():
+        from fastapi import HTTPException
+
+        raise HTTPException(404, "not a desktop runtime")
+    base = (os.environ.get("SINKDUCE_SYS_AUDIO") or "").strip().rstrip("/")
+    if not base:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            503,
+            "Desktop audio helper is not running. Quit SinkDuce with Cmd+Q and reopen.",
+        )
+    return base
+
+
+@app.post("/api/desktop/sysaudio-warmup")
+async def desktop_sysaudio_warmup():
+    import httpx
+    from fastapi.responses import JSONResponse
+
+    base = _sysaudio_base()
+    try:
+        async with httpx.AsyncClient(timeout=8) as http:
+            r = await http.post(f"{base}/warmup")
+        return JSONResponse(status_code=r.status_code, content={"ok": r.is_success})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=503)
+
+
+@app.post("/api/desktop/sysaudio-stop")
+async def desktop_sysaudio_stop():
+    import httpx
+    from fastapi.responses import JSONResponse
+
+    base = _sysaudio_base()
+    try:
+        async with httpx.AsyncClient(timeout=4) as http:
+            await http.post(f"{base}/stop")
+        return {"ok": True}
+    except Exception:
+        return JSONResponse({"ok": False}, status_code=200)
+
+
+@app.get("/api/desktop/pcm")
+async def desktop_pcm():
+    """Same-origin PCM proxy. WKWebView cannot fetch :18950 (TypeError: Load failed)."""
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    base = _sysaudio_base()
+    client = httpx.AsyncClient(timeout=None)
+    try:
+        req = client.build_request("GET", f"{base}/pcm")
+        r = await client.send(req, stream=True)
+    except Exception as exc:
+        await client.aclose()
+        from fastapi import HTTPException
+
+        raise HTTPException(503, f"Audio helper unreachable: {exc}") from exc
+    if r.status_code != 200:
+        body = (await r.aread())[:800]
+        await r.aclose()
+        await client.aclose()
+        from fastapi import HTTPException
+
+        raise HTTPException(r.status_code, body.decode("utf-8", "replace"))
+
+    async def gen():
+        try:
+            async for chunk in r.aiter_bytes():
+                if chunk:
+                    yield chunk
+        finally:
+            await r.aclose()
+            await client.aclose()
+
+    return StreamingResponse(gen(), media_type="application/octet-stream")
+
+
 @app.get("/api/proxy/openrouter-models")
 async def proxy_openrouter_models():
     import httpx

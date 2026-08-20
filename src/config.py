@@ -88,6 +88,28 @@ def advertised_listen() -> tuple[str, int]:
     return host, port
 
 
+def sysaudio_helper_reachable(url: str, timeout: float = 0.15) -> bool:
+    """True if the desktop PCM helper is accepting connections.
+
+    WKWebView fetch to a dead 127.0.0.1:18950 throws TypeError: Load failed.
+    /health must not advertise the helper unless it is actually up.
+    """
+    from urllib.parse import urlparse
+    import socket
+
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 80
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def health_payload() -> dict:
     host, port = advertised_listen()
     body: dict = {
@@ -99,7 +121,7 @@ def health_payload() -> dict:
     if is_desktop_runtime():
         body["desktop"] = True
         audio = (os.environ.get("SINKDUCE_SYS_AUDIO") or "").strip().rstrip("/")
-        if audio:
+        if audio and sysaudio_helper_reachable(audio):
             body["system_audio"] = audio
     if (get_data_dir() / "mock-update").is_file():
         body["mock_update"] = True

@@ -138,7 +138,9 @@ mode === "setup" ? (
                   <p className="pm-meeting-e-kicker">New meeting</p>
                   <h3 className="pm-meeting-e-title">Capture the conversation</h3>
                   <p className="pm-meeting-e-sub">
-                    Pick a hot-words library to reduce ambiguity. Select language for live caption.
+                    {activeHotWordsSupported
+                      ? "Pick a hot-words library to reduce ambiguity. Select language for live caption."
+                      : "Select language for live caption. The active local model does not support hot words."}
                   </p>
 
                   <div className="pm-meeting-e-config" aria-label="Transcription settings">
@@ -250,7 +252,9 @@ mode === "setup" ? (
                   <p className="pm-meeting-e-kicker">Audio ready</p>
                   <h3 className="pm-meeting-e-title">Review audio</h3>
                   <p className="pm-meeting-e-sub">
-                    Pick a hot-words library to reduce ambiguity. Select language for file transcription.
+                    {activeHotWordsSupported
+                      ? "Pick a hot-words library to reduce ambiguity. Select language for file transcription."
+                      : "Select language for file transcription. The active local model does not support hot words."}
                   </p>
 
                   <div className="pm-meeting-e-config" aria-label="Transcription settings">
