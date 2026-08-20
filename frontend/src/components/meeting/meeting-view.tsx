@@ -957,13 +957,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       return
     }
     // Permission / share dialog first — stay on setup if denied / cancelled
-    const ok = await recorder.startRecording()
-    if (!ok) {
-      toast.error(
-        recorder.error ||
-          "Could not start recording. Allow the microphone, then try again.",
-        { duration: 6500 },
-      )
+    const startError = await recorder.startRecording()
+    if (startError) {
+      toast.error(startError, { duration: 6500 })
       return
     }
     // Bind stream to this meeting so other meetings do not show live waveform / pause chrome
