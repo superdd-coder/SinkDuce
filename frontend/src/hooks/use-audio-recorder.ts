@@ -1,6 +1,12 @@
 import { useRef, useState, useCallback, useEffect } from "react"
 import { getHealth } from "@/api/client"
 import { startDesktopSystemAudio } from "@/lib/desktop-system-audio"
+import {
+  createCaptureAudioContext,
+  microphoneErrorMessage,
+  pickRecorderMimeType,
+  requestMicrophoneStream,
+} from "@/lib/microphone"
 
 /** Number of bars exposed for the live capture waveform UI. */
 export const AUDIO_LEVEL_BAR_COUNT = 24
@@ -152,11 +158,19 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
     levelRafRef.current = requestAnimationFrame(tick)
   }, [])
 
-  /** @returns true if recording started; false if permission denied / cancelled */
-  const startRecording = useCallback(async (): Promise<boolean> => {
+  /** @returns null if recording started; otherwise a user-facing error message */
+  const startRecording = useCallback(async (): Promise<string | null> => {
     try {
       // Step 1: mic — silent if already permitted, one-time prompt otherwise.
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // WKWebView often rejects `{ audio: true }` with OverconstrainedError:
+      // "Invalid constraint". Retry with relaxed constraints.
+      const gum = navigator.mediaDevices?.getUserMedia?.bind(
+        navigator.mediaDevices,
+      )
+      if (!gum) {
+        throw new Error("This browser cannot access the microphone.")
+      }
+      const micStream = await requestMicrophoneStream(gum)
 
       // Step 2: system audio. Browser uses getDisplayMedia "Share audio".
       // Desktop WKWebView cannot do that — mix the ScreenCaptureKit helper instead.
@@ -166,7 +180,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
         sysAudioStopRef.current?.()
         const sys = await startDesktopSystemAudio()
         sysAudioStopRef.current = sys.stop
-        const audioCtxMix = new AudioContext({ sampleRate: 16000 })
+        const audioCtxMix = createCaptureAudioContext()
         audioCtxRef.current = audioCtxMix
         const destination = audioCtxMix.createMediaStreamDestination()
         audioCtxMix.createMediaStreamSource(micStream).connect(destination)
@@ -193,7 +207,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
               "No system audio captured. Please check \"Share audio\" when selecting a window."
             )
           }
-          const audioCtxMix = new AudioContext({ sampleRate: 16000 })
+          const audioCtxMix = createCaptureAudioContext()
           audioCtxRef.current = audioCtxMix
           const destination = audioCtxMix.createMediaStreamDestination()
           audioCtxMix.createMediaStreamSource(micStream).connect(destination)
@@ -222,7 +236,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
       // would never reach the WebSocket.
       {
         try {
-          const workletCtx = new AudioContext({ sampleRate: 16000 })
+          const workletCtx = createCaptureAudioContext()
           audioCtxRef.current = workletCtx
           const source = workletCtx.createMediaStreamSource(finalStream)
 
@@ -253,7 +267,7 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
         } catch {
           // AudioWorklet not supported — fall back to ScriptProcessorNode
           try {
-            const scriptCtx = audioCtxRef.current || new AudioContext({ sampleRate: 16000 })
+            const scriptCtx = audioCtxRef.current || createCaptureAudioContext()
             if (!audioCtxRef.current) audioCtxRef.current = scriptCtx
             const source = scriptCtx.createMediaStreamSource(finalStream)
             const processor = scriptCtx.createScriptProcessor(8192, 1, 1)
@@ -296,14 +310,15 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
         }
       }
 
-      // Set up MediaRecorder for saving the full audio file
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-          ? "audio/webm"
-          : "audio/wav"
+      // Set up MediaRecorder for saving the full audio file.
+      // Safari/WKWebView does not support webm — fall back to mp4, then browser default.
+      const mimeType = pickRecorderMimeType((t) =>
+        MediaRecorder.isTypeSupported(t),
+      )
 
-      const recorder = new MediaRecorder(finalStream, { mimeType })
+      const recorder = mimeType
+        ? new MediaRecorder(finalStream, { mimeType })
+        : new MediaRecorder(finalStream)
       chunksRef.current = []
       durationRef.current = 0
 
@@ -312,7 +327,8 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
       }
 
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType })
+        const blobType = mimeType || recorder.mimeType || "audio/webm"
+        const blob = new Blob(chunksRef.current, { type: blobType })
         const url = URL.createObjectURL(blob)
         setState((prev) => ({ ...prev, audioBlob: blob, audioUrl: url, isRecording: false, isPaused: false }))
         if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
@@ -337,14 +353,14 @@ export function useAudioRecorder(onAudioChunk?: (pcm: ArrayBuffer) => void) {
         error: null,
         levels: emptyLevels(),
       }))
-      return true
+      return null
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = microphoneErrorMessage(err)
       sysAudioStopRef.current?.()
       sysAudioStopRef.current = null
       stopLevelLoop()
       setState((prev) => ({ ...prev, error: msg, levels: emptyLevels() }))
-      return false
+      return msg
     }
   }, [startLevelLoop, stopLevelLoop])
 
