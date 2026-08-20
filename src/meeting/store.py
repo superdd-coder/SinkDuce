@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
+import struct
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -212,6 +214,68 @@ def save_audio(meeting_id: str, file_bytes: bytes, ext: str, original_filename: 
     update_meeting(meeting_id, audio_path=str(audio_path))
     logger.info("Saved audio: %s (%d bytes) for meeting %s", audio_path, len(file_bytes), meeting_id)
     return str(audio_path)
+
+
+RECORDING_PCM_NAME = "recording.s16le"
+RECORDING_WAV_NAME = "recording.wav"
+_PCM_RATE = 16_000
+
+
+def recording_pcm_path(meeting_id: str) -> Path:
+    return _meeting_dir(meeting_id) / RECORDING_PCM_NAME
+
+
+def append_recording_pcm(meeting_id: str, chunk: bytes) -> None:
+    """Append 16 kHz s16le PCM during live capture and fsync so a crash keeps audio."""
+    if not chunk:
+        return
+    meeting = get_meeting(meeting_id)
+    if meeting is None:
+        raise FileNotFoundError(f"Meeting {meeting_id} not found")
+    path = recording_pcm_path(meeting_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _get_lock(meeting_id):
+        with path.open("ab") as fh:
+            fh.write(chunk)
+            fh.flush()
+            os.fsync(fh.fileno())
+
+
+def _pcm_s16le_to_wav(pcm: bytes, sample_rate: int = _PCM_RATE) -> bytes:
+    n = len(pcm)
+    return b"".join(
+        (
+            b"RIFF",
+            struct.pack("<I", 36 + n),
+            b"WAVE",
+            b"fmt ",
+            struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16),
+            b"data",
+            struct.pack("<I", n),
+            pcm,
+        )
+    )
+
+
+def finalize_recording_pcm(meeting_id: str) -> str | None:
+    """Turn crash-safe PCM into a WAV and set meeting.audio_path. None if empty."""
+    meeting = get_meeting(meeting_id)
+    if meeting is None:
+        raise FileNotFoundError(f"Meeting {meeting_id} not found")
+    pcm_path = recording_pcm_path(meeting_id)
+    if not pcm_path.is_file() or pcm_path.stat().st_size < 2:
+        return None
+    pcm = pcm_path.read_bytes()
+    wav_path = _meeting_dir(meeting_id) / RECORDING_WAV_NAME
+    wav_path.write_bytes(_pcm_s16le_to_wav(pcm))
+    update_meeting(meeting_id, audio_path=str(wav_path), mode=MeetingMode.record)
+    logger.info(
+        "Finalized recording WAV: %s (%d pcm bytes) for meeting %s",
+        wav_path,
+        len(pcm),
+        meeting_id,
+    )
+    return str(wav_path)
 
 
 _IMAGE_EXTS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"})
@@ -426,6 +490,11 @@ def discard_recording(meeting_id: str) -> Meeting:
         if p.exists():
             p.unlink()
             logger.info("[DISCARD] Deleted audio %s for meeting %s", p, meeting_id)
+    for extra in (RECORDING_PCM_NAME, RECORDING_WAV_NAME):
+        p = _meeting_dir(meeting_id) / extra
+        if p.exists():
+            p.unlink()
+            logger.info("[DISCARD] Deleted %s for meeting %s", p, meeting_id)
 
     # 2. Delete transcript file
     if meeting.transcript_path:

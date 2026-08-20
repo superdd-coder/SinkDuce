@@ -324,6 +324,36 @@ class TestMeetingStore:
         with pytest.raises(FileNotFoundError):
             save_audio("nope", b"data", "wav")
 
+    def test_append_and_finalize_recording_pcm_sets_wav(self):
+        """Live PCM is fsynced during capture and becomes a WAV on finalize."""
+        from src.meeting.store import (
+            append_recording_pcm,
+            create_meeting,
+            finalize_recording_pcm,
+            get_meeting,
+        )
+
+        meeting = create_meeting("PCM persist")
+        chunk = b"\x00\x10" * 8000
+        append_recording_pcm(meeting.id, chunk)
+        append_recording_pcm(meeting.id, chunk)
+        path = finalize_recording_pcm(meeting.id)
+        assert path is not None
+        assert path.endswith("recording.wav")
+        wav = Path(path).read_bytes()
+        assert wav[:4] == b"RIFF"
+        assert wav[8:12] == b"WAVE"
+        assert len(wav) == 44 + len(chunk) * 2
+        fetched = get_meeting(meeting.id)
+        assert fetched is not None
+        assert fetched.audio_path == path
+
+    def test_finalize_recording_pcm_empty_returns_none(self):
+        from src.meeting.store import create_meeting, finalize_recording_pcm
+
+        meeting = create_meeting("No PCM")
+        assert finalize_recording_pcm(meeting.id) is None
+
     def test_save_notes_and_get_notes(self):
         """save_notes writes markdown file; get_notes reads it back."""
         from src.meeting.store import create_meeting, save_notes, get_notes
@@ -1016,6 +1046,83 @@ class TestRealtimeCallback:
 
         handler = _RealtimeCallback(MagicMock())
         handler.on_close(1000, "Normal closure")
+
+
+class TestHotWordsAdapterSupport:
+    """Local ONNX ASR must not advertise hot-words; cloud DashScope must."""
+
+    def test_onnx_file_adapter_does_not_support_hot_words(self):
+        from src.meeting.transcription.funasr_onnx_file import FunASROnnxFileTranscription
+        from src.meeting.transcription.registry import cls_supports_hot_words
+
+        assert cls_supports_hot_words(FunASROnnxFileTranscription) is False
+
+    def test_onnx_realtime_adapter_does_not_support_hot_words(self):
+        from src.meeting.transcription.funasr_onnx_realtime import FunASROnnxRealtimeTranscription
+        from src.meeting.transcription.registry import cls_supports_hot_words
+
+        assert cls_supports_hot_words(FunASROnnxRealtimeTranscription) is False
+
+    def test_dashscope_file_supports_hot_words(self):
+        from src.meeting.transcription.dashscope_file import DashScopeFileTranscription
+        from src.meeting.transcription.registry import cls_supports_hot_words
+
+        assert cls_supports_hot_words(DashScopeFileTranscription) is True
+
+    def test_active_probe_false_when_only_local_onnx(self):
+        from src.meeting.routes import _active_transcription_supports_hot_words
+
+        cfg = AppConfig(
+            transcription=TranscriptionConfig(
+                file_providers=[
+                    TranscriptionProviderConfig(
+                        id="builtin-local-file",
+                        adapter="funasr_onnx",
+                        is_active=True,
+                    )
+                ],
+                realtime_providers=[
+                    TranscriptionProviderConfig(
+                        id="builtin-local-rt",
+                        adapter="funasr_onnx_realtime",
+                        is_active=True,
+                    )
+                ],
+            )
+        )
+        with patch("src.config.get_config", return_value=cfg):
+            assert _active_transcription_supports_hot_words() is False
+
+    def test_get_active_provider_info_local_onnx_disables_hot_words(self):
+        from src.meeting.routes import get_active_provider_info
+
+        cfg = AppConfig(
+            transcription=TranscriptionConfig(
+                file_providers=[
+                    TranscriptionProviderConfig(
+                        id="builtin-local-file",
+                        adapter="funasr_onnx",
+                        model="FunAudioLLM/SenseVoiceSmall",
+                        is_active=True,
+                    )
+                ],
+                realtime_providers=[
+                    TranscriptionProviderConfig(
+                        id="builtin-local-rt",
+                        adapter="funasr_onnx_realtime",
+                        model="funasr/paraformer-zh-streaming",
+                        is_active=True,
+                    )
+                ],
+            )
+        )
+        with patch("src.config.get_config", return_value=cfg):
+            import asyncio
+            info = asyncio.get_event_loop().run_until_complete(get_active_provider_info())
+        assert info["file"]["supports_hot_words"] is False
+        assert info["realtime"]["supports_hot_words"] is False
+        assert info["file"]["adapter"] == "funasr_onnx"
+        assert info["realtime"]["adapter"] == "funasr_onnx_realtime"
 
 
 class TestRequireDashscope:

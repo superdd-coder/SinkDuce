@@ -196,15 +196,7 @@ class FunASROnnxRealtimeTranscription(RealtimeTranscriptionProvider):
         if new_text:
             self._silence_chunks = 0
             self._last_text_end_s = chunk_start_s + chunk_dur_s
-            if self._accumulated_text:
-                prev = self._accumulated_text[-1]
-                if self._is_cjk(prev) or self._is_cjk(new_text[0]):
-                    self._accumulated_text += new_text
-                else:
-                    self._accumulated_text += " " + new_text
-            else:
-                self._accumulated_text = new_text
-                self._sentence_start_s = chunk_start_s
+            self._append_preds(new_text, chunk_start_s)
             self._emit_segment(chunk_start_s + chunk_dur_s, False)
         else:
             self._silence_chunks += 1
@@ -212,11 +204,45 @@ class FunASROnnxRealtimeTranscription(RealtimeTranscriptionProvider):
                 self._silence_chunks >= _SILENCE_THRESHOLD
                 and self._accumulated_text
             ):
-                self._emit_segment(self._last_text_end_s, True)
-                self._silence_chunks = 0
+                await self._flush_sentence(self._last_text_end_s)
 
         if is_last and self._accumulated_text:
-            self._emit_segment(chunk_start_s + chunk_dur_s, True)
+            await self._flush_sentence(chunk_start_s + chunk_dur_s)
+
+    def _append_preds(self, new_text: str, chunk_start_s: float) -> None:
+        if self._accumulated_text:
+            prev = self._accumulated_text[-1]
+            if self._is_cjk(prev) or self._is_cjk(new_text[0]):
+                self._accumulated_text += new_text
+            else:
+                self._accumulated_text += " " + new_text
+        else:
+            self._accumulated_text = new_text
+            self._sentence_start_s = chunk_start_s
+
+    async def _flush_sentence(self, end_s: float) -> None:
+        """Emit a finished sentence and drop streaming look-ahead so the next
+        utterance does not start with the previous syllable.
+        """
+        extra = ""
+        param = self._param_dict
+        param["is_final"] = True
+        loop = asyncio.get_running_loop()
+
+        def _run() -> Any:
+            with self._infer_lock:
+                return self._model(np.zeros(0, dtype=np.float32), param_dict=param)
+
+        try:
+            result = await loop.run_in_executor(None, _run)
+            extra = self._extract_preds(result)
+        except Exception:
+            logger.exception("ONNX sentence flush failed")
+        if extra:
+            self._append_preds(extra, self._sentence_start_s)
+        self._emit_segment(end_s, True)
+        self._param_dict = {"cache": {}, "is_final": False}
+        self._silence_chunks = 0
 
     def _emit_segment(self, end_s: float, is_final: bool) -> None:
         if not self._accumulated_text or not self._on_segment:

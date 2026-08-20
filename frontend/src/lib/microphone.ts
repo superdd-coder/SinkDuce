@@ -42,6 +42,9 @@ export function microphoneErrorMessage(err: unknown): string {
   if (isInvalidMediaConstraint(err)) {
     return "Could not access the microphone. Allow SinkDuce in System Settings → Privacy & Security → Microphone, connect a mic, then try again."
   }
+  if (/load failed|failed to fetch/i.test(msg)) {
+    return "Could not start desktop audio capture. Quit SinkDuce with Cmd+Q, reopen, and try again."
+  }
   if (msg && !/invalid constraint/i.test(msg)) return msg
   return "Could not start recording. Allow the microphone, then try again."
 }
@@ -91,4 +94,40 @@ export function createCaptureAudioContext(): AudioContext {
   } catch {
     return new AudioContext()
   }
+}
+
+/** Encode 16-bit little-endian PCM chunks as a mono WAV (file-ASR friendly). */
+export function pcmInt16ToWav(
+  chunks: ArrayLike<number>[],
+  sampleRate: number = 16000,
+): Blob {
+  let total = 0
+  for (const c of chunks) total += c.length
+  const bytes = total * 2
+  const buffer = new ArrayBuffer(44 + bytes)
+  const view = new DataView(buffer)
+  const writeStr = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i))
+  }
+  writeStr(0, "RIFF")
+  view.setUint32(4, 36 + bytes, true)
+  writeStr(8, "WAVE")
+  writeStr(12, "fmt ")
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeStr(36, "data")
+  view.setUint32(40, bytes, true)
+  let o = 44
+  for (const c of chunks) {
+    for (let i = 0; i < c.length; i++) {
+      view.setInt16(o, c[i] ?? 0, true)
+      o += 2
+    }
+  }
+  return new Blob([buffer], { type: "audio/wav" })
 }

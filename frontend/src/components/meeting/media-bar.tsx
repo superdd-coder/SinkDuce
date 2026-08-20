@@ -43,6 +43,8 @@ interface MediaBarProps {
   hasTranscript?: boolean
   hotWordsLibraryIds?: string[]
   hotWordsLibraries?: HotWordsLibrarySummary[]
+  /** File-model adapter flag. When false the chip is visible but disabled. */
+  hotWordsSupported?: boolean
   onSelectHotWords?: (libraryIds: string[]) => void
   languageHints?: string[]
   languageHintOptions?: LanguageHintOption[]
@@ -85,6 +87,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   hasTranscript,
   hotWordsLibraryIds = [],
   hotWordsLibraries = [],
+  hotWordsSupported = true,
   onSelectHotWords,
   languageHints = [],
   languageHintOptions = [],
@@ -113,6 +116,10 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   const hwBtnRef = useRef<HTMLElement>(null)
   const [langOpen, setLangOpen] = useState(false)
   const langBtnRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (!hotWordsSupported) setHwOpen(false)
+  }, [hotWordsSupported])
 
   // Click outside closes SoftMenu (portal items are still under document)
   useEffect(() => {
@@ -653,11 +660,16 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   render={
                     <button
                       type="button"
+                      disabled={!hotWordsSupported}
                       className={cn(
                         "pm-meeting-player-chip",
-                        hotWordsLibraryIds.length > 0 && "is-active",
+                        hotWordsSupported && hotWordsLibraryIds.length > 0 && "is-active",
                       )}
-                      onClick={() => { setHwOpen(!hwOpen); setLangOpen(false) }}
+                      onClick={() => {
+                        if (!hotWordsSupported) return
+                        setHwOpen(!hwOpen)
+                        setLangOpen(false)
+                      }}
                       aria-label="Hot words"
                     >
                       <BookOpen className="size-3.5" strokeWidth={1.75} />
@@ -665,11 +677,13 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   }
                 />
                 <TooltipContent side="top">
-                  Hot Words{hwSelectedLabel ? ` · ${hwSelectedLabel}` : ""}
+                  {hotWordsSupported
+                    ? `Hot Words${hwSelectedLabel ? ` · ${hwSelectedLabel}` : ""}`
+                    : "Active transcription model does not support hot words"}
                 </TooltipContent>
               </Tooltip>
               <SoftMenu
-                open={hwOpen}
+                open={hotWordsSupported && hwOpen}
                 portal
                 anchorRef={hwBtnRef}
                 align="end"

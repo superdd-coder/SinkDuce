@@ -1,53 +1,93 @@
 import { getHealth } from "@/api/client"
 
-const PLAYER_CODE = `
-class SystemPcmPlayer extends AudioWorkletProcessor {
-  constructor() {
-    super()
-    this._queue = []
-    this._offset = 0
-    this.port.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) {
-        this._queue.push(new Float32Array(e.data))
-      }
-    }
-  }
-  process(_inputs, outputs) {
-    const out = outputs[0] && outputs[0][0]
-    if (!out) return true
-    let i = 0
-    while (i < out.length) {
-      if (this._queue.length === 0) {
-        out.fill(0, i)
-        break
-      }
-      const cur = this._queue[0]
-      const remain = cur.length - this._offset
-      const take = Math.min(remain, out.length - i)
-      out.set(cur.subarray(this._offset, this._offset + take), i)
-      i += take
-      this._offset += take
-      if (this._offset >= cur.length) {
-        this._queue.shift()
-        this._offset = 0
-      }
-    }
-    return true
-  }
-}
-registerProcessor('system-pcm-player', SystemPcmPlayer)
-`
-
 export const SCREEN_RECORDING_HELP =
   "Could not capture system audio. Quit SinkDuce with Cmd+Q, reopen, and try again. If macOS asks to record audio, click Allow."
+
+export const MICROPHONE_HELP =
+  "Allow SinkDuce in System Settings → Privacy & Security → Microphone, then quit with Cmd+Q and reopen."
 
 export interface DesktopSystemAudio {
   stream: MediaStream
   stop: () => void
 }
 
+export interface DesktopPcmHandlers {
+  /** Raw 16 kHz s16le from the native helper — do not round-trip through Web Audio. */
+  onPcm?: (pcm: ArrayBuffer) => void
+  /** 0–1 RMS for the live waveform. */
+  onLevel?: (level: number) => void
+}
+
+function isWkLoadFailed(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return /load failed|failed to fetch/i.test(msg)
+}
+
+/** Play 16 kHz PCM into a MediaStream without blob AudioWorklets (WKWebView). */
+function attachScriptPcmPlayer(ctx: AudioContext) {
+  const dest = ctx.createMediaStreamDestination()
+  const queue: Float32Array[] = []
+  let offset = 0
+  const processor = ctx.createScriptProcessor(1024, 1, 1)
+  processor.onaudioprocess = (e) => {
+    const out = e.outputBuffer.getChannelData(0)
+    let i = 0
+    while (i < out.length) {
+      if (queue.length === 0) {
+        out.fill(0, i)
+        break
+      }
+      const cur = queue[0]
+      if (!cur) break
+      const remain = cur.length - offset
+      const take = Math.min(remain, out.length - i)
+      out.set(cur.subarray(offset, offset + take), i)
+      i += take
+      offset += take
+      if (offset >= cur.length) {
+        queue.shift()
+        offset = 0
+      }
+    }
+  }
+  processor.connect(dest)
+  // Keep the graph pulling even if the destination stream has no listeners.
+  const mute = ctx.createGain()
+  mute.gain.value = 0
+  processor.connect(mute)
+  mute.connect(ctx.destination)
+  return {
+    stream: dest.stream,
+    push(samples: Float32Array) {
+      queue.push(samples)
+    },
+    disconnect() {
+      try {
+        processor.disconnect()
+      } catch {
+        /* already gone */
+      }
+    },
+  }
+}
+
+/** Prime Core Audio so the first Start Recording click is not a multi-second stall. */
+export async function warmupDesktopSystemAudio(): Promise<void> {
+  try {
+    const health = await getHealth()
+    if (health.desktop !== true) return
+    const base = (health.system_audio || "").replace(/\/$/, "")
+    if (!base) return
+    await fetch("/api/desktop/sysaudio-warmup", { method: "POST", cache: "no-store" })
+  } catch {
+    /* helper not up yet */
+  }
+}
+
 /** Capture macOS system audio from the desktop helper advertised on /health. */
-export async function startDesktopSystemAudio(): Promise<DesktopSystemAudio> {
+export async function startDesktopSystemAudio(
+  handlers?: DesktopPcmHandlers,
+): Promise<DesktopSystemAudio> {
   const health = await getHealth()
   const base = (health.system_audio || "").replace(/\/$/, "")
   if (!base) {
@@ -57,9 +97,27 @@ export async function startDesktopSystemAudio(): Promise<DesktopSystemAudio> {
   }
 
   const ac = new AbortController()
-  const res = await fetch(`${base}/pcm`, { signal: ac.signal, cache: "no-store" })
+  let res: Response
+  try {
+    // Same-origin proxy. WKWebView fetch to :18950 throws TypeError: Load failed.
+    res = await fetch("/api/desktop/pcm", { signal: ac.signal, cache: "no-store" })
+  } catch (err) {
+    if (isWkLoadFailed(err)) throw new Error(SCREEN_RECORDING_HELP)
+    throw err
+  }
   if (!res.ok) {
-    throw new Error(SCREEN_RECORDING_HELP)
+    let msg = SCREEN_RECORDING_HELP
+    try {
+      const body = (await res.json()) as { error?: string; message?: string }
+      if (body.error === "microphone_permission") {
+        msg = (body.message || "").trim() || MICROPHONE_HELP
+      } else if ((body.message || "").trim()) {
+        msg = body.message as string
+      }
+    } catch {
+      /* keep default */
+    }
+    throw new Error(msg)
   }
   if (!res.body) {
     throw new Error(SCREEN_RECORDING_HELP)
@@ -67,13 +125,7 @@ export async function startDesktopSystemAudio(): Promise<DesktopSystemAudio> {
 
   const ctx = new AudioContext({ sampleRate: 16000 })
   await ctx.resume()
-  const dest = ctx.createMediaStreamDestination()
-  const blob = new Blob([PLAYER_CODE], { type: "application/javascript" })
-  const url = URL.createObjectURL(blob)
-  await ctx.audioWorklet.addModule(url)
-  URL.revokeObjectURL(url)
-  const node = new AudioWorkletNode(ctx, "system-pcm-player")
-  node.connect(dest)
+  const player = attachScriptPcmPlayer(ctx)
 
   const reader = res.body.getReader()
   let leftover = new Uint8Array(0)
@@ -88,12 +140,20 @@ export async function startDesktopSystemAudio(): Promise<DesktopSystemAudio> {
         merged.set(value, leftover.length)
         const even = merged.length & ~1
         if (even >= 2) {
-          const view = new DataView(merged.buffer, merged.byteOffset, even)
+          const pcmCopy = new ArrayBuffer(even)
+          new Uint8Array(pcmCopy).set(merged.subarray(0, even))
+          handlers?.onPcm?.(pcmCopy)
+          const view = new DataView(pcmCopy)
           const samples = new Float32Array(even / 2)
+          let energy = 0
           for (let i = 0; i < samples.length; i++) {
-            samples[i] = view.getInt16(i * 2, true) / 32768
+            const s = view.getInt16(i * 2, true) / 32768
+            samples[i] = s
+            energy += s * s
           }
-          node.port.postMessage(samples.buffer, [samples.buffer])
+          const rms = Math.sqrt(energy / samples.length)
+          handlers?.onLevel?.(Math.min(1, rms * 4))
+          player.push(samples)
         }
         leftover = even < merged.length ? merged.slice(even) : new Uint8Array(0)
       }
@@ -109,14 +169,10 @@ export async function startDesktopSystemAudio(): Promise<DesktopSystemAudio> {
     stopped = true
     ac.abort()
     void reader.cancel().catch(() => undefined)
-    void fetch(`${base}/stop`, { method: "POST", cache: "no-store" }).catch(() => undefined)
-    try {
-      node.disconnect()
-    } catch {
-      /* already gone */
-    }
+    void fetch("/api/desktop/sysaudio-stop", { method: "POST", cache: "no-store" }).catch(() => undefined)
+    player.disconnect()
     void ctx.close()
   }
 
-  return { stream: dest.stream, stop }
+  return { stream: player.stream, stop }
 }

@@ -86,6 +86,7 @@ export interface MeetingStudioStageProps {
   realtimeEnabled: boolean
   setRealtimeEnabled: Dispatch<SetStateAction<boolean>>
   hotWordsLibraries: HotWordsLibrarySummary[]
+  activeHotWordsSupported: boolean
   handleSelectHotWordsLibraries: (ids: string[]) => void
   languageHints: string[]
   supportedLanguageHints: LanguageHintOption[]
@@ -175,6 +176,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
     realtimeEnabled,
     setRealtimeEnabled,
     hotWordsLibraries,
+    activeHotWordsSupported,
     handleSelectHotWordsLibraries,
     languageHints,
     supportedLanguageHints,
@@ -414,6 +416,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                       hasTranscript={displaySegments.length > 0}
                       hotWordsLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
                       hotWordsLibraries={hotWordsLibraries}
+                      hotWordsSupported={activeHotWordsSupported}
                       onSelectHotWords={handleSelectHotWordsLibraries}
                       languageHints={languageHints}
                       languageHintOptions={supportedLanguageHints}

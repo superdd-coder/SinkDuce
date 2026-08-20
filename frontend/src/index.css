@@ -20709,7 +20709,8 @@ button.pm-ws-path-row {
   color: var(--pm-green-deep, #0f4a2d) !important;
   background: color-mix(in srgb, var(--pm-green, #1a5e3d) 10%, #ffffff) !important;
 }
-.pm-meeting-pill:disabled {
+.pm-meeting-pill:disabled,
+.pm-meeting-pill.is-unsupported {
   opacity: 0.48 !important;
   cursor: not-allowed !important;
   box-shadow: none !important;
@@ -21958,9 +21959,13 @@ button.pm-ws-path-row {
     color 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1)),
     background 140ms var(--pm-ease, cubic-bezier(0.22, 1, 0.36, 1));
 }
-.pm-meeting-player-chip:hover {
+.pm-meeting-player-chip:hover:not(:disabled) {
   color: var(--pm-ink, #121410);
   background: color-mix(in srgb, var(--pm-ink, #121410) 6%, transparent);
+}
+.pm-meeting-player-chip:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 .pm-meeting-player-chip.is-active {
   color: var(--pm-green, #1a5e3d);

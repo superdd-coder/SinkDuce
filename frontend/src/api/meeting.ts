@@ -122,6 +122,23 @@ export const discardMeetingRecording = (id: string) =>
     method: "POST",
   })
 
+export const appendRecordingPcm = async (id: string, pcm: ArrayBuffer) => {
+  const res = await fetch(`${API_BASE}/meetings/${id}/recording-pcm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: pcm,
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`PCM persist failed (${res.status}): ${body}`)
+  }
+}
+
+export const finalizeMeetingRecording = (id: string) =>
+  request<Meeting>(`/meetings/${id}/finalize-recording`, {
+    method: "POST",
+  })
+
 export const uploadMeetingAudio = async (id: string, file: File) => {
   const formData = new FormData()
   formData.append("file", file)
