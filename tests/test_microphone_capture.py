@@ -314,6 +314,45 @@ def test_sysaudio_helper_requests_microphone_tcc():
     assert "available" in flush or "have <" in flush
 
 
+def test_sysaudio_helper_rebuilds_deaf_process_tap():
+    """macOS 26.5 Process Tap can deliver zeros while speakers still play.
+
+    Conservative recovery: rebuild tap+aggregate on a control queue, keep
+    mic/writer running, one rebuild per silence streak, give up after 2 fails.
+    """
+    swift_path = ROOT / "desktop" / "sysaudio" / "main.swift"
+    if not swift_path.is_file():
+        pytest.skip("desktop/ is local-only")
+    swift = swift_path.read_text(encoding="utf-8")
+
+    assert "sinkduce.sysaudio.control" in swift
+    assert 'reason: "watchdog"' in swift
+    assert 'reason: "output-uid"' in swift
+    assert "tap rebuild reason=" in swift
+    assert "giving up" in swift
+    assert "tap rebuild" in swift
+    assert "25" in swift
+    assert "0.01" in swift
+    assert "0.005" in swift
+    assert "tap=" in swift
+    assert "t=" in swift
+    assert "kAudioHardwarePropertyDefaultOutputDevice" in swift
+    assert "AudioObjectAddPropertyListenerBlock" in swift
+    # Device-list / sample-rate listeners are too noisy to trigger rebuild.
+    assert "kAudioHardwarePropertyDevices" not in swift
+    assert "rebuildTap" in swift or "func rebuildTap" in swift
+
+    rebuild = swift.split("func rebuildTap", 1)[1].split("\n    private func ", 1)[0]
+    assert "mic.stop" not in rebuild
+    assert "stopWriter" not in rebuild
+    assert "destroyAggregate" in rebuild
+    assert "destroyTap" in rebuild
+    assert "startTap" in rebuild
+    # Full HAL teardown, not IOProc-only restart.
+    assert rebuild.find("destroyAggregate") < rebuild.find("startTap")
+    assert rebuild.find("destroyTap") < rebuild.find("startTap")
+
+
 def test_meeting_view_toasts_start_recording_error():
     """React state is stale right after await startRecording(); toast must use the return value."""
     src = MEETING_VIEW.read_text(encoding="utf-8")
