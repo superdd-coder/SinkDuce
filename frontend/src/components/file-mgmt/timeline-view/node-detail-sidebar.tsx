@@ -18,6 +18,9 @@ import {
   Video,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
+import { formatApiError } from "@/api/http"
 import { cn } from "@/lib/utils"
 import type {
   FileSummary,
@@ -111,6 +114,7 @@ export function NodeDetailSidebar({
   onNodeUpdated,
   groups,
 }: NodeDetailSidebarProps) {
+  const t = useT()
   const [detail, setDetail] = useState<NodeDetail | null>(null)
   /** Only true for cold open (no shell yet) — never flash cards on refresh. */
   const [loading, setLoading] = useState(false)
@@ -396,7 +400,7 @@ export function NodeDetailSidebar({
         if (/not found/i.test(msg)) {
           return null
         }
-        toast.error(`Failed to load node: ${msg}`)
+        toast.error(t("fileMgmt.failedLoadNode", { error: msg }))
         return null
       }
     },
@@ -617,7 +621,7 @@ export function NodeDetailSidebar({
       /* Re-open edit so the user can retry */
       editingTitleRef.current = true
       setEditingTitle(true)
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
     }
   }, [collectionId, fetchDetail, onNodeUpdated])
 
@@ -658,7 +662,7 @@ export function NodeDetailSidebar({
       void fetchDetail({ silent: true })
       onNodeUpdated()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -675,9 +679,9 @@ export function NodeDetailSidebar({
       setEventTime(value)
       void fetchDetail({ silent: true })
       onNodeUpdated()
-      toast.success("Event time updated")
+      toast.success(t("fileMgmt.eventTimeUpdated"))
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
       setEventTime(toDateInputValue(detail.event_time))
     }
   }
@@ -688,9 +692,9 @@ export function NodeDetailSidebar({
       await deleteNode(collectionId, detail.node_id)
       onClose()
       onNodeUpdated()
-      toast.success("Node deleted")
+      toast.success(t("fileMgmt.nodeDeleted"))
     } catch (err) {
-      toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.deleteFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -718,10 +722,10 @@ export function NodeDetailSidebar({
       await detachFileFromNode(collectionId, detail.node_id, fileId)
       void fetchDetail({ silent: true })
       onNodeUpdated()
-      toast.success("File detached")
+      toast.success(t("fileMgmt.fileDetached"))
     } catch (err) {
       setDetail(prev)
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -746,9 +750,9 @@ export function NodeDetailSidebar({
           author_type: "user",
         })
         await refreshMessages()
-        toast.success("Message added")
+        toast.success(t("fileMgmt.messageAdded"))
       } catch (err) {
-        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+        toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
       }
     },
     [collectionId, detail, refreshMessages]
@@ -764,9 +768,9 @@ export function NodeDetailSidebar({
         })
         setEditingMsg(null)
         await refreshMessages()
-        toast.success("Message updated")
+        toast.success(t("fileMgmt.messageUpdated"))
       } catch (err) {
-        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+        toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
       }
     },
     [collectionId, editingMsg, refreshMessages]
@@ -854,11 +858,11 @@ export function NodeDetailSidebar({
         {loading && !detail ? (
           <section className="pm-ws-side-card flex-1 flex items-center justify-center gap-2 py-10">
             <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
-            <span className="pm-meta">Loading…</span>
+            <span className="pm-meta">{t("common.loading")}</span>
           </section>
         ) : !detail ? (
           <section className="pm-ws-side-card flex-1 flex items-center justify-center px-5 py-10">
-            <p className="pm-meta">Node not found</p>
+            <p className="pm-meta">{t("fileMgmt.nodeNotFound")}</p>
           </section>
         ) : (
           <div ref={accStackRef} className="pm-timeline-acc-stack">
@@ -874,14 +878,14 @@ export function NodeDetailSidebar({
             >
               {/* Title bar is chrome only — does not expand/collapse the card */}
               <div className="pm-ws-side-h">
-                <span className="pm-timeline-panel-title">Node</span>
+                <span className="pm-timeline-panel-title">{t("fileMgmt.node")}</span>
                 <div className="ml-auto flex items-center gap-0.5 shrink-0">
                   {!hideCloseButton && (
                     <button
                       type="button"
                       className="p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] transition-colors rounded-[var(--pm-r-sm)]"
                       onClick={onClose}
-                      title="Close"
+                      title={t("common.close")}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -895,8 +899,8 @@ export function NodeDetailSidebar({
                         e.stopPropagation()
                         goToLinkedMeeting()
                       }}
-                      title="Open meeting"
-                      aria-label="Open linked meeting"
+                      title={t("fileMgmt.openMeeting")}
+                      aria-label={t("fileMgmt.openLinkedMeeting")}
                     >
                       <Video
                         className="h-3.5 w-3.5"
@@ -936,7 +940,7 @@ export function NodeDetailSidebar({
                         aria-hidden
                       />
                     ) : (
-                      <span className="pm-msg-delete-label is-solo">DELETE</span>
+                      <span className="pm-msg-delete-label is-solo">{t("common.delete")}</span>
                     )}
                   </button>
                 </div>
@@ -954,7 +958,7 @@ export function NodeDetailSidebar({
                           value={editTitle}
                           rows={1}
                           spellCheck={false}
-                          aria-label="Node title"
+                          aria-label={t("common.title")}
                           onChange={(e) => {
                             setEditTitle(e.target.value)
                             /* Resize after React paints next value */
@@ -976,7 +980,7 @@ export function NodeDetailSidebar({
                         <p
                           className="pm-node-id-title flex-1 min-w-0 cursor-text"
                           onDoubleClick={startTitleEdit}
-                          title="Double-click to edit"
+                          title={t("fileMgmt.doubleClickEdit")}
                         >
                           {(detail.title || "").trim() || "Untitled"}
                         </p>
@@ -986,7 +990,7 @@ export function NodeDetailSidebar({
                           type="button"
                           className="opacity-0 group-hover/title:opacity-100 transition-opacity text-[var(--pm-faint)] hover:text-[var(--pm-ink)] shrink-0 mt-1"
                           onClick={startTitleEdit}
-                          title="Edit title"
+                          title={t("meeting.editTitle")}
                         >
                           <Edit3 className="h-3 w-3" />
                         </button>
@@ -1008,12 +1012,12 @@ export function NodeDetailSidebar({
                       className="w-full min-w-0"
                       value={detail.group_id ?? ""}
                       onChange={(v) => void handleSelectGroup(v)}
-                      placeholder="No group"
+                      placeholder={t("fileMgmt.noGroup")}
                       options={[
-                        { value: "", label: "No Group" },
+                        { value: "", label: t("fileMgmt.noGroup") },
                         ...groups.map((g) => ({
                           value: g.group_id,
-                          label: g.name,
+                          label: systemFolderDisplayName(g.name, t),
                         })),
                       ]}
                     />
@@ -1091,7 +1095,7 @@ export function NodeDetailSidebar({
                         setEventTime(v)
                         void handleSaveEventTime(v)
                       }}
-                      placeholder="Set date"
+                      placeholder={t("fileMgmt.setDate")}
                       allowClear
                     />
                   </div>
@@ -1121,12 +1125,12 @@ export function NodeDetailSidebar({
                   }
                 }}
               >
-                <span className="pm-timeline-panel-title">Messages</span>
+                <span className="pm-timeline-panel-title">{t("common.messages")}</span>
                 <span className="pm-count-pill">{filteredMessages.length}</span>
                 <button
                   type="button"
                   className="pm-timeline-scope-add ml-auto"
-                  title="Add node message"
+                  title={t("fileMgmt.addNodeMessage")}
                   onClick={(e) => {
                     e.stopPropagation()
                     expandMessages()
@@ -1155,7 +1159,7 @@ export function NodeDetailSidebar({
                         )}
                         onClick={() => setMsgTab(tab)}
                       >
-                        {tab}
+                        {tab === "all" ? t("common.all") : t("fileMgmt.node")}
                       </button>
                     ))}
                   </div>
@@ -1163,7 +1167,7 @@ export function NodeDetailSidebar({
                   {filteredMessages.length === 0 ? (
                     <div className="pm-ws-side-pad pt-0">
                       <p className="pm-meta">
-                        No messages yet. Click + to add one.
+                        {t("fileMgmt.noMessagesClick")}
                       </p>
                     </div>
                   ) : (
@@ -1227,20 +1231,20 @@ export function NodeDetailSidebar({
         onOpenChange={handleCloseMsgDialog}
         title={
           msgDialogReadonly
-            ? "Message"
+            ? t("common.message")
             : editingMsg
-              ? "Edit message"
-              : "Add message"
+              ? t("fileMgmt.editMessage")
+              : t("fileMgmt.addMessage")
         }
         kicker={
           msgDialogReadonly || editingMsg
             ? undefined
-            : "Node"
+            : t("fileMgmt.node")
         }
         description={
           msgDialogReadonly || editingMsg
             ? undefined
-            : "New message on this timeline node."
+            : t("fileMgmt.newMessageOnThisNode")
         }
         initialContent={editingMsg?.body || ""}
         onSave={

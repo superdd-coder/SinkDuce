@@ -11,6 +11,8 @@ import {
 } from "lucide-react"
 import type { Node as NodeType, NodeGroup } from "@/types/file-mgmt"
 import { GroupIconView, groupFromList, type GroupIconSource } from "./group-icons"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
 
 const TIP_OPEN_MS = 450
 const TIP_CLOSE_MS = 120
@@ -52,13 +54,16 @@ export function NodeCard({
   showDragGrip = false,
   isDragging = false,
 }: NodeCardProps) {
+  const t = useT()
   const isMeetingAnchor = !!(node.external_ref || "").startsWith("meeting:")
   const source: GroupIconSource =
-    groupSource ?? (groupName ? { name: groupName } : { name: "未分类" })
-  const groupLabel =
+    groupSource ?? (groupName ? { name: groupName } : { name: t("common.uncategorized") })
+  const groupLabel = systemFolderDisplayName(
     (source?.name && String(source.name).trim()) ||
-    (groupName && groupName.trim()) ||
-    "Uncategorized"
+      (groupName && groupName.trim()) ||
+      t("common.uncategorized"),
+    t,
+  )
   const groupDescription =
     groupSource &&
     typeof groupSource === "object" &&
@@ -213,7 +218,7 @@ export function NodeCard({
               e.stopPropagation()
               onCreateMeetingTodos()
             }}
-            title="Create todos from meeting summary"
+            title={t("fileMgmt.createTodosSummary")}
           >
             <ListTodo className="h-3.5 w-3.5" />
           </button>
@@ -227,7 +232,7 @@ export function NodeCard({
               e.stopPropagation()
               onCreateChain()
             }}
-            title="Start branch chain from here"
+            title={t("fileMgmt.startBranch")}
           >
             <GitBranchPlus className="h-3.5 w-3.5" />
           </button>
@@ -241,7 +246,7 @@ export function NodeCard({
               e.stopPropagation()
               onMergeBranch()
             }}
-            title="Merge branch back to main"
+            title={t("fileMgmt.mergeBranch")}
           >
             <GitMerge className="h-3.5 w-3.5" />
           </button>

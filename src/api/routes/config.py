@@ -11,6 +11,8 @@ import uuid
 
 from fastapi import APIRouter, Body, HTTPException
 
+from src.api.errors import ApiError
+
 from src.api.schemas import ConfigUpdateRequest
 from src.config import get_config, save_config, reload_config, LLMProviderConfig, EmbeddingProviderConfig, RerankProviderConfig, TranscriptionProviderConfig
 from src.services import async_refresh_llm_runtime, async_reload_services
@@ -322,6 +324,22 @@ def _slot_ref_valid(ref: str | None, providers: list, kind: str) -> bool:
 async def update_config(req: ConfigUpdateRequest):
     reload_config()
     config = get_config()
+
+    if req.section == "locale":
+        value = req.data.get("locale")
+        if value not in ("en", "zh-CN"):
+            raise ApiError(
+                400,
+                "invalid_locale",
+                f"Invalid locale: {value!r}",
+                params={"locale": value},
+            )
+        config.locale = value
+        save_config(config)
+        reload_config()
+        from src.services import services
+        services.config = get_config()
+        return {"message": "Config 'locale' updated"}
 
     # Handle top-level AppConfig fields
     if req.section in _TOP_LEVEL_FIELDS:

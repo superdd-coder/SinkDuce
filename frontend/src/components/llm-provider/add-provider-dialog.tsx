@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import { createLLMProvider, updateLLMProvider, getAvailableModels, updateConfig, type LLMProvider } from "@/api/client"
 import { useProviderTypes } from "@/hooks/use-provider-types"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
 
 interface AddProviderDialogProps {
   open: boolean
@@ -39,6 +40,7 @@ const defaultForm = {
 }
 
 export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: AddProviderDialogProps) {
+  const t = useT()
   const [form, setForm] = useState(defaultForm)
   const [showApiKey, setShowApiKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -73,7 +75,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
 
   const fetchModels = useCallback(async () => {
     if (!form.base_url.trim()) {
-      toast.error("Enter a base URL first")
+      toast.error(t("settings.enterBaseUrlFirst"))
       return
     }
     setFetchingModels(true)
@@ -87,17 +89,17 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
       } else {
         setAvailableModels(res.models || [])
         if (res.models?.length) {
-          toast.success(`Found ${res.models.length} models`)
+          toast.success(t("settings.foundModels", { n: res.models.length }))
         } else {
-          toast.info("No models returned")
+          toast.info(t("settings.noModelsReturned"))
         }
       }
     } catch (err) {
-      toast.error(`Failed to fetch models: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("settings.failedFetchModels", { error: err instanceof Error ? err.message : String(err) }))
     } finally {
       setFetchingModels(false)
     }
-  }, [form.base_url, form.api_key])
+  }, [form.base_url, form.api_key, t])
 
   const toggleModelSelection = (model: string) => {
     setForm((prev) => {
@@ -136,7 +138,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
 
   const handleSave = async () => {
     if (!form.name.trim()) {
-      toast.error("Name is required")
+      toast.error(t("common.nameRequired"))
       return
     }
     setSaving(true)
@@ -156,11 +158,11 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
       let savedId = provider?.id || ""
       if (provider) {
         await updateLLMProvider(provider.id, data)
-        toast.success("Provider updated")
+        toast.success(t("settings.providerUpdated"))
       } else {
         const created = await createLLMProvider(data)
         savedId = created?.id || ""
-        toast.success("Provider created")
+        toast.success(t("settings.providerCreated"))
       }
       if (form.is_default && form.function_call_model_ids.length > 0) {
         const chatModel = form.default_model || form.function_call_model_ids[0]
@@ -170,7 +172,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
       }
       onSaved()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: err instanceof Error ? err.message : String(err) }))
     } finally {
       setSaving(false)
     }
@@ -211,7 +213,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                 setDefaultModel(model)
               }}
             >
-              {form.default_model === model ? "Default" : "Set"}
+              {form.default_model === model ? t("common.default") : t("common.set")}
             </button>
             <button
               type="button"
@@ -220,7 +222,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                 e.stopPropagation()
                 toggleFunctionCallModel(model)
               }}
-              title={isFc ? "Function calling enabled" : "Enable function calling"}
+              title={isFc ? t("settings.fcEnabled") : t("settings.enableFc")}
             >
               <Wrench className="h-3 w-3" />
             </button>
@@ -231,7 +233,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                 e.stopPropagation()
                 toggleVisualModel(model)
               }}
-              title={isVisual ? "Visual enabled" : "Enable for visual"}
+              title={isVisual ? t("settings.visualEnabled") : t("settings.enableVisual")}
             >
               <Eye className="h-3 w-3" />
             </button>
@@ -252,10 +254,10 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
         overlayClassName="pm-dialog-overlay--silk"
       >
         <DialogHeader>
-          <DialogKicker>LLM</DialogKicker>
-          <DialogTitle>{provider ? "Edit provider" : "Add provider"}</DialogTitle>
+          <DialogKicker>{t("settings.llmKicker")}</DialogKicker>
+          <DialogTitle>{provider ? t("settings.editProvider") : t("settings.addProvider")}</DialogTitle>
           <DialogDescription>
-            Connect an OpenAI-compatible endpoint and pick models for chat, tools, and vision.
+            {t("settings.addLlmDesc")}
           </DialogDescription>
         </DialogHeader>
 
@@ -264,19 +266,19 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
             {/* Connection */}
             <section className="pm-settings-dlg-card">
               <header className="pm-settings-row-between">
-                <span className="pm-settings-dlg-card-kicker">Connection</span>
+                <span className="pm-settings-dlg-card-kicker">{t("settings.connection")}</span>
               </header>
               <div className="pm-settings-dlg-fields">
                 <div className="pm-settings-dlg-field">
-                  <FieldLabel>Name</FieldLabel>
+                  <FieldLabel>{t("common.name")}</FieldLabel>
                   <Input
                     value={form.name}
                     onChange={(e) => set("name", e.target.value)}
-                    placeholder="My LLM"
+                    placeholder={t("settings.myLlm")}
                   />
                 </div>
                 <div className="pm-settings-dlg-field">
-                  <FieldLabel>Provider type</FieldLabel>
+                  <FieldLabel>{t("settings.providerType")}</FieldLabel>
                   <DropdownSelect
                     value={form.provider}
                     onChange={(v) => set("provider", v)}
@@ -284,7 +286,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                   />
                 </div>
                 <div className="pm-settings-dlg-field">
-                  <FieldLabel>Base URL</FieldLabel>
+                  <FieldLabel>{t("settings.baseUrl")}</FieldLabel>
                   <Input
                     value={form.base_url}
                     onChange={(e) => set("base_url", e.target.value)}
@@ -292,7 +294,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                   />
                 </div>
                 <div className="pm-settings-dlg-field">
-                  <FieldLabel>API key</FieldLabel>
+                  <FieldLabel>{t("settings.apiKey")}</FieldLabel>
                   <div className="pm-settings-dlg-secret">
                     <Input
                       type={showApiKey ? "text" : "password"}
@@ -305,7 +307,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                       size="icon-sm"
                       className="pm-settings-dlg-secret-btn"
                       onClick={() => setShowApiKey(!showApiKey)}
-                      title={showApiKey ? "Hide key" : "Show key"}
+                      title={showApiKey ? t("common.hide") : t("common.show")}
                     >
                       {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
@@ -313,7 +315,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                 </div>
               </div>
               <div className="pm-settings-dlg-pref">
-                <p className="pm-settings-dlg-pref-label">Prefer this provider for new chats</p>
+                <p className="pm-settings-dlg-pref-label">{t("settings.preferNewChats")}</p>
                 <button
                   type="button"
                   className={cn("pm-field-chip", form.is_default && "is-on")}
@@ -321,7 +323,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                   onClick={() => set("is_default", !form.is_default)}
                 >
                   <Star className="h-3 w-3" strokeWidth={1.75} />
-                  {form.is_default ? "Default" : "Set as default"}
+                  {form.is_default ? t("common.default") : t("settings.setAsDefault")}
                 </button>
               </div>
             </section>
@@ -330,9 +332,9 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
             <section className="pm-settings-dlg-card">
               <header className="pm-settings-row-between">
                 <div className="min-w-0">
-                  <span className="pm-settings-dlg-card-kicker">Models</span>
+                  <span className="pm-settings-dlg-card-kicker">{t("settings.models")}</span>
                   <p className="pm-settings-dlg-card-hint mt-1">
-                    Select models, mark default · tools · vision.
+                    {t("settings.modelsHint")}
                   </p>
                 </div>
                 <Button
@@ -346,7 +348,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
                   ) : (
                     <RefreshCw className="h-3 w-3" />
                   )}
-                  Fetch
+                  {t("common.fetch")}
                 </Button>
               </header>
 
@@ -357,7 +359,7 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
               ) : (
                 !fetchingModels && (
                   <p className="pm-settings-dlg-card-hint">
-                    Enter a base URL and fetch models, or select them after creation.
+                    {t("settings.fetchModelsHint")}
                   </p>
                 )
               )}
@@ -367,10 +369,10 @@ export function AddProviderDialog({ open, provider, onOpenChange, onSaved }: Add
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button variant="default" onClick={handleSave} disabled={saving}>
-            {saving ? "Saving…" : provider ? "Update" : "Create"}
+            {saving ? t("common.saving") : provider ? t("common.update") : t("common.create")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -11,6 +11,7 @@ import {
 } from "@/api/client"
 import { toast } from "sonner"
 import { HotWordsManager } from "@/components/llm-provider/hot-words-manager"
+import { useT } from "@/i18n/use-t"
 
 interface Props {
   meetingId: string
@@ -24,11 +25,16 @@ interface Props {
   onRetranscribe?: () => void
   disabled?: boolean
   compact?: boolean
+  /** Player toolbar: icon chip that still opens the same Dialog as setup. */
+  variant?: "pill" | "chip"
 }
 
-export function hotWordsSelectionLabel(ids: string[]): string {
-  if (ids.length === 0) return "Hot Words"
-  return `Hot Words · ${ids.length}`
+export function hotWordsSelectionLabel(
+  ids: string[],
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (ids.length === 0) return t("meeting.hotWords")
+  return t("meeting.hotWordsCount", { n: ids.length })
 }
 
 export function HotWordsSelector({
@@ -41,7 +47,9 @@ export function HotWordsSelector({
   onDraftChange,
   disabled = false,
   compact = false,
+  variant = "pill",
 }: Props) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [libraries, setLibraries] = useState<HotWordsLibrarySummary[]>([])
   const [draftIds, setDraftIds] = useState<string[] | undefined>(undefined)
@@ -128,14 +136,14 @@ export function HotWordsSelector({
       draftIds.some((id) => !serverIds.includes(id)))
   const hasSelection = providerSupportsHotWords && activeIds.length > 0
   const displayName = !providerSupportsHotWords
-    ? "Hot Words · unavailable"
-    : hotWordsSelectionLabel(activeIds)
+    ? t("meeting.hotWordsUnavailable")
+    : hotWordsSelectionLabel(activeIds, t)
 
   const persistOrDraft = (next: string[]) => {
     if (!providerSupportsHotWords) {
       if (next.length > 0) {
         toast.warning(
-          "Current transcription model does not support hot words.",
+          t("meeting.modelNoHotWords"),
           { duration: 5000 },
         )
       }
@@ -157,41 +165,65 @@ export function HotWordsSelector({
 
   const isDisabled = disabled || !providerSupportsHotWords
 
+  const title =
+    !providerSupportsHotWords
+      ? t("settings.hotWordsUnavailableTitle")
+      : disabled
+        ? t("meeting.unavailableWhileTx")
+        : t("meeting.chooseHotWordLibs")
+
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={isDisabled}
-        title={
-          !providerSupportsHotWords
-            ? "Active transcription model does not support hot words"
-            : disabled
-              ? "Unavailable while transcribing"
-              : "Choose hot words libraries"
-        }
-        className={cn(
-          "pm-meeting-pill",
-          compact && "is-compact",
-          hasSelection && providerSupportsHotWords && "is-active",
-          !providerSupportsHotWords && "is-unsupported",
-        )}
-        onClick={() => {
-          if (isDisabled) return
-          setOpen(true)
-        }}
-      >
-        <BookOpen className="size-3.5 shrink-0 opacity-80" />
-        <span className="pm-meeting-pill-label">
-          {displayName}
-        </span>
-        {isPending && providerSupportsHotWords && (
-          <span className="text-[10px] text-amber-700 px-1.5 py-0.5 rounded-full bg-amber-50">
-            draft
+      {variant === "chip" ? (
+        <button
+          type="button"
+          disabled={isDisabled}
+          title={
+            isPending && providerSupportsHotWords
+              ? `${title} · ${t("meeting.hotWordsDraft")}`
+              : title
+          }
+          className={cn(
+            "pm-meeting-player-chip",
+            ((hasSelection && providerSupportsHotWords) || isPending) && "is-active",
+          )}
+          aria-label={t("meeting.hotWords")}
+          onClick={() => {
+            if (isDisabled) return
+            setOpen(true)
+          }}
+        >
+          <BookOpen className="size-3.5" strokeWidth={1.75} />
+        </button>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={isDisabled}
+          title={title}
+          className={cn(
+            "pm-meeting-pill",
+            compact && "is-compact",
+            hasSelection && providerSupportsHotWords && "is-active",
+            !providerSupportsHotWords && "is-unsupported",
+          )}
+          onClick={() => {
+            if (isDisabled) return
+            setOpen(true)
+          }}
+        >
+          <BookOpen className="size-3.5 shrink-0 opacity-80" />
+          <span className="pm-meeting-pill-label">
+            {displayName}
           </span>
-        )}
-      </Button>
+          {isPending && providerSupportsHotWords && (
+            <span className="text-[10px] text-amber-700 px-1.5 py-0.5 rounded-full bg-amber-50">
+              {t("meeting.hotWordsDraft")}
+            </span>
+          )}
+        </Button>
+      )}
 
       <HotWordsManager
         nested
@@ -207,16 +239,15 @@ export function HotWordsSelector({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <BookOpen className="h-4 w-4 text-[var(--pm-green)]" />
-              Hot Words
+              {t("meeting.hotWords")}
             </DialogTitle>
           </DialogHeader>
           <p className="pm-meta -mt-1">
-            Pick one or more libraries. They are concatenated for transcription.
-            Pinned ones start on for new meetings; tap again to turn one off for this meeting.
+            {t("meeting.hotWordsHelp")}
             {hasTranscript && (
               <>
                 {" "}
-                Changes apply on the next re-transcribe.
+                {t("meeting.hotWordsApplyNext")}
               </>
             )}
           </p>
@@ -225,12 +256,12 @@ export function HotWordsSelector({
             <div className="pm-hw-warn" role="status">
               <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
               <span>
-                Active model does not support hot words — selection will not be applied.
+                {t("meeting.activeModelNoHotWords")}
               </span>
             </div>
           )}
 
-          <div className="pm-hw-list" role="listbox" aria-multiselectable="true" aria-label="Hot word libraries">
+          <div className="pm-hw-list" role="listbox" aria-multiselectable="true" aria-label={t("meeting.hotWordLibraries")}>
             <button
               type="button"
               role="option"
@@ -242,8 +273,8 @@ export function HotWordsSelector({
                 <Ban className="size-3.5" />
               </span>
               <span className="pm-hw-option-body">
-                <span className="pm-hw-option-name">None</span>
-                <span className="pm-hw-option-meta">No vocabulary boost</span>
+                <span className="pm-hw-option-name">{t("common.none")}</span>
+                <span className="pm-hw-option-meta">{t("meeting.noVocabBoost")}</span>
               </span>
             </button>
 
@@ -265,14 +296,16 @@ export function HotWordsSelector({
                     <span className="pm-hw-option-name">
                       {lib.name}
                       {lib.is_system && (
-                        <span className="pm-settings-hw-default-pill ml-1.5">System</span>
+                        <span className="pm-settings-hw-default-pill ml-1.5">{t("common.system")}</span>
                       )}
                       {lib.is_pinned && (
                         <Pin className="inline-block size-3 ml-1 opacity-50" />
                       )}
                     </span>
                     <span className="pm-hw-option-meta">
-                      {lib.word_count} word{lib.word_count === 1 ? "" : "s"}
+                      {lib.word_count === 1
+                        ? t("meeting.nWord", { n: lib.word_count })
+                        : t("meeting.nWords", { n: lib.word_count })}
                     </span>
                   </span>
                 </button>
@@ -281,7 +314,7 @@ export function HotWordsSelector({
 
             {libraries.length === 0 && (
               <p className="pm-hw-empty">
-                No libraries yet. Create one below or in Settings.
+                {t("meeting.noLibrariesYet")}
               </p>
             )}
           </div>
@@ -293,14 +326,14 @@ export function HotWordsSelector({
               onClick={() => setManagerOpen(true)}
             >
               <Settings2 className="size-3.5 opacity-80" />
-              Manage libraries
+              {t("meeting.manageLibraries")}
             </button>
             <button
               type="button"
               className="pm-hw-manage-btn"
               onClick={() => closeAfterSelect()}
             >
-              Done
+              {t("common.done")}
             </button>
           </div>
         </DialogContent>

@@ -25,6 +25,8 @@ import {
 } from "@/api/client"
 import { useAppStore } from "@/stores/app-store"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface CollectionConfigProps {
   collection: string
@@ -40,6 +42,7 @@ function ConfigLabel({
   tooltip?: string
   htmlFor?: string
 }) {
+  const t = useT()
   return (
     <div className="pm-config-label-row">
       <FieldLabel htmlFor={htmlFor} className="pm-config-field-label">
@@ -50,7 +53,7 @@ function ConfigLabel({
           <TooltipTrigger
             type="button"
             className="pm-config-info"
-            aria-label="More info"
+            aria-label={t("library.moreInfo")}
           >
             <Info className="h-3 w-3" strokeWidth={1.75} />
           </TooltipTrigger>
@@ -90,6 +93,7 @@ function ConfigSwitch({
 }
 
 export function CollectionConfig({ collection }: CollectionConfigProps) {
+  const t = useT()
   const { providers } = useAppStore()
   const [chunkMode, setChunkMode] = useState("normal")
   const [chunkSize, setChunkSize] = useState("")
@@ -297,7 +301,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           if (gen !== saveGenRef.current) return
           setSaveStatus("error")
           toast.error(
-            `Failed: ${err instanceof Error ? err.message : String(err)}`
+            t("common.failedWithError", { error: formatApiError(err, t) })
           )
         })
     }, 480)
@@ -339,7 +343,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
       if (res.error) {
         toast.error(res.error)
       } else {
-        toast.success(res.message || "Sparse recalculation triggered")
+        toast.success(res.message || t("library.sparseRecalcTriggered"))
         window.setTimeout(async () => {
           try {
             const cfg = (await getCollectionConfig(collection)) as Record<
@@ -354,7 +358,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         }, 2000)
       }
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     } finally {
       setRecalcRunning(false)
     }
@@ -367,7 +371,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
     <div className="pm-collection-config">
       <header className="pm-config-head">
         <div className="pm-config-head-row">
-          <h2 className="pm-config-title">Collection Settings</h2>
+          <h2 className="pm-config-title">{t("library.collectionSettings")}</h2>
           <span
             className={cn(
               "pm-meta pm-config-save-status",
@@ -379,16 +383,16 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
             aria-live="polite"
           >
             {saveStatus === "pending" || saveStatus === "saving"
-              ? "Saving…"
+              ? t("library.saving")
               : saveStatus === "saved"
-                ? "Saved"
+                ? t("library.saved")
                 : saveStatus === "error"
-                  ? "Save failed"
-                  : "Autosave on"}
+                  ? t("library.saveFailed")
+                  : t("library.autosaveOn")}
           </span>
         </div>
         <p className="pm-meta text-[var(--pm-faint)]">
-          Collection processing · embedding · enrichment
+          {t("library.processingHint")}
         </p>
       </header>
 
@@ -396,13 +400,13 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         {/* ── Dimensions & Mode ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Dimensions & Mode</span>
-            <span className="pm-meta text-[var(--pm-faint)]">Locked at create</span>
+            <span className="pm-config-card-kicker">{t("library.dimensionsMode")}</span>
+            <span className="pm-meta text-[var(--pm-faint)]">{t("library.lockedAtCreate")}</span>
           </header>
           <div className="pm-config-grid">
             <div className="pm-config-field">
-              <ConfigLabel tooltip="Vector dimensions for embeddings. Locked at creation time.">
-                Dimensions
+              <ConfigLabel tooltip={t("library.dimsTooltip")}>
+                {t("library.dimensions")}
               </ConfigLabel>
               <div className="pm-config-locked">
                 <Input
@@ -418,13 +422,15 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
               </div>
             </div>
             <div className="pm-config-field">
-              <ConfigLabel tooltip="Locked at creation time.">
-                Chunk Mode
+              <ConfigLabel tooltip={t("library.lockedTooltip")}>
+                {t("library.chunkMode")}
               </ConfigLabel>
               <div className="pm-config-locked">
                 <Input
                   value={
-                    chunkMode === "parent_child" ? "Parent-Child" : "Normal"
+                    chunkMode === "parent_child"
+                      ? t("library.chunkModeParentChild")
+                      : t("library.chunkModeNormal")
                   }
                   disabled
                   className="pm-config-input"
@@ -442,12 +448,12 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         {/* ── Chunking ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Chunking</span>
+            <span className="pm-config-card-kicker">{t("library.chunking")}</span>
           </header>
           <div className="pm-config-grid">
             <div className="pm-config-field">
-              <ConfigLabel tooltip="One extra block may push the chunk past chunk size, up to 150% (512 → 768). After that overflow the chunk is sealed even if more would still fit under 768.">
-                Buffer Ratio
+              <ConfigLabel tooltip={t("library.bufferRatioTooltip")}>
+                {t("library.bufferRatio")}
               </ConfigLabel>
               <Input
                 value={bufferRatio}
@@ -458,17 +464,17 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
             </div>
             {chunkMode === "parent_child" && (
               <div className="pm-config-field">
-                <ConfigLabel tooltip="How parent chunks are created.">
-                  Parent Strategy
+                <ConfigLabel tooltip={t("library.parentStrategyTooltip")}>
+                  {t("library.parentStrategy")}
                 </ConfigLabel>
                 <DropdownSelect
                   size="sm"
                   value={parentStrategy}
                   onChange={setParentStrategy}
                   options={[
-                    { value: "paragraph", label: "Paragraph" },
-                    { value: "fixed_token", label: "Fixed Token" },
-                    { value: "heading", label: "Heading" },
+                    { value: "paragraph", label: t("library.strategyParagraph") },
+                    { value: "fixed_token", label: t("library.strategyFixedToken") },
+                    { value: "heading", label: t("library.strategyHeading") },
                   ]}
                 />
               </div>
@@ -477,7 +483,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           {chunkMode === "normal" ? (
             <div className="pm-config-grid">
               <div className="pm-config-field">
-                <ConfigLabel tooltip="Tokens per chunk.">Chunk Size</ConfigLabel>
+                <ConfigLabel tooltip={t("library.chunkSizeTooltip")}>{t("library.chunkSize")}</ConfigLabel>
                 <Input
                   value={chunkSize}
                   onChange={(e) => setChunkSize(e.target.value)}
@@ -486,8 +492,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
                 />
               </div>
               <div className="pm-config-field">
-                <ConfigLabel tooltip="Overlapping tokens between adjacent chunks.">
-                  Chunk Overlap
+                <ConfigLabel tooltip={t("library.chunkOverlapTooltip")}>
+                  {t("library.chunkOverlap")}
                 </ConfigLabel>
                 <Input
                   value={chunkOverlap}
@@ -501,8 +507,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
             <>
               <div className="pm-config-grid">
                 <div className="pm-config-field">
-                  <ConfigLabel tooltip="Size of parent chunks.">
-                    Parent Chunk Size
+                  <ConfigLabel tooltip={t("library.parentSizeTooltip")}>
+                    {t("library.parentChunkSize")}
                   </ConfigLabel>
                   <Input
                     value={parentChunkSize}
@@ -512,8 +518,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
                   />
                 </div>
                 <div className="pm-config-field">
-                  <ConfigLabel tooltip="Overlap between parent chunks.">
-                    Parent Chunk Overlap
+                  <ConfigLabel tooltip={t("library.parentOverlapTooltip")}>
+                    {t("library.parentChunkOverlap")}
                   </ConfigLabel>
                   <Input
                     value={parentChunkOverlap}
@@ -525,8 +531,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
               </div>
               <div className="pm-config-grid">
                 <div className="pm-config-field">
-                  <ConfigLabel tooltip="Size of child chunks used for matching.">
-                    Child Chunk Size
+                  <ConfigLabel tooltip={t("library.childSizeTooltip")}>
+                    {t("library.childChunkSize")}
                   </ConfigLabel>
                   <Input
                     value={childChunkSize}
@@ -536,8 +542,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
                   />
                 </div>
                 <div className="pm-config-field">
-                  <ConfigLabel tooltip="Overlap between child chunks.">
-                    Child Chunk Overlap
+                  <ConfigLabel tooltip={t("library.childOverlapTooltip")}>
+                    {t("library.childChunkOverlap")}
                   </ConfigLabel>
                   <Input
                     value={childChunkOverlap}
@@ -554,21 +560,21 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         {/* ── Embedding Model ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Embedding Model</span>
+            <span className="pm-config-card-kicker">{t("library.embeddingModel")}</span>
           </header>
           <div className="pm-config-field">
-            <ConfigLabel tooltip="Select embedding provider for this collection.">
-              Provider
+            <ConfigLabel tooltip={t("library.providerTooltip")}>
+              {t("library.provider")}
             </ConfigLabel>
             <DropdownSelect
               size="sm"
               value={embeddingProviderId}
               onChange={setEmbeddingProviderId}
-              placeholder={`Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`}
+              placeholder={`${t("library.globalDefault")}${globalEmbModel ? ` (${globalEmbModel})` : ""}`}
               options={[
                 {
                   value: "",
-                  label: `Global default${globalEmbModel ? ` (${globalEmbModel})` : ""}`,
+                  label: `${t("library.globalDefault")}${globalEmbModel ? ` (${globalEmbModel})` : ""}`,
                 },
                 ...embeddingProviders.map((p) => ({
                   value: p.id,
@@ -579,7 +585,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           </div>
           {embeddingModel ? (
             <div className="pm-config-field">
-              <ConfigLabel tooltip="Legacy field.">Model (legacy)</ConfigLabel>
+              <ConfigLabel tooltip={t("library.modelLegacyTooltip")}>{t("library.modelLegacy")}</ConfigLabel>
               <Input
                 value={embeddingModel}
                 onChange={(e) => setEmbeddingModel(e.target.value)}
@@ -593,15 +599,15 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         {/* ── Allowed File Types ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Allowed File Types</span>
+            <span className="pm-config-card-kicker">{t("library.allowedTypes")}</span>
             <span className="pm-meta text-[var(--pm-faint)]">
-              Empty = all allowed
+              {t("library.emptyAllAllowed")}
             </span>
           </header>
           <p className="pm-meta pm-config-card-desc">
-            Restrict which file types can be uploaded to this collection.
+            {t("library.restrictFileTypes")}
           </p>
-          <div className="pm-config-chips" role="group" aria-label="File types">
+          <div className="pm-config-chips" role="group" aria-label={t("library.fileTypes")}>
             {FILE_TYPES.map((ft) => {
               const on = allowedTypes.includes(ft.ext)
               return (
@@ -628,17 +634,16 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         {/* ── Contextual Enrichment ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Contextual Enrichment</span>
+            <span className="pm-config-card-kicker">{t("library.contextualEnrichment")}</span>
             <ConfigSwitch
               id="pm-config-contextual"
-              label="Enable contextual enrichment"
+              label={t("library.enableContextual")}
               checked={contextualEnabled}
               onCheckedChange={setContextualEnabled}
             />
           </header>
           <p className="pm-meta pm-config-card-desc">
-            When on, each searchable chunk gets situating context for retrieval.
-            The document Summary still runs when this switch is off.
+            {t("library.contextualDesc")}
           </p>
           <div
             className={cn(
@@ -648,8 +653,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           >
             <div className="pm-config-fold-inner">
               <div className="pm-config-field">
-                <ConfigLabel tooltip="Surrounding chunks on each side used for context.">
-                  Context Window
+                <ConfigLabel tooltip={t("library.contextWindowTooltip")}>
+                  {t("library.contextWindow")}
                 </ConfigLabel>
                 <Input
                   value={contextualWindow}
@@ -666,15 +671,14 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         {/* ── Library LLM ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Library LLM</span>
+            <span className="pm-config-card-kicker">{t("settings.libraryLlm")}</span>
           </header>
           <p className="pm-meta pm-config-card-desc">
-            Overrides Settings → Library LLM for this collection (Summary,
-            Context, consolidate, coverage). Leave empty for the global default.
+            {t("library.libraryLlmOverride")}
           </p>
           <div className="pm-config-grid">
             <div className="pm-config-field">
-              <FieldLabel className="pm-config-field-label">Provider</FieldLabel>
+              <FieldLabel className="pm-config-field-label">{t("library.provider")}</FieldLabel>
               <DropdownSelect
                 size="sm"
                 value={enrichingLlmProvider}
@@ -688,9 +692,9 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
                     ""
                   setEnrichingLlmModel(defaultM)
                 }}
-                placeholder="Global default"
+                placeholder={t("library.globalDefault")}
                 options={[
-                  { value: "", label: "Global default" },
+                  { value: "", label: t("library.globalDefault") },
                   ...readyProviders.map((p) => ({
                     value: p.id,
                     label: p.name || p.model || p.id,
@@ -699,15 +703,15 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
               />
             </div>
             <div className="pm-config-field">
-              <FieldLabel className="pm-config-field-label">Model</FieldLabel>
+              <FieldLabel className="pm-config-field-label">{t("library.model")}</FieldLabel>
               <DropdownSelect
                 size="sm"
                 value={enrichingLlmModel}
                 onChange={setEnrichingLlmModel}
                 disabled={!enrichingLlmProvider}
-                placeholder="Select model"
+                placeholder={t("library.selectModel")}
                 options={[
-                  { value: "", label: "Select model" },
+                  { value: "", label: t("library.selectModel") },
                   ...enrichingModels.map((m) => ({ value: m, label: m })),
                 ]}
               />
@@ -720,18 +724,17 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
           <section className="pm-config-card">
             <header className="pm-config-card-head">
               <span className="pm-config-card-kicker">
-                Cloud Parsing · MinerU
+                {t("library.cloudParsingMineru")}
               </span>
               <ConfigSwitch
                 id="pm-config-cloud-parsing"
-                label="Enable cloud parsing"
+                label={t("library.enableCloudParsing")}
                 checked={cloudParsing}
                 onCheckedChange={setCloudParsing}
               />
             </header>
             <p className="pm-meta pm-config-card-desc">
-              Higher-quality Markdown with better tables, formulas, and layout.
-              When on, uploads use MinerU and Markdown-aware chunking.
+              {t("library.cloudParsingDesc")}
             </p>
           </section>
         ) : null}
@@ -739,16 +742,15 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
         {/* ── Sparse Vocabulary ── */}
         <section className="pm-config-card">
           <header className="pm-config-card-head">
-            <span className="pm-config-card-kicker">Sparse Vocabulary · BM25</span>
+            <span className="pm-config-card-kicker">{t("library.sparseVocab")}</span>
           </header>
           <p className="pm-meta pm-config-card-desc">
-            BM25 statistics drift as documents change. The vocabulary rebuilds
-            automatically when changes reach the threshold.
+            {t("library.sparseDesc")}
           </p>
           <div className="pm-config-grid">
             <div className="pm-config-field">
-              <ConfigLabel tooltip="Chunk changes before auto-rebuilding. 5000 ≈ 1000 files.">
-                Recalc Threshold
+              <ConfigLabel tooltip={t("library.recalcThresholdTooltip")}>
+                {t("library.recalcThreshold")}
               </ConfigLabel>
               <Input
                 value={sparseRecalcThreshold}
@@ -758,8 +760,8 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
               />
             </div>
             <div className="pm-config-field">
-              <ConfigLabel tooltip="Chunk changes since last rebuild.">
-                Change Counter
+              <ConfigLabel tooltip={t("library.changeCounterTooltip")}>
+                {t("library.changeCounter")}
               </ConfigLabel>
               <Input value={String(sparseRecalcCounter)} disabled />
             </div>
@@ -776,7 +778,7 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
                 className={cn("h-3.5 w-3.5", recalcRunning && "animate-spin")}
                 strokeWidth={1.75}
               />
-              {recalcRunning ? "Running…" : "Recalculate now"}
+              {recalcRunning ? t("library.running") : t("library.recalculateNow")}
             </Button>
             <span
               className={cn(
@@ -787,8 +789,11 @@ export function CollectionConfig({ collection }: CollectionConfigProps) {
               )}
             >
               {thresholdReached
-                ? "Threshold reached — auto-rebuild pending"
-                : `${sparseRecalcCounter} / ${sparseRecalcThreshold || "5000"} changes`}
+                ? t("library.thresholdReached")
+                : t("library.nChanges", {
+                    n: sparseRecalcCounter,
+                    threshold: sparseRecalcThreshold || "5000",
+                  })}
             </span>
           </div>
         </section>

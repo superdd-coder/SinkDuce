@@ -12,6 +12,7 @@ import { Download, Loader2, Check, AlertCircle } from "lucide-react"
 import { getModelStatus, downloadModels, type ModelStatus } from "@/api/client"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 interface BundleDef {
   id: string
@@ -23,16 +24,14 @@ interface BundleDef {
 const BUNDLES: BundleDef[] = [
   {
     id: "file",
-    label: "File Transcription (ONNX)",
-    description:
-      "SenseVoice int8 + FSMN-VAD + CT-Punc + CAM++ — GitHub Release onnx-models pack",
+    label: "models.fileOnnx",
+    description: "models.fileOnnxDesc",
     modelIds: ["transcription", "vad", "speaker", "punc"],
   },
   {
     id: "realtime",
-    label: "Real-time Transcription (ONNX)",
-    description:
-      "Paraformer Streaming int8 — same GitHub Release pack",
+    label: "models.realtimeOnnx",
+    description: "models.realtimeOnnxDesc",
     modelIds: ["realtime"],
   },
 ]
@@ -51,6 +50,7 @@ export function ModelDownloadDialog({
   onComplete,
   onDownloadStart,
 }: ModelDownloadDialogProps) {
+  const t = useT()
   const [models, setModels] = useState<ModelStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
@@ -106,10 +106,10 @@ export function ModelDownloadDialog({
     .filter((m) => !m.downloaded)
     .reduce((sum, m) => sum + (m.size_mb || 0), 0)
   const primaryBtnLabel = isExtracting
-    ? "Extracting…"
+    ? t("common.extracting")
     : isDownloading
-      ? `Downloading ${downloadProgress}%`
-      : "Download"
+      ? t("settings.downloadingPct", { n: downloadProgress })
+      : t("common.download")
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -156,7 +156,7 @@ export function ModelDownloadDialog({
         b.modelIds.every((mid) => modelMap.get(mid)?.downloaded)
       )
       if (allDone) {
-        toast.success("All models downloaded!")
+        toast.success(t("shell.allModelsDownloaded"))
       }
     }
   }, [models, downloading, modelMap, fetchStatus])
@@ -167,11 +167,11 @@ export function ModelDownloadDialog({
       // Full GitHub Release pack — no per-bundle selection
       await downloadModels()
       onDownloadStart?.()
-      toast.info("Downloading ONNX pack from GitHub Release…")
+      toast.info(t("models.downloadingOnnx"))
       // Progress continues in Settings toolbar — close dialog after start
       onOpenChange(false)
     } catch {
-      toast.error("Failed to start download")
+      toast.error(t("models.failedStart"))
       setDownloading(false)
     }
   }
@@ -192,8 +192,8 @@ export function ModelDownloadDialog({
         overlayClassName="pm-dialog-overlay--silk"
       >
         <DialogHeader>
-          <DialogKicker>Settings</DialogKicker>
-          <DialogTitle>Download local models</DialogTitle>
+          <DialogKicker>{t("nav.settings")}</DialogKicker>
+          <DialogTitle>{t("models.downloadLocal")}</DialogTitle>
         </DialogHeader>
 
         {loading ? (
@@ -203,7 +203,7 @@ export function ModelDownloadDialog({
         ) : allBundlesDone ? (
           <div className="text-center py-6 space-y-3">
             <Check className="h-8 w-8 mx-auto text-[var(--pm-green)]" />
-            <p className="pm-meta">All models are downloaded and ready.</p>
+            <p className="pm-meta">{t("models.allReady")}</p>
             <Button
               variant="default"
               onClick={() => {
@@ -211,22 +211,18 @@ export function ModelDownloadDialog({
                 onOpenChange(false)
               }}
             >
-              Done
+              {t("common.done")}
             </Button>
           </div>
         ) : (
           <>
             <div className="pm-dialog-body space-y-4 px-1 pb-1">
               <p className="text-[13px] leading-relaxed text-[var(--pm-ink)]">
-                Local transcription models are not fully installed yet. Click{" "}
-                <strong className="font-medium">Download</strong> to fetch the
-                official ONNX pack from GitHub Release (file + realtime ASR).
-                There is no HuggingFace fallback.
+                {t("models.intro")}
               </p>
               {missingCount > 0 && (
                 <p className="pm-meta">
-                  About {sizeLabel} remaining · {missingCount} model
-                  {missingCount === 1 ? "" : "s"} missing
+                  {t("models.remaining", { size: sizeLabel, n: missingCount })}
                 </p>
               )}
 
@@ -262,7 +258,7 @@ export function ModelDownloadDialog({
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="pm-title text-[13px]">
-                            {bundle.label}
+                            {t(bundle.label)}
                           </div>
                           <p className="pm-meta mt-0.5">
                             {totalSize >= 1000
@@ -270,12 +266,12 @@ export function ModelDownloadDialog({
                               : `${totalSize}MB`}
                             {" · "}
                             {allDone
-                              ? "Installed"
+                              ? t("common.installed")
                               : anyExtracting
-                                ? "Extracting…"
+                                ? t("common.extracting")
                                 : anyDownloading
-                                  ? "In progress…"
-                                  : "Will be included"}
+                                  ? t("models.inProgress")
+                                  : t("models.willInclude")}
                           </p>
                           {anyError &&
                             memberModels
@@ -297,7 +293,7 @@ export function ModelDownloadDialog({
 
               {hasError && (
                 <div className="pm-meta text-[var(--pm-danger)] p-2 rounded-[var(--pm-r-sm)] bg-[color-mix(in_srgb,var(--pm-danger)_10%,#ffffff)]">
-                  Some models failed — click Download to retry the pack.
+                  {t("models.someFailed")}
                 </div>
               )}
             </div>
@@ -311,7 +307,7 @@ export function ModelDownloadDialog({
                     onOpenChange(false)
                   }}
                 >
-                  Skip
+                  {t("common.skip")}
                 </Button>
               )}
               <Button
@@ -327,7 +323,7 @@ export function ModelDownloadDialog({
                 ) : (
                   <>
                     <Download className="h-4 w-4" />
-                    Download
+                    {t("common.download")}
                   </>
                 )}
               </Button>

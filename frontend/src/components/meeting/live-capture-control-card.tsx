@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 export interface LiveCaptureControlCardProps {
   /** May be empty/undefined after HMR — UI falls back to flat bars. */
@@ -42,12 +43,13 @@ export function LiveCaptureControlCard({
   onStop,
   onDiscard,
 }: LiveCaptureControlCardProps) {
+  const t = useT()
   const [discardOpen, setDiscardOpen] = useState(false)
   // Guard HMR / partial state where levels may be missing
   const bars = Array.isArray(levels) && levels.length > 0 ? levels : Array.from({ length: 24 }, () => 0)
 
   return (
-    <div className="pm-meeting-live-control-card" role="region" aria-label="Recording controls">
+    <div className="pm-meeting-live-control-card" role="region" aria-label={t("meeting.recordingControls")}>
       <div className="pm-meeting-live-control-main">
         <div
           className={cn("pm-meeting-live-wave", isPaused && "is-paused")}
@@ -71,7 +73,7 @@ export function LiveCaptureControlCard({
             aria-hidden
           />
           <strong className="pm-meeting-live-control-label">
-            {isPaused ? "Paused" : "Recording"}
+            {isPaused ? t("common.paused") : t("meeting.recording")}
           </strong>
           <span className="pm-meeting-live-control-time t-mono-family">
             {durationLabel}
@@ -87,7 +89,7 @@ export function LiveCaptureControlCard({
             size="sm"
             className="pm-meeting-live-captions-btn"
             onClick={onToggleRealtime}
-            title={realtimeEnabled ? "Live captions ON" : "Live captions OFF"}
+            title={realtimeEnabled ? t("meeting.liveCaptionsOn") : t("meeting.liveCaptionsOff")}
           >
             <span
               className={cn(
@@ -95,7 +97,7 @@ export function LiveCaptureControlCard({
                 realtimeEnabled ? "bg-[var(--pm-green)]" : "bg-[var(--pm-faint)]",
               )}
             />
-            Live captions
+            {t("meeting.liveCaptions")}
           </Button>
         )}
 
@@ -110,7 +112,7 @@ export function LiveCaptureControlCard({
           ) : (
             <Pause className="size-3.5 mr-1" />
           )}
-          {isPaused ? "Resume" : "Pause"}
+          {isPaused ? t("common.resume") : t("common.pause")}
         </Button>
 
         <Button
@@ -121,7 +123,7 @@ export function LiveCaptureControlCard({
           onClick={onStop}
         >
           <Square className="size-3.5 mr-1" />
-          Stop
+          {t("common.stop")}
         </Button>
 
         <Button
@@ -131,7 +133,7 @@ export function LiveCaptureControlCard({
           onClick={() => setDiscardOpen(true)}
         >
           <Trash2 className="size-3.5 mr-1" />
-          Discard
+          {t("common.discard")}
         </Button>
       </div>
 
@@ -142,9 +144,9 @@ export function LiveCaptureControlCard({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogTitle>Discard recording?</DialogTitle>
+            <DialogTitle>{t("meeting.discardRecordingQ")}</DialogTitle>
             <DialogDescription>
-              This will stop the recording and permanently delete all audio, captions, and transcript data.
+              {t("meeting.discardRecordingBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -154,7 +156,7 @@ export function LiveCaptureControlCard({
               size="sm"
               onClick={() => setDiscardOpen(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -165,7 +167,7 @@ export function LiveCaptureControlCard({
                 onDiscard()
               }}
             >
-              Discard
+              {t("common.discard")}
             </Button>
           </DialogFooter>
         </DialogContent>

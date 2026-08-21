@@ -2,6 +2,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Loader2, ArrowRight, AlertTriangle } from "lucide-react"
 import { type PropagationPreview } from "@/api/client"
+import { useT } from "@/i18n/use-t"
 
 interface PropagationDialogProps {
   open: boolean
@@ -18,6 +19,7 @@ export function PropagationDialog({
   onConfirm,
   propagating,
 }: PropagationDialogProps) {
+  const t = useT()
   if (!preview || preview.total_affected === 0) return null
 
   // Build chain display: deduplicate by target ID
@@ -39,13 +41,12 @@ export function PropagationDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-[var(--pm-green)]" />
-            Propagate Changes?
+            {t("library.propagateChangesQ")}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-4 pt-1">
           <p className="pm-dialog-body">
-            This note has been distilled into other notes. Content changes will trigger
-            re-distillation for the following chain:
+            {t("library.propagateBody")}
           </p>
 
           {/* Chain visualization */}
@@ -89,8 +90,7 @@ export function PropagationDialog({
           </div>
 
           <p className="pm-meta">
-            Downstream propagations (indirect dependencies) will run automatically
-            without additional prompts.
+            {t("library.propagateDownstream")}
           </p>
 
           <div className="flex justify-end gap-2 pt-1">
@@ -99,7 +99,7 @@ export function PropagationDialog({
               onClick={() => onOpenChange(false)}
               disabled={propagating}
             >
-              Skip
+              {t("common.skip")}
             </Button>
             <Button
               onClick={onConfirm}
@@ -108,10 +108,10 @@ export function PropagationDialog({
               {propagating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                  Propagating...
+                  {t("library.propagating")}
                 </>
               ) : (
-                "Propagate Changes"
+                t("library.propagateChanges")
               )}
             </Button>
           </div>

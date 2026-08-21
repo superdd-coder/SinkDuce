@@ -30,6 +30,8 @@ import { listChains, updateTodo } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
 import { triggerTodoRefresh } from "@/lib/todo-refresh"
 import type { Editor } from "@tiptap/core"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface TodoDetailDialogProps {
   collectionId: string
@@ -39,9 +41,16 @@ interface TodoDetailDialogProps {
   onUpdated?: (todo: TodoItem) => void
 }
 
-function chainOptionLabel(c: Chain): string {
-  if (c.is_main) return c.title?.trim() ? `Main · ${c.title}` : "Main"
-  return c.title?.trim() || "Branch"
+function chainOptionLabel(
+  c: Chain,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (c.is_main) {
+    return c.title?.trim()
+      ? t("library.mainDot", { title: c.title.trim() })
+      : t("library.main")
+  }
+  return c.title?.trim() || t("library.branch")
 }
 
 export function TodoDetailDialog({
@@ -51,6 +60,7 @@ export function TodoDetailDialog({
   onOpenChange,
   onUpdated,
 }: TodoDetailDialogProps) {
+  const t = useT()
   /** Hold last todo through exit animation (parent may clear after delay). */
   const [displayTodo, setDisplayTodo] = useState<TodoItem | null>(todo)
   const readonly = !!displayTodo?.done
@@ -153,13 +163,13 @@ export function TodoDetailDialog({
 
   const handleSave = async () => {
     if (!displayTodo || readonly) return
-    const t = title.trim()
-    if (!t) {
-      toast.error("Title is required")
+    const titleText = title.trim()
+    if (!titleText) {
+      toast.error(t("common.titleRequired"))
       return
     }
     if (!selectedChainId) {
-      toast.error("Please select a chain")
+      toast.error(t("library.selectChain"))
       return
     }
     setSaving(true)
@@ -168,7 +178,7 @@ export function TodoDetailDialog({
       const nextBody = body.trim()
       const origBody = (displayTodo.body || "").trim()
       const payload: Parameters<typeof updateTodo>[2] = {
-        title: t,
+        title: titleText,
         target_chain_id: isMain ? null : selectedChainId,
       }
       if (ddl) {
@@ -185,13 +195,13 @@ export function TodoDetailDialog({
         displayTodo.todo_id,
         payload
       )
-      toast.success("Todo updated")
+      toast.success(t("library.todoUpdated"))
       onUpdated?.(updated)
       setDisplayTodo(updated)
       triggerTodoRefresh({ collectionId, reason: "update" })
       onOpenChange(false)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(formatApiError(err, t))
     } finally {
       setSaving(false)
     }
@@ -219,21 +229,21 @@ export function TodoDetailDialog({
       >
         <DialogHeader className="pm-todo-dialog-head">
           <DialogTitle className="pm-todo-dialog-title">
-            {readonly ? "Todo detail" : "Edit todo"}
+            {readonly ? t("library.todoDetail") : t("library.editTodo")}
           </DialogTitle>
         </DialogHeader>
 
         <div className="pm-dialog-body pm-todo-dialog-body">
           {readonly && (
             <p className="pm-todo-readonly-banner" role="status">
-              Completed todos are read-only.
+              {t("library.completedReadOnly")}
             </p>
           )}
 
           <div className="pm-todo-top-row">
             <section className="pm-todo-card pm-todo-card--title">
               {/* Label pinned top-left; input centered in remaining height */}
-              <FieldLabel htmlFor="pm-todo-edit-title">Todo</FieldLabel>
+              <FieldLabel htmlFor="pm-todo-edit-title">{t("library.todo")}</FieldLabel>
               <div className="pm-todo-title-block">
                 <textarea
                   ref={titleInputRef}
@@ -253,8 +263,8 @@ export function TodoDetailDialog({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") e.preventDefault()
                   }}
-                  placeholder="Todo title"
-                  aria-label="Todo title"
+                  placeholder={t("library.todoTitle")}
+                  aria-label={t("library.todoTitle")}
                 />
               </div>
             </section>
@@ -262,7 +272,7 @@ export function TodoDetailDialog({
             <section className="pm-todo-card pm-todo-card--meta">
               <div className="pm-todo-meta-stack">
                 <div className="pm-todo-meta-field min-w-0">
-                  <FieldLabel htmlFor="pm-todo-edit-chain">Chain</FieldLabel>
+                  <FieldLabel htmlFor="pm-todo-edit-chain">{t("library.chain")}</FieldLabel>
                   <div className="relative">
                     <DropdownSelect
                       size="sm"
@@ -270,11 +280,11 @@ export function TodoDetailDialog({
                       onChange={setSelectedChainId}
                       disabled={readonly || loadingChains}
                       placeholder={
-                        loadingChains ? "Loading chains…" : "Select chain"
+                        loadingChains ? t("library.loadingChains") : t("library.selectChainPh")
                       }
                       options={sortedChains.map((c) => ({
                         value: c.chain_id,
-                        label: chainOptionLabel(c),
+                        label: chainOptionLabel(c, t),
                       }))}
                     />
                     {loadingChains && (
@@ -286,10 +296,10 @@ export function TodoDetailDialog({
                   </div>
                 </div>
                 <div className="pm-todo-meta-field min-w-0">
-                  <FieldLabel htmlFor="pm-todo-edit-ddl">Deadline</FieldLabel>
+                  <FieldLabel htmlFor="pm-todo-edit-ddl">{t("library.deadline")}</FieldLabel>
                   {readonly && !ddl ? (
                     <span className="pm-todo-ddl-readonly-empty">
-                      No deadline
+                      {t("library.noDeadline")}
                     </span>
                   ) : (
                     <DatePicker
@@ -297,7 +307,7 @@ export function TodoDetailDialog({
                       size="sm"
                       value={ddl}
                       onChange={setDdl}
-                      placeholder="Optional"
+                      placeholder={t("common.optional")}
                       disabled={readonly}
                       allowClear={!readonly}
                     />
@@ -309,9 +319,9 @@ export function TodoDetailDialog({
 
           <section className="pm-todo-card pm-todo-card--desc">
             <div className="pm-todo-desc-head">
-              <FieldLabel className="pm-todo-desc-label">Description</FieldLabel>
+              <FieldLabel className="pm-todo-desc-label">{t("common.description")}</FieldLabel>
               {!readonly && (
-                <span className="pm-todo-card-hint">Optional · markdown</span>
+                <span className="pm-todo-card-hint">{t("common.optionalMd")}</span>
               )}
             </div>
             <div
@@ -332,8 +342,8 @@ export function TodoDetailDialog({
                   flush
                   placeholder={
                     readonly
-                      ? "No description"
-                      : "Details, context, acceptance criteria…"
+                      ? t("library.noDescription")
+                      : t("library.detailsCriteria")
                   }
                   className="pm-todo-md-editor"
                   onEditorReady={(ed) => {
@@ -353,7 +363,7 @@ export function TodoDetailDialog({
             onClick={() => onOpenChange(false)}
             disabled={saving}
           >
-            {readonly ? "Close" : "Cancel"}
+            {readonly ? t("common.close") : t("common.cancel")}
           </Button>
           {!readonly && (
             <Button
@@ -366,7 +376,7 @@ export function TodoDetailDialog({
               {saving ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
               ) : (
-                "Save"
+                t("common.save")
               )}
             </Button>
           )}

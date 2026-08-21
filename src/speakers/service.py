@@ -353,6 +353,8 @@ def _label_map(people: Sequence[Person]) -> dict[str, int]:
 def rebuild_speaker_names(
     speaker_people: dict[str, str] | None,
     people: Sequence[Person] | None = None,
+    *,
+    keep: dict[str, str] | None = None,
 ) -> dict[str, str]:
     from src.speakers.store import get_person as _get, list_people, person_label
 
@@ -360,11 +362,18 @@ def rebuild_speaker_names(
     by_id = {p.id: p for p in people_list}
     counts = _label_map(people_list)
     names: dict[str, str] = {}
-    for spk, pid in (speaker_people or {}).items():
+    bound = speaker_people or {}
+    for spk, pid in bound.items():
         person = by_id.get(pid) or _get(pid)
         if person is None:
             continue
         names[spk] = person_label(person, name_counts=counts)
+    for spk, label in (keep or {}).items():
+        if spk in bound:
+            continue
+        text = (label or "").strip()
+        if text:
+            names[spk] = text
     return names
 
 
@@ -595,7 +604,10 @@ def apply_matches_from_slots(meeting_id: str) -> bool:
         meeting_id,
         speaker_people=people_map or None,
         speaker_matches=matches or None,
-        speaker_names=rebuild_speaker_names(people_map, people) or None,
+        speaker_names=rebuild_speaker_names(
+            people_map, people, keep=meeting.speaker_names
+        )
+        or None,
     )
     return True
 
@@ -765,6 +777,7 @@ def assign_speaker(
     *,
     segment_embeddings: Sequence[Sequence[float] | np.ndarray] | None = None,
     new_person: dict | None = None,
+    display_name: str | None = None,
 ):
     from src.meeting.store import get_meeting, get_transcript
     from src.speakers.store import create_person, get_person, list_people
@@ -772,16 +785,19 @@ def assign_speaker(
     meeting = get_meeting(meeting_id)
     if meeting is None:
         raise FileNotFoundError(f"Meeting {meeting_id} not found")
+    one_off = (display_name or "").strip()
     if new_person:
         created = create_person(
             new_person.get("display_name") or "",
             new_person.get("disambiguator") or "",
         )
         person_id = created.id
+        one_off = ""
     if person_id:
         person = get_person(person_id)
         if person is None:
             raise FileNotFoundError(f"Person {person_id} not found")
+        one_off = ""
 
     transcript = get_transcript(meeting_id)
     segments = transcript.segments if transcript else []
@@ -797,6 +813,30 @@ def assign_speaker(
     matches = dict(meeting.speaker_matches or {})
     prev = people_map.get(speaker_id)
     need_backfill = False
+
+    if person_id is None and one_off:
+        if prev:
+            unenroll(prev, meeting_id)
+        people_map.pop(speaker_id, None)
+        names[speaker_id] = one_off
+        prev_match = matches.get(speaker_id) or SpeakerMatch()
+        if not isinstance(prev_match, SpeakerMatch):
+            prev_match = SpeakerMatch.model_validate(prev_match)
+        matches[speaker_id] = SpeakerMatch(
+            auto=False,
+            score=None,
+            enrolled=False,
+            cleared=True,
+            top=list(prev_match.top or []),
+        )
+        people = list_people()
+        names = rebuild_speaker_names(people_map, people, keep=names)
+        return _write_speaker_state(
+            meeting_id,
+            speaker_people=people_map,
+            speaker_matches=matches,
+            speaker_names=names,
+        )
 
     if person_id is None:
         if prev:
@@ -840,7 +880,7 @@ def assign_speaker(
             need_backfill = True
 
     people = list_people()
-    names = rebuild_speaker_names(people_map, people)
+    names = rebuild_speaker_names(people_map, people, keep=names)
     updated = _write_speaker_state(
         meeting_id,
         speaker_people=people_map,
@@ -897,7 +937,7 @@ def commit_pending(
             top=list(current.top or []),
         )
 
-    names = rebuild_speaker_names(people_map)
+    names = rebuild_speaker_names(people_map, keep=meeting.speaker_names)
     return _write_speaker_state(
         meeting_id,
         speaker_people=people_map,

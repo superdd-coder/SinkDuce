@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Trash2, Mic } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 import { Button } from "@/components/ui/button"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { CreateMeetingButton } from "./create-meeting-dialog"
@@ -30,6 +31,7 @@ export function MeetingList({
   onDelete,
   keepFocusOnCreate = false,
 }: MeetingListProps) {
+  const t = useT()
   /* Sliding mint indicator — Collections / Sessions language */
   const listRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -56,35 +58,35 @@ export function MeetingList({
     const d = new Date(iso)
     const now = new Date()
     const diff = now.getTime() - d.getTime()
-    if (diff < 60_000) return "just now"
-    if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`
-    if (diff < 86_400_000) return `${Math.floor(diff / 3600_000)}h ago`
+    if (diff < 60_000) return t("common.justNow")
+    if (diff < 3600_000) return t("common.minutesAgo", { n: Math.floor(diff / 60_000) })
+    if (diff < 86_400_000) return t("common.hoursAgo", { n: Math.floor(diff / 3600_000) })
     return d.toLocaleDateString()
   }
 
   /** Live / in-flight status shown like Recording (always visible in meta) */
   const liveStatus = (m: Meeting): string | null => {
-    if (recordingMeetingId === m.id || m.status === "recording") return "Recording"
-    if (m.status === "transcribing") return "Transcribing…"
-    if (m.processing_state === "summarizing") return "Summarizing…"
-    if (m.processing_state === "extracting") return "Extracting…"
+    if (recordingMeetingId === m.id || m.status === "recording") return t("meeting.recording")
+    if (m.status === "transcribing") return t("meeting.transcribing")
+    if (m.processing_state === "summarizing") return t("meeting.summarizing")
+    if (m.processing_state === "extracting") return t("meeting.extracting")
     return null
   }
 
   const statusLabel = (m: Meeting) => {
     const live = liveStatus(m)
     if (live) return live
-    if (m.status === "completed") return "Ready"
-    return "Draft"
+    if (m.status === "completed") return t("common.ready")
+    return t("meeting.draft")
   }
 
   const edgeFade = useScrollEdgeFade(listRef, meetings.length)
 
   return (
-    <aside className="pm-meeting-rail" aria-label="Meetings">
+    <aside className="pm-meeting-rail" aria-label={t("meeting.meetings")}>
       <div className="pm-meeting-rail-surface">
         <div className="pm-meeting-rail-head pm-rail-head">
-          <h2 className="pm-meeting-rail-title pm-rail-title">Meetings</h2>
+          <h2 className="pm-meeting-rail-title pm-rail-title">{t("meeting.meetings")}</h2>
           <CreateMeetingButton
             onCreated={onCreated}
             stayOnCurrent={keepFocusOnCreate}
@@ -115,7 +117,7 @@ export function MeetingList({
             {meetings.length === 0 && (
               <div className="pm-chat-sess-empty">
                 <Mic className="size-5 pm-chat-sess-empty-icon" />
-                <p className="pm-meta">No meetings yet</p>
+                <p className="pm-meta">{t("meeting.noMeetings")}</p>
               </div>
             )}
 
@@ -184,8 +186,8 @@ export function MeetingList({
                     variant="ghost"
                     size="icon-xs"
                     className="pm-chat-sess-del"
-                    title="Delete meeting"
-                    aria-label="Delete meeting"
+                    title={t("meeting.deleteMeeting")}
+                    aria-label={t("meeting.deleteMeeting")}
                     onClick={(e) => {
                       e.stopPropagation()
                       onDelete(m.id)

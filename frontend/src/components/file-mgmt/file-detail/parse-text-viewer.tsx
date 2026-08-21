@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { splitExtractParts } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 export interface ParseTextViewerProps {
   text: string
@@ -18,6 +19,7 @@ export function ParseTextViewer({
   collectionId,
   fileId,
 }: ParseTextViewerProps) {
+  const t = useT()
   const parts = useMemo(
     () => splitExtractParts(text, collectionId, fileId),
     [text, collectionId, fileId],
@@ -37,7 +39,7 @@ export function ParseTextViewer({
             type="button"
             className="pm-ws-parse-image-btn"
             onClick={() => setOpenSrc(part.src)}
-            title="Open image"
+            title={t("fileMgmt.openImage")}
           >
             <img
               src={part.src}
@@ -52,7 +54,7 @@ export function ParseTextViewer({
           type="button"
           className="pm-ws-parse-lightbox"
           onClick={() => setOpenSrc(null)}
-          aria-label="Close image"
+          aria-label={t("fileMgmt.closeImage")}
         >
           <img src={openSrc} alt="" className="pm-ws-parse-lightbox-img" />
         </button>

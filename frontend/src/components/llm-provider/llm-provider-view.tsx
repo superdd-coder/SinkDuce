@@ -48,23 +48,46 @@ import { HotWordsManager } from "./hot-words-manager"
 import { PeopleManager } from "./people-manager"
 import { OneShotDashscopeDialog } from "./oneshot-dashscope-dialog"
 import { OneShotOpenRouterDialog } from "./oneshot-openrouter-dialog"
+import { useT } from "@/i18n/use-t"
 
 const LOCAL_MODEL_BUNDLES = [
   {
     id: "file",
-    label: "File transcription pack",
-    description: "SenseVoice + VAD + speaker + punctuation",
     modelIds: ["transcription", "vad", "speaker", "punc"] as const,
   },
   {
     id: "realtime",
-    label: "Realtime transcription",
-    description: "Paraformer streaming",
     modelIds: ["realtime"] as const,
   },
 ] as const
 
 const LOCAL_MODEL_IDS = LOCAL_MODEL_BUNDLES.flatMap((b) => [...b.modelIds])
+
+function InterfaceLanguageCard() {
+  const t = useT()
+  const locale = useAppStore((s) => s.locale)
+  const setLocale = useAppStore((s) => s.setLocale)
+  return (
+    <section className="pm-settings-section">
+      <div className="pm-settings-card">
+        <div className="pm-settings-card-head">
+          <div className="pm-settings-card-head-text min-w-0">
+            <h2 className="pm-settings-card-kicker">{t("settings.interfaceLanguage")}</h2>
+            <p className="pm-settings-card-desc">{t("settings.interfaceLanguageHelp")}</p>
+          </div>
+          <DropdownSelect
+            value={locale}
+            onChange={(v) => setLocale(v === "zh-CN" ? "zh-CN" : "en")}
+            options={[
+              { value: "en", label: t("settings.langEn") },
+              { value: "zh-CN", label: t("settings.langZhCN") },
+            ]}
+          />
+        </div>
+      </div>
+    </section>
+  )
+}
 
 // OpenRouter transcription models suitable for long audio (file transcription)
 const OPENROUTER_TRANSCRIPTION_MODELS = [
@@ -94,6 +117,7 @@ interface SimpleProviderCardProps<T extends { id: string; name: string; provider
 function SimpleProviderCard<T extends { id: string; name: string; provider: string; model: string; base_url: string; is_default: boolean }>({
   provider, subtitle, onEdit, onRefresh, onTest, onDelete, onSetDefault,
 }: SimpleProviderCardProps<T>) {
+  const t = useT()
   const [testing, setTesting] = useState(false)
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
 
@@ -105,11 +129,11 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
     try {
       const res = await onTest(provider.id)
       setStatus(res.success ? "ready" : "error")
-      if (res.success) toast.success(`${provider.name}: connection OK`)
-      else toast.error(`${provider.name}: ${res.error || "connection failed"}`)
+      if (res.success) toast.success(t("settings.connectionOk", { name: provider.name }))
+      else toast.error(t("settings.connectionFailed", { name: provider.name, error: res.error || t("errors.connection_failed") }))
     } catch {
       setStatus("error")
-      toast.error("Test failed")
+      toast.error(t("settings.testFailed"))
     } finally {
       setTesting(false)
     }
@@ -121,11 +145,11 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
       if (res.error) toast.error(res.error)
       else {
         toast.success(
-          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+          res.message || t("settings.providerDeleted", { name: provider.name || t("common.unnamed") }),
         )
         onRefresh()
       }
-    } catch { toast.error("Delete failed") }
+    } catch { toast.error(t("settings.deleteFailed")) }
   }
 
   const handleSetDefault = async () => {
@@ -134,23 +158,23 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
       if (res.error) toast.error(res.error)
       else {
         toast.success(
-          res.message || `Provider '${provider.name || "Unnamed"}' set as default`,
+          res.message || t("settings.providerSetDefault", { name: provider.name || t("common.unnamed") }),
         )
         onRefresh()
       }
-    } catch { toast.error("Failed to set default") }
+    } catch { toast.error(t("settings.failedSetDefault")) }
   }
 
   return (
     <div className="pm-settings-provider-card">
       <div className="pm-settings-provider-top">
         <div className="pm-settings-provider-name-row">
-          <span className="pm-settings-provider-name">{provider.name || "Unnamed"}</span>
+          <span className="pm-settings-provider-name">{provider.name || t("common.unnamed")}</span>
           <span className={cn("pm-settings-status-dot", statusClass)} aria-hidden />
         </div>
         {provider.is_default && (
           <Badge variant="default" className="shrink-0">
-            Default
+            {t("common.default")}
           </Badge>
         )}
       </div>
@@ -162,19 +186,19 @@ function SimpleProviderCard<T extends { id: string; name: string; provider: stri
       <div className="pm-settings-provider-actions">
         <Button variant="ghost" size="sm" onClick={handleTest} disabled={testing}>
           {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plug className="h-3 w-3" />}
-          Test
+          {t("common.test")}
         </Button>
         <Button variant="ghost" size="sm" onClick={handleSetDefault} disabled={provider.is_default}>
           <Star className="h-3 w-3" />
-          Default
+          {t("common.default")}
         </Button>
         <Button variant="secondary" size="sm" onClick={() => onEdit(provider)}>
           <Pencil className="h-3 w-3" />
-          Edit
+          {t("common.edit")}
         </Button>
         <Button variant="destructive" size="sm" onClick={handleDelete}>
           <Trash2 className="h-3 w-3" />
-          Delete
+          {t("common.delete")}
         </Button>
       </div>
     </div>
@@ -241,9 +265,11 @@ interface SimpleProviderDialogProps<T extends { id: string }> {
 
 function SimpleProviderDialog<T extends { id: string }>({
   open, provider, title, kicker, fields, getTransFields, defaults, onOpenChange, onSaved, onCreate, onUpdate,
-  checkboxField = "is_default", checkboxLabel = "Set as default",
+  checkboxField = "is_default", checkboxLabel,
   modelFetchSection, renderExtra,
 }: SimpleProviderDialogProps<T>) {
+  const t = useT()
+  const resolvedCheckboxLabel = checkboxLabel ?? t("settings.setAsDefault")
   const [form, setForm] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
@@ -287,7 +313,7 @@ function SimpleProviderDialog<T extends { id: string }>({
 
   const fetchModels = async () => {
     if (!form.base_url?.trim()) {
-      toast.error("Enter a base URL first")
+      toast.error(t("settings.enterBaseUrlFirst"))
       return
     }
     if (!modelFetchSection) return
@@ -303,20 +329,20 @@ function SimpleProviderDialog<T extends { id: string }>({
       } else {
         setAvailableModels(res.models || [])
         if (res.models?.length) {
-          toast.success(`Found ${res.models.length} models`)
+          toast.success(t("settings.foundModels", { n: res.models.length }))
         } else {
-          toast.info("No models returned")
+          toast.info(t("settings.noModelsReturned"))
         }
       }
     } catch (err) {
-      toast.error(`Failed to fetch models: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("settings.failedFetchModels", { error: err instanceof Error ? err.message : String(err) }))
     } finally {
       setFetchingModels(false)
     }
   }
 
   const handleSave = async () => {
-    if (!form.name?.trim()) { toast.error("Name is required"); return }
+    if (!form.name?.trim()) { toast.error(t("common.nameRequired")); return }
     setSaving(true)
     try {
       const data: Record<string, unknown> = {}
@@ -328,10 +354,10 @@ function SimpleProviderDialog<T extends { id: string }>({
       data[checkboxField] = form[checkboxField] === "true"
       if (provider) await onUpdate(provider.id, data)
       else await onCreate(data)
-      toast.success(provider ? "Updated" : "Created")
+      toast.success(provider ? t("settings.updated") : t("common.created"))
       onSaved()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: err instanceof Error ? err.message : String(err) }))
     } finally { setSaving(false) }
   }
 
@@ -347,17 +373,17 @@ function SimpleProviderDialog<T extends { id: string }>({
       >
         <DialogHeader>
           <DialogKicker>{kicker || title}</DialogKicker>
-          <DialogTitle>{provider ? "Edit provider" : "Add provider"}</DialogTitle>
+          <DialogTitle>{provider ? t("settings.editProvider") : t("settings.addProvider")}</DialogTitle>
           <DialogDescription>
             {provider
-              ? `Update connection details for this ${title.toLowerCase()}.`
-              : `Add a ${title.toLowerCase()} with endpoint and credentials.`}
+              ? t("settings.updateProviderDesc", { kind: title.toLowerCase() })
+              : t("settings.addProviderDesc", { kind: title.toLowerCase() })}
           </DialogDescription>
         </DialogHeader>
         <div className="pm-settings-dlg-scroll">
           <div className="pm-dialog-body pm-settings-dlg-body">
             <section className="pm-settings-dlg-card">
-              <span className="pm-settings-dlg-card-kicker">Connection</span>
+              <span className="pm-settings-dlg-card-kicker">{t("settings.connection")}</span>
               <div className="pm-settings-dlg-fields">
                 {resolvedFields.map((f) => (
                   <div key={f.key} className="pm-settings-dlg-field">
@@ -377,7 +403,7 @@ function SimpleProviderDialog<T extends { id: string }>({
                             size="icon-sm"
                             onClick={fetchModels}
                             disabled={fetchingModels || !form.base_url?.trim()}
-                            title="Fetch models"
+                            title={t("settings.fetchModels")}
                           >
                             {fetchingModels ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
@@ -388,7 +414,7 @@ function SimpleProviderDialog<T extends { id: string }>({
                         </div>
                         {availableModels.length === 0 && !fetchingModels && form.base_url?.trim() && (
                           <p className="pm-settings-dlg-card-hint mt-1.5">
-                            Refresh to fetch models from the base URL.
+                            {t("settings.refreshToFetch")}
                           </p>
                         )}
                       </>
@@ -429,7 +455,7 @@ function SimpleProviderDialog<T extends { id: string }>({
               </div>
               <div className="pm-settings-dlg-pref">
                 <p className="pm-settings-dlg-pref-label">
-                  Prefer this provider when multiple are available
+                  {t("settings.preferWhenMultiple")}
                 </p>
                 <button
                   type="button"
@@ -440,16 +466,16 @@ function SimpleProviderDialog<T extends { id: string }>({
                   }
                 >
                   <Star className="h-3 w-3" strokeWidth={1.75} />
-                  {form[checkboxField] === "true" ? "Default" : checkboxLabel}
+                  {form[checkboxField] === "true" ? t("common.default") : resolvedCheckboxLabel}
                 </button>
               </div>
             </section>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
           <Button variant="default" onClick={handleSave} disabled={saving}>
-            {saving ? "Saving…" : provider ? "Update" : "Create"}
+            {saving ? t("common.saving") : provider ? t("common.update") : t("common.create")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -470,6 +496,7 @@ interface TranscriptionProviderCardProps {
 }
 
 function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSetActive, onTest }: TranscriptionProviderCardProps) {
+  const t = useT()
   const modelLabel = provider.model || provider.adapter
 
   const [status, setStatus] = useState<"unknown" | "ready" | "error">("unknown")
@@ -483,14 +510,14 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
       const res = await onTest(provider.id)
       if (res.success) {
         setStatus("ready")
-        toast.success(res.message || "Test passed")
+        toast.success(res.message || t("settings.testPassed"))
       } else {
         setStatus("error")
-        toast.error(res.error || "Test failed")
+        toast.error(res.error || t("settings.testFailed"))
       }
     } catch {
       setStatus("error")
-      toast.error("Test failed")
+      toast.error(t("settings.testFailed"))
     } finally {
       setTesting(false)
     }
@@ -502,11 +529,11 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
       if (res.error) toast.error(res.error)
       else {
         toast.success(
-          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+          res.message || t("settings.providerDeleted", { name: provider.name || t("common.unnamed") }),
         )
         onRefresh()
       }
-    } catch { toast.error("Delete failed") }
+    } catch { toast.error(t("settings.deleteFailed")) }
   }
 
   const handleSetActive = async () => {
@@ -515,23 +542,23 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
       if (res.error) toast.error(res.error)
       else {
         toast.success(
-          res.message || `Provider '${provider.name || "Unnamed"}' set as default`,
+          res.message || t("settings.providerSetDefault", { name: provider.name || t("common.unnamed") }),
         )
         onRefresh()
       }
-    } catch { toast.error("Failed to set default") }
+    } catch { toast.error(t("settings.failedSetDefault")) }
   }
 
   return (
     <div className="pm-settings-provider-card">
       <div className="pm-settings-provider-top">
         <div className="pm-settings-provider-name-row">
-          <span className="pm-settings-provider-name">{provider.name || "Unnamed"}</span>
+          <span className="pm-settings-provider-name">{provider.name || t("common.unnamed")}</span>
           <span className={cn("pm-settings-status-dot", statusClass)} aria-hidden />
         </div>
         {provider.is_active && (
           <Badge variant="default" className="shrink-0">
-            Default
+            {t("common.default")}
           </Badge>
         )}
       </div>
@@ -540,19 +567,19 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
       <div className="pm-settings-provider-actions">
         <Button variant="ghost" size="sm" onClick={handleSetActive} disabled={provider.is_active}>
           <Star className="h-3 w-3" />
-          Default
+          {t("common.default")}
         </Button>
         <Button variant="ghost" size="sm" onClick={handleTest} disabled={testing}>
           {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
-          Test
+          {t("common.test")}
         </Button>
         <Button variant="secondary" size="sm" onClick={() => onEdit(provider)}>
           <Pencil className="h-3 w-3" />
-          Edit
+          {t("common.edit")}
         </Button>
         <Button variant="destructive" size="sm" onClick={handleDelete}>
           <Trash2 className="h-3 w-3" />
-          Delete
+          {t("common.delete")}
         </Button>
       </div>
     </div>
@@ -562,6 +589,7 @@ function TranscriptionProviderCard({ provider, onEdit, onRefresh, onDelete, onSe
 // ── Main View ──
 
 export function LLMProviderView() {
+  const t = useT()
   const { providers, setProviders, developerMode, toggleDeveloperMode } = useAppStore()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProvider, setEditingProvider] = useState<LLMProvider | null>(null)
@@ -612,27 +640,27 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
   // MinerU cloud parsing options
   const MINERU_MODEL_OPTIONS = [
-    { value: "pipeline", label: "Pipeline (Default)" },
-    { value: "vlm", label: "VLM (Recommended)" },
-    { value: "MinerU-HTML", label: "MinerU HTML" },
+    { value: "pipeline", label: t("settings.pipelineDefault") },
+    { value: "vlm", label: t("settings.mineruVlm") },
+    { value: "MinerU-HTML", label: t("settings.mineruHtml") },
   ]
   const MINERU_LANGUAGE_OPTIONS = [
-    { value: "ch", label: "Chinese + English + Traditional Chinese" },
-    { value: "ch_server", label: "Chinese + Japanese (server)" },
-    { value: "en", label: "English" },
-    { value: "japan", label: "Japanese" },
-    { value: "korean", label: "Korean" },
-    { value: "chinese_cht", label: "Traditional Chinese" },
-    { value: "ta", label: "Tamil" },
-    { value: "te", label: "Telugu" },
-    { value: "ka", label: "Kannada" },
-    { value: "el", label: "Greek" },
-    { value: "th", label: "Thai" },
-    { value: "latin", label: "Latin (40+ languages)" },
-    { value: "arabic", label: "Arabic" },
-    { value: "cyrillic", label: "Cyrillic (30+ languages)" },
-    { value: "east_slavic", label: "East Slavic (RU/UA/BY)" },
-    { value: "devanagari", label: "Devanagari (Hindi/Marathi/Nepali)" },
+    { value: "ch", label: t("settings.mineruLangCh") },
+    { value: "ch_server", label: t("settings.mineruLangChServer") },
+    { value: "en", label: t("settings.mineruLangEn") },
+    { value: "japan", label: t("settings.mineruLangJa") },
+    { value: "korean", label: t("settings.mineruLangKo") },
+    { value: "chinese_cht", label: t("settings.mineruLangCht") },
+    { value: "ta", label: t("settings.mineruLangTa") },
+    { value: "te", label: t("settings.mineruLangTe") },
+    { value: "ka", label: t("settings.mineruLangKa") },
+    { value: "el", label: t("settings.mineruLangEl") },
+    { value: "th", label: t("settings.mineruLangTh") },
+    { value: "latin", label: t("settings.mineruLangLatin") },
+    { value: "arabic", label: t("settings.mineruLangArabic") },
+    { value: "cyrillic", label: t("settings.mineruLangCyrillic") },
+    { value: "east_slavic", label: t("settings.mineruLangEastSlavic") },
+    { value: "devanagari", label: t("settings.mineruLangDevanagari") },
   ]
 
   const [ragTopK,setRagTopK]=useState("20");const [ragRerankTopK,setRagRerankTopK]=useState("5");const [ragMaxParallel,setRagMaxParallel]=useState("10");const [ragMaxIter,setRagMaxIter]=useState("8");const [ragSearchMode,setRagSearchMode]=useState("hybrid");const [ragMinScore,setRagMinScore]=useState("25")
@@ -722,16 +750,16 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         if (was === "loading" && st === "loaded") {
           const detail = state.load_details?.[id]
           const took =
-            typeof detail?.load_s === "number" ? ` in ${detail.load_s}s` : ""
+            typeof detail?.load_s === "number" ? t("settings.inSeconds", { n: detail.load_s }) : ""
           toast.success(
             id === "builtin-local-rt"
-              ? `Realtime model ready${took}`
-              : `File transcription model ready${took}`,
+              ? t("settings.rtModelReady", { took })
+              : t("settings.fileModelReady", { took }),
           )
         }
         if (was === "loading" && st === "error") {
           const detail = state.load_details?.[id]
-          toast.error(detail?.error || detail?.message || "Model load failed")
+          toast.error(detail?.error || detail?.message || t("settings.modelLoadFailed"))
         }
       }
       setLoadStates(next)
@@ -830,7 +858,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           if (c.default_chat_model && typeof c.default_chat_model === "string") setChatModelId(c.default_chat_model)
         }).catch(() => {})
       }
-    } catch { toast.error("Failed to load providers") }
+    } catch { toast.error(t("settings.failedToLoadProviders")) }
   }
 
   // ── Embedding ──
@@ -874,17 +902,17 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     })
     if (!hasFiles) {
       setDeleteLocalModelsOpen(false)
-      toast.message("Nothing to delete")
+      toast.message(t("settings.nothingToDelete"))
       return
     }
     setDeletingModelIds((prev) => new Set([...prev, ...ids]))
     try {
       const res = await deleteLocalModels(ids)
       if (!res.success) {
-        toast.error(res.error || "Delete failed")
+        toast.error(res.error || t("settings.deleteFailed"))
       } else {
-        const freed = res.freed_mb ? ` (~${res.freed_mb} MB)` : ""
-        toast.success(`Local models deleted${freed}`)
+        const freed = res.freed_mb ? t("settings.freedMb", { n: res.freed_mb }) : ""
+        toast.success(t("settings.localModelsDeleted", { freed }))
         setDeleteLocalModelsOpen(false)
       }
       await refreshModelDownloaded()
@@ -989,25 +1017,25 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
   const rtAdapterOpts = providerTypes.realtime_transcription.map((p) => ({ value: p.name, label: p.display_name }))
 
   const embFields: FieldDef[] = [
-    { key: "name", label: "Name", placeholder: "My Embedding" },
-    { key: "provider", label: "Provider", options: embOptions },
-    { key: "model", label: "Model", placeholder: "text-embedding-3-small" },
-    { key: "base_url", label: "Base URL", placeholder: "https://api.openai.com/v1" },
-    { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
-    { key: "batch_size", label: "Batch Size", type: "number", placeholder: "10" },
+    { key: "name", label: t("common.name"), placeholder: t("settings.embedding") },
+    { key: "provider", label: t("library.provider"), options: embOptions },
+    { key: "model", label: t("library.model"), placeholder: "text-embedding-3-small" },
+    { key: "base_url", label: t("settings.baseUrl"), placeholder: "https://api.openai.com/v1" },
+    { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
+    { key: "batch_size", label: t("settings.batchSize"), type: "number", placeholder: "10" },
   ]
 
   const rerankFields: FieldDef[] = [
-    { key: "name", label: "Name", placeholder: "My Reranker" },
-    { key: "provider", label: "Provider", options: rerankOptions },
-    { key: "model", label: "Model", placeholder: "rerank-multilingual-v3.0" },
-    { key: "base_url", label: "Base URL", placeholder: "https://api.cohere.com/v1" },
-    { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+    { key: "name", label: t("common.name"), placeholder: t("settings.reranker") },
+    { key: "provider", label: t("library.provider"), options: rerankOptions },
+    { key: "model", label: t("library.model"), placeholder: "rerank-multilingual-v3.0" },
+    { key: "base_url", label: t("settings.baseUrl"), placeholder: "https://api.cohere.com/v1" },
+    { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
   ]
 
   const fileTransFields: FieldDef[] = [
-    { key: "name", label: "Name", placeholder: "My File Transcription" },
-    { key: "adapter", label: "Adapter", options: ftAdapterOpts },
+    { key: "name", label: t("common.name"), placeholder: t("settings.fileTranscription") },
+    { key: "adapter", label: t("settings.adapter"), options: ftAdapterOpts },
   ]
 
   const getFileTransFields = (form: Record<string, string>): FieldDef[] => {
@@ -1016,17 +1044,17 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     if (adapter === "openai_compatible") {
       return [
         ...fileTransFields,
-        { key: "base_url", label: "Base URL", placeholder: "https://api.openai.com/v1" },
-        { key: "model", label: "Model", placeholder: "whisper-1" },
-        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+        { key: "base_url", label: t("settings.baseUrl"), placeholder: "https://api.openai.com/v1" },
+        { key: "model", label: t("library.model"), placeholder: "whisper-1" },
+        { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
       ]
     }
     if (adapter === "openrouter") {
       return [
         ...fileTransFields,
-        { key: "base_url", label: "Base URL", placeholder: "https://openrouter.ai/api/v1" },
-        { key: "model", label: "Model", options: OPENROUTER_TRANSCRIPTION_MODELS },
-        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-or-v1-..." },
+        { key: "base_url", label: t("settings.baseUrl"), placeholder: "https://openrouter.ai/api/v1" },
+        { key: "model", label: t("library.model"), options: OPENROUTER_TRANSCRIPTION_MODELS },
+        { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-or-v1-..." },
       ]
     }
     if (adapter === "dashscope_funasr") {
@@ -1034,25 +1062,25 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         ...fileTransFields,
         {
           key: "model",
-          label: "Model",
+          label: t("library.model"),
           options: [
             { value: "fun-asr", label: "fun-asr (FunASR cloud)" },
             { value: "qwen-audio-3.0-asr-flash-filetrans", label: "qwen-audio-3.0-asr-flash-filetrans" },
           ],
         },
-        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+        { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
       ]
     }
     // Other remote adapters: only api_key
     return [
       ...fileTransFields,
-      { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+      { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
     ]
   }
 
   const rtTransFields: FieldDef[] = [
-    { key: "name", label: "Name", placeholder: "My Realtime Transcription" },
-    { key: "adapter", label: "Adapter", options: rtAdapterOpts },
+    { key: "name", label: t("common.name"), placeholder: t("settings.realtimeTranscription") },
+    { key: "adapter", label: t("settings.adapter"), options: rtAdapterOpts },
   ]
 
   const getRtTransFields = (form: Record<string, string>): FieldDef[] => {
@@ -1061,9 +1089,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     if (adapter === "openai_compatible") {
       return [
         ...rtTransFields,
-        { key: "base_url", label: "Base URL", placeholder: "https://api.openai.com/v1" },
-        { key: "model", label: "Model", placeholder: "gpt-4o-realtime-preview" },
-        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+        { key: "base_url", label: t("settings.baseUrl"), placeholder: "https://api.openai.com/v1" },
+        { key: "model", label: t("library.model"), placeholder: "gpt-4o-realtime-preview" },
+        { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
       ]
     }
     if (adapter === "dashscope_funasr_realtime") {
@@ -1071,18 +1099,18 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         ...rtTransFields,
         {
           key: "model",
-          label: "Model",
+          label: t("library.model"),
           options: [
             { value: "fun-asr-realtime", label: "fun-asr-realtime (FunASR cloud)" },
             { value: "qwen-audio-3.0-asr-flash-streaming", label: "qwen-audio-3.0-asr-flash-streaming" },
           ],
         },
-        { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+        { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
       ]
     }
     return [
       ...rtTransFields,
-      { key: "api_key", label: "API Key", type: "password", placeholder: "sk-..." },
+      { key: "api_key", label: t("settings.apiKey"), type: "password", placeholder: "sk-..." },
     ]
   }
 
@@ -1094,7 +1122,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         label: `${p.name || p.id} / ${m}`,
       })),
     )
-    return [{ value: "", label: "None (disabled)" }, ...visualModels]
+    return [{ value: "", label: t("settings.noneDisabled") }, ...visualModels]
   })()
 
   const chatModelOptions = (() => {
@@ -1107,7 +1135,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         })),
       )
       .filter((cm) => cm.isFunctionCall)
-    return [{ value: "", label: "Default" }, ...chatModels.map(({ value, label }) => ({ value, label }))]
+    return [{ value: "", label: t("common.default") }, ...chatModels.map(({ value, label }) => ({ value, label }))]
   })()
 
   const coerceSlotValue = (stored: string, options: { value: string }[]) => {
@@ -1124,7 +1152,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         label: `${p.name || p.id} / ${m}`,
       })),
     )
-    return [{ value: "", label: "Default" }, ...meetingModels]
+    return [{ value: "", label: t("common.default") }, ...meetingModels]
   })()
 
   const enrichModelOptions = (() => {
@@ -1139,10 +1167,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
       const p = providers.find((x) => x.id === enrichModel)
       models.unshift({
         value: enrichModel,
-        label: p ? `${p.name || p.id} (provider default)` : enrichModel,
+        label: p ? t("settings.providerDefaultLabel", { name: p.name || p.id }) : enrichModel,
       })
     }
-    return [{ value: "", label: "Default" }, ...models]
+    return [{ value: "", label: t("common.default") }, ...models]
   })()
 
   const saveMineru = async (patch: Record<string, unknown>) => {
@@ -1163,9 +1191,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
     <div className="pm-settings">
       <div className="pm-settings-inner">
         <header className="pm-settings-mast">
-          <h1 className="pm-settings-page-title">Settings</h1>
+          <h1 className="pm-settings-page-title">{t("settings.pageTitle")}</h1>
           <p className="pm-settings-page-desc">
-            Configure language models, retrieval, transcription, and system defaults.
+            {t("settings.pageDesc")}
           </p>
         </header>
 
@@ -1174,9 +1202,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <div className="pm-settings-card">
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text min-w-0">
-                <h2 className="pm-settings-card-kicker">Quick setup</h2>
+                <h2 className="pm-settings-card-kicker">{t("settings.quickSetup")}</h2>
                 <p className="pm-settings-card-desc">
-                  Configure a full provider stack with a single API key.
+                  {t("settings.quickSetupDesc")}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 shrink-0">
@@ -1198,10 +1226,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <div className="pm-settings-card">
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text">
-                <h2 className="pm-settings-card-kicker">Models</h2>
-                <p className="pm-settings-card-desc">LLM providers for chat, tools, and vision.</p>
+                <h2 className="pm-settings-card-kicker">{t("settings.models")}</h2>
+                <p className="pm-settings-card-desc">{t("settings.modelsDesc")}</p>
               </div>
-              <Button variant="default" size="sm" onClick={handleAdd}>Add</Button>
+              <Button variant="default" size="sm" onClick={handleAdd}>{t("common.add")}</Button>
             </div>
             <div className="pm-settings-card-body">
               <div className="pm-settings-provider-grid">
@@ -1217,7 +1245,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   onClick={() => setShowModelConfig(!showModelConfig)}
                   aria-expanded={showModelConfig}
                 >
-                  <span className="pm-settings-subhead">More · image · chat · meeting · library · query · distill</span>
+                  <span className="pm-settings-subhead">{t("settings.moreSlots")}</span>
                   <ChevronRight className="pm-settings-fold-chev" strokeWidth={1.75} />
                 </button>
                 <div className={cn("pm-config-fold", showModelConfig && "is-open")}>
@@ -1226,11 +1254,11 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                       <div className="pm-settings-model-fields">
                         {/* Image description */}
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Image description</FieldLabel>
+                          <FieldLabel>{t("settings.imageDescription")}</FieldLabel>
                           {visualModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
                               <Sparkles className="h-5 w-5" />
-                              <p className="pm-meta">No visual-capable models configured.</p>
+                              <p className="pm-meta">{t("settings.noVisualModels")}</p>
                             </div>
                           ) : (
                             <DropdownSelect
@@ -1239,24 +1267,24 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                 setVisualModelId(v)
                                 try {
                                   await updateConfig("visual_model_id", { visual_model_id: v || null })
-                                  toast.success("Image description model updated")
+                                  toast.success(t("settings.visualModelUpdated"))
                                 } catch {
-                                  toast.error("Failed to update image description model")
+                                  toast.error(t("settings.failedVisualModel"))
                                 }
                               }}
                               options={visualModelOptions}
-                              placeholder="None (disabled)"
+                              placeholder={t("settings.noneDisabled")}
                             />
                           )}
                         </div>
 
                         {/* Chat model */}
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Chat model</FieldLabel>
+                          <FieldLabel>{t("settings.chatModel")}</FieldLabel>
                           {chatModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
                               <MessageSquare className="h-5 w-5" />
-                              <p className="pm-meta">No chat-capable models configured.</p>
+                              <p className="pm-meta">{t("settings.noChatModels")}</p>
                             </div>
                           ) : (
                             <DropdownSelect
@@ -1265,22 +1293,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                 setChatModelId(v)
                                 try {
                                   await updateConfig("default_chat_model", { default_chat_model: v || null })
-                                  toast.success("Chat model updated")
+                                  toast.success(t("settings.chatModelUpdated"))
                                 } catch {
-                                  toast.error("Failed to update chat model")
+                                  toast.error(t("settings.failedChatModel"))
                                 }
                               }}
                               options={chatModelOptions}
-                              placeholder="Default"
+                              placeholder={t("common.default")}
                             />
                           )}
                         </div>
 
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Meeting summary model</FieldLabel>
+                          <FieldLabel>{t("settings.meetingSummaryModel")}</FieldLabel>
                           {meetingModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
-                              <p className="pm-meta">No LLM providers configured.</p>
+                              <p className="pm-meta">{t("settings.noLlmProviders")}</p>
                             </div>
                           ) : (
                             <DropdownSelect
@@ -1291,22 +1319,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                   await updateConfig("enrichment", {
                                     meeting_model: v,
                                   })
-                                  toast.success("Meeting model updated")
+                                  toast.success(t("settings.meetingModelUpdated"))
                                 } catch {
-                                  toast.error("Failed to update")
+                                  toast.error(t("settings.failedToUpdate"))
                                 }
                               }}
                               options={meetingModelOptions}
-                              placeholder="Default"
+                              placeholder={t("common.default")}
                             />
                           )}
                         </div>
 
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Library LLM</FieldLabel>
+                          <FieldLabel>{t("settings.libraryLlm")}</FieldLabel>
                           {enrichModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
-                              <p className="pm-meta">No LLM providers configured.</p>
+                              <p className="pm-meta">{t("settings.noLlmProviders")}</p>
                             </div>
                           ) : (
                             <DropdownSelect
@@ -1317,22 +1345,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                   await updateConfig("enrichment", {
                                     enrichment_model: v,
                                   })
-                                  toast.success("Library LLM updated")
+                                  toast.success(t("settings.libraryLlmUpdated"))
                                 } catch {
-                                  toast.error("Failed to update")
+                                  toast.error(t("settings.failedToUpdate"))
                                 }
                               }}
                               options={enrichModelOptions}
-                              placeholder="Default"
+                              placeholder={t("common.default")}
                             />
                           )}
                         </div>
 
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Agentic query</FieldLabel>
+                          <FieldLabel>{t("settings.agenticQuery")}</FieldLabel>
                           {enrichModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
-                              <p className="pm-meta">No LLM providers configured.</p>
+                              <p className="pm-meta">{t("settings.noLlmProviders")}</p>
                             </div>
                           ) : (
                             <DropdownSelect
@@ -1343,22 +1371,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                   await updateConfig("enrichment", {
                                     agentic_query_model: v,
                                   })
-                                  toast.success("Agentic query model updated")
+                                  toast.success(t("settings.agenticQueryUpdated"))
                                 } catch {
-                                  toast.error("Failed to update")
+                                  toast.error(t("settings.failedToUpdate"))
                                 }
                               }}
                               options={enrichModelOptions}
-                              placeholder="Default"
+                              placeholder={t("common.default")}
                             />
                           )}
                         </div>
 
                         <div className="pm-settings-model-field">
-                          <FieldLabel>Note distill</FieldLabel>
+                          <FieldLabel>{t("settings.noteDistill")}</FieldLabel>
                           {enrichModelOptions.length <= 1 ? (
                             <div className="pm-settings-empty">
-                              <p className="pm-meta">No LLM providers configured.</p>
+                              <p className="pm-meta">{t("settings.noLlmProviders")}</p>
                             </div>
                           ) : (
                             <DropdownSelect
@@ -1369,13 +1397,13 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                   await updateConfig("enrichment", {
                                     note_distill_model: v,
                                   })
-                                  toast.success("Note distill model updated")
+                                  toast.success(t("settings.noteDistillUpdated"))
                                 } catch {
-                                  toast.error("Failed to update")
+                                  toast.error(t("settings.failedToUpdate"))
                                 }
                               }}
                               options={enrichModelOptions}
-                              placeholder="Default"
+                              placeholder={t("common.default")}
                             />
                           )}
                         </div>
@@ -1393,15 +1421,15 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <div className="pm-settings-card">
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text">
-                <h2 className="pm-settings-card-kicker">Embedding models</h2>
-                <p className="pm-settings-card-desc">Vector encoders for retrieval.</p>
+                <h2 className="pm-settings-card-kicker">{t("settings.embeddingModels")}</h2>
+                <p className="pm-settings-card-desc">{t("settings.embeddingDesc")}</p>
               </div>
               <Button
                 variant="default"
                 size="sm"
                 onClick={() => { setEditingEmb(null); setEmbDialogOpen(true) }}
               >
-                Add
+                {t("common.add")}
               </Button>
             </div>
             <div className="pm-settings-card-body">
@@ -1427,15 +1455,15 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <div className="pm-settings-card">
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text">
-                <h2 className="pm-settings-card-kicker">Rerank models</h2>
-                <p className="pm-settings-card-desc">Cross-encoder reranking for final ranking.</p>
+                <h2 className="pm-settings-card-kicker">{t("settings.rerankModels")}</h2>
+                <p className="pm-settings-card-desc">{t("settings.rerankDesc")}</p>
               </div>
               <Button
                 variant="default"
                 size="sm"
                 onClick={() => { setEditingRerank(null); setRerankDialogOpen(true) }}
               >
-                Add
+                {t("common.add")}
               </Button>
             </div>
             <div className="pm-settings-card-body">
@@ -1461,14 +1489,14 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <div className="pm-settings-card">
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text">
-                <h2 className="pm-settings-card-kicker">Transcription</h2>
-                <p className="pm-settings-card-desc">File batch and realtime speech providers.</p>
+                <h2 className="pm-settings-card-kicker">{t("settings.transcription")}</h2>
+                <p className="pm-settings-card-desc">{t("settings.transcriptionDesc")}</p>
               </div>
             </div>
             <div className="pm-settings-card-body">
               <div>
                 <div className="pm-settings-card-head mb-2">
-                  <h3 className="pm-settings-subhead">File transcription</h3>
+                  <h3 className="pm-settings-subhead">{t("settings.fileTranscription")}</h3>
                   <Button
                     variant="default"
                     size="sm"
@@ -1478,7 +1506,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                       setFileTransDialogOpen(true)
                     }}
                   >
-                    Add
+                    {t("common.add")}
                   </Button>
                 </div>
                 <div className="pm-settings-provider-grid">
@@ -1507,8 +1535,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         const adapter = (res as { adapter?: string })?.adapter
                         toast.success(
                           adapter
-                            ? `Default file transcription → ${adapter}`
-                            : "Set as default file transcription",
+                            ? t("settings.defaultFileTransNamed", { adapter })
+                            : t("settings.defaultFileTrans"),
                         )
                       }}
                       onToggleLoad={async (action) => {
@@ -1520,7 +1548,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             ...d,
                             [id]: {
                               state: "loading",
-                              message: "Loading file transcription pack into memory…",
+                              message: t("settings.loadingFilePack"),
                               started_at: Date.now() / 1000,
                             },
                           }))
@@ -1548,13 +1576,13 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           setLoadStates((s) => ({ ...s, [id]: "loaded" }))
                           setLoadDetails((d) => ({
                             ...d,
-                            [id]: { state: "loaded", message: res.message || "Ready" },
+                            [id]: { state: "loaded", message: res.message || t("common.ready") },
                           }))
                         } else if (res.status === "unloaded") {
                           setLoadStates((s) => ({ ...s, [id]: "unloaded" }))
                           setLoadDetails((d) => ({
                             ...d,
-                            [id]: { state: "unloaded", message: res.message || "Unloaded" },
+                            [id]: { state: "unloaded", message: res.message || t("settings.unloaded") },
                           }))
                         } else if (action === "load") {
                           // Unknown status while loading — keep loading + poll
@@ -1588,7 +1616,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
               <div>
                 <div className="pm-settings-card-head mb-2">
-                  <h3 className="pm-settings-subhead">Realtime transcription</h3>
+                  <h3 className="pm-settings-subhead">{t("settings.realtimeTranscription")}</h3>
                   <Button
                     variant="default"
                     size="sm"
@@ -1597,7 +1625,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                       setRtTransDialogOpen(true)
                     }}
                   >
-                    Add
+                    {t("common.add")}
                   </Button>
                 </div>
                 <div className="pm-settings-provider-grid">
@@ -1626,8 +1654,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         const adapter = (res as { adapter?: string })?.adapter
                         toast.success(
                           adapter
-                            ? `Default realtime transcription → ${adapter}`
-                            : "Set as default realtime transcription",
+                            ? t("settings.defaultRtTransNamed", { adapter })
+                            : t("settings.defaultRtTrans"),
                         )
                       }}
                       onToggleLoad={async (action) => {
@@ -1638,7 +1666,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             ...d,
                             [id]: {
                               state: "loading",
-                              message: "Loading realtime model into memory…",
+                              message: t("settings.loadingRtModel"),
                               started_at: Date.now() / 1000,
                             },
                           }))
@@ -1664,13 +1692,13 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           setLoadStates((s) => ({ ...s, [id]: "loaded" }))
                           setLoadDetails((d) => ({
                             ...d,
-                            [id]: { state: "loaded", message: res.message || "Ready" },
+                            [id]: { state: "loaded", message: res.message || t("common.ready") },
                           }))
                         } else if (res.status === "unloaded") {
                           setLoadStates((s) => ({ ...s, [id]: "unloaded" }))
                           setLoadDetails((d) => ({
                             ...d,
-                            [id]: { state: "unloaded", message: res.message || "Unloaded" },
+                            [id]: { state: "unloaded", message: res.message || t("settings.unloaded") },
                           }))
                         } else if (action === "load") {
                           setLoadStates((s) => ({ ...s, [id]: "loading" }))
@@ -1708,11 +1736,11 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <div className={cn("pm-settings-card", !hotWordsSupported && "opacity-60")}>
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text min-w-0">
-                <h2 className="pm-settings-card-kicker">Hot words</h2>
+                <h2 className="pm-settings-card-kicker">{t("settings.hotWords")}</h2>
                 <p className="pm-settings-card-desc">
                   {hotWordsSupported
-                    ? "Libraries for domain terms — names, acronyms, jargon — to improve transcription."
-                    : "Unavailable — the active local transcription models do not apply hot-word vocabularies."}
+                    ? t("settings.hotWordsDesc")
+                    : t("settings.hotWordsUnavailable")}
                 </p>
               </div>
               <Button
@@ -1721,15 +1749,15 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                 disabled={!hotWordsSupported}
                 title={
                   hotWordsSupported
-                    ? "Manage hot-word libraries"
-                    : "Active transcription model does not support hot words"
+                    ? t("settings.manageHotWords")
+                    : t("settings.hotWordsUnavailableTitle")
                 }
                 onClick={() => {
                   if (!hotWordsSupported) return
                   setHotWordsManagerOpen(true)
                 }}
               >
-                Manage
+                {t("common.manage")}
               </Button>
             </div>
           </div>
@@ -1739,13 +1767,13 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           <div className="pm-settings-card">
             <div className="pm-settings-card-head">
               <div className="pm-settings-card-head-text min-w-0">
-                <h2 className="pm-settings-card-kicker">People</h2>
+                <h2 className="pm-settings-card-kicker">{t("settings.people")}</h2>
                 <p className="pm-settings-card-desc">
-                  Voiceprint directory from Meetings — rename, listen, see which meetings they are in.
+                  {t("settings.peopleDesc")}
                 </p>
               </div>
               <Button variant="default" size="sm" onClick={() => setPeopleManagerOpen(true)}>
-                Manage
+                {t("common.manage")}
               </Button>
             </div>
           </div>
@@ -1755,25 +1783,13 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         <section className="pm-settings-section">
         <div className="pm-settings-card">
           <div className="pm-settings-card-head-text">
-            <h2 className="pm-settings-card-kicker">Web search (Tavily)</h2>
+            <h2 className="pm-settings-card-kicker">{t("settings.webSearch")}</h2>
           </div>
           <p className="pm-settings-card-desc">
-            Store your Tavily API key here. Turn web search on/off from the{" "}
-            <strong className="text-[var(--pm-ink)] font-normal">Chat</strong> toolbar (Globe / Web).
-            Even when on, every search still asks for confirmation, and results are labeled WEB
-            (not knowledge base). Meeting chat never uses web search. Get a key at{" "}
-            <a
-              href="https://tavily.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="pm-settings-link"
-            >
-              tavily.com
-            </a>
-            .
+            {t("settings.tavilyHelp")}
           </p>
           <div className="pm-config-field">
-            <FieldLabel>Tavily API key</FieldLabel>
+            <FieldLabel>{t("settings.tavilyKey")}</FieldLabel>
             <div className="relative">
               <Input
                 type={showWebSearchKey ? "text" : "password"}
@@ -1787,11 +1803,11 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                     })
                     toast.success(
                       webSearchApiKey.trim()
-                        ? "Tavily API key saved"
-                        : "Tavily API key cleared",
+                        ? t("settings.tavilyKeySaved")
+                        : t("settings.tavilyKeyCleared"),
                     )
                   } catch {
-                    toast.error("Failed to save Tavily API key")
+                    toast.error(t("settings.failedSaveTavily"))
                   }
                 }}
                 placeholder="tvly-..."
@@ -1807,7 +1823,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                 {showWebSearchKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
             </div>
-            <p className="pm-meta mt-1.5">Without a key, the Chat “Web” toggle will have no effect.</p>
+            <p className="pm-meta mt-1.5">{t("settings.withoutKey")}</p>
           </div>
         </div>
         </section>
@@ -1817,32 +1833,22 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         <div className="pm-settings-card">
           <div className="pm-settings-row-between">
             <div className="min-w-0">
-              <h2 className="pm-settings-card-kicker">MinerU cloud parsing</h2>
+                <h2 className="pm-settings-card-kicker">{t("settings.mineru")}</h2>
               <p className="pm-meta pm-settings-card-desc mt-1">
-                High-quality document parsing with better table, formula, and layout preservation.
-                Get a token at{" "}
-                <a
-                  href="https://mineru.net/apiManage/token"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="pm-settings-link"
-                >
-                  mineru.net
-                </a>
-                . Enable per-collection in Collection Settings when ready.
+                {t("settings.mineruDesc")}
               </p>
             </div>
             <SettingsSwitch
               id="pm-settings-mineru"
-              label="Enable MinerU"
+              label={t("settings.enableMineru")}
               checked={mineruEnabled}
               onCheckedChange={async (next) => {
                 setMineruEnabled(next)
                 try {
                   await saveMineru({ enabled: next })
-                  toast.success(next ? "MinerU enabled" : "MinerU disabled")
+                  toast.success(next ? t("settings.mineruEnabled") : t("settings.mineruDisabled"))
                 } catch {
-                  toast.error("Failed to update MinerU setting")
+                  toast.error(t("settings.failedMineru"))
                   setMineruEnabled(!next)
                 }
               }}
@@ -1853,7 +1859,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
             <div className="pm-config-fold-inner">
               <div className="space-y-4 pt-1">
                 <div className="pm-config-field">
-                  <FieldLabel>API token</FieldLabel>
+                  <FieldLabel>{t("settings.apiToken")}</FieldLabel>
                   <div className="relative">
                     <Input
                       type={showMineruToken ? "text" : "password"}
@@ -1864,7 +1870,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           await saveMineru({ api_token: mineruToken })
                         } catch { /* ignore */ }
                       }}
-                      placeholder="Enter your MinerU API token"
+                      placeholder={t("settings.mineruTokenPh")}
                       disabled={!mineruEnabled}
                       className="pr-10"
                     />
@@ -1883,7 +1889,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
                 <div className="pm-config-grid">
                   <div className="pm-config-field">
-                    <FieldLabel>Model version</FieldLabel>
+                    <FieldLabel>{t("settings.modelVersion")}</FieldLabel>
                     <DropdownSelect
                       value={mineruModel}
                       onChange={async (v) => {
@@ -1897,7 +1903,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                     />
                   </div>
                   <div className="pm-config-field">
-                    <FieldLabel>Language</FieldLabel>
+                    <FieldLabel>{t("settings.language")}</FieldLabel>
                     <DropdownSelect
                       value={mineruLanguage}
                       onChange={async (v) => {
@@ -1913,30 +1919,30 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                 </div>
 
                 <div>
-                  <FieldLabel>Parsing options</FieldLabel>
+                  <FieldLabel>{t("settings.parsingOptions")}</FieldLabel>
                   <div className="space-y-3 mt-2">
                     {(
                       [
                         {
                           key: "ocr",
-                          label: "Force OCR",
-                          desc: "Force OCR on all pages. When off, MinerU auto-detects scanned or image pages.",
+                          label: t("settings.forceOcr"),
+                          desc: t("settings.forceOcrDesc"),
                           checked: mineruOcr,
                           set: setMineruOcr,
                           patch: (v: boolean) => ({ is_ocr: v }),
                         },
                         {
                           key: "formula",
-                          label: "Formula recognition",
-                          desc: "Recognize mathematical formulas and convert to LaTeX.",
+                          label: t("settings.formulaRecognition"),
+                          desc: t("settings.formulaDesc"),
                           checked: mineruFormula,
                           set: setMineruFormula,
                           patch: (v: boolean) => ({ enable_formula: v }),
                         },
                         {
                           key: "table",
-                          label: "Table recognition",
-                          desc: "Detect and extract tables as structured Markdown.",
+                          label: t("settings.tableRecognition"),
+                          desc: t("settings.tableDesc"),
                           checked: mineruTable,
                           set: setMineruTable,
                           patch: (v: boolean) => ({ enable_table: v }),
@@ -1974,6 +1980,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
 
         <ConnectionInfoCard />
 
+        <InterfaceLanguageCard />
+
         {/* Advanced */}
         <section className="pm-settings-section">
           <div className="pm-settings-card pm-settings-fold-card">
@@ -1994,7 +2002,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
             }}
             aria-expanded={showAdvanced}
           >
-            <span className="pm-settings-card-kicker">Advanced</span>
+            <span className="pm-settings-card-kicker">{t("settings.advanced")}</span>
             <ChevronRight className="pm-settings-fold-chev" strokeWidth={1.75} />
           </button>
 
@@ -2008,16 +2016,14 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   {/* Enrichment */}
                   <div className="pm-settings-adv-block">
                     <div className="pm-settings-adv-head">
-                      <h3 className="pm-settings-subhead">Enrichment</h3>
+                      <h3 className="pm-settings-subhead">{t("settings.enrichment")}</h3>
                       <p className="pm-settings-adv-desc">
-                        Global cap on concurrent Summary, Context, and image
-                        description requests across all files (default 50).
-                        The Library LLM is set in the model list above.
+                        {t("settings.enrichmentDesc")}
                       </p>
                     </div>
                     <div className="pm-settings-adv-grid">
                       <div className="pm-settings-adv-field">
-                        <FieldLabel>Parallel</FieldLabel>
+                        <FieldLabel>{t("settings.parallel")}</FieldLabel>
                         <Input
                           inputMode="numeric"
                           value={enrichMaxParallel}
@@ -2039,9 +2045,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   {/* Agentic RAG */}
                   <div className="pm-settings-adv-block">
                     <div className="pm-settings-adv-head">
-                      <h3 className="pm-settings-subhead">Agentic RAG defaults</h3>
+                      <h3 className="pm-settings-subhead">{t("settings.agenticDefaults")}</h3>
                       <p className="pm-settings-adv-desc">
-                        Applies to decompose, rewrite loop, and aggregate.
+                        {t("settings.agenticDesc")}
                       </p>
                     </div>
                     <div className="pm-settings-adv-toolbar">
@@ -2054,7 +2060,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           _saveRag(m)
                         }}
                       >
-                        {ragSearchMode === "hybrid" ? "Hybrid" : "Dense"}
+                        {ragSearchMode === "hybrid" ? t("settings.hybrid") : t("settings.dense")}
                       </button>
                     </div>
                     <div className="pm-settings-adv-fields-stack">
@@ -2062,7 +2068,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         {(
                           [
                             {
-                              label: "Top K",
+                              label: t("settings.topK"),
                               value: ragTopK,
                               set: setRagTopK,
                               min: 1,
@@ -2070,7 +2076,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                               fallback: 20,
                             },
                             {
-                              label: "Rerank Top K",
+                              label: t("settings.rerankTopK"),
                               value: ragRerankTopK,
                               set: setRagRerankTopK,
                               min: 1,
@@ -2078,7 +2084,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                               fallback: 5,
                             },
                             {
-                              label: "Parallel",
+                              label: t("settings.parallel"),
                               value: ragMaxParallel,
                               set: setRagMaxParallel,
                               min: 1,
@@ -2086,7 +2092,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                               fallback: 10,
                             },
                             {
-                              label: "Iter",
+                              label: t("settings.iter"),
                               value: ragMaxIter,
                               set: setRagMaxIter,
                               min: 1,
@@ -2120,7 +2126,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         <div className="pm-settings-adv-fold-inner">
                           <div className="pm-settings-adv-grid pm-settings-adv-fold-pad">
                             <div className="pm-settings-adv-field">
-                              <FieldLabel>Min score</FieldLabel>
+                              <FieldLabel>{t("settings.minScore")}</FieldLabel>
                               <Input
                                 inputMode="numeric"
                                 value={ragMinScore}
@@ -2141,9 +2147,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   {/* Direct RAG */}
                   <div className="pm-settings-adv-block">
                     <div className="pm-settings-adv-head">
-                      <h3 className="pm-settings-subhead">Direct RAG defaults</h3>
+                      <h3 className="pm-settings-subhead">{t("settings.directDefaults")}</h3>
                       <p className="pm-settings-adv-desc">
-                        Used when Agentic mode is disabled. Direct retrieval with optional rerank.
+                        {t("settings.directDesc")}
                       </p>
                     </div>
                     <div className="pm-settings-adv-toolbar">
@@ -2157,7 +2163,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           updateConfig("direct_rag", { use_reranker: n }).catch(() => {})
                         }}
                       >
-                        Rerank {dirRerankEnabled ? "on" : "off"}
+                        {dirRerankEnabled ? t("settings.rerankOn") : t("settings.rerankOff")}
                       </button>
                       <button
                         type="button"
@@ -2168,13 +2174,13 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           _saveDir(m)
                         }}
                       >
-                        {dirSearchMode === "hybrid" ? "Hybrid" : "Dense"}
+                        {dirSearchMode === "hybrid" ? t("settings.hybrid") : t("settings.dense")}
                       </button>
                     </div>
                     <div className="pm-settings-adv-fields-stack">
                       <div className="pm-settings-adv-grid">
                         <div className="pm-settings-adv-field">
-                          <FieldLabel>Top K</FieldLabel>
+                          <FieldLabel>{t("settings.topK")}</FieldLabel>
                           <Input
                             inputMode="numeric"
                             value={dirTopK}
@@ -2197,7 +2203,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         <div className="pm-settings-adv-fold-inner">
                           <div className="pm-settings-adv-grid pm-settings-adv-fold-pad">
                             <div className="pm-settings-adv-field">
-                              <FieldLabel>Rerank Top K</FieldLabel>
+                              <FieldLabel>{t("settings.rerankTopK")}</FieldLabel>
                               <Input
                                 inputMode="numeric"
                                 value={dirRerankTopK}
@@ -2222,7 +2228,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         <div className="pm-settings-adv-fold-inner">
                           <div className="pm-settings-adv-grid pm-settings-adv-fold-pad">
                             <div className="pm-settings-adv-field">
-                              <FieldLabel>Min score</FieldLabel>
+                              <FieldLabel>{t("settings.minScore")}</FieldLabel>
                               <Input
                                 inputMode="numeric"
                                 value={dirMinScore}
@@ -2274,10 +2280,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         deletingModelIds.has(id)
                       )
                       const primaryActionLabel = anyExtracting
-                        ? "Extracting…"
+                        ? t("common.extracting")
                         : anyDownloading
-                          ? `Downloading ${downloadProgress}%`
-                          : "Download"
+                          ? t("settings.downloadingPct", { n: downloadProgress })
+                          : t("common.download")
                       // Only crossfade on semantic phase change — not every % tick
                       const primaryActionPhase = anyExtracting
                         ? "extracting"
@@ -2289,9 +2295,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         <>
                     <div className="pm-settings-adv-head">
                       <div>
-                        <h3 className="pm-settings-subhead">Local model downloads</h3>
+                        <h3 className="pm-settings-subhead">{t("settings.localDownloads")}</h3>
                         <p className="pm-settings-adv-desc">
-                          Download FunASR models for offline file and realtime transcription (CPU).
+                          {t("settings.localDownloadsDesc")}
                         </p>
                       </div>
                       <div className="pm-settings-adv-toolbar">
@@ -2300,11 +2306,11 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                           size="sm"
                           onClick={() => {
                             refreshModelDownloaded()
-                            toast.success("Status refreshed")
+                            toast.success(t("settings.statusRefreshed"))
                           }}
                         >
                           <RefreshCw className="h-3.5 w-3.5" />
-                          Refresh
+                          {t("common.refresh")}
                         </Button>
                         {allDone ? (
                           <Button
@@ -2318,7 +2324,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             ) : (
                               <Trash2 className="h-3.5 w-3.5" />
                             )}
-                            Delete
+                            {t("common.delete")}
                           </Button>
                         ) : (
                           <Button
@@ -2348,10 +2354,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             aria-busy={anyDownloading || undefined}
                             title={
                               anyExtracting
-                                ? "Extracting ONNX packs…"
+                                ? t("settings.extractingOnnx")
                                 : anyDownloading
-                                  ? `Downloading… ${downloadProgress}%`
-                                  : "Download local models"
+                                  ? t("settings.downloadingTitle", { n: downloadProgress })
+                                  : t("models.downloadLocal")
                             }
                           >
                             <span className="pm-settings-dl-btn-inner">
@@ -2392,16 +2398,16 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                         )
                         // Progress only on toolbar Download button — cards stay calm
                         const statusLabel = !known
-                          ? "Unknown"
+                          ? t("common.unknown")
                           : anyPackDownloading
-                            ? "In progress"
+                            ? t("settings.inProgress")
                             : anyError
-                              ? "Error"
+                              ? t("common.error")
                               : packDone
-                                ? "Ready"
+                                ? t("common.ready")
                                 : anyPackDownloaded
-                                  ? "Partial"
-                                  : "Not downloaded"
+                                  ? t("settings.partial")
+                                  : t("settings.notDownloaded")
                         const badgeVariant = anyError
                           ? "destructive"
                           : packDone
@@ -2414,7 +2420,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             <div className="pm-settings-provider-top">
                               <div className="pm-settings-provider-name-row">
                                 <span className="pm-settings-provider-name">
-                                  {bundle.label}
+                                  {bundle.id === "file" ? t("settings.filePack") : t("settings.realtimePack")}
                                 </span>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
@@ -2433,7 +2439,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                             </div>
 
                             <p className="pm-settings-provider-meta">
-                              {bundle.description}
+                              {bundle.id === "file" ? t("settings.filePackDesc") : t("settings.realtimePackDesc")}
                               {totalMb > 0 ? ` · ~${totalMb} MB` : ""}
                             </p>
 
@@ -2444,9 +2450,9 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                                     <span>{m.display_name || m.id}</span>
                                     <span className="pm-settings-local-model-part-status">
                                       {m.downloaded
-                                        ? "Ready"
+                                        ? t("common.ready")
                                         : m.status === "error"
-                                          ? "Error"
+                                          ? t("common.error")
                                           : anyPackDownloading
                                             ? "…"
                                             : "—"}
@@ -2460,7 +2466,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                       })}
                       {localModelCatalog.length === 0 && (
                         <p className="pm-settings-adv-desc" style={{ margin: 0 }}>
-                          Loading model status… click Refresh if this stays empty.
+                          {t("settings.loadingModelStatus")}
                         </p>
                       )}
                     </div>
@@ -2472,15 +2478,15 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                   {/* Developer mode */}
                   <div className="pm-settings-adv-row">
                     <div className="pm-settings-adv-row-text">
-                      <h3 className="pm-settings-subhead">Developer mode</h3>
+                      <h3 className="pm-settings-subhead">{t("settings.developerMode")}</h3>
                       <p className="pm-settings-adv-desc">
-                        Backend logs and the file-detail Ingest run timeline.
+                        {t("settings.developerModeDesc")}
                       </p>
                     </div>
                     <div className="pm-settings-adv-row-actions">
                       <SettingsSwitch
                         id="pm-settings-dev"
-                        label="Developer mode"
+                        label={t("settings.developerMode")}
                         checked={developerMode}
                         onCheckedChange={() => toggleDeveloperMode()}
                       />
@@ -2504,8 +2510,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         <SimpleProviderDialog
           open={embDialogOpen}
           provider={editingEmb}
-          title="Embedding Provider"
-          kicker="Embedding"
+          title={t("settings.embeddingProvider")}
+          kicker={t("settings.embeddingKicker")}
           fields={embFields}
           defaults={{ provider: "openai_compatible", batch_size: "10", is_default: "false" }}
           onOpenChange={setEmbDialogOpen}
@@ -2522,8 +2528,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         <SimpleProviderDialog
           open={rerankDialogOpen}
           provider={editingRerank}
-          title="Rerank Provider"
-          kicker="Rerank"
+          title={t("settings.rerankProvider")}
+          kicker={t("settings.rerankKicker")}
           fields={rerankFields}
           defaults={{ provider: "openai_compatible", is_default: "false" }}
           onOpenChange={setRerankDialogOpen}
@@ -2540,8 +2546,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         <SimpleProviderDialog
           open={fileTransDialogOpen}
           provider={editingFileTrans}
-          title="File Transcription Provider"
-          kicker="File transcription"
+          title={t("settings.fileTransProvider")}
+          kicker={t("settings.fileTranscription")}
           fields={fileTransFields}
           getTransFields={getFileTransFields}
           defaults={{ adapter: ftAdapterOpts[0]?.value ?? "", is_active: "false", device: "auto" }}
@@ -2566,7 +2572,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
             return updateFileTranscriptionProvider(id, payload as Partial<TranscriptionProvider>)
           }}
           checkboxField="is_active"
-          checkboxLabel="Set as active"
+          checkboxLabel={t("settings.setAsActive")}
           modelFetchSection="transcription"
           renderExtra={(form) => {
             if (form.adapter !== "openai_compatible") return null
@@ -2580,7 +2586,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
             return (
               <div className="space-y-2">
                 <div className="pm-settings-row-between">
-                  <FieldLabel className="mb-0">Language hints</FieldLabel>
+                  <FieldLabel className="mb-0">{t("settings.languageHints")}</FieldLabel>
                   <Button
                     variant="ghost"
                     size="xs"
@@ -2590,23 +2596,23 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
                     }}
                   >
                     <Plus className="h-3 w-3" />
-                    Add
+                    {t("common.add")}
                   </Button>
                 </div>
                 <p className="pm-meta">
-                  Codes appear in the transcription language selector. Leave empty for provider defaults.
+                  {t("settings.codesHelp")}
                 </p>
                 {fileTransLangHints.map((hint, idx) => (
                   <div key={idx} className="flex gap-2 items-center">
                     <Input
                       className="flex-1"
-                      placeholder="Code (e.g. zh)"
+                      placeholder={t("settings.codeEg")}
                       value={hint.code}
                       onChange={(e) => update(idx, "code", e.target.value)}
                     />
                     <Input
                       className="flex-1"
-                      placeholder="Label (e.g. 中文)"
+                      placeholder={t("settings.labelEg")}
                       value={hint.label}
                       onChange={(e) => update(idx, "label", e.target.value)}
                     />
@@ -2630,8 +2636,8 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
         <SimpleProviderDialog
           open={rtTransDialogOpen}
           provider={editingRtTrans}
-          title="Realtime Transcription Provider"
-          kicker="Realtime transcription"
+          title={t("settings.rtTransProvider")}
+          kicker={t("settings.realtimeTranscription")}
           fields={rtTransFields}
           getTransFields={getRtTransFields}
           defaults={{ adapter: rtAdapterOpts[0]?.value ?? "", is_active: "false", device: "auto" }}
@@ -2648,7 +2654,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
             updateRealtimeTranscriptionProvider(id, data as Partial<TranscriptionProvider>)
           }
           checkboxField="is_active"
-          checkboxLabel="Set as active"
+          checkboxLabel={t("settings.setAsActive")}
           modelFetchSection="transcription"
         />
       </div>
@@ -2665,11 +2671,10 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
           showCloseButton={false}
         >
           <DialogHeader>
-            <DialogKicker>Local models</DialogKicker>
-            <DialogTitle>Delete local models?</DialogTitle>
+            <DialogKicker>{t("settings.localModels")}</DialogKicker>
+            <DialogTitle>{t("settings.deleteLocalModelsQ")}</DialogTitle>
             <DialogDescription>
-              File and realtime FunASR packs will be removed from disk. You can
-              re-download later.
+              {t("settings.deleteLocalModelsBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -2680,7 +2685,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
               disabled={deletingModelIds.size > 0}
               onClick={() => setDeleteLocalModelsOpen(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -2692,7 +2697,7 @@ const [openrouterDialogOpen, setOpenrouterDialogOpen] = useState(false)
               {deletingModelIds.size > 0 ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
-              Delete
+              {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { Loader2 } from "lucide-react"
 import { createMeeting } from "@/api/client"
+import { formatApiError } from "@/api/http"
+import { useT } from "@/i18n/use-t"
 import { toast } from "sonner"
 
 interface CreateMeetingButtonProps {
@@ -19,6 +21,7 @@ export function CreateMeetingButton({
   stayOnCurrent = false,
   recordingTitle = null,
 }: CreateMeetingButtonProps) {
+  const t = useT()
   const [creating, setCreating] = useState(false)
 
   const handleCreate = async () => {
@@ -30,17 +33,17 @@ export function CreateMeetingButton({
       }).replace(/\//g, "-")
       const meeting = await createMeeting(title)
       if (stayOnCurrent) {
-        const label = (recordingTitle || "current meeting").trim()
-        toast.success("Meeting created", {
-          description: `Still recording “${label}”. New meeting is in the list.`,
+        const label = (recordingTitle || t("meeting.currentMeeting")).trim()
+        toast.success(t("meeting.meetingCreated"), {
+          description: t("meeting.stillRecording", { label }),
         })
         onCreated(meeting.id, { stayOnCurrent: true })
       } else {
-        toast.success("Meeting created")
+        toast.success(t("meeting.meetingCreated"))
         onCreated(meeting.id)
       }
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     } finally {
       setCreating(false)
     }
@@ -54,12 +57,12 @@ export function CreateMeetingButton({
       disabled={creating}
       title={
         stayOnCurrent
-          ? "New meeting (stay on recording)"
-          : "New meeting"
+          ? t("meeting.newMeetingStay")
+          : t("meeting.newMeeting")
       }
     >
       {creating ? <Loader2 className="size-3 animate-spin" /> : null}
-      New
+      {t("common.new")}
     </button>
   )
 }

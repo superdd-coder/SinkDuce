@@ -6,6 +6,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useT } from "@/i18n/use-t"
+import { tr } from "@/i18n/tr"
 
 const HIDDEN = new Set(["text", "images"])
 
@@ -88,7 +90,7 @@ function isEmpty(value: unknown): boolean {
 }
 
 function formatMetaValue(key: string, value: unknown): string {
-  if (typeof value === "boolean") return value ? "Yes" : "No"
+  if (typeof value === "boolean") return value ? tr("common.yes") : tr("common.no")
   if (key === "ingested_at" && typeof value === "number" && Number.isFinite(value)) {
     const ms = value > 1e12 ? value : value * 1000
     const date = new Date(ms)
@@ -187,6 +189,7 @@ export function ChunkInspect({
   children: ReactNode
   className?: string
 }) {
+  const t = useT()
   const [armed, setArmed] = useState(false)
   if (!armed) {
     return (
@@ -229,14 +232,14 @@ export function ChunkInspect({
       >
         <div className="pm-chunk-inspect">
           <header className="pm-chunk-inspect-head">
-            <span className="pm-chunk-inspect-kicker">Chunk meta</span>
+            <span className="pm-chunk-inspect-kicker">{t("fileMgmt.chunkMeta")}</span>
             <p className="pm-chunk-inspect-title">
               #{index}
               <span className="pm-chunk-inspect-kind">{kind}</span>
             </p>
           </header>
           {empty ? (
-            <p className="pm-chunk-inspect-empty">No metadata on this chunk.</p>
+            <p className="pm-chunk-inspect-empty">{t("fileMgmt.noChunkMeta")}</p>
           ) : (
             <dl className="pm-chunk-inspect-list">
               {rows.map((row) => (
@@ -257,7 +260,7 @@ export function ChunkInspect({
                   key={img.imageId}
                   className="pm-chunk-inspect-row is-block"
                 >
-                  <dt>Image</dt>
+                  <dt>{t("fileMgmt.image")}</dt>
                   <dd>
                     <div className="font-mono">{img.imageId.slice(0, 12)}</div>
                     <div>OCR: {img.ocr || "—"}</div>

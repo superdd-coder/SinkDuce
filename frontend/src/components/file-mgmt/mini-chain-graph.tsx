@@ -15,6 +15,8 @@ import {
   listNodes,
 } from "@/api/file-mgmt"
 import { GroupIconView, groupFromList } from "./timeline-view/group-icons"
+import { tr } from "@/i18n/tr"
+import { useT } from "@/i18n/use-t"
 
 /** Compact slot pitch — same geometry ratios as Timeline, smaller scale. */
 const SLOT_W = 100
@@ -110,9 +112,9 @@ function nodeLabel(node: Node): string {
   const t = node.title?.trim()
   if (t) return t
   // Match NodeCard fallback for empty titles
-  if (node.node_type === "start") return "Start"
-  if (node.node_type === "end") return "End"
-  return "Untitled"
+  if (node.node_type === "start") return tr("fileMgmt.start")
+  if (node.node_type === "end") return tr("fileMgmt.end")
+  return tr("common.untitled")
 }
 
 function NodeChip({
@@ -187,6 +189,7 @@ export function MiniChainGraph({
   className?: string
   variant?: "default" | "glass"
 }) {
+  const t = useT()
   const glass = variant === "glass"
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [groups, setGroups] = useState<NodeGroup[]>([])
@@ -489,7 +492,7 @@ export function MiniChainGraph({
           className
         )}
       >
-        {error || "No timeline"}
+        {error || t("fileMgmt.noTimeline")}
       </div>
     )
   }

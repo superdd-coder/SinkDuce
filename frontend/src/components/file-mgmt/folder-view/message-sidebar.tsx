@@ -16,6 +16,7 @@ import { MessageCard } from "../message-card"
 import { LogMessageDialog } from "../file-detail/log-message-dialog"
 import { getFileDetail } from "@/api/file-mgmt"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 function findFolderInTree(
   tree: FolderTreeNode[],
@@ -30,6 +31,7 @@ function findFolderInTree(
 }
 
 export function MessageSidebar({ collectionId }: { collectionId: string }) {
+  const t = useT()
   const {
     currentFolderId,
     currentFolderMessages,
@@ -247,48 +249,58 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
   const scopeHint = (() => {
     if (focusFileId) {
       return fileLabel
-        ? `File: ${fileLabel}`
-        : "Selected file messages"
+        ? t("fileMgmt.fileColon", { name: fileLabel })
+        : t("fileMgmt.selectedFileMessages")
     }
     if (focusFolderId) {
-      const name = focusFolder?.name || "Selected folder"
+      const name = focusFolder?.name || t("fileMgmt.selectedFolder")
       const bits: string[] = [name]
-      if (messageRecursive) bits.push("nested")
-      if (messageIncludeFiles) bits.push("files")
-      if (messageIncludeNodes) bits.push("nodes")
+      if (messageRecursive) bits.push(t("common.nested"))
+      if (messageIncludeFiles) bits.push(t("common.files"))
+      if (messageIncludeNodes) bits.push(t("common.nodes"))
       return bits.join(" · ")
     }
-    const bits: string[] = [folderScopeIsRoot ? "Root" : "This folder"]
+    const bits: string[] = [
+      folderScopeIsRoot ? t("common.root") : t("fileMgmt.thisFolder"),
+    ]
     if (messageRecursive)
-      bits.push(folderScopeIsRoot ? "all folders" : "nested folders")
+      bits.push(
+        folderScopeIsRoot
+          ? t("fileMgmt.allFoldersBit")
+          : t("fileMgmt.nestedFoldersBit")
+      )
     if (messageIncludeFiles) {
       bits.push(
         messageRecursive
-          ? "all files"
+          ? t("fileMgmt.allFilesBit")
           : folderScopeIsRoot
-            ? "orphan files"
-            : "files here"
+            ? t("fileMgmt.orphanFilesBit")
+            : t("fileMgmt.filesHereBit")
       )
     }
     if (messageIncludeNodes) {
       if (folderScopeIsRoot && !messageRecursive) {
-        bits.push("nodes (need Nested)")
+        bits.push(t("fileMgmt.nodesNeedNested"))
       } else {
         bits.push(
-          messageRecursive ? "all linked nodes" : "group/branch nodes"
+          messageRecursive
+            ? t("fileMgmt.allLinkedNodes")
+            : t("fileMgmt.groupBranchNodes")
         )
       }
     }
     if (bits.length === 1)
-      bits[0] = folderScopeIsRoot ? "Root messages only" : "This folder only"
+      bits[0] = folderScopeIsRoot
+        ? t("fileMgmt.rootMessagesOnly")
+        : t("fileMgmt.thisFolderOnly")
     return bits.join(" + ")
   })()
 
   const contextLabel = focusFileId
-    ? "File"
+    ? t("common.file")
     : focusFolderId
-      ? "Folder"
-      : "Messages"
+      ? t("common.folder")
+      : t("common.messages")
 
   /** Folder id used for "Current folder" tag highlighting */
   const highlightFolderId = focusFileId
@@ -330,10 +342,10 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
               onClick={handleOpenForAdd}
               title={
                 focusFileId
-                  ? "Add message to file"
+                  ? t("fileMgmt.addMessageToFile")
                   : focusFolderId
-                    ? "Add message to folder"
-                    : "Add message"
+                    ? t("fileMgmt.addMessageToFolder")
+                    : t("fileMgmt.addMessage")
               }
               className="text-[var(--pm-muted)] hover:text-[var(--pm-ink)]"
               tabIndex={messageSidebarOpen ? 0 : -1}
@@ -344,7 +356,7 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
               variant="ghost"
               size="icon-xs"
               onClick={toggleMessageSidebar}
-              title="Hide messages"
+              title={t("fileMgmt.hideMessages")}
               className="text-[var(--pm-muted)] hover:text-[var(--pm-ink)]"
               tabIndex={messageSidebarOpen ? 0 : -1}
             >
@@ -366,14 +378,14 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
                 onClick={() => setMessageRecursive(!messageRecursive)}
                 title={
                   messageRecursive
-                    ? "Stop including nested folders"
+                    ? t("fileMgmt.stopNested")
                     : atRoot || folderScopeIsRoot
-                      ? "Include messages from all folders"
-                      : "Include messages from nested folders (recursive)"
+                      ? t("fileMgmt.includeAllFolders")
+                      : t("fileMgmt.includeNested")
                 }
               >
                 <FolderTree className="h-3 w-3 shrink-0" />
-                Nested
+                {t("common.nested")}
               </button>
               <button
                 type="button"
@@ -384,12 +396,12 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
                 onClick={() => setMessageIncludeFiles(!messageIncludeFiles)}
                 title={
                   messageIncludeFiles
-                    ? "Hide file messages"
-                    : "Include file messages in scope"
+                    ? t("fileMgmt.hideFileMessages")
+                    : t("fileMgmt.includeFileMessagesScope")
                 }
               >
                 <FileText className="h-3 w-3 shrink-0" />
-                Files
+                {t("common.files")}
               </button>
               <button
                 type="button"
@@ -400,12 +412,12 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
                 onClick={() => setMessageIncludeNodes(!messageIncludeNodes)}
                 title={
                   messageIncludeNodes
-                    ? "Hide node messages"
-                    : "Include node messages in scope"
+                    ? t("fileMgmt.hideNodeMessages")
+                    : t("fileMgmt.includeNodeMessagesScope")
                 }
               >
                 <GitBranch className="h-3 w-3 shrink-0" />
-                Nodes
+                {t("common.nodes")}
               </button>
             </div>
             <p className="pm-files-scope-hint" title={scopeHint}>
@@ -430,7 +442,7 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
             </div>
           ) : currentFolderMessages.length === 0 ? (
             <div className="pm-files-empty py-8">
-              No messages yet. Click + to add one.
+              {t("fileMgmt.noMessagesClick")}
             </div>
           ) : (
             <div
@@ -462,32 +474,34 @@ export function MessageSidebar({ collectionId }: { collectionId: string }) {
         key="folder-message-editor"
         open={dialogOpen}
         onOpenChange={handleCloseDialog}
-        title={editingMsg ? "Message" : "Add message"}
+        title={editingMsg ? t("common.message") : t("fileMgmt.addMessage")}
         kicker={
           editingMsg
             ? undefined
             : focusFileId
-              ? "File"
+              ? t("common.file")
               : focusFolderId
-                ? "Folder"
+                ? t("common.folder")
                 : folderScopeIsRoot
-                  ? "Root"
-                  : "Folder"
+                  ? t("common.root")
+                  : t("common.folder")
         }
         description={
           editingMsg
             ? undefined
             : focusFileId
               ? fileLabel
-                ? `New message on file “${fileLabel}”.`
-                : "New message on the selected file."
+                ? t("fileMgmt.newMessageOnFile", { name: fileLabel })
+                : t("fileMgmt.newMessageOnSelectedFile")
               : focusFolderId
                 ? focusFolder?.name
-                  ? `New message on folder “${focusFolder.name}”.`
-                  : "New message on the selected folder."
+                  ? t("fileMgmt.newMessageOnFolderNamed", {
+                      name: focusFolder.name,
+                    })
+                  : t("fileMgmt.newMessageOnSelectedFolder")
                 : folderScopeIsRoot
-                  ? "New message at collection root."
-                  : "New message on this folder."
+                  ? t("fileMgmt.newMessageAtRoot")
+                  : t("fileMgmt.newMessageOnThisFolder")
         }
         initialContent={editingMsg?.body || ""}
         onSave={!editingMsg ? handleAdd : handleEdit}

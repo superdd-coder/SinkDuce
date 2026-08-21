@@ -1,6 +1,7 @@
 /** Shared helpers for the file detail dialog (no React UI). */
 
 import type { FileVersion, Message } from "@/types/file-mgmt"
+import { tr } from "@/i18n/tr"
 
 // ── summary generation markers (module-level, same pattern as legacy dialog) ──
 
@@ -191,6 +192,9 @@ export function buildTimeline(
 }
 
 export function versionUpdateBody(body: string | null | undefined): string {
-  const t = (body || "").trim()
-  return t || "version update"
+  const text = (body || "").trim()
+  if (!text || text.toLowerCase() === "version update") {
+    return tr("fileMgmt.versionUpdateLower")
+  }
+  return text
 }

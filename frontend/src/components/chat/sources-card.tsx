@@ -2,6 +2,7 @@ import { useState } from "react"
 import { ChevronDown, ChevronUp, ExternalLink, Globe } from "lucide-react"
 import { useAppStore, type Source } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 interface SourcesCardProps {
   sources: Source[]
@@ -25,6 +26,7 @@ function isWebSource(s: Source | null | undefined): boolean {
  * - Web: neutral row, silver WEB tag only (no green rail / wash)
  */
 export function SourcesCard({ sources, onSelectSource, selectedSourceId }: SourcesCardProps) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const collections = useAppStore((s) => s.collections)
 
@@ -66,16 +68,16 @@ export function SourcesCard({ sources, onSelectSource, selectedSourceId }: Sourc
         className="pm-chat-sources-toggle"
       >
         <span className="inline-flex items-center gap-1.5 min-w-0 flex-wrap">
-          <span>Sources · {list.length}</span>
+          <span>{t("chat.sourcesCount", { n: list.length })}</span>
           {webCount > 0 && (
-            <span className="pm-chat-web-badge" title="Public internet sources">
+            <span className="pm-chat-web-badge" title={t("chat.publicSources")}>
               <Globe aria-hidden />
-              {webCount} web
+              {t("chat.nWeb", { n: webCount })}
             </span>
           )}
           {kbCount > 0 && (
-            <span className="pm-chat-kb-badge" title="Knowledge base sources">
-              {kbCount} kb
+            <span className="pm-chat-kb-badge" title={t("chat.kbSources")}>
+              {t("chat.nKb", { n: kbCount })}
             </span>
           )}
         </span>
@@ -118,22 +120,22 @@ export function SourcesCard({ sources, onSelectSource, selectedSourceId }: Sourc
                     isWeb ? "is-web" : "is-kb",
                     isSelected && !isWeb && "is-selected",
                   )}
-                  title={isWeb && url ? `Open external: ${url}` : undefined}
+                  title={isWeb && url ? t("chat.externalLink") : undefined}
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 min-w-0">
                       {isWeb ? (
                         <span className="pm-chat-web-badge">
                           <Globe aria-hidden />
-                          web
+                          {t("chat.web")}
                         </span>
                       ) : (
-                        <span className="pm-chat-kb-badge" title="Knowledge base">
+                        <span className="pm-chat-kb-badge" title={t("chat.knowledgeBase")}>
                           kb
                         </span>
                       )}
                       <div className="pm-chat-source-name">
-                        {sourceName || `Source ${i + 1}`}
+                        {sourceName || t("chat.sourceN", { n: i + 1 })}
                       </div>
                     </div>
                     {s.text && (
@@ -152,7 +154,7 @@ export function SourcesCard({ sources, onSelectSource, selectedSourceId }: Sourc
                       </span>
                     )}
                     {isWeb ? (
-                      <span className="pm-chat-source-ext" aria-hidden title="External link">
+                      <span className="pm-chat-source-ext" aria-hidden title={t("chat.externalLink")}>
                         <ExternalLink className="size-3" strokeWidth={1.75} />
                       </span>
                     ) : (

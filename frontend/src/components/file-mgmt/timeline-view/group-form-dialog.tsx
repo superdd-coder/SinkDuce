@@ -11,6 +11,9 @@ import {
 import { FieldLabel } from "@/components/ui/field-label"
 import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
+import { formatApiError } from "@/api/http"
 import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
 import {
   createGroup,
@@ -81,6 +84,7 @@ function FolderBindTree({
   expanded: Set<string>
   onToggle: (id: string) => void
 }) {
+  const t = useT()
   return (
     <>
       {nodes.map((n) => {
@@ -93,12 +97,12 @@ function FolderBindTree({
         const selected = selectedId === n.folder_id
         const boundGroup = groupByFolderId.get(n.folder_id) ?? null
         const title = isBound
-          ? "Already bound to a group"
+          ? t("fileMgmt.alreadyBoundGroup")
           : n.kind !== "plain"
-            ? `${n.kind} folders cannot be bound`
+            ? t("fileMgmt.foldersCannotBeBound", { kind: n.kind })
             : hasChildren
-              ? "Group folders must be flat. Move or remove subfolders first."
-              : n.name
+              ? t("fileMgmt.groupFoldersMustBeFlat")
+              : systemFolderDisplayName(n.name, t)
 
         return (
           <div key={n.folder_id}>
@@ -151,7 +155,7 @@ function FolderBindTree({
                 <span className="pm-timeline-ftree-icon">
                   <FolderRowIcon folder={n} boundGroup={boundGroup} />
                 </span>
-                <span className="pm-timeline-ftree-name">{n.name}</span>
+                <span className="pm-timeline-ftree-name">{systemFolderDisplayName(n.name, t)}</span>
                 {isBound && (
                   <span className="pm-meta text-[var(--pm-faint)] shrink-0">
                     bound
@@ -253,6 +257,7 @@ export function GroupFormDialog({
   onSaved,
   onDeleted,
 }: GroupFormDialogProps) {
+  const t = useT()
   const [name, setName] = useState("")
   /** lucide when picking line icon; emoji when using symbol field */
   const [iconMode, setIconMode] = useState<"lucide" | "emoji">("lucide")
@@ -361,15 +366,15 @@ export function GroupFormDialog({
   const handleSubmit = async () => {
     const trimmed = name.trim()
     if (!trimmed) {
-      toast.error("Name is required")
+      toast.error(t("fileMgmt.nameRequired"))
       return
     }
     if (folderMode === "existing" && !folderId && !isEdit) {
-      toast.error("Select a folder")
+      toast.error(t("fileMgmt.selectFolder"))
       return
     }
     if (iconMode === "emoji" && !symbol.trim()) {
-      toast.error("Enter a symbol or pick a line icon")
+      toast.error(t("fileMgmt.enterSymbol"))
       return
     }
     setSubmitting(true)
@@ -389,14 +394,14 @@ export function GroupFormDialog({
             ? { rebind_folder_id: folderId }
             : {}),
         })
-        toast.success("Group updated")
+        toast.success(t("fileMgmt.groupUpdated"))
       } else {
         await createGroup(collectionId, {
           name: trimmed,
           ...iconPayload,
           bind_existing_folder_id: folderMode === "existing" ? folderId : null,
         })
-        toast.success("Group created")
+        toast.success(t("fileMgmt.groupCreated"))
       }
       onSaved()
       onOpenChange(false)
@@ -405,10 +410,13 @@ export function GroupFormDialog({
       if (conflict) {
         setName(conflict.suggested_name)
         toast.error(
-          `${conflict.message} Suggested: ${conflict.suggested_name}`
+          t("errors.name_conflict", {
+            name: conflict.name,
+            suggested_name: conflict.suggested_name,
+          })
         )
       } else {
-        toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+        toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
       }
     } finally {
       setSubmitting(false)
@@ -429,11 +437,11 @@ export function GroupFormDialog({
     setDeleting(true)
     try {
       await deleteGroup(collectionId, sessionEditing.group_id)
-      toast.success("Group deleted")
+      toast.success(t("fileMgmt.groupDeleted"))
       onDeleted?.()
       onOpenChange(false)
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
     } finally {
       setDeleting(false)
       setConfirmDelete(false)
@@ -485,7 +493,7 @@ export function GroupFormDialog({
       >
         <DialogHeader className="pm-group-dialog-head">
           <DialogTitle className="pm-group-dialog-title">
-            {isEdit ? "Edit Group" : "Create Group"}
+            {isEdit ? t("fileMgmt.editGroup") : t("fileMgmt.createGroup")}
           </DialogTitle>
         </DialogHeader>
 
@@ -496,19 +504,19 @@ export function GroupFormDialog({
               <div
                 key={`${iconMode}-${iconKey}-${iconColor}-${symbol}`}
                 className="pm-group-preview"
-                title="Icon preview"
+                title={t("fileMgmt.iconPreview")}
               >
                 <GroupIconView source={previewSource} className="h-6 w-6" />
               </div>
               <div className="pm-group-identity-fields min-w-0 flex-1">
-                <FieldLabel htmlFor="pm-group-name">Name</FieldLabel>
+                <FieldLabel htmlFor="pm-group-name">{t("common.name")}</FieldLabel>
                 <Input
                   ref={nameInputRef}
                   id="pm-group-name"
                   className="pm-group-name-input w-full"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Design review"
+                  placeholder={t("fileMgmt.egDesignReview")}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault()
@@ -541,15 +549,15 @@ export function GroupFormDialog({
                 onClick={() => {
                   if (!appearanceOpen) openAppearance()
                 }}
-                title={appearanceOpen ? undefined : "Edit icon and color"}
+                title={appearanceOpen ? undefined : t("fileMgmt.editIconColor")}
                 aria-expanded={appearanceOpen}
               >
                 <span className="pm-group-appearance-row-text">
-                  <span className="pm-group-card-kicker">Appearance</span>
+                  <span className="pm-group-card-kicker">{t("fileMgmt.appearance")}</span>
                   <span className="pm-meta text-[var(--pm-faint)]">
                     {appearanceOpen
-                      ? "Icon & color"
-                      : "Icon & color · tap to expand"}
+                      ? t("fileMgmt.iconAndColor")
+                      : t("fileMgmt.iconColorExpand")}
                   </span>
                 </span>
                 <ChevronDown
@@ -589,13 +597,13 @@ export function GroupFormDialog({
               )}
             >
               <header className="pm-group-card-head">
-                <span className="pm-group-card-kicker">Folder</span>
+                <span className="pm-group-card-kicker">{t("common.folder")}</span>
               </header>
 
               <div
                 className="pm-group-seg"
                 role="tablist"
-                aria-label="Folder mode"
+                aria-label={t("fileMgmt.folderMode")}
                 data-on={segIndex}
               >
                 <span className="pm-group-seg-pill" aria-hidden />
@@ -610,7 +618,7 @@ export function GroupFormDialog({
                     )}
                     onClick={chooseKeepOrNew}
                   >
-                    New folder
+                    {t("fileMgmt.newFolder")}
                   </button>
                 )}
                 {isEdit && (
@@ -624,7 +632,7 @@ export function GroupFormDialog({
                     )}
                     onClick={chooseKeepOrNew}
                   >
-                    Keep current
+                    {t("fileMgmt.keepCurrent")}
                   </button>
                 )}
                 <button
@@ -637,7 +645,7 @@ export function GroupFormDialog({
                   )}
                   onClick={openTree}
                 >
-                  {isEdit ? "Rebind" : "Existing"}
+                  {isEdit ? t("fileMgmt.rebind") : t("fileMgmt.existing")}
                 </button>
               </div>
 
@@ -645,8 +653,8 @@ export function GroupFormDialog({
               {!treeOpen && (
                 <p className="pm-group-folder-hint">
                   {isEdit
-                    ? "Keep the folder currently bound to this group."
-                    : "Creates a new library folder bound to this group."}
+                    ? t("fileMgmt.keepCurrentFolderHint")
+                    : t("fileMgmt.createsNewFolder")}
                 </p>
               )}
 
@@ -663,7 +671,7 @@ export function GroupFormDialog({
                     />
                     <input
                       className="pm-timeline-ftree-search pm-group-folder-search-input"
-                      placeholder="Search folders…"
+                      placeholder={t("fileMgmt.searchFolders")}
                       value={folderSearch}
                       onChange={(e) => setFolderSearch(e.target.value)}
                       tabIndex={treeOpen ? 0 : -1}
@@ -672,11 +680,11 @@ export function GroupFormDialog({
                   <div className="pm-group-tree-list">
                     {folderTree.length === 0 ? (
                       <p className="pm-meta text-center py-6 text-[var(--pm-faint)]">
-                        No folders yet
+                        {t("fileMgmt.noFoldersYet")}
                       </p>
                     ) : visibleFolders.length === 0 ? (
                       <p className="pm-meta text-center py-6 text-[var(--pm-faint)]">
-                        No matches
+                        {t("common.noMatches")}
                       </p>
                     ) : (
                       <div className="pm-timeline-ftree pm-group-ftree">
@@ -696,11 +704,11 @@ export function GroupFormDialog({
                     )}
                     {folderId && (
                       <p className="pm-group-folder-selected">
-                        Selected ·{" "}
-                        <span className="text-[var(--pm-ink)]">
-                          {findFolderName(folderTree, folderId) ??
-                            folderId.slice(0, 8)}
-                        </span>
+                        {t("fileMgmt.selectedNamed", {
+                          name:
+                            findFolderName(folderTree, folderId) ??
+                            folderId.slice(0, 8),
+                        })}
                       </p>
                     )}
                   </div>
@@ -715,8 +723,7 @@ export function GroupFormDialog({
             confirmDelete ? (
               <div className="pm-group-delete-confirm min-w-0 flex-1 mr-2">
                 <p className="pm-meta text-[var(--pm-muted)] leading-snug">
-                  Delete “{sessionEditing?.name}”? Nodes become uncategorized;
-                  folder and files stay.
+                  {t("fileMgmt.deleteNamedQ", { name: sessionEditing?.name ?? "" })}
                 </p>
                 <div className="flex gap-2 mt-2">
                   <Button
@@ -725,7 +732,7 @@ export function GroupFormDialog({
                     onClick={() => setConfirmDelete(false)}
                     disabled={deleting}
                   >
-                    Keep
+                    {t("fileMgmt.keep")}
                   </Button>
                   <Button
                     variant="destructive"
@@ -733,7 +740,7 @@ export function GroupFormDialog({
                     onClick={() => void handleDelete()}
                     disabled={deleting}
                   >
-                    {deleting ? "Deleting…" : "Delete group"}
+                    {deleting ? t("fileMgmt.deleting") : t("fileMgmt.deleteGroup")}
                   </Button>
                 </div>
               </div>
@@ -744,7 +751,7 @@ export function GroupFormDialog({
                 onClick={() => setConfirmDelete(true)}
                 disabled={submitting}
               >
-                Delete group
+                {t("fileMgmt.deleteGroup")}
               </button>
             )
           ) : (
@@ -757,7 +764,7 @@ export function GroupFormDialog({
               onClick={() => onOpenChange(false)}
               disabled={submitting || deleting}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="default"
@@ -765,7 +772,11 @@ export function GroupFormDialog({
               onClick={() => void handleSubmit()}
               disabled={submitting || deleting || confirmDelete}
             >
-              {submitting ? "Saving…" : isEdit ? "Save changes" : "Create group"}
+              {submitting
+                ? t("common.saving")
+                : isEdit
+                  ? t("fileMgmt.saveChanges")
+                  : t("fileMgmt.createGroup")}
             </Button>
           </div>
         </DialogFooter>

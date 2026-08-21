@@ -2,10 +2,13 @@ import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { Send, Loader2, AlertTriangle, MessageCircle, BrushCleaning } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { createImeEnterGuard } from "@/lib/ime"
 import { humanSourceLabel } from "@/lib/source-display"
 import { parseMeetingRefGroups, MEETING_CITE_RE_SOURCE } from "@/lib/meeting-ref-chips"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
+import { useT } from "@/i18n/use-t"
+import { tr } from "@/i18n/tr"
 
 // ── Types ──
 
@@ -31,15 +34,15 @@ function countTurns(msgs: { role: string; content: string }[]): number {
 }
 
 // ── Hint bubble config ──
-const HINT_MESSAGES = [
-  "Chat with this meeting?",
-  "Ask a question?",
-  "Quick Q&A?",
-  "Got a question?",
-  "Ask anything...",
-  "Curious about the discussion?",
-  "Ask about the meeting?",
-]
+const HINT_KEYS = [
+  "meeting.qaHint1",
+  "meeting.qaHint2",
+  "meeting.qaHint3",
+  "meeting.qaHint4",
+  "meeting.qaHint5",
+  "meeting.qaHint6",
+  "meeting.qaHint7",
+] as const
 const HINT_SHOW_DURATION = 4000
 const HINT_INITIAL_DELAY = 1000
 const HINT_MIN_INTERVAL = 5000
@@ -137,9 +140,10 @@ export function MeetingQcFab({
   spinPhase?: MeetingQcSpinPhase
   className?: string
 }) {
+  const t = useT()
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
-  const [hintMessage, setHintMessage] = useState(HINT_MESSAGES[0])
+  const [hintMessage, setHintMessage] = useState(() => t(HINT_KEYS[0]))
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   const angleRef = useRef({ outer: 0, inner: 0 })
@@ -155,7 +159,7 @@ export function MeetingQcFab({
       return
     }
     const scheduleHint = () => {
-      const msg = HINT_MESSAGES[Math.floor(Math.random() * HINT_MESSAGES.length)]
+      const msg = t(HINT_KEYS[Math.floor(Math.random() * HINT_KEYS.length)])
       setHintMessage(msg)
       setHintVisible(true)
       setHintExiting(false)
@@ -174,7 +178,7 @@ export function MeetingQcFab({
     return () => {
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
     }
-  }, [idle])
+  }, [idle, t])
 
   // WAAPI spin (continuous angles). Idle → CSS Collection hover owns transform.
   useEffect(() => {
@@ -401,7 +405,7 @@ export function MeetingQcFab({
             idle ? "pm-meeting-qc-fab-btn--idle" : "pm-meeting-qc-fab-btn--driven quick-chat-btn-spinning",
           )}
           style={{ color: "var(--pm-green, #1A5E3D)", background: "transparent" }}
-          aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
+          aria-label={open ? t("meeting.closeQuickQa") : t("library.openQuickQa")}
         >
           <DiamondIcon className="w-10 h-10" />
         </button>
@@ -437,6 +441,7 @@ export function MeetingQuickChat({
   className,
   layout = "rail",
 }: MeetingQuickChatProps) {
+  const t = useT()
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -449,10 +454,11 @@ export function MeetingQuickChat({
   const stickToBottom = useRef(true)
   const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const imeGuardRef = useRef(createImeEnterGuard())
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
-  const [hintMessage, setHintMessage] = useState(HINT_MESSAGES[0])
+  const [hintMessage, setHintMessage] = useState(() => t(HINT_KEYS[0]))
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Init session ──
@@ -580,7 +586,7 @@ export function MeetingQuickChat({
   useEffect(() => {
     if (open) return
     const scheduleHint = () => {
-      const msg = HINT_MESSAGES[Math.floor(Math.random() * HINT_MESSAGES.length)]
+      const msg = t(HINT_KEYS[Math.floor(Math.random() * HINT_KEYS.length)])
       setHintMessage(msg)
       setHintVisible(true)
       setHintExiting(false)
@@ -601,7 +607,7 @@ export function MeetingQuickChat({
     return () => {
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
     }
-  }, [meetingId, open])
+  }, [meetingId, open, t])
 
   // ── Send ──
 
@@ -738,7 +744,14 @@ export function MeetingQuickChat({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
+    if (!imeGuardRef.current.isSubmitEnter(e)) return
+    e.preventDefault()
+    send()
+  }
+  const handleCompositionStart = () => imeGuardRef.current.onCompositionStart()
+  const handleCompositionEnd = () => {
+    imeGuardRef.current.onCompositionEnd()
+    requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
   }
 
   const hasMessages = messages.length > 0
@@ -776,7 +789,7 @@ export function MeetingQuickChat({
           )}
           <div className="min-w-0">
             {layout !== "dock" && (
-              <p className="pm-qc-header-title">Quick Chat</p>
+              <p className="pm-qc-header-title">{t("library.quickChat")}</p>
             )}
             {layout !== "dock" && (
               <p className="pm-qc-header-sub truncate" title={meetingTitle}>
@@ -792,7 +805,7 @@ export function MeetingQuickChat({
                 "pm-meta inline-flex items-center gap-1 tabular-nums",
                 msgCount >= WARN_THRESHOLD && "text-amber-600",
               )}
-              title={`${msgCount}/${MAX_MESSAGES} rounds. Soft limit trims older rounds.`}
+              title={t("library.roundsLimit", { n: msgCount, max: MAX_MESSAGES })}
             >
               {msgCount >= WARN_THRESHOLD && <AlertTriangle className="size-3" />}
               {msgCount}/{MAX_MESSAGES}
@@ -802,8 +815,8 @@ export function MeetingQuickChat({
             type="button"
             className="pm-qc-clear-btn"
             onClick={clearContext}
-            title="Clear conversation"
-            aria-label="Clear conversation"
+            title={t("library.clearConversation")}
+            aria-label={t("library.clearConversation")}
           >
             <BrushCleaning className="size-3.5" strokeWidth={1.75} />
           </button>
@@ -813,9 +826,9 @@ export function MeetingQuickChat({
               variant="ghost"
               size="xs"
               onClick={onClose}
-              aria-label="Close Quick Q&A"
+              aria-label={t("meeting.closeQuickQa")}
             >
-              Close
+              {t("common.close")}
             </Button>
           )}
         </div>
@@ -841,7 +854,7 @@ export function MeetingQuickChat({
         {loadingHistory ? (
           <div className="flex flex-1 items-center justify-center gap-2 py-10">
             <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
-            <span className="pm-meta">Loading…</span>
+            <span className="pm-meta">{t("common.loading")}</span>
           </div>
         ) : hasMessages ? (
           <div className="pm-qc-thread-inner">
@@ -854,7 +867,7 @@ export function MeetingQuickChat({
                     msg.isNew && "animate-slide-in-right",
                   )}
                 >
-                  <span className="pm-qc-msg-role">You</span>
+                  <span className="pm-qc-msg-role">{t("chat.you")}</span>
                   <div className="pm-qc-bubble pm-qc-bubble--user">
                     <p className="pm-qc-bubble-text">{msg.content}</p>
                   </div>
@@ -867,7 +880,7 @@ export function MeetingQuickChat({
                     msg.isNew && "animate-slide-in-right",
                   )}
                 >
-                  <span className="pm-qc-msg-role pm-qc-msg-role--ai">Assistant</span>
+                  <span className="pm-qc-msg-role pm-qc-msg-role--ai">{t("chat.assistant")}</span>
                   <div className="pm-qc-bubble pm-qc-bubble--assistant">
                     {msg.thinkingContent && (
                       <details
@@ -875,7 +888,7 @@ export function MeetingQuickChat({
                         open={msg.isStreaming && !msg.content ? true : undefined}
                       >
                         <summary>
-                          Thinking
+                          {t("chat.thinking")}
                           {msg.isStreaming && !msg.content && (
                             <Loader2 className="size-2.5 animate-spin inline ml-1" />
                           )}
@@ -890,7 +903,7 @@ export function MeetingQuickChat({
                     ) : msg.isStreaming ? (
                       <div className="pm-qc-typing">
                         <Loader2 className="size-3.5 animate-spin" />
-                        <span>Educing…</span>
+                        <span>{t("chat.educing")}</span>
                       </div>
                     ) : (
                       <p className="pm-qc-bubble-text">{msg.content}</p>
@@ -911,7 +924,7 @@ export function MeetingQuickChat({
                             }
                             className="pm-qc-sources-toggle"
                           >
-                            <span>Sources · {msg.sources.length}</span>
+                            <span>{t("library.sourcesN", { n: msg.sources.length })}</span>
                             <svg
                               className={cn(
                                 "size-3 transition-transform duration-300",
@@ -953,7 +966,7 @@ export function MeetingQuickChat({
                                         </span>
                                       </div>
                                       {chunkIdx != null && (
-                                        <div className="pm-qc-source-meta">Chunk #{chunkIdx}</div>
+                                        <div className="pm-qc-source-meta">{t("library.chunkN", { n: chunkIdx })}</div>
                                       )}
                                       <div className="line-clamp-2 opacity-70 mt-0.5">{s.text}</div>
                                     </div>
@@ -974,11 +987,12 @@ export function MeetingQuickChat({
             <span className="pm-qc-empty-icon" aria-hidden>
               <MessageCircle className="size-5" strokeWidth={1.75} />
             </span>
-            <p className="pm-qc-empty-title">Ask this meeting</p>
+            <p className="pm-qc-empty-title">{t("meeting.askMeeting")}</p>
             <p className="pm-qc-empty-sub">
-              Chat with{" "}
-              <em className="not-italic text-[var(--pm-green)]">{meetingTitle || "this meeting"}</em>
-              . Answers use the transcript and summary.
+              {t("library.qcEmptyBefore")}{" "}
+              <em className="not-italic text-[var(--pm-green)]">{meetingTitle || t("meeting.thisMeeting")}</em>
+              {". "}
+              {t("meeting.qcEmptyAfter")}
             </p>
           </div>
         )}
@@ -1007,6 +1021,8 @@ export function MeetingQuickChat({
             streaming={streaming}
             onSend={send}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             textareaRef={textareaRef}
           />
         </div>
@@ -1045,7 +1061,7 @@ export function MeetingQuickChat({
           open && "quick-chat-btn-spinning",
         )}
         style={{ color: "var(--pm-green, #1A5E3D)" }}
-        aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
+        aria-label={open ? t("meeting.closeQuickQa") : t("library.openQuickQa")}
       >
         <DiamondIcon className="w-10 h-10" />
       </button>
@@ -1141,7 +1157,7 @@ function renderInlineWithRefs(text: string, onRefClick?: (sentenceId: string) =>
             key={`r${lastIdx}${gi}`}
             className="pm-meeting-ref-chip"
             onClick={(e) => { e.stopPropagation(); if (g.ids[0]) onRefClick?.(g.ids[0]) }}
-            title={`Sources: ${g.ids.join(", ")}`}
+            title={tr("meeting.sourcesIds", { ids: g.ids.join(", ") })}
           >
             {g.label}
           </button>,
@@ -1203,15 +1219,19 @@ function TimeContent({ content, onRefClick }: {
 }
 
 function ChatInputBar({
-  input, setInput, streaming, onSend, onKeyDown, textareaRef,
+  input, setInput, streaming, onSend, onKeyDown,
+  onCompositionStart, onCompositionEnd, textareaRef,
 }: {
   input: string
   setInput: (v: string) => void
   streaming: boolean
   onSend: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
+  onCompositionStart: () => void
+  onCompositionEnd: () => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
+  const t = useT()
   return (
     <div
       className={cn(
@@ -1226,7 +1246,9 @@ function ChatInputBar({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Message this meeting…"
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
+          placeholder={t("meeting.messageMeeting")}
           disabled={streaming}
           rows={1}
           className="pm-qc-textarea"
@@ -1241,7 +1263,7 @@ function ChatInputBar({
           input.trim() && !streaming && "is-ready",
           streaming && "is-hidden",
         )}
-        aria-label="Send"
+        aria-label={t("common.send")}
       >
         <Send className="size-3.5" />
       </button>

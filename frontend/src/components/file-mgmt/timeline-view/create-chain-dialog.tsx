@@ -9,6 +9,8 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { createChain, createNode } from "@/api/file-mgmt"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface CreateChainDialogProps {
   collectionId: string
@@ -27,6 +29,7 @@ export function CreateChainDialog({
   onOpenChange,
   onCreated,
 }: CreateChainDialogProps) {
+  const t = useT()
   const [title, setTitle] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
@@ -37,7 +40,7 @@ export function CreateChainDialog({
       const newChain = await createChain(collectionId, {
         parent_chain_id: parentChainId,
         parent_node_id: parentNodeId,
-        title: title.trim() || "New Branch",
+        title: title.trim() || t("fileMgmt.newBranch"),
       })
       // Auto-create a start node as the first node of the branch chain (order 1 = anchor)
       await createNode(collectionId, newChain.chain_id, {
@@ -47,11 +50,15 @@ export function CreateChainDialog({
         order: 1,
         event_time: null,
       })
-      toast.success(`Branch "${title.trim() || "New Branch"}" created with start node`)
+      toast.success(
+        t("fileMgmt.branchCreatedWithStart", {
+          title: title.trim() || t("fileMgmt.newBranch"),
+        })
+      )
       setTitle("")
       onCreated()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
     } finally {
       setSubmitting(false)
     }
@@ -64,18 +71,17 @@ export function CreateChainDialog({
         overlayClassName="pm-dialog-overlay--silk"
       >
         <DialogHeader>
-          <DialogTitle>Create Branch Chain</DialogTitle>
+          <DialogTitle>{t("fileMgmt.createBranch")}</DialogTitle>
         </DialogHeader>
         <div className="pm-dialog-body space-y-3">
           <p className="pm-meta text-[var(--pm-muted)]">
-            A new branch chain will be created from this node, with its own
-            branch folder and timeline. A start node will be added automatically.
+            {t("fileMgmt.createBranchHint")}
           </p>
           <div>
-            <label className="pm-field-label">Branch Title</label>
+            <label className="pm-field-label">{t("fileMgmt.branchTitle")}</label>
             <input
               className="pm-field w-full"
-              placeholder="Branch title..."
+              placeholder={t("fileMgmt.branchTitlePh")}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
@@ -90,7 +96,7 @@ export function CreateChainDialog({
             className="pm-btn-ghost"
             onClick={() => onOpenChange(false)}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             size="xs"
@@ -98,7 +104,7 @@ export function CreateChainDialog({
             onClick={handleSubmit}
             disabled={submitting}
           >
-            {submitting ? "Creating..." : "Create"}
+            {submitting ? t("common.creating") : t("common.create")}
           </Button>
         </DialogFooter>
       </DialogContent>

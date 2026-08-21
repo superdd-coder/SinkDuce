@@ -41,7 +41,9 @@ def test_dialog_branches_desktop_download_vs_docker_compose():
     assert "update.desktop" in text
     assert "update.downloadUrl" in text
     assert "desktopDmgAssetName" in text
-    assert "Download" in text
+    assert 't("update.desktopHelp"' in text
+    assert 't("update.downloadVersion"' in text
     assert "git pull &&" in text
     assert "docker compose pull" in text
-    assert "Cmd+Q" in text
+    en = (ROOT / "frontend" / "src" / "i18n" / "en.json").read_text(encoding="utf-8")
+    assert "Cmd+Q" in en

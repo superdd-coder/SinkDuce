@@ -23,6 +23,8 @@ import { NoteSidebarRight } from "./note-sidebar-right"
 import { MeetingSummaryPanel } from "./meeting-summary-panel"
 import { NotePane } from "./note-pane"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface NoteEditorDialogProps {
   collection: string
@@ -48,6 +50,7 @@ let _paneSeq = 0
 const newPaneId = () => `pane-${++_paneSeq}`
 
 export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: NoteEditorDialogProps) {
+  const t = useT()
   const [notesList, setNotesList] = useState<NoteListItem[]>([])
   const [meetingsList, setMeetingsList] = useState<Meeting[]>([])
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("notes")
@@ -723,9 +726,9 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
       setNotesList(notes)
       openNoteInFocused(res.id)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create note")
+      toast.error(formatApiError(err, t))
     }
-  }, [collection, openNoteInFocused])
+  }, [collection, openNoteInFocused, t])
 
   const handleNoteDeleted = useCallback(
     async (deletedId: string) => {
@@ -843,7 +846,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
             size="sm"
             className="pm-ws-icon-btn"
             onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
-            title={leftSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            title={leftSidebarCollapsed ? t("library.showSidebar") : t("library.hideSidebar")}
           >
             <ChevronLeft
               className={cn(
@@ -853,7 +856,7 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
             />
           </Button>
           <DialogTitle className="pm-ws-chrome-title flex-1 min-w-0 text-left">
-            Notes
+            {t("common.notes")}
           </DialogTitle>
           {/* room for dialog close button */}
           <div className="w-8" />
@@ -1022,14 +1025,14 @@ export function NoteEditorDialog({ collection, noteId, open, onOpenChange }: Not
                                     e.stopPropagation()
                                     closePane(pane.id)
                                   }}
-                                  title="Close page"
+                                  title={t("library.closePage")}
                                 >
                                   <X className="h-3.5 w-3.5" />
                                 </Button>
                               )}
                               <div className="flex-1 flex flex-col items-center justify-center px-8 text-center select-none">
                                 <p className="text-[13px] font-normal text-[var(--pm-muted)]">
-                                  Select a note or meeting
+                                  {t("library.selectNoteOrMeeting")}
                                 </p>
                               </div>
                             </div>

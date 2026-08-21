@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { SoftMenu, MenuItem } from "@/components/ui/menu"
 import { TRANSLATE_LANGUAGES } from "@/api/client"
+import { useT } from "@/i18n/use-t"
 
 interface SummaryTranslateControlProps {
   /** Language codes that already have a generated translation file. */
@@ -41,6 +42,7 @@ export function SummaryTranslateControl({
   onSelect,
   onOpen,
 }: SummaryTranslateControlProps) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLElement>(null)
 
@@ -71,8 +73,8 @@ export function SummaryTranslateControl({
         size="icon-sm"
         disabled={disabled || translating}
         onClick={handleToggle}
-        title="Translate summary"
-        aria-label="Translate summary"
+        title={t("meeting.translateSummary")}
+        aria-label={t("meeting.translateSummary")}
         className={cn(activeLang && "text-[var(--pm-green)]")}
       >
         {translating ? (
@@ -87,7 +89,7 @@ export function SummaryTranslateControl({
           active={activeLang === null}
           onClick={() => { onSelect(null); setOpen(false) }}
         >
-          Original
+          {t("chat.original")}
         </MenuItem>
         {TRANSLATE_LANGUAGES.map(({ code, label }) => {
           const generated = generatedLangs.includes(code)

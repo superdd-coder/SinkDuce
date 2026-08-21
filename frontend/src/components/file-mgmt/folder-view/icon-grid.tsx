@@ -45,6 +45,8 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
 
 export function IconGrid({
   collectionId,
@@ -54,6 +56,7 @@ export function IconGrid({
   /** Double-click a file to open detail dialog (Phase 8). */
   onOpenFile?: (fileId: string) => void
 }) {
+  const t = useT()
   const {
     folderTree,
     currentFolderId,
@@ -176,9 +179,7 @@ export function IconGrid({
           .map((f) => f.name || "")
         if (taken.some((n) => n.trim().toLowerCase() === name.toLowerCase())) {
           const suggested = suggestUniqueName(name, taken)
-          setEditClash(
-            `A folder named '${name}' already exists here.`
-          )
+          setEditClash(t("fileMgmt.folderExists", { name }))
           setEditName(suggested)
           return
         }
@@ -221,7 +222,7 @@ export function IconGrid({
           takenFiles.some((n) => n.toLowerCase() === finalName.toLowerCase())
         ) {
           const suggested = suggestUniqueName(finalName, takenFiles)
-          setEditClash(`A file named '${finalName}' already exists here.`)
+          setEditClash(t("fileMgmt.fileExists", { name: finalName }))
           if (
             editFileExt &&
             suggested.toLowerCase().endsWith(editFileExt.toLowerCase())
@@ -559,7 +560,7 @@ export function IconGrid({
               )}
               {sortedItems.length === 0 && (
                 <div className="pm-files-empty">
-                  This folder is empty. Drag files here to upload.
+                  {t("fileMgmt.emptyFolderHint")}
                 </div>
               )}
             </div>
@@ -579,7 +580,9 @@ export function IconGrid({
         <DialogContent className="pm-dialog max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {editTarget?.kind === "folder" ? "Edit Folder" : "Rename File"}
+              {editTarget?.kind === "folder"
+                ? t("fileMgmt.editFolder")
+                : t("fileMgmt.renameFile")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-1">
@@ -596,11 +599,11 @@ export function IconGrid({
                     />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <label className="pm-field-label">Name</label>
+                    <label className="pm-field-label">{t("common.name")}</label>
                     <Input
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
-                      placeholder="Folder name"
+                      placeholder={t("fileMgmt.folderName")}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") void handleSaveEdit()
                       }}
@@ -622,12 +625,12 @@ export function IconGrid({
               </>
             ) : (
               <div>
-                <label className="pm-field-label">File name</label>
+                <label className="pm-field-label">{t("fileMgmt.fileName")}</label>
                 <div className="flex items-center gap-1.5 min-w-0">
                   <Input
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                    placeholder="filename"
+                    placeholder={t("fileMgmt.filename")}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void handleSaveEdit()
                     }}
@@ -637,20 +640,20 @@ export function IconGrid({
                   {editFileExt && (
                     <span
                       className="shrink-0 pm-meta font-mono bg-[var(--pm-green-wash)] rounded-[var(--pm-r-sm)] px-2 h-8 inline-flex items-center"
-                      title="Extension cannot be changed"
+                      title={t("fileMgmt.extCannotChange")}
                     >
                       {editFileExt}
                     </span>
                   )}
                 </div>
                 <p className="pm-meta mt-1.5">
-                  Extension is fixed and cannot be changed.
+                  {t("fileMgmt.extensionFixed")}
                 </p>
               </div>
             )}
             {editClash ? (
               <p className="text-[13px] text-[var(--pm-danger,#b42318)] leading-snug">
-                {editClash} Suggested name is filled in — Save to apply, or type another.
+                {editClash} {t("fileMgmt.clashSuggested")}
               </p>
             ) : null}
           </div>
@@ -661,7 +664,7 @@ export function IconGrid({
               onClick={() => setEditTarget(null)}
               disabled={editSaving}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               size="xs"
@@ -674,7 +677,7 @@ export function IconGrid({
                   !editSymbol.trim())
               }
             >
-              {editSaving ? "Saving…" : "Save"}
+              {editSaving ? t("common.saving") : t("common.save")}
             </Button>
           </div>
         </DialogContent>
@@ -702,7 +705,8 @@ function FolderIconItem({
   boundGroup?: NodeGroup | null
   onEdit?: () => void
 }) {
-  const fullName = folder.name || "Untitled"
+  const t = useT()
+  const fullName = systemFolderDisplayName(folder.name || "", t) || t("common.untitled")
   // Badge = direct files + direct subfolders (not recursive)
   const itemCount =
     (folder.file_count || 0) + (folder.children?.length || 0)
@@ -735,7 +739,10 @@ function FolderIconItem({
               {itemCount > 0 && (
                 <span
                   className="pm-files-item-badge"
-                  title={`${folder.file_count || 0} file(s), ${folder.children?.length || 0} folder(s)`}
+                  title={t("fileMgmt.fileAndFolderCounts", {
+                    files: folder.file_count || 0,
+                    folders: folder.children?.length || 0,
+                  })}
                 >
                   {itemCount}
                 </span>
@@ -767,7 +774,7 @@ function FolderIconItem({
             <button
               type="button"
               className="shrink-0 p-0.5 rounded hover:bg-background/20 text-background/90 hover:text-background transition-colors"
-              title="Edit"
+              title={t("common.edit")}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -803,11 +810,12 @@ function FileIconItem({
   onOpen?: () => void
   onEdit?: () => void
 }) {
+  const t = useT()
   const ext = file.original_ext || ""
   // Unified: file-level or path-level archive both look "archived"
   const isArchived = file.is_greyed || file.archived
   const isIngesting = !!ingesting
-  const fullName = file.display_name || file.filename || "Untitled"
+  const fullName = file.display_name || file.filename || t("common.untitled")
   const progressPct = Math.max(
     0,
     Math.min(100, Math.round(ingesting?.progress ?? 0))
@@ -859,8 +867,8 @@ function FileIconItem({
                   className="absolute inset-0 flex items-center justify-center rounded-md bg-[var(--pm-float)]/55 pointer-events-none"
                   title={
                     ingesting?.message
-                      ? `${ingesting.message} — open when done`
-                      : "Ingesting… open when done"
+                      ? t("fileMgmt.openWhenDone", { message: ingesting.message })
+                      : t("fileMgmt.ingestingOpenWhenDone")
                   }
                 >
                   <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-green)]" />
@@ -878,10 +886,10 @@ function FileIconItem({
             <span className="pm-files-item-name">{fullName}</span>
             {isIngesting ? (
               <span className="pm-files-item-meta is-busy">
-                {progressPct > 0 ? `${progressPct}%` : "updating…"}
+                {progressPct > 0 ? `${progressPct}%` : t("fileMgmt.updating")}
               </span>
             ) : isArchived ? (
-              <span className="pm-files-item-meta">archived</span>
+              <span className="pm-files-item-meta">{t("fileMgmt.archived")}</span>
             ) : ext ? (
               <span className="pm-files-item-meta">{ext}</span>
             ) : null}
@@ -904,10 +912,10 @@ function FileIconItem({
             </span>
             {isIngesting && (
               <span className="block pm-meta mt-0.5 line-clamp-2 opacity-90">
-                {ingesting?.message || "Ingesting…"}
+                {ingesting?.message || t("fileMgmt.ingestingEllipsis")}
                 {progressPct > 0 ? ` · ${progressPct}%` : ""}
                 {" · "}
-                cannot open until done
+                {t("fileMgmt.cannotOpenUntilDone")}
               </span>
             )}
           </div>
@@ -915,7 +923,7 @@ function FileIconItem({
             <button
               type="button"
               className="shrink-0 p-0.5 rounded hover:bg-background/20 text-background/90 hover:text-background transition-colors"
-              title="Rename"
+              title={t("common.rename")}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()

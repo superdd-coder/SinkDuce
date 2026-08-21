@@ -2,7 +2,10 @@ import { request } from "./http"
 
 // ── Config ──
 
-export type ConfigData = Record<string, Record<string, unknown>>
+export type ConfigData = {
+  locale?: string
+  [key: string]: any
+}
 
 export const getConfig = () => request<ConfigData>("/config")
 

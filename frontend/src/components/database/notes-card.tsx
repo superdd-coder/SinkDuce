@@ -29,6 +29,8 @@ import { useAppStore } from "@/stores/app-store"
 import { onInfoRefresh, triggerInfoRefresh } from "@/lib/info-refresh"
 import { NoteEditorDialog } from "./note-editor-dialog"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface NotesCardProps {
   collection: string
@@ -51,6 +53,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
     { collection, variant = "default", hideToolbar = false },
     ref
   ) {
+    const t = useT()
     const [notes, setNotes] = useState<NoteListItem[]>([])
     const [loading, setLoading] = useState(false)
     /** Note id kept mounted through close animation */
@@ -165,14 +168,14 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
       })
       try {
         const res = await createNote(collection, title)
-        toast.success("Note created")
+        toast.success(t("library.noteCreated"))
         await fetchNotes()
         triggerInfoRefresh({ collectionId: collection, reason: "manual" })
         openEditor(res.id)
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to create note")
+        toast.error(formatApiError(err, t))
       }
-    }, [collection, fetchNotes, openEditor])
+    }, [collection, fetchNotes, openEditor, t])
 
     const openImport = useCallback(() => {
       fileInputRef.current?.click()
@@ -199,12 +202,12 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
         const title = file.name.replace(/\.(md|txt|markdown)$/i, "") || file.name
         const res = await createNote(collection, title)
         await updateNote(collection, res.id, { content: text })
-        toast.success(`Imported "${title}"`)
+        toast.success(t("library.importedTitle", { title }))
         await fetchNotes()
         triggerInfoRefresh({ collectionId: collection, reason: "manual" })
         openEditor(res.id)
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Import failed")
+        toast.error(formatApiError(err, t))
       }
     }
 
@@ -217,7 +220,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
       if (!deleteTarget) return
       try {
         await deleteNote(collection, deleteTarget.id)
-        toast.success(`Deleted "${deleteTarget.title}"`)
+        toast.success(t("library.deletedTitle", { title: deleteTarget.title }))
         if (activeNoteId === deleteTarget.id) {
           if (editorCloseTimerRef.current) {
             clearTimeout(editorCloseTimerRef.current)
@@ -230,7 +233,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
         await fetchNotes()
         triggerInfoRefresh({ collectionId: collection, reason: "manual" })
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to delete note")
+        toast.error(formatApiError(err, t))
       }
     }
 
@@ -241,12 +244,10 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
         const diffMs = now.getTime() - date.getTime()
         const diffMins = Math.floor(diffMs / 60000)
         const diffHours = Math.floor(diffMs / 3600000)
-        const diffDays = Math.floor(diffMs / 86400000)
 
-        if (diffMins < 1) return "just now"
-        if (diffMins < 60) return `${diffMins}m ago`
-        if (diffHours < 24) return `${diffHours}h ago`
-        if (diffDays < 7) return `${diffDays}d ago`
+        if (diffMins < 1) return t("common.justNow")
+        if (diffMins < 60) return t("common.minutesAgo", { n: diffMins })
+        if (diffHours < 24) return t("common.hoursAgo", { n: diffHours })
         return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
       } catch {
         return dateStr
@@ -279,7 +280,11 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
           </span>
           <span className="pm-meta truncate">
             {[
-              note.is_ingested ? "Ingested" : note.is_extracted ? "Extracted" : "Draft",
+              note.is_ingested
+                ? t("common.ingested")
+                : note.is_extracted
+                  ? t("library.extracted")
+                  : t("meeting.draft"),
               formatDate(note.updated_at),
             ].join(" · ")}
           </span>
@@ -289,7 +294,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
           className="pm-meta opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shrink-0 ml-2 border-none bg-transparent hover:text-[var(--pm-danger,#b42318)]"
           onClick={(e) => handleDeleteClick(e, note.id, note.title)}
         >
-          Delete
+          {t("common.delete")}
         </button>
       </div>
     )
@@ -302,7 +307,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
         <div className={cn(isRail && "min-h-0 flex flex-col h-full")}>
           {showToolbar && (
             <div className="flex items-center gap-1.5 mb-2.5 justify-between">
-              <div className="pm-label">Notes · {notes.length}</div>
+              <div className="pm-label">{t("common.notes")} · {notes.length}</div>
               <div className="flex items-center gap-1.5 ml-auto">
                 <Button
                   type="button"
@@ -310,7 +315,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
                   size="xs"
                   onClick={openImport}
                 >
-                  Import
+                  {t("common.import")}
                 </Button>
                 <Button
                   type="button"
@@ -318,7 +323,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
                   size="xs"
                   onClick={() => void handleCreate()}
                 >
-                  New
+                  {t("common.new")}
                 </Button>
               </div>
             </div>
@@ -327,18 +332,18 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
           {loading ? (
             <div className="flex items-center justify-center py-6 gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
-              <span className="pm-meta">Loading…</span>
+              <span className="pm-meta">{t("common.loading")}</span>
             </div>
           ) : notes.length === 0 ? (
-            <p className="pm-meta">No notes yet. Create one to get started.</p>
+            <p className="pm-meta">{t("library.noNotes")}</p>
           ) : (
             <div className={cn(isRail && "flex-1 min-h-0 overflow-auto")}>
               {/* Active / unextracted notes */}
               {unextracted.length === 0 ? (
                 <p className="pm-meta py-1">
                   {extracted.length > 0
-                    ? "All notes are extracted."
-                    : "No notes yet."}
+                    ? t("library.allNotesExtracted")
+                    : t("library.noNotes")}
                 </p>
               ) : (
                 <div>{unextracted.map(renderNoteRow)}</div>
@@ -362,7 +367,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
                     >
                       <ChevronRight className="size-3.5" strokeWidth={2} />
                     </span>
-                    Extracted · {extracted.length}
+                    {t("library.extractedCount", { n: extracted.length })}
                   </button>
                   <div
                     className={cn(
@@ -405,15 +410,15 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
             showCloseButton={false}
           >
             <DialogHeader>
-              <DialogKicker>Note</DialogKicker>
-              <DialogTitle>Delete note?</DialogTitle>
+              <DialogKicker>{t("common.note")}</DialogKicker>
+              <DialogTitle>{t("library.deleteNoteQ")}</DialogTitle>
               {deleteTarget?.title ? (
                 <p className="pm-dialog-confirm-target" title={deleteTarget.title}>
                   {deleteTarget.title}
                 </p>
               ) : null}
               <DialogDescription>
-                This note will be permanently removed. This cannot be undone.
+                {t("library.noteDeleteBody")}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
@@ -423,7 +428,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
                 size="sm"
                 onClick={() => setDeleteTarget(null)}
               >
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button
                 type="button"
@@ -431,7 +436,7 @@ export const NotesCard = forwardRef<NotesCardHandle, NotesCardProps>(
                 size="sm"
                 onClick={handleDeleteConfirm}
               >
-                Delete
+                {t("common.delete")}
               </Button>
             </DialogFooter>
           </DialogContent>

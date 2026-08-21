@@ -10,18 +10,19 @@ import {
   DEFAULT_LANGUAGE_HINTS,
   toggleLanguageHint,
 } from "@/lib/language-hints"
+import { useT } from "@/i18n/use-t"
 
 export { DEFAULT_LANGUAGE_HINTS, toggleLanguageHint }
 
 /** Short rotating tips — explicit language improves ASR accuracy */
-const LANG_HINT_MESSAGES = [
-  "Pick a language for accuracy",
-  "Language hint → cleaner text",
-  "Specify language for better ASR",
-  "A set language is more precise",
-  "Hint the language for best results",
-  "Known language, sharper captions",
-]
+const LANG_HINT_KEYS = [
+  "meeting.langHint1",
+  "meeting.langHint2",
+  "meeting.langHint3",
+  "meeting.langHint4",
+  "meeting.langHint5",
+  "meeting.langHint6",
+] as const
 
 const HINT_SHOW_DURATION = 3200
 const HINT_INITIAL_DELAY = 600
@@ -41,6 +42,8 @@ interface Props {
   compact?: boolean
   /** Official cap for the active model (1 = single-select, 4 = Qwen). */
   maxHints?: number
+  /** Player toolbar: icon chip that still opens the same Dialog as setup. */
+  variant?: "pill" | "chip"
 }
 
 export function LanguageHintsSelector({
@@ -51,22 +54,24 @@ export function LanguageHintsSelector({
   disabled = false,
   compact = false,
   maxHints = 1,
+  variant = "pill",
 }: Props) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
-  const [hintMessage, setHintMessage] = useState(LANG_HINT_MESSAGES[0])
+  const [hintMessage, setHintMessage] = useState(() => t(LANG_HINT_KEYS[0]))
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastHintIdxRef = useRef(0)
 
   const pickMessage = () => {
-    if (LANG_HINT_MESSAGES.length <= 1) return LANG_HINT_MESSAGES[0]
-    let idx = Math.floor(Math.random() * LANG_HINT_MESSAGES.length)
+    if (LANG_HINT_KEYS.length <= 1) return t(LANG_HINT_KEYS[0])
+    let idx = Math.floor(Math.random() * LANG_HINT_KEYS.length)
     if (idx === lastHintIdxRef.current) {
-      idx = (idx + 1) % LANG_HINT_MESSAGES.length
+      idx = (idx + 1) % LANG_HINT_KEYS.length
     }
     lastHintIdxRef.current = idx
-    return LANG_HINT_MESSAGES[idx]
+    return t(LANG_HINT_KEYS[idx])
   }
 
   useEffect(() => {
@@ -103,7 +108,7 @@ export function LanguageHintsSelector({
     return () => {
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
     }
-  }, [showTipBubble, open, disabled])
+  }, [showTipBubble, open, disabled, t])
 
   const toggle = (code: string) => {
     onChange(toggleLanguageHint(selected, code, maxHints))
@@ -115,83 +120,109 @@ export function LanguageHintsSelector({
 
   // When disabled (e.g. re-transcribing), show short codes: zh / en / zh,en
   const display = isAutoOnly
-    ? "Auto"
+    ? t("meeting.auto")
     : disabled
-      ? selected.filter((c) => c !== "auto").join(", ") || "Auto"
+      ? selected.filter((c) => c !== "auto").join(", ") || t("meeting.auto")
       : selected.length <= 2
         ? selected.map((c) => options.find((o) => o.code === c)?.label ?? c).join(", ")
-        : `${selected.length} languages`
+        : t("meeting.nLanguages", { n: selected.length })
 
   // Ensure auto appears in the list even if options omit it
   const pills: LanguageHintOption[] = (() => {
     const hasAuto = options.some((o) => o.code === "auto")
     return hasAuto
       ? options
-      : [{ code: "auto", label: "Auto" }, ...options]
+      : [{ code: "auto", label: t("meeting.auto") }, ...options]
   })()
+
+  const chipTrigger = (
+    <button
+      type="button"
+      disabled={disabled}
+      className={cn(
+        "pm-meeting-player-chip",
+        !isAutoOnly && "is-active",
+      )}
+      aria-label={t("meeting.language")}
+      title={
+        isAutoOnly
+          ? t("meeting.languageAuto")
+          : t("meeting.langCountSelected", { n: selected.filter((c) => c !== "auto").length || selected.length })
+      }
+      onClick={() => {
+        if (disabled) return
+        setOpen(true)
+      }}
+    >
+      <Languages className="size-3.5" strokeWidth={1.75} />
+    </button>
+  )
+
+  const pillTrigger = (
+    <div className={cn("pm-lang-hint-anchor", compact ? "w-auto" : "w-full")}>
+      {(hintVisible || hintExiting) && showTipBubble && !open && !disabled && (
+        <div className="pm-lang-hint-bubble-slot" aria-hidden>
+          {/* Bob on outer wrap; scale emerge on inner — no transform fight */}
+          <div className="pm-lang-hint-bob">
+            <div
+              className={cn(
+                "pm-lang-hint-bubble",
+                hintExiting ? "is-retracting" : "is-emerging",
+              )}
+            >
+              <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">
+                {hintMessage}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        className={cn(
+          "pm-meeting-pill",
+          compact && "is-compact",
+          !isAutoOnly && "is-active",
+        )}
+        onClick={() => {
+          if (disabled) return
+          setOpen(true)
+        }}
+      >
+        <Languages className="size-3.5 shrink-0 opacity-80" />
+        <span
+          className={cn(
+            "pm-meeting-pill-label",
+            disabled && "t-mono-family uppercase tracking-wide",
+          )}
+        >
+          {display}
+        </span>
+      </Button>
+    </div>
+  )
 
   return (
     <>
-      {/* Language button fixed; bubble sits top-right and bobs on its own */}
-      <div className={cn("pm-lang-hint-anchor", compact ? "w-auto" : "w-full")}>
-        {(hintVisible || hintExiting) && showTipBubble && !open && !disabled && (
-          <div className="pm-lang-hint-bubble-slot" aria-hidden>
-            {/* Bob on outer wrap; scale emerge on inner — no transform fight */}
-            <div className="pm-lang-hint-bob">
-              <div
-                className={cn(
-                  "pm-lang-hint-bubble",
-                  hintExiting ? "is-retracting" : "is-emerging",
-                )}
-              >
-                <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">
-                  {hintMessage}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={disabled}
-          className={cn(
-            "pm-meeting-pill",
-            compact && "is-compact",
-            !isAutoOnly && "is-active",
-          )}
-          onClick={() => {
-            if (disabled) return
-            setOpen(true)
-          }}
-        >
-          <Languages className="size-3.5 shrink-0 opacity-80" />
-          <span
-            className={cn(
-              "pm-meeting-pill-label",
-              disabled && "t-mono-family uppercase tracking-wide",
-            )}
-          >
-            {display}
-          </span>
-        </Button>
-      </div>
+      {variant === "chip" ? chipTrigger : pillTrigger}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="pm-dialog sm:max-w-[340px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Languages className="h-4 w-4 text-[var(--pm-green)]" />
-              Language Hints
+              {t("meeting.languageHints")}
             </DialogTitle>
           </DialogHeader>
           <p className="pm-meta -mt-1">
             {maxHints <= 1
-              ? "This model accepts one language. Auto lets it detect the language."
-              : `This model accepts up to ${maxHints} languages. Auto lets it detect.`}
+              ? t("meeting.langHintModel1")
+              : t("meeting.langHintModelN", { n: maxHints })}
           </p>
-          <div className="pm-lang-pills" role="group" aria-label="Language hints">
+          <div className="pm-lang-pills" role="group" aria-label={t("meeting.languageHints")}>
             {pills.map(({ code, label }) => {
               const isSelected =
                 code === "auto"
@@ -208,7 +239,7 @@ export function LanguageHintsSelector({
                   aria-pressed={isSelected}
                   onClick={() => toggle(code)}
                 >
-                  <span className="pm-lang-pill-label">{label}</span>
+                  <span className="pm-lang-pill-label">{code === "auto" ? t("meeting.auto") : label}</span>
                   {code !== "auto" && (
                     <span className="pm-lang-pill-code t-mono-family">{code}</span>
                   )}

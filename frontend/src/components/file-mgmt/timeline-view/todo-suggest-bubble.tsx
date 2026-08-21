@@ -10,6 +10,7 @@ import { ListTodo } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getChainTodoSuggestions } from "@/api/file-mgmt"
 import type { TodoSuggestionItem } from "@/types/file-mgmt"
+import { useT } from "@/i18n/use-t"
 
 /** Open hold: 2.5–4s random */
 const HOLD_MS_MIN = 2500
@@ -48,6 +49,7 @@ export function TodoSuggestBubble({
   onPick,
   className,
 }: TodoSuggestBubbleProps) {
+  const t = useT()
   const [items, setItems] = useState<TodoSuggestionItem[]>([])
   const [idx, setIdx] = useState(0)
   const [hover, setHover] = useState(false)
@@ -239,7 +241,7 @@ export function TodoSuggestBubble({
         setHover(false)
       }}
     >
-      <div className="pm-todo-suggest-stack" aria-label="Todo suggestions">
+      <div className="pm-todo-suggest-stack" aria-label={t("fileMgmt.todoSuggestions")}>
         {items.map((item, i) => {
           const isActive = i === idx
           const offset = hover && n > 1 ? (i - center) * STACK_STEP : 0

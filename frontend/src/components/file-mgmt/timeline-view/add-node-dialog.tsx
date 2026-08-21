@@ -16,10 +16,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import { FolderOpen, Paperclip, Upload, X, XCircle } from "lucide-react"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
+import { formatApiError } from "@/api/http"
 import type { FileSummary, Node, NodeGroup } from "@/types/file-mgmt"
 import {
   attachFileToNode,
@@ -99,6 +101,7 @@ export function AddNodeDialog({
   initialTitle,
   initialMessageBody,
 }: AddNodeDialogProps) {
+  const t = useT()
   const [title, setTitle] = useState("")
   const [groupSlug, setGroupSlug] = useState<string>(groups[0]?.group_id ?? "")
   const [localGroups, setLocalGroups] = useState<NodeGroup[]>(groups)
@@ -276,11 +279,11 @@ export function AddNodeDialog({
     if (!chainId) return
     const trimmedTitle = title.trim()
     if (!trimmedTitle) {
-      toast.error("Node name is required")
+      toast.error(t("fileMgmt.nodeNameRequired"))
       return
     }
     if (!groupSlug) {
-      toast.error("Group is required")
+      toast.error(t("fileMgmt.groupRequired"))
       return
     }
     setSubmitting(true)
@@ -329,18 +332,16 @@ export function AddNodeDialog({
         })
       }
 
-      toast.success("Node added")
+      toast.success(t("fileMgmt.nodeAdded"))
       onCreated(node)
       onOpenChange(false)
     } catch (err) {
       const conflict = getNameConflict(err)
       if (conflict) {
-        toast.error(
-          `A file named “${conflict.name}” already exists. Please rename and try again.`
-        )
+        toast.error(t("fileMgmt.fileExists", { name: conflict.name }))
       } else {
         toast.error(
-          `Failed: ${err instanceof Error ? err.message : String(err)}`
+          t("fileMgmt.failed", { error: formatApiError(err, t) })
         )
       }
     } finally {
@@ -401,7 +402,7 @@ export function AddNodeDialog({
               Actions live in the same row so Cancel / Add Node / close share one baseline.
             */}
             <DialogHeader className="pm-add-node-head">
-              <DialogTitle className="pm-add-node-title">Add Node</DialogTitle>
+              <DialogTitle className="pm-add-node-title">{t("fileMgmt.addNode")}</DialogTitle>
               <div className="pm-add-node-head-actions">
                 <Button
                   type="button"
@@ -410,7 +411,7 @@ export function AddNodeDialog({
                   onClick={() => onOpenChange(false)}
                   disabled={submitting}
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -419,7 +420,7 @@ export function AddNodeDialog({
                   onClick={() => void handleSubmit()}
                   disabled={submitting || !groupSlug || !title.trim()}
                 >
-                  {submitting ? "Adding…" : "Add Node"}
+                  {submitting ? t("fileMgmt.adding") : t("fileMgmt.addNode")}
                 </Button>
                 <Button
                   type="button"
@@ -428,8 +429,8 @@ export function AddNodeDialog({
                   className="pm-add-node-head-close"
                   onClick={() => onOpenChange(false)}
                   disabled={submitting}
-                  title="Close"
-                  aria-label="Close"
+                  title={t("common.close")}
+                  aria-label={t("common.close")}
                 >
                   <X className="h-3.5 w-3.5" strokeWidth={1.75} />
                 </Button>
@@ -443,7 +444,7 @@ export function AddNodeDialog({
                   <section className="pm-add-node-card pm-add-node-card--params">
                     <div className="pm-add-node-field">
                       <FieldLabel htmlFor="pm-add-node-title">
-                        Title{" "}
+                        {t("common.title")}{" "}
                         <span className="text-[var(--pm-danger)]">*</span>
                       </FieldLabel>
                       <Input
@@ -451,7 +452,7 @@ export function AddNodeDialog({
                         id="pm-add-node-title"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        placeholder="Node title…"
+                        placeholder={t("fileMgmt.nodeTitlePh")}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
                             e.preventDefault()
@@ -463,7 +464,7 @@ export function AddNodeDialog({
 
                     <div className="pm-add-node-field">
                       <FieldLabel>
-                        Group{" "}
+                        {t("common.group")}{" "}
                         <span className="text-[var(--pm-danger)]">*</span>
                       </FieldLabel>
                       <DropdownSelect
@@ -476,30 +477,30 @@ export function AddNodeDialog({
                           }
                           setGroupSlug(v)
                         }}
-                        placeholder="Select a group"
+                        placeholder={t("fileMgmt.selectGroup")}
                         options={[
                           ...(localGroups.length === 0
-                            ? [{ value: "", label: "Select a group" }]
+                            ? [{ value: "", label: t("fileMgmt.selectGroup") }]
                             : []),
                           ...localGroups.map((g) => ({
                             value: g.group_id,
-                            label: g.name,
+                            label: systemFolderDisplayName(g.name, t),
                           })),
-                          { value: "__add_group__", label: "+ Add group…" },
+                          { value: "__add_group__", label: t("fileMgmt.addGroup") },
                         ]}
                       />
                     </div>
 
                     <div className="pm-add-node-field">
                       <FieldLabel htmlFor="pm-add-node-event-time">
-                        Event Time
+                        {t("fileMgmt.eventTime")}
                       </FieldLabel>
                       <DatePicker
                         id="pm-add-node-event-time"
                         size="sm"
                         value={eventTime}
                         onChange={setEventTime}
-                        placeholder="Optional"
+                        placeholder={t("common.optional")}
                         allowClear
                       />
                     </div>
@@ -514,7 +515,7 @@ export function AddNodeDialog({
                     <div className="pm-add-node-attach-head">
                       <div className="pm-add-node-attach-labels">
                         <FieldLabel className="pm-add-node-attach-label">
-                          Attachments
+                          {t("fileMgmt.attachments")}
                         </FieldLabel>
                         <span className="pm-meta text-[var(--pm-faint)]">
                           {pending.length}
@@ -573,7 +574,7 @@ export function AddNodeDialog({
                             }
                             fileInputRef.current?.click()
                           }}
-                          title={selectOpen ? "Back to upload" : "Browse files"}
+                          title={selectOpen ? t("fileMgmt.backToUpload") : t("fileMgmt.browseFiles")}
                         >
                           <Upload
                             className={cn(
@@ -584,15 +585,15 @@ export function AddNodeDialog({
                           />
                           {selectOpen ? (
                             <span className="pm-meta text-[var(--pm-muted)]">
-                              Upload File
+                              {t("fileMgmt.uploadFileBtn")}
                             </span>
                           ) : (
                             <>
                               <p className="pm-meta text-[var(--pm-muted)]">
-                                Drag & drop files here
+                                {t("fileMgmt.dragDrop")}
                               </p>
                               <p className="pm-meta text-[var(--pm-faint)]">
-                                or click to browse
+                                {t("fileMgmt.orClickBrowse")}
                               </p>
                             </>
                           )}
@@ -610,7 +611,7 @@ export function AddNodeDialog({
                             onClick={applyCollectionConfirm}
                             disabled={!draftDirty}
                           >
-                            Confirm
+                            {t("common.confirm")}
                           </button>
                         ) : (
                           <button
@@ -622,7 +623,7 @@ export function AddNodeDialog({
                               className="h-3.5 w-3.5 shrink-0"
                               strokeWidth={1.75}
                             />
-                            From Collection
+                            {t("fileMgmt.fromCollection")}
                           </button>
                         )}
                       </div>
@@ -638,7 +639,7 @@ export function AddNodeDialog({
                           <div className="pm-timeline-attach-list-inner">
                             {pending.length === 0 ? (
                               <p className="pm-meta text-[var(--pm-faint)] px-1 py-2">
-                                No files attached yet
+                                {t("fileMgmt.noFilesAttachedYet")}
                               </p>
                             ) : (
                               <ul className="pm-ws-list pm-timeline-attach-list">
@@ -677,8 +678,8 @@ export function AddNodeDialog({
                                             onClick={() =>
                                               removePending(att.key)
                                             }
-                                            title="Remove attachment"
-                                            aria-label="Remove attachment"
+                                            title={t("fileMgmt.removeAttachment")}
+                                            aria-label={t("fileMgmt.removeAttachment")}
                                           >
                                             <XCircle className="h-3 w-3" />
                                           </button>
@@ -724,10 +725,10 @@ export function AddNodeDialog({
                 <section className="pm-add-node-card pm-add-node-card--message">
                   <div className="pm-add-node-msg-head">
                     <FieldLabel className="pm-add-node-msg-label">
-                      Message
+                      {t("common.message")}
                     </FieldLabel>
                     <span className="pm-meta text-[var(--pm-faint)]">
-                      Optional · markdown
+                      {t("common.optionalMd")}
                     </span>
                   </div>
                   <div className="pm-add-node-md-host">
@@ -737,7 +738,7 @@ export function AddNodeDialog({
                         value={messageBody}
                         onChange={setMessageBody}
                         minHeight="100%"
-                        placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+                        placeholder={t("fileMgmt.writeMessagePh")}
                         showToolbar
                         flush
                         className="pm-add-node-md-editor"

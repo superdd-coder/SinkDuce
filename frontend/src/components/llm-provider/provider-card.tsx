@@ -7,6 +7,7 @@ import { deleteLLMProvider, testLLMProvider, setDefaultLLMProvider, updateConfig
 import type { LLMProvider } from "@/stores/app-store"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 interface ProviderCardProps {
   provider: LLMProvider
@@ -15,6 +16,7 @@ interface ProviderCardProps {
 }
 
 export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps) {
+  const t = useT()
   const { setProviders } = useAppStore()
   const [testing, setTesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -34,10 +36,10 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
       setProviders((prev) =>
         prev.map((p) => (p.id === provider.id ? { ...p, status: newStatus } : p))
       )
-      if (res.success) toast.success(`${provider.name}: connection OK`)
-      else toast.error(`${provider.name}: ${res.error || "connection failed"}`)
+      if (res.success) toast.success(t("settings.connectionOk", { name: provider.name }))
+      else toast.error(t("settings.connectionFailed", { name: provider.name, error: res.error || t("errors.connection_failed") }))
     } catch {
-      toast.error("Test failed")
+      toast.error(t("settings.testFailed"))
     } finally {
       setTesting(false)
     }
@@ -50,12 +52,12 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
       if (res.error) toast.error(res.error)
       else {
         toast.success(
-          res.message || `Provider '${provider.name || "Unnamed"}' deleted`,
+          res.message || t("settings.providerDeleted", { name: provider.name || t("common.unnamed") }),
         )
         onRefresh()
       }
     } catch {
-      toast.error("Delete failed")
+      toast.error(t("settings.deleteFailed"))
     } finally {
       setDeleting(false)
     }
@@ -66,7 +68,7 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
       const res = await setDefaultLLMProvider(provider.id)
       if (res.error) toast.error(res.error)
       else {
-        toast.success(res.message || `Provider '${provider.name || "Unnamed"}' set as default`)
+        toast.success(res.message || t("settings.providerSetDefault", { name: provider.name || t("common.unnamed") }))
         if ((provider.function_call_model_ids ?? []).length > 0) {
           const chatModel = provider.default_model || provider.function_call_model_ids![0]
           await updateConfig("default_chat_model", {
@@ -76,7 +78,7 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
         onRefresh()
       }
     } catch {
-      toast.error("Failed to set default")
+      toast.error(t("settings.failedSetDefault"))
     }
   }
 
@@ -84,12 +86,12 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
     <div className="pm-settings-provider-card">
       <div className="pm-settings-provider-top">
         <div className="pm-settings-provider-name-row">
-          <span className="pm-settings-provider-name">{provider.name || "Unnamed"}</span>
+          <span className="pm-settings-provider-name">{provider.name || t("common.unnamed")}</span>
           <span className={cn("pm-settings-status-dot", statusClass)} aria-hidden />
         </div>
         {provider.is_default && (
           <Badge variant="default" className="shrink-0">
-            Default
+            {t("common.default")}
           </Badge>
         )}
       </div>
@@ -128,7 +130,7 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
       <div className="pm-settings-provider-actions">
         <Button variant="ghost" size="sm" onClick={handleTest} disabled={testing}>
           {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plug className="h-3 w-3" />}
-          Test
+          {t("common.test")}
         </Button>
         <Button
           variant="ghost"
@@ -137,11 +139,11 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
           disabled={provider.is_default}
         >
           <Star className="h-3 w-3" />
-          Default
+          {t("common.default")}
         </Button>
         <Button variant="secondary" size="sm" onClick={() => onEdit(provider)}>
           <Pencil className="h-3 w-3" />
-          Edit
+          {t("common.edit")}
         </Button>
         <Button
           variant="destructive"
@@ -150,7 +152,7 @@ export function ProviderCard({ provider, onEdit, onRefresh }: ProviderCardProps)
           disabled={deleting}
         >
           <Trash2 className="h-3 w-3" />
-          Delete
+          {t("common.delete")}
         </Button>
       </div>
     </div>

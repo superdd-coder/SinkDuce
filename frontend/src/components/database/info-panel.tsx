@@ -23,6 +23,8 @@ import type { FileSummary } from "@/types/file-mgmt"
 import { ConflictViewerDialog } from "./conflict-viewer-dialog"
 import { NotesCard, type NotesCardHandle } from "./notes-card"
 import { TodoCard } from "./todo-card"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface InfoPanelProps {
   collection: string
@@ -38,6 +40,7 @@ interface InfoPanelProps {
 type RailPanel = "notes" | "meetings" | null
 
 export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPanelProps) {
+  const t = useT()
   const [summary, setSummary] = useState<string | null>(null)
   /** Only true on first load / collection switch — never on silent hot-refresh. */
   const [summaryLoading, setSummaryLoading] = useState(false)
@@ -287,11 +290,10 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
     wasBusyRef.current = true
     try {
       await triggerConsolidation(collection)
-      toast.info(`Consolidation started for ${collectionName}...`)
+      toast.info(t("library.consolidationStarted", { name: collectionName }))
       // Poll loop above will silent-refresh when consolidating ends
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg || "Consolidation failed")
+      toast.error(formatApiError(err, t) || t("library.consolidationFailed"))
       setConsolidating(false)
       wasConsolidatingRef.current = false
     }
@@ -329,7 +331,9 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
   }
 
   const meetingsMeta =
-    meetings.length === 0 ? "None linked" : `${meetings.length} linked`
+    meetings.length === 0
+      ? t("library.noneLinked")
+      : t("library.nLinked", { n: meetings.length })
 
   const ensureNotesOpen = () => {
     if (openRail !== "notes") setOpenRail("notes")
@@ -358,25 +362,25 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
             <div className="pm-h-cell">
               <span className="pm-h-num">{docCount}</span>
               <span className="pm-label" style={{ textTransform: "none", letterSpacing: "0.02em" }}>
-                Docs
+                {t("library.docs")}
               </span>
             </div>
             <div className="pm-h-cell">
               <span className="pm-h-num">{meetings.length > 0 ? meetings.length : "—"}</span>
               <span className="pm-label" style={{ textTransform: "none", letterSpacing: "0.02em" }}>
-                Meetings
+                {t("meeting.meetings")}
               </span>
             </div>
             <div className="pm-h-cell">
               <span className="pm-h-num">{notesCount > 0 ? notesCount : "—"}</span>
               <span className="pm-label" style={{ textTransform: "none", letterSpacing: "0.02em" }}>
-                Notes
+                {t("common.notes")}
               </span>
             </div>
             <div className={cn("pm-h-cell", conflicts.length === 0 && "ok")}>
               <span className="pm-h-num">{conflicts.length}</span>
               <span className="pm-label" style={{ textTransform: "none", letterSpacing: "0.02em" }}>
-                Conflicts
+                {t("library.conflict")}
               </span>
             </div>
           </div>
@@ -392,17 +396,17 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
             >
               {projectDescription?.trim()
                 ? projectDescription
-                : "No project description yet. Upload sources and consolidate to build context."}
+                : t("library.noProjectDesc")}
             </p>
           </div>
 
           <div className="pm-summary-h">
-            <span className="pm-summary-title">Summary</span>
+            <span className="pm-summary-title">{t("common.summary")}</span>
             <div className="flex items-center gap-2 shrink-0">
               {consolidating && (
                 <span className="pm-meta inline-flex items-center gap-1.5">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  Updating
+                  {t("library.updating")}
                 </span>
               )}
               <Button
@@ -417,7 +421,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                 ) : (
                   <RefreshCw className="h-3 w-3" />
                 )}
-                Consolidate
+                {t("library.consolidate")}
               </Button>
             </div>
           </div>
@@ -425,7 +429,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
           {summaryLoading && !summary ? (
             <div className="flex items-center justify-center py-8 gap-2">
               <Loader2 className="h-5 w-5 animate-spin text-[var(--pm-faint)]" />
-              <span className="pm-meta">Loading…</span>
+              <span className="pm-meta">{t("common.loading")}</span>
             </div>
           ) : summary ? (
             <div className="pm-summary-body pm-read-text mb-6">
@@ -438,7 +442,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
               />
             </div>
           ) : (
-            <p className="pm-meta mb-6">No summary yet. Upload files and consolidate.</p>
+            <p className="pm-meta mb-6">{t("library.noSummaryYet")}</p>
           )}
 
           <div className="mb-6">
@@ -452,10 +456,12 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                 <ChevronRight className="h-3.5 w-3.5" />
               </span>
               <span className="pm-meta" style={{ color: "var(--pm-green)" }}>
-                Definitive sources ·{" "}
-                {definitiveLoading && definitiveFiles.length === 0
-                  ? "…"
-                  : definitiveFiles.length}
+                {t("library.definitiveSources", {
+                  n:
+                    definitiveLoading && definitiveFiles.length === 0
+                      ? "…"
+                      : definitiveFiles.length,
+                })}
               </span>
             </button>
             <div
@@ -468,12 +474,11 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                   {definitiveLoading && definitiveFiles.length === 0 ? (
                     <div className="flex items-center gap-2 py-3">
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--pm-faint)]" />
-                      <span className="pm-meta">Loading…</span>
+                      <span className="pm-meta">{t("common.loading")}</span>
                     </div>
                   ) : definitiveFiles.length === 0 ? (
                     <p className="pm-meta py-1">
-                      No definitive files yet. Mark files as definitive to include them in
-                      Collection Summary.
+                      {t("library.noDefinitiveFiles")}
                     </p>
                   ) : (
                     <ul className="space-y-0">
@@ -503,7 +508,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                           <button
                             type="button"
                             className="shrink-0 px-1.5 py-1 pm-meta hover:text-[var(--pm-green)] transition-colors disabled:opacity-50 border-none bg-transparent cursor-pointer"
-                            title="Exclude from Collection Summary sources"
+                            title={t("library.excludeFromSummary")}
                             disabled={clearingDefinitiveId === f.file_id}
                             onClick={async (e) => {
                               e.stopPropagation()
@@ -513,7 +518,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                                   is_definitive: false,
                                   version: f.version,
                                 })
-                                toast.success("Excluded from Collection Summary")
+                                toast.success(t("library.excludedFromSummary"))
                                 setDefinitiveFiles((prev) =>
                                   prev.filter((x) => x.file_id !== f.file_id)
                                 )
@@ -523,7 +528,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                                 })
                               } catch (err) {
                                 toast.error(
-                                  `Failed: ${err instanceof Error ? err.message : String(err)}`
+                                  t("common.failedWithError", { error: formatApiError(err, t) })
                                 )
                               } finally {
                                 setClearingDefinitiveId(null)
@@ -533,7 +538,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                             {clearingDefinitiveId === f.file_id ? (
                               <Loader2 className="h-3 w-3 animate-spin inline" />
                             ) : (
-                              "Exclude"
+                              t("library.exclude")
                             )}
                           </button>
                         </li>
@@ -548,7 +553,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
           {conflicts.length > 0 && (
             <div className="mb-4">
               <span className="pm-label mb-2 block" style={{ color: "#B45309" }}>
-                ⚠ Conflicts · {conflicts.length}
+                {t("library.conflictsCount", { n: conflicts.length })}
               </span>
               <div>
                 {conflicts.map((conflict, i) => (
@@ -565,7 +570,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                         ({conflict.source1_label ?? conflict.source1})
                       </span>
                       <span className="text-[var(--pm-faint)]" style={{ margin: "0 6px" }}>
-                        vs
+                        {t("library.vs")}
                       </span>
                       <span style={{ color: "#B45309" }}>{conflict.content2}</span>
                       <span className="text-[var(--pm-faint)]">
@@ -612,7 +617,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                 type="button"
                 className="pm-collapse-h-main"
                 aria-expanded={openRail === "notes"}
-                aria-label="Toggle Notes"
+                aria-label={t("library.toggleNotes")}
                 onClick={() => toggleRail("notes")}
               >
                 <span
@@ -628,7 +633,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                   className="pm-label"
                   style={{ textTransform: "none", letterSpacing: "0.02em" }}
                 >
-                  Notes
+                  {t("common.notes")}
                 </span>
                 <span className="pm-count-pill">{notesCount}</span>
               </button>
@@ -642,7 +647,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                     requestAnimationFrame(() => notesCardRef.current?.openImport())
                   }}
                 >
-                  Import
+                  {t("common.import")}
                 </Button>
                 <Button
                   type="button"
@@ -653,7 +658,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                     requestAnimationFrame(() => notesCardRef.current?.create())
                   }}
                 >
-                  New
+                  {t("common.new")}
                 </Button>
               </div>
             </div>
@@ -688,7 +693,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                 type="button"
                 className="pm-collapse-h-main"
                 aria-expanded={openRail === "meetings"}
-                aria-label="Toggle Meetings"
+                aria-label={t("library.toggleMeetings")}
                 onClick={() => toggleRail("meetings")}
               >
                 <span
@@ -704,7 +709,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                   className="pm-label"
                   style={{ textTransform: "none", letterSpacing: "0.02em" }}
                 >
-                  Meetings
+                  {t("meeting.meetings")}
                 </span>
                 <span className="pm-count-pill">{meetings.length}</span>
                 <span className="pm-meta ml-auto shrink-0 pl-2">{meetingsMeta}</span>
@@ -720,7 +725,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                 <div className="pm-rail-expand-inner pm-rail-body px-3 pb-3">
                   {meetings.length === 0 ? (
                     <p className="pm-meta py-1">
-                      No meetings linked. Attach from Meeting when ready.
+                      {t("library.noMeetingsLinked")}
                     </p>
                   ) : (
                     <div className="flex flex-col gap-0.5">
@@ -737,7 +742,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                               type="button"
                               className="pm-rail-row"
                               onClick={() => handleMeetingClick(meeting)}
-                              title={meeting.title || "Open meeting"}
+                              title={meeting.title || t("fileMgmt.openMeeting")}
                             >
                               <span className="pm-rail-row-title">
                                 {meeting.title || meeting.id}
@@ -762,7 +767,7 @@ export function InfoPanel({ collection, tabsSlot, railCovered = false }: InfoPan
                                     onClick={() => handleMeetingSectionClick(fid)}
                                     title={
                                       meeting.file_labels?.[fid] ||
-                                      "Open section"
+                                      t("library.openSection")
                                     }
                                   >
                                     <span className="pm-rail-row-title">

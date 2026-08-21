@@ -32,6 +32,15 @@ def test_studio_media_bar_gates_hot_words_on_adapter_flag():
     assert "hotWordsSupported={activeHotWordsSupported}" in studio
 
 
+def test_studio_player_opens_same_dialogs_as_setup():
+    """Player hot-words/language must use the setup Dialogs, not a SoftMenu."""
+    media = (MEETING / "media-bar.tsx").read_text(encoding="utf-8")
+    assert "SoftMenu" not in media
+    assert "<HotWordsSelector" in media
+    assert "<LanguageHintsSelector" in media
+    assert 'variant="chip"' in media
+
+
 def test_settings_hot_words_gated_when_local_asr_active():
     """Settings Hot words card must read active-provider supports_hot_words."""
     settings = SETTINGS.read_text(encoding="utf-8")

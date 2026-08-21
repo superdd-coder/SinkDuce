@@ -20,6 +20,8 @@ import FileViewer from "@file-viewer/react"
 import officePreset from "@file-viewer/preset-office"
 import textRenderer from "@file-viewer/renderer-text"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { tr } from "@/i18n/tr"
 
 /** Inline SVG for scrubbed toolbar — magnifying glass / download icon only. */
 const ICON_SEARCH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`
@@ -35,8 +37,14 @@ function setButtonIconOnly(btn: HTMLElement, kind: "search" | "download") {
   }
   btn.dataset.sinkduceIcon = kind
   btn.innerHTML = kind === "search" ? ICON_SEARCH_SVG : ICON_DOWNLOAD_SVG
-  btn.setAttribute("aria-label", kind === "search" ? "Search" : "Download")
-  btn.setAttribute("title", kind === "search" ? "Search" : "Download")
+  btn.setAttribute(
+    "aria-label",
+    kind === "search" ? tr("common.search") : tr("common.download"),
+  )
+  btn.setAttribute(
+    "title",
+    kind === "search" ? tr("common.search") : tr("common.download"),
+  )
 }
 
 /**
@@ -372,11 +380,11 @@ function friendlyRawError(status: number | null, body: string): string {
     lower.includes("file not found") ||
     lower.includes("not found")
 
-  if (isMissingBlob) return "Original file is not available for preview"
-  if (status === 400) return "Cannot open this file in Raw"
-  if (status === 403) return "Preview not allowed"
-  if (status !== null && status >= 500) return "Preview temporarily unavailable"
-  return "Could not load preview"
+  if (isMissingBlob) return tr("fileMgmt.originalNotAvailable")
+  if (status === 400) return tr("fileMgmt.cannotOpenRaw")
+  if (status === 403) return tr("fileMgmt.previewNotAllowed")
+  if (status !== null && status >= 500) return tr("fileMgmt.previewUnavailable")
+  return tr("fileMgmt.couldNotLoadPreview")
 }
 
 function RawFileViewerInner({
@@ -387,6 +395,7 @@ function RawFileViewerInner({
   hideChrome = false,
   tools = "full",
 }: RawFileViewerProps) {
+  const t = useT()
   const downloadSearchOnly = tools === "download-search"
   /** File Viewer routes by File.name / filename — prefer File over bare blob URL. */
   const [viewerFile, setViewerFile] = useState<File | null>(null)
@@ -418,7 +427,7 @@ function RawFileViewerInner({
       if (searchInput) {
         // Short placeholder for narrow rail
         if (searchInput.placeholder.length > 8) {
-          searchInput.placeholder = "Search"
+          searchInput.placeholder = tr("common.search")
         }
       }
       const hasQuery = !!(searchInput?.value || "").trim()
@@ -801,7 +810,7 @@ function RawFileViewerInner({
         )}
       >
         <p className="text-sm text-foreground/90 font-light text-center">
-          Preview not available for this file type
+          {t("fileMgmt.previewNotAvailable")}
         </p>
         {(downloadUrl || url) && (
           <button
@@ -810,7 +819,7 @@ function RawFileViewerInner({
             className="inline-flex items-center h-7 gap-1 rounded-lg border border-border bg-background px-2.5 text-[0.8rem] hover:bg-muted"
           >
             <Download className="h-3.5 w-3.5" />
-            Download
+            {t("common.download")}
           </button>
         )}
       </div>
@@ -826,7 +835,7 @@ function RawFileViewerInner({
         )}
       >
         <Loader2 className="h-4 w-4 animate-spin" />
-        <span className="text-sm">Loading preview…</span>
+        <span className="text-sm">{t("fileMgmt.loadingPreview")}</span>
       </div>
     )
   }
@@ -840,7 +849,7 @@ function RawFileViewerInner({
         )}
       >
         <p className="text-sm text-foreground/90 font-light text-center max-w-md">
-          {errorTitle || "Could not load preview"}
+          {errorTitle || t("fileMgmt.couldNotLoadPreview")}
         </p>
         {(downloadUrl || url) && (
           <button
@@ -849,7 +858,7 @@ function RawFileViewerInner({
             className="inline-flex items-center h-7 gap-1 rounded-lg border border-border bg-background px-2.5 text-[0.8rem] hover:bg-muted"
           >
             <Download className="h-3.5 w-3.5" />
-            Download
+            {t("common.download")}
           </button>
         )}
       </div>

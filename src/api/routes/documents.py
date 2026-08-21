@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import Response
 
+from src.api.errors import ApiError
+
 from src.services import services
 from src.parsers import parse_directory
 from src.tasks import task_manager
@@ -69,7 +71,7 @@ async def upload_document(
         # 保存文件 — 用 file_id 做目录，防同名冲突
         safe_name = Path(file.filename).name
         if not safe_name:
-            raise HTTPException(status_code=400, detail="Invalid filename")
+            raise ApiError(400, "invalid_filename", "Invalid filename")
         file_id = uuid.uuid4().hex
         file_source = f"__file__:{file_id}"
         file_dir = _files_dir(collection_id) / file_id
@@ -130,7 +132,7 @@ async def get_task(task_id: str):
     """获取单个任务状态"""
     task = task_manager.get_task(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise ApiError(404, "task_not_found", "Task not found")
     return task.to_dict()
 
 
@@ -146,7 +148,7 @@ async def cancel_task(task_id: str):
     """取消正在运行的任务"""
     if task_manager.cancel_task(task_id):
         return {"message": "Task cancelled"}
-    raise HTTPException(status_code=400, detail="Task not found or cannot be cancelled")
+    raise ApiError(400, "task_not_cancellable", "Task not found or cannot be cancelled")
 
 
 @router.post("/documents/tasks/{task_id}/retry")
@@ -155,7 +157,7 @@ async def retry_task(task_id: str):
     task = task_manager.retry_task(task_id)
     if task:
         return {"message": "Task re-queued", "task": task.to_dict()}
-    raise HTTPException(status_code=400, detail="Task not found or not in failed state")
+    raise ApiError(400, "task_not_retryable", "Task not found or not in failed state")
 
 
 @router.post("/documents/upload-folder")
@@ -780,9 +782,9 @@ def preview_file(
                 break
 
     if not file_path:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise ApiError(404, "file_not_found", "File not found")
     if not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+        raise ApiError(404, "file_not_found", "File not found")
 
     # Never serve shared parse cache as "original" even if path resolution fails open
     if file_path.name == "parsed.txt":
@@ -929,7 +931,7 @@ def get_extracted_text(
                 break
 
     if not file_path:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise ApiError(404, "file_not_found", "File not found")
 
     # Get file_type from files.json index
     from src.collections.file_index import load_for_read as load_file_index

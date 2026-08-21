@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react"
 import { Pause, Play } from "lucide-react"
+import { useT } from "@/i18n/use-t"
 
 export type CaptureMiniPlayerHandle = {
   /** Jump to start and play; if end is set, auto-pause at that time (one sentence). */
@@ -31,6 +32,7 @@ export const CaptureMiniPlayer = forwardRef<
   { audioUrl, audioVersion, variant = "compact", onTimeUpdate, footerSlot, footerLeftSlot },
   ref,
 ) {
+  const t = useT()
   const audioRef = useRef<HTMLAudioElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const segmentEndRef = useRef<number | null>(null)
@@ -145,7 +147,7 @@ export const CaptureMiniPlayer = forwardRef<
       }
       role="slider"
       tabIndex={0}
-      aria-label="Seek"
+      aria-label={t("common.seek")}
       aria-valuemin={0}
       aria-valuemax={Math.floor(duration || 0)}
       aria-valuenow={Math.floor(current || 0)}
@@ -184,7 +186,7 @@ export const CaptureMiniPlayer = forwardRef<
             type="button"
             className="pm-meeting-review-play"
             onClick={toggle}
-            aria-label={playing ? "Pause" : "Play"}
+            aria-label={playing ? t("common.pause") : t("common.play")}
           >
             {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
           </button>
@@ -201,7 +203,7 @@ export const CaptureMiniPlayer = forwardRef<
         type="button"
         className="pm-meeting-player-play"
         onClick={toggle}
-        aria-label={playing ? "Pause" : "Play"}
+        aria-label={playing ? t("common.pause") : t("common.play")}
       >
         {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
       </button>

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge"
 import { Star, Plug, Loader2, Power, Download } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 export type LoadState = "unloaded" | "loading" | "loaded" | "error"
 
@@ -52,6 +53,7 @@ export function LocalModelCard({
   onToggleLoad,
   onDownload,
 }: LocalModelCardProps) {
+  const t = useT()
   const [testing, setTesting] = useState(false)
   const [testNote, setTestNote] = useState<string | null>(null)
   const [testOk, setTestOk] = useState<boolean | null>(null)
@@ -104,8 +106,8 @@ export function LocalModelCard({
 
   const handleTest = async () => {
     if (!isLoaded) {
-      toast.message("Load the model first", {
-        description: "Test only checks that the model is in memory.",
+      toast.message(t("settings.loadModelFirst"), {
+        description: t("settings.testInMemoryHint"),
       })
       return
     }
@@ -118,19 +120,19 @@ export function LocalModelCard({
       if (res.success) {
         // No long adapter/model dump on the card — keep UI quiet
         setTestNote(null)
-        toast.success("Test passed")
+        toast.success(t("settings.testPassed"))
       } else {
-        setTestNote(res.error || "Test failed")
+        setTestNote(res.error || t("settings.testFailed"))
         if (res.code === "not_loaded") {
-          toast.message("Not loaded", { description: res.error })
+          toast.message(t("settings.unloaded"), { description: res.error })
         } else {
-          toast.error("Test failed", { description: res.error })
+          toast.error(t("settings.testFailed"), { description: res.error })
         }
       }
     } catch (e) {
       setTestOk(false)
       setTestNote(String(e))
-      toast.error("Test failed")
+      toast.error(t("settings.testFailed"))
     } finally {
       setTesting(false)
     }
@@ -152,45 +154,45 @@ export function LocalModelCard({
       const res = await onToggleLoad(action)
       if (!res.success) {
         setAwaitingLoad(false)
-        toast.error(res.error || "Request failed")
+        toast.error(res.error || t("settings.requestFailed"))
         return
       }
 
       // Trust server status only
       if (res.status === "loading") {
         setAwaitingLoad(true)
-        toast.message("Loading into memory…", {
+        toast.message(t("settings.loadingIntoMemory"), {
           description:
             res.message ||
-            "CPU load often takes 10–60s. This card updates when ready.",
+            t("settings.cpuLoadHint"),
         })
         return
       }
       if (res.status === "loaded") {
         setAwaitingLoad(false)
         // Already in memory (e.g. second click) — only then show ready
-        toast.success("Already in memory", { description: res.message })
+        toast.success(t("settings.alreadyInMemory"), { description: res.message })
         return
       }
       if (res.status === "unloaded") {
         setAwaitingLoad(false)
-        toast.success("Unloaded", {
-          description: res.message || "Freed from memory. Files stay on disk.",
+        toast.success(t("settings.unloaded"), {
+          description: res.message || t("settings.freedFromMemory"),
         })
         return
       }
       // Unknown status: keep awaiting if we started a load
       if (action === "load") {
         setAwaitingLoad(true)
-        toast.message("Loading…", {
-          description: "Waiting for server status updates.",
+        toast.message(t("common.loading"), {
+          description: t("settings.loadingWaitServer"),
         })
       } else {
         setAwaitingLoad(false)
       }
     } catch {
       setAwaitingLoad(false)
-      toast.error("Load/unload failed")
+      toast.error(t("settings.loadUnloadFailed"))
     }
   }
 
@@ -199,7 +201,7 @@ export function LocalModelCard({
       await onSetDefault()
       // Parent shows which adapter became active
     } catch {
-      toast.error("Failed to set default")
+      toast.error(t("settings.failedSetDefault"))
     }
   }
 
@@ -216,41 +218,43 @@ export function LocalModelCard({
       return (
         <Badge variant="secondary">
           <Loader2 className="h-3 w-3 animate-spin" />
-          Loading{elapsed > 0 ? ` ${elapsed}s` : "…"}
+          {elapsed > 0 ? t("settings.loadingElapsed", { n: elapsed }) : t("common.loading")}
         </Badge>
       )
     }
     if (isLoaded) {
-      return <Badge variant="default">In memory</Badge>
+      return <Badge variant="default">{t("settings.inMemory")}</Badge>
     }
     if (isError) {
-      return <Badge variant="destructive">Error</Badge>
+      return <Badge variant="destructive">{t("common.error")}</Badge>
     }
     if (!isDownloaded) {
-      return <Badge variant="outline">Not downloaded</Badge>
+      return <Badge variant="outline">{t("settings.notDownloaded")}</Badge>
     }
-    return <Badge variant="outline">On disk only</Badge>
+    return <Badge variant="outline">{t("settings.onDiskOnly")}</Badge>
   }
 
   const statusLine = (() => {
     if (isLoading) {
       return (
         loadDetail?.message ||
-        `Loading into memory on CPU… ${elapsed > 0 ? `${elapsed}s elapsed` : "please wait"}`
+        t("settings.loadingCpuWait", {
+          wait: elapsed > 0 ? t("settings.nSecElapsed", { n: elapsed }) : t("settings.pleaseWait"),
+        })
       )
     }
     if (isError) {
-      return loadDetail?.error || loadDetail?.message || "Load failed — try again"
+      return loadDetail?.error || loadDetail?.message || t("settings.loadFailedRetry")
     }
     if (isLoaded) {
       const took =
-        typeof loadDetail?.load_s === "number" ? ` (loaded in ${loadDetail.load_s}s)` : ""
-      return (loadDetail?.message || "Ready in memory — meetings can use it") + took
+        typeof loadDetail?.load_s === "number" ? t("settings.loadedIn", { n: loadDetail.load_s }) : ""
+      return (loadDetail?.message || t("settings.readyInMemory")) + took
     }
     if (!isDownloaded) {
-      return "Download model files first, then Load into memory"
+      return t("settings.downloadThenLoad")
     }
-    return "Downloaded but not loaded — click Load before using or Test"
+    return t("settings.downloadedNotLoaded")
   })()
 
   return (
@@ -261,7 +265,7 @@ export function LocalModelCard({
           <span className={cn("pm-settings-status-dot", statusDot)} aria-hidden />
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {isDefault && <Badge variant="default">Default</Badge>}
+          {isDefault && <Badge variant="default">{t("common.default")}</Badge>}
           {badge()}
         </div>
       </div>
@@ -284,7 +288,7 @@ export function LocalModelCard({
             testOk === false ? "is-error" : "is-ok",
           )}
         >
-          Test: {testNote}
+          {t("settings.testPrefix", { note: testNote })}
         </p>
       )}
 
@@ -294,20 +298,20 @@ export function LocalModelCard({
           size="sm"
           onClick={handleTest}
           disabled={testing || !isLoaded || isLoading}
-          title={!isLoaded ? "Load model first" : "Check that the model is in memory"}
+          title={!isLoaded ? t("settings.loadModelFirst") : t("settings.checkInMemory")}
         >
           {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plug className="h-3 w-3" />}
-          Test
+          {t("common.test")}
         </Button>
         <Button
           variant="ghost"
           size="sm"
           onClick={handleSetDefault}
           disabled={isDefault || !isLoaded || !isDownloaded || isLoading}
-          title={!isLoaded ? "Load model before setting default" : undefined}
+          title={!isLoaded ? t("settings.loadBeforeDefault") : undefined}
         >
           <Star className="h-3 w-3" />
-          Default
+          {t("common.default")}
         </Button>
         {isDownloaded ? (
           <Button
@@ -321,12 +325,12 @@ export function LocalModelCard({
             ) : (
               <Power className="h-3 w-3" />
             )}
-            {isLoading ? "Loading…" : isLoaded ? "Unload" : "Load"}
+            {isLoading ? t("common.loading") : isLoaded ? t("common.unload") : t("common.load")}
           </Button>
         ) : (
           <Button variant="secondary" size="sm" onClick={onDownload}>
             <Download className="h-3 w-3" />
-            Download
+            {t("common.download")}
           </Button>
         )}
       </div>

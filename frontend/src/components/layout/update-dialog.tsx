@@ -12,6 +12,7 @@ import type { UpdateInfo } from "@/hooks/use-update-check"
 import { openDesktopExternalUrl } from "@/api/client"
 import { desktopDmgAssetName } from "@/lib/update-release"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 /** Default path: pull Hub image (docker-compose.yml). Source builds use docker-compose.build.yml. */
 const UPDATE_COMMAND =
@@ -35,6 +36,7 @@ function formatReleaseBody(body: string): string {
 }
 
 export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -70,22 +72,22 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
         overlayClassName="pm-dialog-overlay--silk"
       >
         <DialogHeader className="pm-update-dialog-head shrink-0">
-          <DialogKicker>Release</DialogKicker>
-          <DialogTitle>Update available</DialogTitle>
+          <DialogKicker>{t("update.release")}</DialogKicker>
+          <DialogTitle>{t("update.updateAvailable")}</DialogTitle>
         </DialogHeader>
 
         <div className="pm-update-dialog-body min-h-0 flex-1 overflow-y-auto">
           {/* Version path */}
-          <div className="pm-update-ver-row" aria-label="Version change">
+          <div className="pm-update-ver-row" aria-label={t("update.versionChange")}>
             <span className="pm-update-ver-chip is-muted">
-              <span className="pm-update-ver-chip-label">Current</span>
+              <span className="pm-update-ver-chip-label">{t("update.current")}</span>
               <span className="pm-update-ver-chip-val">
                 v{update.currentVersion.replace(/^v/, "")}
               </span>
             </span>
             <ArrowRight className="pm-update-ver-arrow" strokeWidth={1.75} aria-hidden />
             <span className="pm-update-ver-chip is-new">
-              <span className="pm-update-ver-chip-label">Latest</span>
+              <span className="pm-update-ver-chip-label">{t("update.latest")}</span>
               <span className="pm-update-ver-chip-val">
                 {update.latestVersion.startsWith("v")
                   ? update.latestVersion
@@ -97,32 +99,26 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
           {releaseNotes ? (
             <section
               className="pm-update-card pm-update-card--notes"
-              aria-label="Release notes"
+              aria-label={t("update.releaseNotes")}
             >
-              <h3 className="pm-update-card-label">What&rsquo;s new</h3>
+              <h3 className="pm-update-card-label">{t("update.whatsNew")}</h3>
               <div className="pm-update-notes">{releaseNotes}</div>
             </section>
           ) : null}
 
           {update.desktop ? (
-            <section className="pm-update-card" aria-label="How to update">
-              <h3 className="pm-update-card-label">How to update</h3>
+            <section className="pm-update-card" aria-label={t("update.howToUpdate")}>
+              <h3 className="pm-update-card-label">{t("update.howToUpdate")}</h3>
               <p className="pm-update-help">
-                Download{" "}
-                <code className="pm-update-inline-code">
-                  {desktopDmgAssetName(update.latestVersion)}
-                </code>
-                , open the disk image, and drag SinkDuce into Applications.
-                Then quit with{" "}
-                <code className="pm-update-inline-code">Cmd+Q</code> and
-                reopen — the red window button only hides to the menu bar.
-                If macOS blocks the app, right-click → Open.
+                {t("update.desktopHelp", {
+                  file: desktopDmgAssetName(update.latestVersion),
+                })}
               </p>
             </section>
           ) : (
-            <section className="pm-update-card" aria-label="How to update">
+            <section className="pm-update-card" aria-label={t("update.howToUpdate")}>
               <div className="pm-update-card-head-row">
-                <h3 className="pm-update-card-label">How to update</h3>
+                <h3 className="pm-update-card-label">{t("update.howToUpdate")}</h3>
                 <Button
                   type="button"
                   variant="ghost"
@@ -136,32 +132,27 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
                   {copied ? (
                     <>
                       <Check className="h-3.5 w-3.5" strokeWidth={2} />
-                      Copied
+                      {t("common.copied")}
                     </>
                   ) : (
                     <>
                       <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      Copy
+                      {t("common.copy")}
                     </>
                   )}
                 </Button>
               </div>
               <p className="pm-update-help">
-                On the server,{" "}
-                <code className="pm-update-inline-code">cd</code> into the project
-                directory (where{" "}
-                <code className="pm-update-inline-code">docker-compose.yml</code>{" "}
-                lives), then run:
+                {t("update.dockerHelp")}
               </p>
               <div className="pm-update-cmd">
                 <pre className="pm-update-cmd-pre">{UPDATE_COMMAND}</pre>
               </div>
               <p className="pm-update-help" style={{ marginTop: "0.65rem" }}>
-                Building from source instead? Use{" "}
-                <code className="pm-update-inline-code">
-                  docker compose -f docker-compose.build.yml up -d --build
-                </code>
-                .
+                {t("update.buildFromSource", {
+                  command:
+                    "docker compose -f docker-compose.build.yml up -d --build",
+                })}
               </p>
             </section>
           )}
@@ -176,7 +167,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
             className="pm-update-foot-link"
             onClick={() => window.open(update.releaseUrl, "_blank")}
           >
-            View on GitHub
+            {t("update.viewOnGithub")}
             <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
           </Button>
           <div className="pm-update-foot-actions">
@@ -189,7 +180,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
                   className="pm-update-foot-link"
                   onClick={() => onOpenChange(false)}
                 >
-                  Close
+                  {t("common.close")}
                 </Button>
                 <Button
                   type="button"
@@ -205,12 +196,12 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
                 >
                   <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
                   {update.downloadUrl
-                    ? `Download ${
-                        update.latestVersion.startsWith("v")
+                    ? t("update.downloadVersion", {
+                        version: update.latestVersion.startsWith("v")
                           ? update.latestVersion
-                          : `v${update.latestVersion}`
-                      }`
-                    : "Installer not on this release yet"}
+                          : `v${update.latestVersion}`,
+                      })
+                    : t("update.installerNotReady")}
                 </Button>
               </>
             ) : (
@@ -220,7 +211,7 @@ export function UpdateDialog({ open, onOpenChange, update }: UpdateDialogProps) 
                 className="pm-update-foot-close"
                 onClick={() => onOpenChange(false)}
               >
-                Close
+                {t("common.close")}
               </Button>
             )}
           </div>

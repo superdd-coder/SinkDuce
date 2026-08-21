@@ -18,6 +18,8 @@ import {
   FileTypeIcon,
   resolveDocKind,
 } from "@/components/file-mgmt/file-type-icon"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
 import { FolderIconView } from "./group-icons"
 
 export type PickerFolderNode = {
@@ -175,6 +177,7 @@ function FolderRow({
   onSelectFile: (file: FileSummary) => void
   groupByFolderId: Map<string, NodeGroup>
 }) {
+  const t = useT()
   const isOpen = expanded.has(node.folder_id)
   const expandable = folderIsExpandable(node)
   const childFileCount =
@@ -193,7 +196,7 @@ function FolderRow({
         <button
           type="button"
           className={cn("pm-timeline-ftree-chev", isOpen && "is-open")}
-          aria-label={isOpen ? "Collapse folder" : "Expand folder"}
+          aria-label={isOpen ? t("fileMgmt.collapseFolder") : t("fileMgmt.expandFolder")}
           aria-expanded={isOpen}
           disabled={!expandable}
           onClick={(e) => {
@@ -225,7 +228,7 @@ function FolderRow({
           <span className="pm-timeline-ftree-icon">
             <FolderRowIcon node={node} boundGroup={boundGroup} />
           </span>
-          <span className="pm-timeline-ftree-name">{node.name}</span>
+          <span className="pm-timeline-ftree-name">{systemFolderDisplayName(node.name, t)}</span>
           <span className="pm-timeline-ftree-count">{count}</span>
         </button>
       </div>
@@ -265,7 +268,7 @@ function FolderRow({
                   className="pm-timeline-ftree-empty"
                   style={{ paddingLeft: (depth + 1) * 14 + 30 }}
                 >
-                  Empty
+                  {t("fileMgmt.empty")}
                 </p>
               )}
             </>
@@ -287,6 +290,7 @@ function FileRow({
   selected: boolean
   onSelect: (file: FileSummary) => void
 }) {
+  const t = useT()
   return (
     <button
       type="button"
@@ -315,7 +319,7 @@ function FileRow({
       </span>
       {(file.archived || file.is_greyed) && (
         <span className="pm-meta text-[var(--pm-faint)] shrink-0">
-          archived
+          {t("fileMgmt.archived")}
         </span>
       )}
       <Check
@@ -335,6 +339,7 @@ export function FileTreePicker({
   className,
   maxHeightClass = "max-h-48",
 }: FileTreePickerProps) {
+  const t = useT()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [folders, setFolders] = useState<PickerFolderNode[]>([])
@@ -452,7 +457,7 @@ export function FileTreePicker({
         <Search className="pm-timeline-ftree-search-icon" strokeWidth={1.75} />
         <input
           className="pm-timeline-ftree-search"
-          placeholder="Search folders or files…"
+          placeholder={t("fileMgmt.searchFoldersFiles")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           autoFocus
@@ -468,7 +473,7 @@ export function FileTreePicker({
         {loading && (
           <div className="flex items-center justify-center gap-2 py-10">
             <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
-            <span className="pm-meta text-[var(--pm-muted)]">Loading files…</span>
+            <span className="pm-meta text-[var(--pm-muted)]">{t("fileMgmt.loadingFiles")}</span>
           </div>
         )}
 

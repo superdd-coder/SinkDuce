@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, forwardRef, useImperativeHandle, type RefObject } from "react"
+import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -8,12 +8,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { SoftMenu } from "@/components/ui/menu"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages, Trash2, Download, Ban } from "lucide-react"
-import type { MeetingStatus, HotWordsLibrarySummary, LanguageHintOption } from "@/api/client"
-import { toggleLanguageHint } from "./language-hints-selector"
+import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, Trash2, Download } from "lucide-react"
+import type { MeetingStatus, LanguageHintOption } from "@/api/client"
+import { LanguageHintsSelector } from "./language-hints-selector"
+import { HotWordsSelector } from "./hot-words-selector"
+import { useT } from "@/i18n/use-t"
 
 interface MediaBarProps {
   meetingId: string
@@ -42,10 +43,10 @@ interface MediaBarProps {
   onToggleRealtime?: () => void
   hasTranscript?: boolean
   hotWordsLibraryIds?: string[]
-  hotWordsLibraries?: HotWordsLibrarySummary[]
   /** File-model adapter flag. When false the chip is visible but disabled. */
   hotWordsSupported?: boolean
   onSelectHotWords?: (libraryIds: string[]) => void
+  onHotWordsDraftChange?: (draftIds: string[] | undefined) => void
   languageHints?: string[]
   languageHintOptions?: LanguageHintOption[]
   onChangeLanguageHints?: (hints: string[]) => void
@@ -86,9 +87,9 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   onToggleRealtime,
   hasTranscript,
   hotWordsLibraryIds = [],
-  hotWordsLibraries = [],
   hotWordsSupported = true,
   onSelectHotWords,
+  onHotWordsDraftChange,
   languageHints = [],
   languageHintOptions = [],
   onChangeLanguageHints,
@@ -98,6 +99,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   recorderError,
   onDiscard,
 }, ref) {
+  const t = useT()
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const progressTrackRef = useRef<HTMLDivElement>(null)
@@ -110,36 +112,6 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   const [scrubbing, setScrubbing] = useState(false)
   const [scrubRatio, setScrubRatio] = useState(0)
   const scrubbingRef = useRef(false)
-
-  // Hot Words / Language menus (SoftMenu + portal)
-  const [hwOpen, setHwOpen] = useState(false)
-  const hwBtnRef = useRef<HTMLElement>(null)
-  const [langOpen, setLangOpen] = useState(false)
-  const langBtnRef = useRef<HTMLElement>(null)
-
-  useEffect(() => {
-    if (!hotWordsSupported) setHwOpen(false)
-  }, [hotWordsSupported])
-
-  // Click outside closes SoftMenu (portal items are still under document)
-  useEffect(() => {
-    if (!hwOpen && !langOpen) return
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (hwOpen) {
-        const hitBtn = hwBtnRef.current?.contains(t)
-        const hitMenu = (e.target as Element)?.closest?.("[data-slot='menu']")
-        if (!hitBtn && !hitMenu) setHwOpen(false)
-      }
-      if (langOpen) {
-        const hitBtn = langBtnRef.current?.contains(t)
-        const hitMenu = (e.target as Element)?.closest?.("[data-slot='menu']")
-        if (!hitBtn && !hitMenu) setLangOpen(false)
-      }
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [hwOpen, langOpen])
 
   // Pause + reset local player chrome when meeting changes (no parent remount)
   useEffect(() => {
@@ -309,16 +281,16 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
           </div>
           <Button variant="ghost" size="sm" onClick={isPaused ? onResumeRecord : onPauseRecord}>
             <Pause className="size-3.5 mr-1" />
-            {isPaused ? "Resume" : "Pause"}
+            {isPaused ? t("common.resume") : t("common.pause")}
           </Button>
           <Button variant="default" size="sm" onClick={onStopRecord}>
             <Square className="size-3.5 mr-1" />
-            Finish
+            {t("meeting.finish")}
           </Button>
           {onDiscard && (
             <Button variant="destructive" size="sm" onClick={() => setDiscardConfirmOpen(true)}>
               <Trash2 className="size-3.5 mr-1" />
-              Discard
+              {t("common.discard")}
             </Button>
           )}
         </div>
@@ -336,7 +308,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                 realtimeEnabled ? "bg-[var(--pm-green)]" : "bg-[var(--pm-faint)]",
               )}
             />
-            Live captions
+            {t("meeting.liveCaptions")}
           </Button>
         )}
         {onDiscard && (
@@ -347,14 +319,14 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
               overlayClassName="pm-dialog-overlay--silk"
             >
               <DialogHeader>
-                <DialogTitle>Discard recording?</DialogTitle>
+                <DialogTitle>{t("meeting.discardRecordingQ")}</DialogTitle>
                 <DialogDescription>
-                  This will stop the recording and permanently delete all audio, captions, and transcript data.
+                  {t("meeting.discardRecordingBody")}
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setDiscardConfirmOpen(false)}>
-                  Cancel
+                  {t("common.cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -362,7 +334,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   size="sm"
                   onClick={() => { setDiscardConfirmOpen(false); onDiscard() }}
                 >
-                  Discard
+                  {t("common.discard")}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -387,7 +359,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
         {transcriptionError && (
           <div className="pm-meeting-warn">
             <AlertCircle className="size-3.5 shrink-0" />
-            <span className="flex-1">Transcription failed: {transcriptionError}</span>
+            <span className="flex-1">{t("meeting.transcriptionFailed", { error: transcriptionError })}</span>
           </div>
         )}
 
@@ -413,7 +385,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
               className={cn("pm-meeting-player-progress", scrubbing && "is-scrubbing")}
               role="slider"
               tabIndex={0}
-              aria-label="Seek"
+              aria-label={t("common.seek")}
               aria-valuemin={0}
               aria-valuemax={Math.floor(dur || 0)}
               aria-valuenow={Math.floor(displayTime || 0)}
@@ -466,14 +438,14 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
         <div className="pm-meeting-player-main">
           <span className="pm-meeting-player-status pm-meta inline-flex items-center gap-1.5 min-w-0 truncate">
             <Loader2 className="size-3 animate-spin text-[var(--pm-green)] shrink-0" />
-            Transcribing…
+            {t("meeting.transcribing")}
           </span>
           {audioUrl ? (
             <button
               type="button"
               className="pm-meeting-player-play"
               onClick={togglePlay}
-              aria-label={isPlaying ? "Pause" : "Play"}
+              aria-label={isPlaying ? t("common.pause") : t("common.play")}
             >
               {isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
             </button>
@@ -494,7 +466,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
           <div className="pm-meeting-player-tools">
             <Button variant="destructive" size="sm" onClick={onCancelTranscribe}>
               <Square className="size-3.5 mr-1" />
-              Stop
+              {t("common.stop")}
             </Button>
           </div>
         ) : null}
@@ -504,12 +476,6 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 
   // Has audio — custom player card (tools row + scrubbable progress row)
   if (hasAudio) {
-    const hwSelectedLabel = hotWordsLibraryIds
-      .map((id) => hotWordsLibraries.find((l) => l.id === id)?.name)
-      .filter(Boolean)
-      .join(" · ")
-    const langCount = languageHints.length
-    const langCustomized = langCount > 0 && !(langCount === 1 && languageHints[0] === "auto")
     const dur = audioDuration > 0 && Number.isFinite(audioDuration) ? audioDuration : 0
     const ratio = scrubbing
       ? scrubRatio
@@ -523,7 +489,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
         {transcriptionError && (
           <div className="pm-meeting-warn">
             <AlertCircle className="size-3.5 shrink-0" />
-            <span className="flex-1">Transcription failed: {transcriptionError}</span>
+            <span className="flex-1">{t("meeting.transcriptionFailed", { error: transcriptionError })}</span>
           </div>
         )}
 
@@ -549,7 +515,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
               className={cn("pm-meeting-player-progress", scrubbing && "is-scrubbing")}
               role="slider"
               tabIndex={0}
-              aria-label="Seek"
+              aria-label={t("common.seek")}
               aria-valuemin={0}
               aria-valuemax={Math.floor(dur || 0)}
               aria-valuenow={Math.floor(displayTime || 0)}
@@ -593,7 +559,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             </div>
           ) : (
             <p className="pm-meta truncate w-full min-w-0" title={audioPath}>
-              {audioPath ? audioPath.split("/").pop() : "Audio uploaded"}
+              {audioPath ? audioPath.split("/").pop() : t("meeting.audioUploaded")}
             </p>
           )}
         </div>
@@ -605,7 +571,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
               type="button"
               className="pm-meeting-player-play"
               onClick={togglePlay}
-              aria-label={isPlaying ? "Pause" : "Play"}
+              aria-label={isPlaying ? t("common.pause") : t("common.play")}
             >
               {isPlaying ? (
                 <Pause className="size-3.5" strokeWidth={2.25} />
@@ -634,7 +600,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   <button
                     type="button"
                     className="pm-meeting-player-chip"
-                    aria-label="Download audio"
+                    aria-label={t("meeting.downloadAudio")}
                     onClick={() => {
                       const a = document.createElement("a")
                       a.href = audioUrl
@@ -649,167 +615,31 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                   </button>
                 }
               />
-              <TooltipContent side="top">Download audio</TooltipContent>
+              <TooltipContent side="top">{t("meeting.downloadAudio")}</TooltipContent>
             </Tooltip>
           )}
 
           {onSelectHotWords && (
-            <div className="relative" ref={hwBtnRef as RefObject<HTMLDivElement>}>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      disabled={!hotWordsSupported}
-                      className={cn(
-                        "pm-meeting-player-chip",
-                        hotWordsSupported && hotWordsLibraryIds.length > 0 && "is-active",
-                      )}
-                      onClick={() => {
-                        if (!hotWordsSupported) return
-                        setHwOpen(!hwOpen)
-                        setLangOpen(false)
-                      }}
-                      aria-label="Hot words"
-                    >
-                      <BookOpen className="size-3.5" strokeWidth={1.75} />
-                    </button>
-                  }
-                />
-                <TooltipContent side="top">
-                  {hotWordsSupported
-                    ? `Hot Words${hwSelectedLabel ? ` · ${hwSelectedLabel}` : ""}`
-                    : "Active transcription model does not support hot words"}
-                </TooltipContent>
-              </Tooltip>
-              <SoftMenu
-                open={hotWordsSupported && hwOpen}
-                portal
-                anchorRef={hwBtnRef}
-                align="end"
-                className="pm-hw-menu min-w-[240px]"
-              >
-                <div className="pm-hw-list pm-hw-list--menu" role="listbox" aria-label="Hot word libraries">
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={hotWordsLibraryIds.length === 0}
-                    className={cn("pm-hw-option", hotWordsLibraryIds.length === 0 ? "is-on" : "is-off")}
-                    onClick={() => { onSelectHotWords([]) }}
-                  >
-                    <span className="pm-hw-option-icon" aria-hidden>
-                      <Ban className="size-3.5" />
-                    </span>
-                    <span className="pm-hw-option-body">
-                      <span className="pm-hw-option-name">None</span>
-                      <span className="pm-hw-option-meta">No vocabulary boost</span>
-                    </span>
-                  </button>
-                  {hotWordsLibraries.map((lib) => {
-                    const isOn = hotWordsLibraryIds.includes(lib.id)
-                    return (
-                      <button
-                        key={lib.id}
-                        type="button"
-                        role="option"
-                        aria-selected={isOn}
-                        className={cn("pm-hw-option", isOn ? "is-on" : "is-off")}
-                        onClick={() => {
-                          onSelectHotWords(
-                            isOn
-                              ? hotWordsLibraryIds.filter((id) => id !== lib.id)
-                              : [...hotWordsLibraryIds, lib.id],
-                          )
-                        }}
-                      >
-                        <span className="pm-hw-option-icon" aria-hidden>
-                          <BookOpen className="size-3.5" />
-                        </span>
-                        <span className="pm-hw-option-body">
-                          <span className="pm-hw-option-name">{lib.name}</span>
-                          <span className="pm-hw-option-meta">
-                            {lib.word_count} word{lib.word_count === 1 ? "" : "s"}
-                          </span>
-                        </span>
-                      </button>
-                    )
-                  })}
-                  {hotWordsLibraries.length === 0 && (
-                    <p className="pm-hw-empty">No hot word libraries</p>
-                  )}
-                </div>
-              </SoftMenu>
-            </div>
+            <HotWordsSelector
+              meetingId={meetingId}
+              currentLibraryIds={hotWordsLibraryIds}
+              hasTranscript={!!hasTranscript}
+              providerSupportsHotWords={hotWordsSupported}
+              onSelectLibraries={onSelectHotWords}
+              onDraftChange={onHotWordsDraftChange}
+              variant="chip"
+            />
           )}
 
           {showLanguageSelector && (
-            <div className="relative" ref={langBtnRef as RefObject<HTMLDivElement>}>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      className={cn(
-                        "pm-meeting-player-chip",
-                        langCustomized && "is-active",
-                      )}
-                      onClick={() => { setLangOpen(!langOpen); setHwOpen(false) }}
-                      aria-label="Language"
-                    >
-                      <Languages className="size-3.5" strokeWidth={1.75} />
-                    </button>
-                  }
-                />
-                <TooltipContent side="top">
-                  Language{langCustomized ? ` · ${langCount} selected` : " · auto"}
-                </TooltipContent>
-              </Tooltip>
-              <SoftMenu
-                open={langOpen}
-                portal
-                anchorRef={langBtnRef}
-                align="end"
-                className="pm-lang-menu min-w-[220px]"
-              >
-                <p className="pm-meta px-1 pb-1.5">
-                  {maxLanguageHints <= 1
-                    ? "One language for this model"
-                    : `Up to ${maxLanguageHints} languages`}
-                </p>
-                <div className="pm-lang-pills pm-lang-pills--menu" role="group" aria-label="Language hints">
-                  {(() => {
-                    const opts = languageHintOptions.some((o) => o.code === "auto")
-                      ? languageHintOptions
-                      : [{ code: "auto", label: "Auto" }, ...languageHintOptions]
-                    const isAutoOnly =
-                      languageHints.length === 0 ||
-                      (languageHints.length === 1 && languageHints[0] === "auto")
-                    return opts.map(({ code, label }) => {
-                      const isSelected =
-                        code === "auto" ? isAutoOnly : languageHints.includes(code)
-                      return (
-                        <button
-                          key={code}
-                          type="button"
-                          className={cn("pm-lang-pill", isSelected ? "is-on" : "is-off")}
-                          aria-pressed={isSelected}
-                          onClick={() => {
-                            onChangeLanguageHints?.(
-                              toggleLanguageHint(languageHints, code, maxLanguageHints),
-                            )
-                          }}
-                        >
-                          <span className="pm-lang-pill-label">{label}</span>
-                          {code !== "auto" && (
-                            <span className="pm-lang-pill-code t-mono-family">{code}</span>
-                          )}
-                        </button>
-                      )
-                    })
-                  })()}
-                </div>
-              </SoftMenu>
-            </div>
+            <LanguageHintsSelector
+              selected={languageHints}
+              onChange={(hints) => onChangeLanguageHints?.(hints)}
+              options={languageHintOptions}
+              maxHints={maxLanguageHints}
+              showTipBubble={false}
+              variant="chip"
+            />
           )}
 
           {/* Rightmost: Replace / Transcribe (pre-tx) or Re-transcribe (post-tx) */}
@@ -832,7 +662,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                 onClick={() => inputRef.current?.click()}
               >
                 <RefreshCw className="size-3" strokeWidth={1.75} />
-                <span>Replace</span>
+                <span>{t("common.replace")}</span>
               </button>
               <button
                 type="button"
@@ -840,7 +670,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                 onClick={onTranscribe}
               >
                 <Play className="size-3 pm-meeting-player-play-icon" strokeWidth={2} />
-                <span>Transcribe</span>
+                <span>{t("common.transcribe")}</span>
               </button>
             </>
           )}
@@ -852,14 +682,14 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                     type="button"
                     className="pm-meeting-player-chip pm-meeting-player-chip--label"
                     onClick={onReTranscribe}
-                    aria-label="Re-transcribe"
+                    aria-label={t("meeting.reTranscribe")}
                   >
                     <RefreshCw className="size-3" strokeWidth={1.75} />
-                    <span>Re-transcribe</span>
+                    <span>{t("meeting.reTranscribe")}</span>
                   </button>
                 }
               />
-              <TooltipContent side="top">Re-transcribe</TooltipContent>
+              <TooltipContent side="top">{t("meeting.reTranscribe")}</TooltipContent>
             </Tooltip>
           )}
         </div>{/* /.pm-meeting-player-tools */}
@@ -890,11 +720,11 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
         />
         <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()}>
           <Upload className="size-3.5 mr-1" />
-          Audio
+          {t("common.audio")}
         </Button>
         <Button variant="default" size="sm" onClick={onStartRecord}>
           <Mic className="size-3.5 mr-1" />
-          Record
+          {t("meeting.record")}
         </Button>
         {hasRealtimeProvider && onToggleRealtime && (
           <Button
@@ -903,7 +733,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
             size="sm"
             className="ml-auto"
             onClick={onToggleRealtime}
-            title={realtimeEnabled ? "Live captions ON" : "Live captions OFF"}
+            title={realtimeEnabled ? t("meeting.liveCaptionsOn") : t("meeting.liveCaptionsOff")}
           >
             <span
               className={cn(
@@ -911,7 +741,7 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
                 realtimeEnabled ? "bg-[var(--pm-green)]" : "bg-[var(--pm-faint)]",
               )}
             />
-            Live captions
+            {t("meeting.liveCaptions")}
           </Button>
         )}
       </div>

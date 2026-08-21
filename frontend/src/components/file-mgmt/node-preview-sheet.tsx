@@ -16,6 +16,8 @@ import remarkGfm from "remark-gfm"
 import { MiniChainGraph } from "@/components/file-mgmt/mini-chain-graph"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 /** Resolve node id from a message for "from node" preview. */
 export function resolveMessageSourceNodeId(msg: Message): string | null {
@@ -60,6 +62,7 @@ export function NodePreviewSheet({
   onSelectNode,
   onGoToNode,
 }: NodePreviewSheetProps) {
+  const t = useT()
   const [detail, setDetail] = useState<NodeDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [groups, setGroups] = useState<NodeGroup[]>([])
@@ -87,7 +90,7 @@ export function NodePreviewSheet({
       .catch((err) => {
         if (!cancelled) {
           toast.error(
-            `Failed to load node: ${err instanceof Error ? err.message : String(err)}`
+            t("fileMgmt.failedLoadNode", { error: formatApiError(err, t) })
           )
           setDetail(null)
         }
@@ -102,7 +105,7 @@ export function NodePreviewSheet({
 
   const groupName = detail?.group_id
     ? groups.find((g) => g.group_id === detail.group_id)?.name ?? "—"
-    : "未分类"
+    : t("common.uncategorized")
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -121,7 +124,7 @@ export function NodePreviewSheet({
       >
         <button
           type="button"
-          aria-label="Close node preview"
+          aria-label={t("fileMgmt.closeNodePreview")}
           className="pm-node-preview-hit"
           onClick={() => onOpenChange(false)}
         />
@@ -135,7 +138,7 @@ export function NodePreviewSheet({
               >
                 <div className="relative z-10 px-3 pt-1.5 pb-0.5 flex items-center justify-between shrink-0 gap-2">
                   <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
-                    Timeline
+                    {t("common.timeline")}
                   </p>
                   {onGoToNode && nodeId ? (
                     <Button
@@ -143,18 +146,18 @@ export function NodePreviewSheet({
                       size="sm"
                       variant="ghost"
                       className="h-6 px-2 text-[10px] gap-0.5 text-primary hover:text-primary"
-                      title="Open this node in Timeline view"
+                      title={t("fileMgmt.openInTimeline")}
                       disabled={loading || !detail}
                       onClick={() => {
                         onGoToNode(nodeId, detail?.chain_id ?? null)
                       }}
                     >
-                      Go To
+                      {t("fileMgmt.goTo")}
                       <ArrowUpRight className="h-3 w-3" />
                     </Button>
                   ) : (
                     <p className="text-[9px] text-muted-foreground/70">
-                      Node context graph
+                      {t("fileMgmt.nodeContextGraph")}
                     </p>
                   )}
                 </div>
@@ -177,12 +180,14 @@ export function NodePreviewSheet({
             onClick={(e) => e.stopPropagation()}
           >
             <DialogHeader className="pm-node-preview-rail-head">
-              <DialogKicker>Node</DialogKicker>
+              <DialogKicker>{t("fileMgmt.node")}</DialogKicker>
               <DialogTitle className="pm-node-preview-title">
-                {loading ? "Loading…" : detail?.title || "Untitled"}
+                {loading
+                  ? t("common.loading")
+                  : detail?.title || t("common.untitled")}
               </DialogTitle>
               <DialogDescription className="pm-node-preview-lede">
-                Preview only — stays on this file.
+                {t("fileMgmt.previewOnlyStays")}
               </DialogDescription>
               <Button
                 type="button"
@@ -192,7 +197,7 @@ export function NodePreviewSheet({
                 onClick={() => onOpenChange(false)}
               >
                 <X className="size-3.5" />
-                <span className="sr-only">Close</span>
+                <span className="sr-only">{t("common.close")}</span>
               </Button>
             </DialogHeader>
 
@@ -202,18 +207,18 @@ export function NodePreviewSheet({
               </div>
             ) : !detail ? (
               <div className="pm-node-preview-empty">
-                <p className="pm-meta">Node not found</p>
+                <p className="pm-meta">{t("fileMgmt.nodeNotFound")}</p>
               </div>
             ) : (
               <div className="pm-node-preview-rail-body">
                 <dl className="pm-ws-meta-grid pm-node-preview-meta">
-                  <dt>Group</dt>
+                  <dt>{t("common.group")}</dt>
                   <dd title={groupName}>{groupName}</dd>
-                  <dt>Type</dt>
+                  <dt>{t("common.type")}</dt>
                   <dd className="capitalize">{detail.node_type}</dd>
                   {detail.event_time ? (
                     <>
-                      <dt>Date</dt>
+                      <dt>{t("common.date")}</dt>
                       <dd>
                         <span className="pm-node-preview-date">
                           <Calendar className="size-3" aria-hidden />
@@ -226,13 +231,13 @@ export function NodePreviewSheet({
 
                 <section className="pm-node-preview-block">
                   <header className="pm-node-preview-block-h">
-                    <span className="pm-label">Attachments</span>
+                    <span className="pm-label">{t("fileMgmt.attachments")}</span>
                     <span className="pm-count-pill">
                       {detail.attachments?.length ?? 0}
                     </span>
                   </header>
                   {(detail.attachments?.length ?? 0) === 0 ? (
-                    <p className="pm-meta">None</p>
+                    <p className="pm-meta">{t("common.none")}</p>
                   ) : (
                     <ul className="pm-node-preview-files">
                       {detail.attachments.map((a) => {
@@ -245,7 +250,7 @@ export function NodePreviewSheet({
                             <span className="truncate">{label}</span>
                             {a.archived ? (
                               <span className="pm-meta uppercase shrink-0">
-                                archived
+                                {t("fileMgmt.archived")}
                               </span>
                             ) : null}
                           </>
@@ -255,7 +260,7 @@ export function NodePreviewSheet({
                             {clickable ? (
                               <button
                                 type="button"
-                                title="Open file detail"
+                                title={t("library.openFileDetail")}
                                 onClick={() => onOpenAttachment(a.file_id)}
                                 className="pm-node-preview-file"
                               >
@@ -275,11 +280,11 @@ export function NodePreviewSheet({
 
                 <section className="pm-node-preview-block">
                   <header className="pm-node-preview-block-h">
-                    <span className="pm-label">Messages</span>
+                    <span className="pm-label">{t("common.messages")}</span>
                     <span className="pm-count-pill">{messages.length}</span>
                   </header>
                   {messages.length === 0 ? (
-                    <p className="pm-meta">No messages</p>
+                    <p className="pm-meta">{t("fileMgmt.noMessages")}</p>
                   ) : (
                     <ol className="pm-node-preview-msgs">
                       {messages.map((m) => (

@@ -10,10 +10,12 @@ import { Button } from "@/components/ui/button"
 import { getLLMProviders } from "@/api/client"
 import type { Source } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 const THREAD_FADE_MS = 240
 
 export function ChatView() {
+  const t = useT()
   const {
     messages,
     setProviders,
@@ -343,10 +345,10 @@ export function ChatView() {
                   {displayEmpty ? (
                     <div className="pm-chat-empty">
                       <p className="pm-chat-empty-title">
-                        Ask a question about your documents
+                        {t("chat.emptyTitle")}
                       </p>
                       <p className="pm-chat-empty-sub">
-                        Upload documents first, then start chatting
+                        {t("chat.emptyHint")}
                       </p>
                     </div>
                   ) : (
@@ -389,7 +391,7 @@ export function ChatView() {
                 className="pm-chat-scroll-btn"
               >
                 <ArrowDown className="size-3" />
-                Scroll to bottom
+                {t("chat.scrollBottom")}
               </button>
             )}
 

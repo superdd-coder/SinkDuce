@@ -3,6 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { ChevronRight, FileText, GripVertical, Plus, Video } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type NoteListItem, type Meeting, type MeetingTab } from "@/api/client"
+import { useT } from "@/i18n/use-t"
 
 export type SidebarTab = "notes" | "meetings"
 
@@ -71,6 +72,7 @@ export function NoteSidebarLeft({
   onOpenMeetingTab,
   onCreateNote,
 }: NoteSidebarLeftProps) {
+  const t = useT()
   const summarized = useMemo(() => meetingsWithSummary(meetings), [meetings])
   const openNoteSet = useMemo(() => new Set(activeNoteIds), [activeNoteIds])
 
@@ -153,14 +155,14 @@ export function NoteSidebarLeft({
             )}
             onClick={() => onSidebarTabChange("notes")}
           >
-            <span>Notes</span>
+            <span>{t("common.notes")}</span>
             {/* + only when Notes tab is active */}
             {onCreateNote && sidebarTab === "notes" && (
               <span
                 role="button"
                 tabIndex={0}
                 className="pm-ws-seg-add"
-                title="New Note"
+                title={t("library.newNote")}
                 onClick={(e) => {
                   e.stopPropagation()
                   e.preventDefault()
@@ -187,7 +189,7 @@ export function NoteSidebarLeft({
             )}
             onClick={() => onSidebarTabChange("meetings")}
           >
-            Meetings
+            {t("meeting.meetings")}
           </button>
         </div>
       </div>
@@ -213,7 +215,7 @@ export function NoteSidebarLeft({
                 />
               ))}
               {notes.length === 0 && (
-                <p className="pm-ws-empty">No notes in this collection</p>
+                <p className="pm-ws-empty">{t("library.noNotesInCollection")}</p>
               )}
             </div>
           </ScrollArea>
@@ -270,7 +272,7 @@ export function NoteSidebarLeft({
                 )
               })}
               {summarized.length === 0 && (
-                <p className="pm-ws-empty">No meetings with summary yet</p>
+                <p className="pm-ws-empty">{t("library.noMeetingsSummary")}</p>
               )}
             </div>
           </ScrollArea>
@@ -291,6 +293,7 @@ function NoteDraggableItem({
   isFocused: boolean
   onClick: () => void
 }) {
+  const t = useT()
   const [dragging, setDragging] = useState(false)
 
   return (
@@ -316,7 +319,7 @@ function NoteDraggableItem({
       <FileText className="pm-ws-item-icon h-3.5 w-3.5" />
       <span className="flex-1 truncate">{note.title}</span>
       {note.is_extracted && (
-        <span className="pm-ws-item-dot" title="Has been extracted" />
+        <span className="pm-ws-item-dot" title={t("library.hasExtracted")} />
       )}
     </button>
   )
@@ -339,6 +342,7 @@ function MeetingTreeRow({
   onToggleExpand: (e: React.MouseEvent) => void
   onClick: () => void
 }) {
+  const t = useT()
   const [dragging, setDragging] = useState(false)
 
   return (
@@ -384,11 +388,11 @@ function MeetingTreeRow({
         }}
         onDragEnd={() => setDragging(false)}
         onClick={onClick}
-        title="Open General Summary · drag onto a note to distill"
+        title={t("library.openGeneralSummary")}
       >
         <Video className="pm-ws-item-icon h-3.5 w-3.5" />
         <span className="flex-1 truncate">
-          {meeting.title || "Untitled meeting"}
+          {meeting.title || t("library.untitledMeeting")}
         </span>
       </button>
     </div>
@@ -408,6 +412,7 @@ function MeetingSectionRow({
   isFocused: boolean
   onClick: () => void
 }) {
+  const t = useT()
   const [dragging, setDragging] = useState(false)
   const label = tab.name || tab.tab_id
 
@@ -426,14 +431,14 @@ function MeetingSectionRow({
         e.dataTransfer.setData("application/meeting-tab-id", tab.tab_id)
         e.dataTransfer.setData(
           "application/meeting-title",
-          `${meeting.title || "Meeting"} / ${label}`
+          `${meeting.title || t("nav.meeting")} / ${label}`
         )
         e.dataTransfer.effectAllowed = "copy"
         setDragging(true)
       }}
       onDragEnd={() => setDragging(false)}
       onClick={onClick}
-      title="Open section · drag onto a note to distill"
+      title={t("library.openSectionDistill")}
     >
       <FileText className="pm-ws-item-icon h-3 w-3" />
       <span className="flex-1 truncate">{label}</span>

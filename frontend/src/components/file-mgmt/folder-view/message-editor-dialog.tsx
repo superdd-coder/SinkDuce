@@ -15,7 +15,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
+import { EditorToolbar } from "@/components/ui/tiptap-editor"
+import type { Editor } from "@tiptap/react"
 import { Clock, GitBranch, Loader2, Paperclip, Pencil } from "lucide-react"
 import type { Chain, Message, NodeDetail, NodeGroup } from "@/types/file-mgmt"
 import {
@@ -28,6 +29,8 @@ import {
 import { formatMessageSourceTag, MessageBody } from "../message-card"
 import { MiniChainGraph } from "../mini-chain-graph"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { tr } from "@/i18n/tr"
 
 /** Content pane sequential fade — open/close symmetric (ENGINEERING §4) */
 const PANE_OUT_MS = 140
@@ -79,11 +82,11 @@ interface MessageEditorDialogProps {
 /** Map owner_type → short green kicker label */
 function kickerFromOwnerType(ownerType: string | undefined | null): string | null {
   const ot = (ownerType || "").toLowerCase()
-  if (ot === "file") return "File"
-  if (ot === "folder") return "Folder"
-  if (ot === "node") return "Node"
-  if (ot === "collection") return "Root"
-  if (ot === "system_version") return "Version"
+  if (ot === "file") return tr("common.file")
+  if (ot === "folder") return tr("common.folder")
+  if (ot === "node") return tr("fileMgmt.node")
+  if (ot === "collection") return tr("common.root")
+  if (ot === "system_version") return tr("common.version")
   return null
 }
 
@@ -103,11 +106,13 @@ export function MessageEditorDialog({
   onNavigateToNode,
   onSelectNodeMessage,
 }: MessageEditorDialogProps) {
+  const t = useT()
   /** Currently viewed/edited message (can switch via node message list). */
   const [activeMsg, setActiveMsg] = useState<Message | null>(message)
   const [content, setContent] = useState(initialContent)
   const [editing, setEditing] = useState(!readonly)
   const [saving, setSaving] = useState(false)
+  const [msgEditor, setMsgEditor] = useState<Editor | null>(null)
 
   const isNodeMsg =
     !!activeMsg &&
@@ -220,6 +225,8 @@ export function MessageEditorDialog({
         setActiveMsg(message)
         setContent(initialContent)
         setEditing(!readonly)
+      } else {
+        setMsgEditor(null)
       }
       onOpenChange(o)
     },
@@ -286,7 +293,7 @@ export function MessageEditorDialog({
     const chain = chains.find((c) => c.chain_id === nodeDetail.chain_id)
     if (!chain || chain.is_main) return null
     const t = (chain.title || "").trim()
-    return t || "Branch"
+    return t || tr("fileMgmt.branch")
   }, [nodeDetail?.chain_id, chains])
 
   const sortedNodeMsgs = useMemo(() => {
@@ -443,7 +450,7 @@ export function MessageEditorDialog({
               tabIndex={editing ? 0 : -1}
               onClick={handleCancelEdit}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
           ) : null}
           <button
@@ -456,10 +463,10 @@ export function MessageEditorDialog({
             {saving ? (
               <>
                 <Loader2 className="h-3 w-3 animate-spin" />
-                Saving…
+                {t("common.saving")}
               </>
             ) : (
-              "Save"
+              t("common.save")
             )}
           </button>
         </div>
@@ -469,14 +476,14 @@ export function MessageEditorDialog({
           type="button"
           className="pm-log-msg-edit"
           aria-expanded={editing}
-          aria-label="Edit message"
+          aria-label={t("fileMgmt.editMessage")}
           tabIndex={editing ? -1 : 0}
           onClick={() => {
             if (!editing) setEditing(true)
           }}
         >
           <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
-          Edit
+          {t("common.edit")}
         </button>
       ) : null}
     </div>
@@ -531,7 +538,7 @@ export function MessageEditorDialog({
               letterSpacing: "0.02em",
             }}
           >
-            Message
+            {t("common.message")}
           </span>
           <div className="ml-auto shrink-0">{messageCardActions}</div>
         </div>
@@ -544,14 +551,20 @@ export function MessageEditorDialog({
       >
         {editing ? (
           <div className="flex-1 min-h-0 flex flex-col pm-msg-editor-host">
+            <div className="pm-msg-fmt-bar">
+              {msgEditor && !msgEditor.isDestroyed ? (
+                <EditorToolbar editor={msgEditor} pinned />
+              ) : null}
+            </div>
             <MarkdownEditor
               value={content}
               onChange={setContent}
               minHeight={isNodeMsg ? "140px" : "280px"}
-              placeholder={MESSAGE_EDITOR_PLACEHOLDER}
-              showToolbar
+              placeholder={t("fileMgmt.writeMessagePh")}
+              showToolbar={false}
               flush
               className="flex-1 min-h-0"
+              onEditorReady={(ed) => setMsgEditor(ed as Editor)}
             />
           </div>
         ) : (
@@ -610,11 +623,11 @@ export function MessageEditorDialog({
               {nodeLoading ? (
                 <section className="pm-ws-side-card flex-1 flex items-center justify-center gap-2 py-10">
                   <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
-                  <span className="pm-meta">Loading…</span>
+                  <span className="pm-meta">{t("common.loading")}</span>
                 </section>
               ) : !nodeDetail ? (
                 <section className="pm-ws-side-card flex-1 flex items-center justify-center px-5 py-10">
-                  <p className="pm-meta">Node not found</p>
+                  <p className="pm-meta">{t("fileMgmt.nodeNotFound")}</p>
                 </section>
               ) : (
                 <>
@@ -628,7 +641,7 @@ export function MessageEditorDialog({
                           letterSpacing: "0.02em",
                         }}
                       >
-                        Node
+                        {t("fileMgmt.node")}
                       </span>
                     </div>
                     <div className="pm-ws-side-pad pt-0">
@@ -636,7 +649,7 @@ export function MessageEditorDialog({
                       <div className="pm-node-id-row">
                         <div className="pm-node-id-main min-w-0 flex-1">
                           <p className="pm-node-id-title">
-                            {(nodeDetail.title || "").trim() || "Untitled"}
+                            {(nodeDetail.title || "").trim() || t("common.untitled")}
                           </p>
                           {(nodeDetail.event_time ||
                             (nodeDetail.attachments?.length ?? 0) > 0) && (
@@ -646,11 +659,13 @@ export function MessageEditorDialog({
                                   ? nodeDetail.event_time.slice(0, 10)
                                   : null,
                                 (nodeDetail.attachments?.length ?? 0) > 0
-                                  ? `${nodeDetail.attachments.length} file${
-                                      nodeDetail.attachments.length === 1
-                                        ? ""
-                                        : "s"
-                                    }`
+                                  ? nodeDetail.attachments.length === 1
+                                    ? t("fileMgmt.nFile", {
+                                        n: nodeDetail.attachments.length,
+                                      })
+                                    : t("fileMgmt.nFiles", {
+                                        n: nodeDetail.attachments.length,
+                                      })
                                   : null,
                               ]
                                 .filter(Boolean)
@@ -668,7 +683,7 @@ export function MessageEditorDialog({
                             {branchName ? (
                               <span
                                 className="pm-node-tag is-branch"
-                                title={`Branch · ${branchName}`}
+                                title={`${t("fileMgmt.branch")} · ${branchName}`}
                               >
                                 <GitBranch
                                   className="h-3 w-3 shrink-0"
@@ -713,7 +728,7 @@ export function MessageEditorDialog({
                           letterSpacing: "0.02em",
                         }}
                       >
-                        Messages
+                        {t("common.messages")}
                       </span>
                       <span className="pm-count-pill ml-auto">
                         {sortedNodeMsgs.length}
@@ -721,7 +736,7 @@ export function MessageEditorDialog({
                     </div>
                     {sortedNodeMsgs.length === 0 ? (
                       <div className="pm-ws-side-pad pt-0">
-                        <p className="pm-meta">No messages yet</p>
+                        <p className="pm-meta">{t("fileMgmt.noMessagesYet")}</p>
                       </div>
                     ) : (
                       <div
@@ -787,12 +802,12 @@ export function MessageEditorDialog({
                                 ) : null}
                                 {m.edited_at ? (
                                   <span className="pm-meta italic shrink-0">
-                                    edited
+                                    {t("common.edited")}
                                   </span>
                                 ) : null}
                               </div>
                               <p className="pm-node-msg-excerpt">
-                                {excerpt || "Empty message"}
+                                {excerpt || t("fileMgmt.emptyMessage")}
                               </p>
                             </div>
                           )
@@ -812,10 +827,10 @@ export function MessageEditorDialog({
                 className="pm-label"
                 style={{ textTransform: "none", letterSpacing: "0.02em" }}
               >
-                Timeline
+                {t("common.timeline")}
               </span>
               <span className="pm-meta ml-auto">
-                Click a node to open Timeline view
+                {t("fileMgmt.clickNodeTimeline")}
               </span>
             </div>
             <div className="pm-msg-dialog-card-body flex-1 min-h-0">

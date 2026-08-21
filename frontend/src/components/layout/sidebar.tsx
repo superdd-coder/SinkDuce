@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 import { useAppStore, type SidebarView } from "@/stores/app-store"
 import { X, ArrowUpRight } from "lucide-react"
 import { useUpdateCheck } from "@/hooks/use-update-check"
+import { useT } from "@/i18n/use-t"
 import { UpdateDialog } from "./update-dialog"
 
 /**
@@ -11,13 +12,6 @@ import { UpdateDialog } from "./update-dialog"
  * Slim rail · system label type · one shared diamond plate that
  * slides + quarter-turns when switching views.
  */
-const navItems: Array<{ view: SidebarView; label: string }> = [
-  { view: "chat", label: "Chat" },
-  { view: "database", label: "Library" },
-  { view: "recall", label: "Recall" },
-  { view: "meeting", label: "Meeting" },
-  { view: "llm_provider", label: "Settings" },
-]
 
 type PlateState = {
   /** Center Y of active item relative to list (px) */
@@ -31,6 +25,14 @@ type PlateState = {
 const UPDATE_CARD_MS = 280
 
 export function Sidebar() {
+  const t = useT()
+  const navItems: Array<{ view: SidebarView; label: string }> = [
+    { view: "chat", label: t("nav.chat") },
+    { view: "database", label: t("nav.library") },
+    { view: "recall", label: t("nav.recall") },
+    { view: "meeting", label: t("nav.meeting") },
+    { view: "llm_provider", label: t("nav.settings") },
+  ]
   const { sidebarView, setSidebarView } = useAppStore(
     useShallow((s) => ({
       sidebarView: s.sidebarView,
@@ -166,7 +168,7 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="pm-shell-nav" aria-label="Main navigation">
+      <aside className="pm-shell-nav" aria-label={t("nav.main")}>
         <nav ref={listRef} className="pm-shell-nav-list">
           {/* Shared diamond — slides + rotates to active item */}
           <span
@@ -211,13 +213,13 @@ export function Sidebar() {
                 role="status"
               >
                 <div className="pm-shell-update-card-head">
-                  <span className="pm-shell-update-label">Update</span>
+                  <span className="pm-shell-update-label">{t("shell.update")}</span>
                   <button
                     type="button"
                     onClick={handleIgnore}
                     className="pm-shell-update-dismiss"
-                    title="Ignore this version"
-                    aria-label="Ignore this version"
+                    title={t("shell.ignoreVersion")}
+                    aria-label={t("shell.ignoreVersion")}
                   >
                     <X className="h-3 w-3" strokeWidth={2} />
                   </button>
@@ -228,7 +230,9 @@ export function Sidebar() {
                     : `v${update.latestVersion}`}
                 </p>
                 <p className="pm-shell-update-from">
-                  from v{update.currentVersion.replace(/^v/, "")}
+                  {t("shell.fromVersion", {
+                    version: update.currentVersion.replace(/^v/, ""),
+                  })}
                 </p>
                 <div className="pm-shell-update-actions">
                   <button
@@ -236,7 +240,7 @@ export function Sidebar() {
                     onClick={openUpdateDetails}
                     className="pm-shell-update-link"
                   >
-                    Details
+                    {t("common.details")}
                     <ArrowUpRight className="h-3 w-3" strokeWidth={2} />
                   </button>
                   <button
@@ -244,7 +248,7 @@ export function Sidebar() {
                     onClick={handleIgnore}
                     className="pm-shell-update-ghost"
                   >
-                    Ignore
+                    {t("common.ignore")}
                   </button>
                 </div>
               </div>
@@ -257,8 +261,8 @@ export function Sidebar() {
                   pillIn && "is-in",
                 )}
                 onClick={openUpdateDetails}
-                title="Update available — view details"
-                aria-label={`Update available, current version v${currentVersion}. Open details.`}
+                title={t("shell.updateAvailable")}
+                aria-label={t("shell.updateAvailableAria", { version: currentVersion })}
               >
                 <span className="pm-shell-version-pill-ring" aria-hidden />
                 <span className="pm-shell-version-pill-label">

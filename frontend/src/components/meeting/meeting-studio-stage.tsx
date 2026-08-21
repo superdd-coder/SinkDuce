@@ -15,8 +15,9 @@ import {
   MeetingQcFab,
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
-import { type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary } from "@/api/client"
+import { type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
 import type { SidebarView } from "@/stores/app-store"
+import { useT } from "@/i18n/use-t"
 
 export type MeetingStudioSideTab = "sections" | "transcript" | "speaker"
 export type MeetingStudioSideSurface = "tools" | "chat"
@@ -85,9 +86,9 @@ export interface MeetingStudioStageProps {
   hasRealtimeProvider: boolean
   realtimeEnabled: boolean
   setRealtimeEnabled: Dispatch<SetStateAction<boolean>>
-  hotWordsLibraries: HotWordsLibrarySummary[]
   activeHotWordsSupported: boolean
   handleSelectHotWordsLibraries: (ids: string[]) => void
+  handleHotWordsDraftChange: (draft: string[] | undefined) => void
   languageHints: string[]
   supportedLanguageHints: LanguageHintOption[]
   updateLanguageHints: (next: string[]) => void
@@ -121,6 +122,7 @@ export interface MeetingStudioStageProps {
 }
 
 export function MeetingStudioStage(p: MeetingStudioStageProps) {
+  const t = useT()
   const {
     meeting,
     collections,
@@ -175,9 +177,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
     hasRealtimeProvider,
     realtimeEnabled,
     setRealtimeEnabled,
-    hotWordsLibraries,
     activeHotWordsSupported,
     handleSelectHotWordsLibraries,
+    handleHotWordsDraftChange,
     languageHints,
     supportedLanguageHints,
     updateLanguageHints,
@@ -244,10 +246,10 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                             }}
                             autoFocus
                           />
-                          <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={handleSaveTitle} aria-label="Save title">
+                          <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={handleSaveTitle} aria-label={t("meeting.saveTitle")}>
                             <Check className="size-3.5" />
                           </Button>
-                          <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => setEditingTitle(false)} aria-label="Cancel edit">
+                          <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => setEditingTitle(false)} aria-label={t("meeting.cancelEdit")}>
                             <X className="size-3.5" />
                           </Button>
                         </div>
@@ -259,7 +261,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                             size="icon-sm"
                             className="shrink-0 opacity-50 hover:opacity-100 mt-0.5"
                             onClick={handleStartEditTitle}
-                            aria-label="Edit title"
+                            aria-label={t("meeting.editTitle")}
                           >
                             <Pencil className="size-3.5" />
                           </Button>
@@ -268,15 +270,15 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
 
                       <div className="pm-meeting-meta-stack">
                         <div className="pm-meeting-meta-row">
-                          <span className="pm-meeting-meta-key">Created</span>
+                          <span className="pm-meeting-meta-key">{t("common.created")}</span>
                           <span className="pm-meeting-meta-val">{metaCreated}</span>
                         </div>
                         <div className="pm-meeting-meta-row">
-                          <span className="pm-meeting-meta-key">Speakers</span>
+                          <span className="pm-meeting-meta-key">{t("common.speakers")}</span>
                           <span className="pm-meeting-meta-val">{metaSpeakers}</span>
                         </div>
                         <div className="pm-meeting-meta-row">
-                          <span className="pm-meeting-meta-key">Collections</span>
+                          <span className="pm-meeting-meta-key">{t("common.collections")}</span>
                           <span className="pm-meeting-meta-val">
                             {(() => {
                               const cols = meeting.allocated_collections
@@ -314,9 +316,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                   {!hasFileProvider && meeting.audio_path && (
                     <div className="pm-meeting-warn mx-3 mt-2 mb-0">
                       <AlertCircle className="size-3.5 shrink-0" />
-                      <span className="flex-1">No transcription provider configured.</span>
+                      <span className="flex-1">{t("meeting.noTranscriptionProvider")}</span>
                       <Button variant="ghost" size="sm" onClick={() => setSidebarView("llm_provider")}>
-                        <Settings className="size-3 mr-1" /> Settings
+                        <Settings className="size-3 mr-1" /> {t("nav.settings")}
                       </Button>
                     </div>
                   )}
@@ -415,9 +417,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                       onToggleRealtime={() => setRealtimeEnabled((v) => !v)}
                       hasTranscript={displaySegments.length > 0}
                       hotWordsLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
-                      hotWordsLibraries={hotWordsLibraries}
                       hotWordsSupported={activeHotWordsSupported}
                       onSelectHotWords={handleSelectHotWordsLibraries}
+                      onHotWordsDraftChange={handleHotWordsDraftChange}
                       languageHints={languageHints}
                       languageHintOptions={supportedLanguageHints}
                       onChangeLanguageHints={updateLanguageHints}
@@ -436,7 +438,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                     "pm-meeting-stage-right",
                     !sideRailOpen && "is-collapsed",
                   )}
-                  aria-label="Meeting side panel"
+                  aria-label={t("meeting.meetingSidePanel")}
                   aria-hidden={!sideRailOpen}
                 >
                     <div className="pm-meeting-stage-right-card">
@@ -457,9 +459,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                         >
                           {sideSurfaceDisplay === "chat" ? (
                             <div className="pm-meeting-side-chat-label">
-                              <span className="pm-meeting-side-chat-title">Chat</span>
+                              <span className="pm-meeting-side-chat-title">{t("common.chat")}</span>
                               <span className="pm-meeting-side-chat-sub truncate" title={meeting.title ?? ""}>
-                                {meeting.title || "Meeting"}
+                                {meeting.title || t("nav.meeting")}
                               </span>
                             </div>
                           ) : (
@@ -472,16 +474,16 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                               }}
                               className="pm-meeting-side-tabs gap-0 min-w-0 flex-1"
                             >
-                              <TabsList className="relative" aria-label="Side panel">
+                              <TabsList className="relative" aria-label={t("meeting.sidePanel")}>
                                 <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
                                 <TabsTrigger value="sections" disabled={sideSurfaceExiting}>
-                                  Sections
+                                  {t("meeting.sections")}
                                 </TabsTrigger>
                                 <TabsTrigger value="transcript" disabled={sideSurfaceExiting}>
-                                  Transcript
+                                  {t("common.transcript")}
                                 </TabsTrigger>
                                 <TabsTrigger value="speaker" disabled={sideSurfaceExiting}>
-                                  Speaker
+                                  {t("meeting.speaker")}
                                 </TabsTrigger>
                               </TabsList>
                             </Tabs>
@@ -493,8 +495,8 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                           <button
                             type="button"
                             className="pm-meeting-side-collapse"
-                            title="Collapse side panel"
-                            aria-label="Collapse side panel"
+                            title={t("meeting.collapseSidePanel")}
+                            aria-label={t("meeting.collapseSidePanel")}
                             onClick={() => setSideRailOpenWithMotion(false)}
                           >
                             <PanelRightClose className="size-3.5" />
@@ -548,18 +550,18 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                               >
                                 <div className="pm-meeting-section-rail-head">
                                   <span className="pm-meeting-section-rail-title">
-                                    {sectionRailModel?.thinking ? "Building…" : "Browse"}
+                                    {sectionRailModel?.thinking ? t("meeting.building") : t("meeting.browse")}
                                   </span>
                                   <button
                                     type="button"
                                     className="pm-meeting-section-rail-add"
                                     disabled={!!sectionRailModel?.busy || !!sectionRailModel?.thinking}
-                                    title="Add section"
-                                    aria-label="Add section"
+                                    title={t("meeting.addSection")}
+                                    aria-label={t("meeting.addSection")}
                                     onClick={() => sectionRailActionsRef.current?.openAddSection()}
                                   >
                                     <Plus className="size-3.5" />
-                                    <span>Add</span>
+                                    <span>{t("common.add")}</span>
                                   </button>
                                 </div>
                                 <div
@@ -592,7 +594,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                       <div className="pm-meeting-section-fence-line" />
                                     </div>
                                   ) : !sectionRailModel || sectionRailModel.items.length === 0 ? (
-                                    <p className="pm-meeting-section-rail-empty">No sections yet</p>
+                                    <p className="pm-meeting-section-rail-empty">{t("meeting.noSections")}</p>
                                   ) : (
                                     sectionRailModel.items.map((item) => {
                                       if (item.kind === "skeleton") {
@@ -669,13 +671,13 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                             )}
                                             title={
                                               isStreaming
-                                                ? "Streaming — click to watch"
+                                                ? t("meeting.streamingWatch")
                                                 : isGenerating
-                                                  ? "Generating…"
+                                                  ? t("meeting.generating")
                                                   : isIngested
-                                                    ? "Ingested · open section"
+                                                    ? t("meeting.ingestedOpen")
                                                     : isReady
-                                                      ? "Open section"
+                                                      ? t("library.openSection")
                                                       : undefined
                                             }
                                             onClick={() => {
@@ -745,15 +747,15 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                             <span className="pm-meeting-section-card-name">{item.label}</span>
                                             {isStreaming ? (
                                               <span className="pm-meeting-section-card-badge is-streaming">
-                                                Streaming
+                                                {t("meeting.streaming")}
                                               </span>
                                             ) : isGenerating ? (
-                                              <span className="pm-meeting-section-card-badge">Generating</span>
+                                              <span className="pm-meeting-section-card-badge">{t("common.generated")}</span>
                                             ) : isIngested ? (
                                               <span
                                                 className="pm-meeting-section-card-ingested"
-                                                title="Ingested to collection"
-                                                aria-label="Ingested"
+                                                title={t("meeting.ingestedToCollection")}
+                                                aria-label={t("common.ingested")}
                                               >
                                                 <Check className="size-2.5" strokeWidth={2.5} aria-hidden />
                                               </span>
@@ -778,7 +780,7 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                                         disabled={sectionRailModel.busy}
                                         onClick={() => sectionRailActionsRef.current?.breakdown()}
                                       >
-                                        {sectionRailModel.busy ? "Extracting…" : "Breakdown"}
+                                        {sectionRailModel.busy ? t("meeting.extracting") : t("meeting.breakdown")}
                                       </button>
                                     </div>
                                   )}
@@ -882,10 +884,10 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                       setSideRailOpenWithMotion(true)
                       /* reopen to last non-chat tools view */
                     }}
-                    aria-label="Open side panel"
+                    aria-label={t("meeting.openSidePanel")}
                   >
                     <PanelRightOpen className="size-3.5" />
-                    Panel
+                    {t("meeting.panel")}
                   </button>
                 )}
 
@@ -893,17 +895,17 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                 {txPeekOpen && sideRailOpen && (
                   <aside
                     className="pm-meeting-tx-peek"
-                    aria-label="Transcript reference"
+                    aria-label={t("meeting.transcriptRef")}
                   >
                     <div className="pm-meeting-tx-peek-card">
                       <div className="pm-meeting-tx-peek-head">
-                        <span className="pm-meeting-tx-peek-title">Transcript</span>
+                        <span className="pm-meeting-tx-peek-title">{t("common.transcript")}</span>
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon-xs"
                           onClick={() => setTxPeekOpen(false)}
-                          aria-label="Close transcript"
+                          aria-label={t("meeting.closeTranscript")}
                         >
                           <X className="size-3.5" />
                         </Button>

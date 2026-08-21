@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react
 import { createPortal } from "react-dom"
 import { Send, Loader2, AlertTriangle, Globe, MessageCircle, BrushCleaning } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { createImeEnterGuard } from "@/lib/ime"
+import { useT } from "@/i18n/use-t"
 import { humanSourceLabel } from "@/lib/source-display"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
 import { createSession, getSession, deleteSession, iterateSessionSse, postSessionMessage } from "@/api/client"
@@ -41,15 +43,15 @@ function countTurns(msgs: { role: string; content: string }[]): number {
 }
 
 // ── Hint bubble config ──
-const HINT_MESSAGES = [
-  "Chat with this collection?",
-  "Ask a question?",
-  "Quick Q&A?",
-  "Got a question?",
-  "Ask anything...",
-  "Curious about the content?",
-  "Ask about the collection?",
-]
+const HINT_KEYS = [
+  "library.qcHint1",
+  "library.qcHint2",
+  "library.qcHint3",
+  "library.qcHint4",
+  "library.qcHint5",
+  "library.qcHint6",
+  "library.qcHint7",
+] as const
 const HINT_SHOW_DURATION = 4000
 const HINT_INITIAL_DELAY = 1000
 const HINT_MIN_INTERVAL = 5000
@@ -177,6 +179,7 @@ export function QuickChat({
   railKey,
   fabVisible = true,
 }: QuickChatProps) {
+  const t = useT()
   const [messages, setMessages] = useState<QAMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -192,12 +195,13 @@ export function QuickChat({
   const stickToBottom = useRef(true)
   const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const imeGuardRef = useRef(createImeEnterGuard())
   /** Stable host for web-confirm portal — avoid inline ref callbacks (re-fire every render). */
   const webConfirmHostRef = useRef<HTMLDivElement | null>(null)
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
-  const [hintMessage, setHintMessage] = useState(HINT_MESSAGES[0])
+  const [hintMessage, setHintMessage] = useState("")
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Spin class lags `open` so we can freeze angle and ease to rest on close. */
   const [diamondSpinning, setDiamondSpinning] = useState(false)
@@ -452,8 +456,8 @@ export function QuickChat({
   useEffect(() => {
     if (open) return
     const scheduleHint = () => {
-      const msg = HINT_MESSAGES[Math.floor(Math.random() * HINT_MESSAGES.length)]
-      setHintMessage(msg)
+      const key = HINT_KEYS[Math.floor(Math.random() * HINT_KEYS.length)]
+      setHintMessage(t(key))
       setHintVisible(true)
       setHintExiting(false)
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
@@ -473,7 +477,7 @@ export function QuickChat({
     return () => {
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
     }
-  }, [collectionId, open])
+  }, [collectionId, open, t])
 
   // ── Send ──
 
@@ -557,7 +561,7 @@ export function QuickChat({
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
-              ? { ...m, content: `Error: ${resp.status} - ${err}`, isStreaming: false }
+              ? { ...m, content: `${t("common.error")}: ${resp.status} - ${err}`, isStreaming: false }
               : m,
           ),
         )
@@ -599,7 +603,7 @@ export function QuickChat({
                 appendThinkingLocal(line)
               } else if (eventType === "searching") {
                 const q = String(data.query || "")
-                appendThinkingLocal(q ? `\n🔍 ${q}` : "\n🔍 Searching…")
+                appendThinkingLocal(q ? `\n🔍 ${q}` : `\n🔍 ${t("chat.searching")}`)
               } else if (eventType === "tool_result") {
                 const st = String(data.status || "done")
                 const tool = String(data.tool || "")
@@ -611,13 +615,13 @@ export function QuickChat({
                 const line =
                   st === "declined"
                     ? tool === "request_web_search"
-                      ? "\n⛔ Web search declined / off"
-                      : "\n⛔ Tool declined / cancelled"
+                      ? `\n⛔ ${t("chat.web")} · ${t("chat.declined")}`
+                      : `\n⛔ ${t("chat.declined")}`
                     : st === "error"
-                      ? "\n❌ Tool failed"
+                      ? `\n❌ ${t("common.failed")}`
                       : isSearchLike && typeof n === "number"
-                        ? `\n✅ Done · ${n} source${n === 1 ? "" : "s"}`
-                        : "\n✅ Done"
+                        ? `\n✅ ${t("common.done")} · ${t("library.sourcesN", { n })}`
+                        : `\n✅ ${t("common.done")}`
                 appendThinkingLocal(line)
               } else if (eventType === "done") {
                 if (data.sources) {
@@ -628,7 +632,7 @@ export function QuickChat({
                   setMsgCount(data.message_count)
                 }
               } else if (eventType === "error") {
-                appendTokenLocal(`Error: ${data.content}`)
+                appendTokenLocal(`${t("common.error")}: ${data.content}`)
               }
         }
       }
@@ -641,7 +645,7 @@ export function QuickChat({
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, content: `Error: ${String(err)}`, isStreaming: false }
+            ? { ...m, content: `${t("common.error")}: ${String(err)}`, isStreaming: false }
             : m,
         ),
       )
@@ -649,7 +653,7 @@ export function QuickChat({
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, sessionId, collectionId, webSearch, pinToBottom])
+  }, [input, streaming, sessionId, collectionId, webSearch, pinToBottom, t])
 
   const toggleWebSearch = () => {
     setWebSearch((prev) => {
@@ -677,7 +681,14 @@ export function QuickChat({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
+    if (!imeGuardRef.current.isSubmitEnter(e)) return
+    e.preventDefault()
+    send()
+  }
+  const handleCompositionStart = () => imeGuardRef.current.onCompositionStart()
+  const handleCompositionEnd = () => {
+    imeGuardRef.current.onCompositionEnd()
+    requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
   }
 
   const hasMessages = messages.length > 0
@@ -707,7 +718,7 @@ export function QuickChat({
             <MessageCircle className="size-3.5" strokeWidth={2} />
           </span>
           <div className="min-w-0">
-            <p className="pm-qc-header-title">Quick Chat</p>
+            <p className="pm-qc-header-title">{t("library.quickChat")}</p>
             <p className="pm-qc-header-sub truncate" title={collectionName}>
               {collectionName}
             </p>
@@ -720,7 +731,7 @@ export function QuickChat({
                 "pm-meta inline-flex items-center gap-1 tabular-nums",
                 msgCount >= WARN_THRESHOLD && "text-amber-600"
               )}
-              title={`${msgCount}/${MAX_MESSAGES} rounds. Soft limit trims older rounds.`}
+              title={t("library.roundsLimit", { n: msgCount, max: MAX_MESSAGES })}
             >
               {msgCount >= WARN_THRESHOLD && (
                 <AlertTriangle className="size-3" />
@@ -732,8 +743,8 @@ export function QuickChat({
             type="button"
             className="pm-qc-clear-btn"
             onClick={clearContext}
-            title="Clear conversation"
-            aria-label="Clear conversation"
+            title={t("library.clearConversation")}
+            aria-label={t("library.clearConversation")}
           >
             <BrushCleaning className="size-3.5" strokeWidth={1.75} />
           </button>
@@ -759,7 +770,7 @@ export function QuickChat({
         {loadingHistory ? (
           <div className="flex flex-1 items-center justify-center gap-2 py-10">
             <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
-            <span className="pm-meta">Loading…</span>
+            <span className="pm-meta">{t("common.loading")}</span>
           </div>
         ) : hasMessages ? (
           <div className="pm-qc-thread-inner">
@@ -773,7 +784,7 @@ export function QuickChat({
                   )}
                 >
                   {/* Match Chat message-bubble: You + underline text */}
-                  <span className="pm-qc-msg-role">You</span>
+                  <span className="pm-qc-msg-role">{t("chat.you")}</span>
                   <div className="pm-qc-bubble pm-qc-bubble--user">
                     <p className="pm-qc-bubble-text">{msg.content}</p>
                   </div>
@@ -788,7 +799,7 @@ export function QuickChat({
                 >
                   {/* Match Chat: “Assistant” + left rail, prose answer */}
                   <span className="pm-qc-msg-role pm-qc-msg-role--ai">
-                    Assistant
+                    {t("chat.assistant")}
                   </span>
                   <div className="pm-qc-bubble pm-qc-bubble--assistant">
                     {msg.thinkingContent && (
@@ -799,7 +810,7 @@ export function QuickChat({
                         }
                       >
                         <summary>
-                          Thinking
+                          {t("chat.thinking")}
                           {msg.isStreaming && !msg.content && (
                             <Loader2 className="size-2.5 animate-spin inline ml-1" />
                           )}
@@ -816,7 +827,7 @@ export function QuickChat({
                     ) : msg.isStreaming ? (
                       <div className="pm-qc-typing">
                         <Loader2 className="size-3.5 animate-spin" />
-                        <span>Educing…</span>
+                        <span>{t("chat.educing")}</span>
                       </div>
                     ) : (
                       <p className="pm-qc-bubble-text">{msg.content}</p>
@@ -846,8 +857,8 @@ export function QuickChat({
                               className="pm-qc-sources-toggle"
                             >
                               <span>
-                                Sources · {msg.sources!.length}
-                                {webN > 0 ? ` · ${webN} web` : ""}
+                                {t("library.sourcesN", { n: msg.sources!.length })}
+                                {webN > 0 ? ` · ${webN} ${t("chat.web")}` : ""}
                                 {kbN > 0 && webN > 0 ? ` · ${kbN} kb` : ""}
                               </span>
                               <svg
@@ -889,7 +900,7 @@ export function QuickChat({
                                           s.metadata?.source_label ||
                                             s.metadata?.source ||
                                             url ||
-                                            "Web"
+                                            t("chat.web")
                                         )
                                       : getDisplayName(src || "", s.metadata)
                                     return (
@@ -928,7 +939,7 @@ export function QuickChat({
                                         </div>
                                         {!isWeb && chunkIdx != null && (
                                           <div className="pm-qc-source-meta">
-                                            Chunk #{chunkIdx}
+                                            {t("library.chunkN", { n: chunkIdx })}
                                           </div>
                                         )}
                                         {isWeb && url && (
@@ -959,13 +970,13 @@ export function QuickChat({
             <span className="pm-qc-empty-icon" aria-hidden>
               <MessageCircle className="size-5" strokeWidth={1.75} />
             </span>
-            <p className="pm-qc-empty-title">Ask this collection</p>
+            <p className="pm-qc-empty-title">{t("library.askCollection")}</p>
             <p className="pm-qc-empty-sub">
-              Chat with{" "}
+              {t("library.qcEmptyBefore")}{" "}
               <em className="not-italic text-[var(--pm-green)]">
                 {collectionName}
               </em>
-              . Answers use your indexed sources.
+              {t("library.qcEmptyAfter")}
             </p>
           </div>
         )}
@@ -987,6 +998,8 @@ export function QuickChat({
             onToggleWebSearch={toggleWebSearch}
             onSend={send}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             textareaRef={textareaRef}
           />
         </div>
@@ -1062,7 +1075,7 @@ export function QuickChat({
             diamondSpinning && "quick-chat-btn-spinning"
           )}
           style={{ color: "var(--ze-green, #1A5E3D)" }}
-          aria-label={open ? "Close Quick Q&A" : "Open Quick Q&A"}
+          aria-label={open ? t("meeting.closeQuickQa") : t("library.openQuickQa")}
         >
           <DiamondIcon className="w-10 h-10" />
         </button>
@@ -1089,7 +1102,8 @@ export function QuickChat({
 // ── Chat Input Bar ──
 
 function ChatInputBar({
-  input, setInput, streaming, webSearch, onToggleWebSearch, onSend, onKeyDown, textareaRef,
+  input, setInput, streaming, webSearch, onToggleWebSearch, onSend, onKeyDown,
+  onCompositionStart, onCompositionEnd, textareaRef,
 }: {
   input: string
   setInput: (v: string) => void
@@ -1098,8 +1112,11 @@ function ChatInputBar({
   onToggleWebSearch: () => void
   onSend: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
+  onCompositionStart: () => void
+  onCompositionEnd: () => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
+  const t = useT()
   return (
     <div
       className={cn(
@@ -1116,8 +1133,8 @@ function ChatInputBar({
         disabled={streaming}
         title={
           webSearch
-            ? "Web search ON — may confirm before searching the internet"
-            : "Web search OFF — collection only (API key in Settings)"
+            ? t("library.qcWebOn")
+            : t("library.qcWebOff")
         }
         className={cn(
           "pm-qc-web-btn",
@@ -1135,7 +1152,9 @@ function ChatInputBar({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Message this collection…"
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
+          placeholder={t("library.messageCollection")}
           disabled={streaming}
           rows={1}
           className="pm-qc-textarea"
@@ -1151,7 +1170,7 @@ function ChatInputBar({
           input.trim() && !streaming && "is-ready",
           streaming && "is-hidden"
         )}
-        aria-label="Send"
+        aria-label={t("common.send")}
       >
         <Send className="size-3.5" />
       </button>

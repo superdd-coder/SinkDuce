@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import { FolderOpen, Paperclip, Star, Upload, XCircle } from "lucide-react"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import { cn } from "@/lib/utils"
 import type { FileSummary, NodeAttachment } from "@/types/file-mgmt"
 import {
@@ -54,6 +56,7 @@ export function NodeFileAttach({
   onToggleDefinitive,
   onDetach,
 }: NodeFileAttachProps) {
+  const t = useT()
   const attachedIds = useMemo(
     () => new Set(attachments.map((a) => a.file_id)),
     [attachments]
@@ -196,14 +199,14 @@ export function NodeFileAttach({
       if (toDetach.length) parts.push(`−${toDetach.length}`)
       toast.success(
         parts.length
-          ? `Attachments updated (${parts.join(" · ")})`
-          : "Attachments updated"
+          ? t("fileMgmt.attachmentsUpdatedParts", { parts: parts.join(" · ") })
+          : t("fileMgmt.attachmentsUpdated")
       )
       setSelect(false)
       onAttached()
     } catch (err) {
       toast.error(
-        `Failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.failed", { error: formatApiError(err, t) })
       )
       // Keep picker open with draft so user can retry
     } finally {
@@ -229,21 +232,20 @@ export function NodeFileAttach({
       toast.success(
         list.length === 1
           ? started
-            ? `Uploaded “${list[0].name}” — ingesting…`
-            : `Uploaded and attached “${list[0].name}”`
-          : `Uploaded ${list.length} file(s)` +
-              (started ? ` · ${started} ingesting` : "")
+            ? t("fileMgmt.uploadedIngestingName", { name: list[0].name })
+            : t("fileMgmt.uploadedAttachedName", { name: list[0].name })
+          : started
+            ? t("fileMgmt.uploadedNIngesting", { n: list.length, m: started })
+            : t("fileMgmt.uploadedN", { n: list.length })
       )
       onAttached()
     } catch (err) {
       const conflict = getNameConflict(err)
       if (conflict) {
-        toast.error(
-          `A file named “${conflict.name}” already exists. Please rename and try again.`
-        )
+        toast.error(t("fileMgmt.fileExists", { name: conflict.name }))
       } else {
         toast.error(
-          `Failed: ${err instanceof Error ? err.message : String(err)}`
+          t("fileMgmt.failed", { error: formatApiError(err, t) })
         )
       }
     } finally {
@@ -337,13 +339,13 @@ export function NodeFileAttach({
             )}
           />
           {selectOpen ? (
-            <span className="pm-meta text-[var(--pm-muted)]">Upload File</span>
+            <span className="pm-meta text-[var(--pm-muted)]">{t("fileMgmt.uploadFileBtn")}</span>
           ) : (
             <>
               <p className="pm-meta text-[var(--pm-muted)]">
-                {uploading ? "Uploading…" : "Drag & drop files here"}
+                {uploading ? t("common.uploading") : t("fileMgmt.dragDrop")}
               </p>
-              <p className="pm-meta text-[var(--pm-faint)]">or click to browse</p>
+              <p className="pm-meta text-[var(--pm-faint)]">{t("fileMgmt.orClickBrowse")}</p>
             </>
           )}
         </button>
@@ -361,7 +363,7 @@ export function NodeFileAttach({
             onClick={() => void applyConfirm()}
             disabled={!dirty || confirming}
           >
-            {confirming ? "Saving…" : "Confirm"}
+            {confirming ? t("common.saving") : t("common.confirm")}
           </button>
         ) : (
           <button
@@ -371,7 +373,7 @@ export function NodeFileAttach({
             disabled={uploading}
           >
             <FolderOpen className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-            From Collection
+            {t("fileMgmt.fromCollection")}
           </button>
         )}
       </div>
@@ -388,7 +390,7 @@ export function NodeFileAttach({
           <div className="pm-timeline-attach-list-inner">
             {displayAttachments.length === 0 ? (
               <p className="pm-meta text-[var(--pm-faint)] px-1 py-2">
-                No files attached yet
+                {t("fileMgmt.noFilesAttachedYet")}
               </p>
             ) : (
               <ul className="pm-ws-list pm-timeline-attach-list">
@@ -462,7 +464,7 @@ export function NodeFileAttach({
                                 requestDetach(att)
                               }}
                               disabled={isExit}
-                              title="Remove attachment"
+                              title={t("fileMgmt.removeAttachment")}
                             >
                               <XCircle className="h-3 w-3" />
                             </button>

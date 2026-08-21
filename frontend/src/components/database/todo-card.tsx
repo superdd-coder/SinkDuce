@@ -33,6 +33,8 @@ import type { Node, NodeGroup, TodoItem } from "@/types/file-mgmt"
 import { AddNodeDialog } from "@/components/file-mgmt/timeline-view/add-node-dialog"
 import { CreateTodoDialog } from "./create-todo-dialog"
 import { TodoDetailDialog } from "./todo-detail-dialog"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface TodoCardProps {
   collection: string
@@ -57,6 +59,7 @@ function TodoDeleteButton({
   disabled?: boolean
   onConfirm: () => void
 }) {
+  const t = useT()
   const [deleteArmed, setDeleteArmed] = useState(false)
   const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const deleteBtnRef = useRef<HTMLButtonElement>(null)
@@ -111,8 +114,8 @@ function TodoDeleteButton({
         "pm-msg-delete",
         deleteArmed ? "is-confirm opacity-100" : "opacity-100",
       )}
-      title={deleteArmed ? "Click again to delete" : "Delete todo"}
-      aria-label={deleteArmed ? "Confirm delete todo" : "Delete todo"}
+      title={deleteArmed ? t("library.clickAgainDelete") : t("library.deleteTodo")}
+      aria-label={deleteArmed ? t("library.confirmDeleteTodo") : t("library.deleteTodo")}
       aria-expanded={deleteArmed}
       onClick={(e) => {
         e.preventDefault()
@@ -132,7 +135,7 @@ function TodoDeleteButton({
           ×
         </span>
       ) : (
-        <span className="pm-msg-delete-label is-solo">Delete</span>
+        <span className="pm-msg-delete-label is-solo">{t("common.delete")}</span>
       )}
     </button>
   )
@@ -146,6 +149,7 @@ export function TodoCard({
   createOpen: createOpenProp,
   onCreateOpenChange,
 }: TodoCardProps) {
+  const t = useT()
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [loading, setLoading] = useState(true)
   const [groupByChain, setGroupByChain] = useState(false)
@@ -189,17 +193,15 @@ export function TodoCard({
               : String(err)
         // HTML response usually means API process is old / not restarted
         if (msg.includes("<!doctype") || msg.includes("Unexpected token")) {
-          toast.error(
-            "Todos API unavailable — restart the backend (uvicorn) so /api/file-mgmt/.../todos is registered."
-          )
+          toast.error(t("library.todosApiUnavailable"))
         } else {
-          toast.error(`Todos: ${msg}`)
+          toast.error(t("library.todosError", { error: msg }))
         }
       } finally {
         if (!opts?.silent) setLoading(false)
       }
     },
-    [collection]
+    [collection, t]
   )
 
   useEffect(() => {
@@ -250,18 +252,18 @@ export function TodoCard({
     return { openRows: open, completedRows: completed }
   }, [todos, justCompletedIds, mineOnly, meId])
 
-  const toggleDone = async (t: TodoItem) => {
-    setBusyId(t.todo_id)
+  const toggleDone = async (item: TodoItem) => {
+    setBusyId(item.todo_id)
     try {
-      const next = !t.done
-      const updated = await updateTodo(collection, t.todo_id, { done: next })
+      const next = !item.done
+      const updated = await updateTodo(collection, item.todo_id, { done: next })
       setTodos((prev) => mergeTodoUpdateInPlace(prev, updated))
       if (next) {
-        setJustCompletedIds((prev) => new Set(prev).add(t.todo_id))
+        setJustCompletedIds((prev) => new Set(prev).add(item.todo_id))
       } else {
         setJustCompletedIds((prev) => {
           const n = new Set(prev)
-          n.delete(t.todo_id)
+          n.delete(item.todo_id)
           return n
         })
       }
@@ -271,23 +273,23 @@ export function TodoCard({
         todo: updated,
       })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(formatApiError(err, t))
     } finally {
       setBusyId(null)
     }
   }
 
-  const handleDelete = async (t: TodoItem) => {
-    setBusyId(t.todo_id)
+  const handleDelete = async (item: TodoItem) => {
+    setBusyId(item.todo_id)
     try {
-      await deleteTodo(collection, t.todo_id)
-      setTodos((prev) => prev.filter((x) => x.todo_id !== t.todo_id))
+      await deleteTodo(collection, item.todo_id)
+      setTodos((prev) => prev.filter((x) => x.todo_id !== item.todo_id))
       triggerTodoRefresh({
         collectionId: collection,
         reason: "delete",
       })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(formatApiError(err, t))
     } finally {
       setBusyId(null)
     }
@@ -316,31 +318,31 @@ export function TodoCard({
         setTodos((prev) =>
           prev.map((x) => (x.todo_id === linkTodo.todo_id ? updated : x))
         )
-        toast.success("Linked node to todo")
+        toast.success(t("library.linkedNodeTodo"))
         triggerTodoRefresh({
           collectionId: collection,
           reason: "link-node",
         })
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : String(err))
+        toast.error(formatApiError(err, t))
       }
     }
     setLinkTodo(null)
     void refresh({ silent: true })
   }
 
-  const renderRow = (t: TodoItem) => {
-    const chainLabel = t.is_main_chain
-      ? t.chain_title || "Main"
-      : t.chain_title || "Branch"
-    const busy = busyId === t.todo_id
-    const mine = !!(meId && t.assignee_person_id === meId)
+  const renderRow = (item: TodoItem) => {
+    const chainLabel = item.is_main_chain
+      ? item.chain_title || t("library.main")
+      : item.chain_title || t("library.branch")
+    const busy = busyId === item.todo_id
+    const mine = !!(meId && item.assignee_person_id === meId)
     return (
       <li
-        key={t.todo_id}
+        key={item.todo_id}
         role="button"
         tabIndex={0}
-        aria-label={`Open todo: ${t.title}`}
+        aria-label={`${t("library.todo")}: ${item.title}`}
         className={cn(
           /* Horizontal inset: checkbox + hover wash leave a margin from card edge */
           "group/todo flex items-start gap-2 py-1.5 px-2 mx-0.5",
@@ -348,33 +350,33 @@ export function TodoCard({
           "cursor-pointer rounded-[var(--pm-r-sm,8px)] transition-colors hover:bg-black/[0.03]",
           busy && "opacity-70"
         )}
-        onClick={() => openDetail(t)}
+        onClick={() => openDetail(item)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault()
-            openDetail(t)
+            openDetail(item)
           }
         }}
       >
         <button
           type="button"
           disabled={busy}
-          title={t.done ? "Mark incomplete" : "Mark complete"}
-          aria-label={t.done ? "Mark incomplete" : "Mark complete"}
+          title={item.done ? t("library.markIncomplete") : t("library.markComplete")}
+          aria-label={item.done ? t("library.markIncomplete") : t("library.markComplete")}
           className={cn(
             "mt-0.5 size-3.5 shrink-0 rounded-[4px] flex items-center justify-center transition-colors",
-            t.done
+            item.done
               ? "bg-[var(--pm-green)] border-none text-[var(--pm-on)]"
               : "border border-[rgba(26,94,61,0.35)] bg-transparent hover:border-[var(--pm-green)]"
           )}
           onClick={(e) => {
             e.stopPropagation()
-            if (!busy) void toggleDone(t)
+            if (!busy) void toggleDone(item)
           }}
         >
           {busy ? (
             <Loader2 className="size-2.5 animate-spin" />
-          ) : t.done ? (
+          ) : item.done ? (
             <span className="text-[10px] leading-none">✓</span>
           ) : null}
         </button>
@@ -382,22 +384,22 @@ export function TodoCard({
           <div
             className={cn(
               "text-xs leading-snug",
-              t.done && "line-through text-muted-foreground",
-              mine && !t.done && "text-[var(--pm-green,#1a5e3d)]",
+              item.done && "line-through text-muted-foreground",
+              mine && !item.done && "text-[var(--pm-green,#1a5e3d)]",
             )}
           >
-            {t.title}
+            {item.title}
           </div>
-          {t.body?.trim() && (
+          {item.body?.trim() && (
             <div className="text-[10px] text-muted-foreground/80 mt-0.5 line-clamp-1">
-              {t.body.trim()}
+              {item.body.trim()}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
             <span
               className={cn(
                 "inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0 rounded-sm",
-                t.is_main_chain
+                item.is_main_chain
                   ? "bg-muted text-muted-foreground"
                   : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
               )}
@@ -405,9 +407,9 @@ export function TodoCard({
               <GitBranch className="size-2.5" />
               {chainLabel}
             </span>
-            {t.ddl && (
+            {item.ddl && (
               <span className="text-[10px] text-muted-foreground">
-                DDL {t.ddl.slice(0, 10)}
+                DDL {item.ddl.slice(0, 10)}
               </span>
             )}
           </div>
@@ -422,23 +424,23 @@ export function TodoCard({
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
-          {t.done && !t.completed_node_id && (
+          {item.done && !item.completed_node_id && (
             <button
               type="button"
-              title="Add node to timeline"
-              aria-label="Add node to timeline"
+              title={t("library.addNodeTimeline")}
+              aria-label={t("library.addNodeTimeline")}
               className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:text-[var(--pm-green)] hover:bg-black/[0.04] border-none bg-transparent p-0 cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation()
-                openAddNode(t)
+                openAddNode(item)
               }}
             >
               <Plus className="size-3.5" strokeWidth={2} />
             </button>
           )}
-          {t.done && t.completed_node_id && (
+          {item.done && item.completed_node_id && (
             <span
-              title="Linked to timeline node"
+              title={t("library.linkedTimeline")}
               className="inline-flex size-6 items-center justify-center text-[var(--pm-green)]"
             >
               <Link2 className="size-3.5" strokeWidth={2} />
@@ -447,7 +449,7 @@ export function TodoCard({
           <TodoDeleteButton
             disabled={busy}
             onConfirm={() => {
-              void handleDelete(t)
+              void handleDelete(item)
             }}
           />
         </div>
@@ -460,17 +462,17 @@ export function TodoCard({
       return <ul className="space-y-0">{items.map(renderRow)}</ul>
     }
     const map = new Map<string, { title: string; items: TodoItem[] }>()
-    for (const t of items) {
-      const key = t.chain_id
+    for (const item of items) {
+      const key = item.chain_id
       if (!map.has(key)) {
         map.set(key, {
-          title: t.is_main_chain
-            ? t.chain_title || "Main"
-            : t.chain_title || "Branch",
+          title: item.is_main_chain
+            ? item.chain_title || t("library.main")
+            : item.chain_title || t("library.branch"),
           items: [],
         })
       }
-      map.get(key)!.items.push(t)
+      map.get(key)!.items.push(item)
     }
     const entries = [...map.entries()].sort((a, b) => {
       const aMain = a[1].items[0]?.is_main_chain ? 0 : 1
@@ -510,7 +512,7 @@ export function TodoCard({
               : { textTransform: "none", letterSpacing: "0.02em" }
           }
         >
-          To-do
+          {t("library.todo")}
         </span>
         <div className="flex items-center gap-1">
           <button
@@ -518,9 +520,9 @@ export function TodoCard({
             title={
               meId
                 ? mineOnly
-                  ? "Show all todos"
-                  : "Only todos assigned to you"
-                : "Mark yourself in People first"
+                  ? t("library.showAllTodos")
+                  : t("library.onlyTodosAssigned")
+                : t("library.markYourselfPeople")
             }
             disabled={!meId}
             onClick={() => setMineOnly((v) => !v)}
@@ -532,11 +534,11 @@ export function TodoCard({
               !meId && "opacity-40 cursor-default"
             )}
           >
-            Mine
+            {t("library.mine")}
           </button>
           <button
             type="button"
-            title={groupByChain ? "Ungroup" : "Group by chain"}
+            title={groupByChain ? t("library.ungroup") : t("library.groupByChain")}
             onClick={() => setGroupByChain((v) => !v)}
             className={cn(
               "p-1 rounded-md transition-colors border-none",
@@ -552,9 +554,9 @@ export function TodoCard({
             variant="ghost"
             size="xs"
             onClick={() => setCreateOpen(true)}
-            title="Add todo"
+            title={t("library.addTodo")}
           >
-            Add
+            {t("common.add")}
           </Button>
         </div>
       </div>
@@ -562,13 +564,13 @@ export function TodoCard({
       {loading ? (
         <div className="todo-card-body flex flex-1 items-center gap-2 py-4 justify-center min-h-0">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--pm-faint)]" />
-          <span className="pm-meta">Loading…</span>
+          <span className="pm-meta">{t("common.loading")}</span>
         </div>
       ) : (
         <div className="todo-card-body min-h-0 flex flex-col flex-1 overflow-auto">
           {openRows.length === 0 && completedRows.length === 0 ? (
             <p className="pm-meta py-2">
-              {mineOnly ? "No todos assigned to you." : "No todos yet."}
+              {mineOnly ? t("library.noTodosAssigned") : t("library.noTodosYet")}
             </p>
           ) : (
             renderList(openRows)
@@ -591,7 +593,7 @@ export function TodoCard({
                 >
                   <ChevronRight className="size-3.5" strokeWidth={2} />
                 </span>
-                Completed · {completedRows.length}
+                {t("library.completedCount", { n: completedRows.length })}
               </button>
               <div
                 className={cn("pm-subcollapse", completedOpen && "is-open")}

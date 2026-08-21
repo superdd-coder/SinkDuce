@@ -38,6 +38,12 @@ import {
 import { enrichMessageSourceNames } from "@/components/file-mgmt/message-card"
 import { toast } from "sonner"
 import { getTasks } from "@/api/client"
+import { tr } from "@/i18n/tr"
+import { formatApiError } from "@/api/http"
+
+function errMsg(err: unknown): string {
+  return formatApiError(err, tr)
+}
 
 /** Build folder_id → name map from tree for message source tags. */
 function collectFolderNames(
@@ -423,7 +429,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     const { collectionId } = pending
     const { currentFolderId, currentFolder } = get()
     if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) {
-      toast.error("Cannot upload to Archived")
+      toast.error(tr("fileMgmt.cannotUploadArchived"))
       set({ folderUploadConfirm: null })
       return
     }
@@ -431,7 +437,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     const files = pending.files.filter((f) => !isSkippedUploadFile(f))
     set({ folderUploadConfirm: null })
     if (files.length === 0) {
-      toast.info("No files to upload")
+      toast.info(tr("fileMgmt.noFilesToUpload"))
       return
     }
     try {
@@ -445,18 +451,19 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       const withTasks = results.filter((r) => r.task_id)
       if (withTasks.length > 0) {
         toast.info(
-          `${files.length} files uploaded, ${withTasks.length} ingesting...`
+          tr("fileMgmt.filesUploadedIngesting", {
+            n: files.length,
+            m: withTasks.length,
+          })
         )
         for (const r of withTasks) {
           get()._startTaskPolling(collectionId, r.task_id!, r.file_id)
         }
       } else {
-        toast.success(`${files.length} files uploaded`)
+        toast.success(tr("fileMgmt.filesUploaded", { n: files.length }))
       }
     } catch (err) {
-      toast.error(
-        `Folder upload failed: ${err instanceof Error ? err.message : String(err)}`
-      )
+      toast.error(tr("fileMgmt.uploadFailed", { error: errMsg(err) }))
     }
   },
 
@@ -465,7 +472,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     if (!pending) return
     const name = newName.trim()
     if (!name) {
-      toast.error("Name is required")
+      toast.error(tr("fileMgmt.nameRequired"))
       return
     }
     try {
@@ -486,7 +493,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         return
       }
       set({ nameConflict: null })
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(tr("fileMgmt.failed", { error: errMsg(err) }))
     }
   },
 
@@ -500,7 +507,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       const tree = await getFolderTree(collectionId)
       set({ folderTree: tree })
     } catch (err) {
-      toast.error(`Failed to load folders: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failedLoadFolders", { error: errMsg(err) }))
     } finally {
       set({ folderTreeLoading: false })
     }
@@ -537,7 +544,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         const files = await getFolderFiles(collectionId, folderId)
         set({ currentFolderFiles: files })
       } catch (err) {
-        toast.error(`Failed to load files: ${err instanceof Error ? err.message : String(err)}`)
+        toast.error(tr("fileMgmt.failedLoadFiles", { error: errMsg(err) }))
         set({ currentFolderFiles: [] })
       } finally {
         set({ filesLoading: false })
@@ -619,7 +626,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         ...(icon ?? {}),
       })
       await get().fetchFolderTree(collectionId)
-      toast.success(`Folder "${folderName}" created`)
+      toast.success(tr("fileMgmt.folderCreated", { name: folderName }))
     }
     try {
       await doCreate(name)
@@ -635,7 +642,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         })
         return
       }
-      toast.error(`Failed to create folder: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failedCreateFolder", { error: errMsg(err) }))
     }
   },
 
@@ -661,7 +668,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
             : null,
         })
       }
-      toast.success("Folder updated")
+      toast.success(tr("fileMgmt.folderUpdated"))
     }
     try {
       await doUpdate()
@@ -671,9 +678,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       if (conflict && patch.name !== undefined) {
         return conflict
       }
-      toast.error(
-        `Failed to update folder: ${err instanceof Error ? err.message : String(err)}`
-      )
+      toast.error(tr("fileMgmt.failed", { error: errMsg(err) }))
       return null
     }
   },
@@ -682,7 +687,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     const doRename = async (newName: string) => {
       await updateFile(collectionId, fileId, { filename: newName, version })
       await get().refreshFiles(collectionId)
-      toast.success("File renamed")
+      toast.success(tr("fileMgmt.fileRenamed"))
     }
     try {
       await doRename(filename)
@@ -690,9 +695,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     } catch (err) {
       const conflict = getNameConflict(err)
       if (conflict) return conflict
-      toast.error(
-        `Failed to rename file: ${err instanceof Error ? err.message : String(err)}`
-      )
+      toast.error(tr("fileMgmt.failed", { error: errMsg(err) }))
       return null
     }
   },
@@ -706,7 +709,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         version,
       })
       await get().fetchFolderTree(collectionId)
-      toast.success("Folder moved")
+      toast.success(tr("fileMgmt.folderMoved"))
     }
     try {
       await doMove()
@@ -726,13 +729,13 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
                 version,
               })
               await get().fetchFolderTree(collectionId)
-              toast.success("Folder moved")
+              toast.success(tr("fileMgmt.folderMoved"))
             },
           },
         })
         return
       }
-      toast.error(`Failed to move: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failedMove", { error: errMsg(err) }))
     }
   },
 
@@ -756,9 +759,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       }
       await get().fetchFolderTree(collectionId)
       await get().refreshFiles(collectionId)
-      toast.success("Folder deleted")
+      toast.success(tr("fileMgmt.folderDeleted"))
     } catch (err) {
-      toast.error(`Failed to delete folder: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failedDeleteFolder", { error: errMsg(err) }))
     }
   },
 
@@ -791,7 +794,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
   uploadFile: async (collectionId: string, file: File) => {
     const { currentFolderId, currentFolder } = get()
     if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) {
-      toast.error("Cannot upload to Archived")
+      toast.error(tr("fileMgmt.cannotUploadArchived"))
       return
     }
     const folderId = currentFolderId || ""
@@ -803,14 +806,12 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       const result = await uploadFileToFolder(collectionId, folderId, payload)
       await get().refreshFiles(collectionId)
       if (result.unsupported) {
-        toast.warning(
-          `"${displayName}" uploaded — file type not supported for ingest`
-        )
+        toast.warning(tr("fileMgmt.uploadedNoIngest", { name: displayName }))
       } else if (result.task_id) {
-        toast.info(`"${displayName}" uploaded, ingesting...`)
+        toast.info(tr("fileMgmt.ingesting", { name: displayName }))
         get()._startTaskPolling(collectionId, result.task_id, result.file_id)
       } else {
-        toast.success(`"${displayName}" uploaded`)
+        toast.success(tr("fileMgmt.uploaded", { name: displayName }))
       }
     }
     try {
@@ -829,19 +830,19 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         })
         return
       }
-      toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.uploadFailed", { error: errMsg(err) }))
     }
   },
 
   uploadFolder: async (collectionId: string, files: File[]) => {
     const { currentFolderId, currentFolder } = get()
     if (currentFolderId && isArchivedFolder(currentFolderId, currentFolder)) {
-      toast.error("Cannot upload to Archived")
+      toast.error(tr("fileMgmt.cannotUploadArchived"))
       return
     }
     const list = Array.from(files)
     if (list.length === 0) {
-      toast.info("No files selected")
+      toast.info(tr("fileMgmt.noFilesSelected"))
       return
     }
     // Open system confirm dialog (skip .DS_Store by default there)
@@ -909,9 +910,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       }
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) moved`)
+      toast.success(tr("fileMgmt.filesMoved", { n: fileIds.length }))
     } catch (err) {
-      toast.error(`Move failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.moveFailed", { error: errMsg(err) }))
     }
   },
 
@@ -961,9 +962,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       }
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) linked to folder`)
+      toast.success(tr("fileMgmt.filesLinked", { n: fileIds.length }))
     } catch (err) {
-      toast.error(`Link failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.linkFailed", { error: errMsg(err) }))
     }
   },
 
@@ -987,16 +988,16 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       )
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) unlinked from this folder`)
+      toast.success(tr("fileMgmt.filesUnlinked", { n: fileIds.length }))
     } catch (err) {
-      toast.error(`Unlink failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.unlinkFailed", { error: errMsg(err) }))
     }
   },
 
   archiveFilesForFolder: async (collectionId: string, fileIds: string[], files: FileSummary[]) => {
     const folderId = get().currentFolderId
     if (!folderId || folderId === "__archived__") {
-      toast.error("Open a folder to archive for this folder")
+      toast.error(tr("fileMgmt.openFolderArchive"))
       return
     }
     try {
@@ -1011,9 +1012,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       )
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) archived for this folder`)
+      toast.success(tr("fileMgmt.filesArchived", { n: fileIds.length }))
     } catch (err) {
-      toast.error(`Archive failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.archiveFailed", { error: errMsg(err) }))
     }
   },
 
@@ -1029,9 +1030,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       )
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) excluded from search`)
+      toast.success(tr("fileMgmt.filesExcluded", { n: fileIds.length }))
     } catch (err) {
-      toast.error(`Exclude failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.excludeFailed", { error: errMsg(err) }))
     }
   },
 
@@ -1040,9 +1041,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       await Promise.all(fileIds.map((fid) => deleteFile(collectionId, fid)))
       await get().refreshFiles(collectionId)
       set({ selectedFileIds: new Set() })
-      toast.success(`${fileIds.length} file(s) permanently deleted`)
+      toast.success(tr("fileMgmt.filesDeleted", { n: fileIds.length }))
     } catch (err) {
-      toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.deleteFailed", { error: errMsg(err) }))
     }
   },
 
@@ -1067,11 +1068,11 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       set({ selectedFileIds: new Set() })
       toast.success(
         inArchivedView
-          ? `${fileIds.length} file(s) restored to search (folder archives unchanged)`
-          : `${fileIds.length} file(s) restored`
+          ? tr("fileMgmt.filesRestoredSearch", { n: fileIds.length })
+          : tr("fileMgmt.filesRestored", { n: fileIds.length })
       )
     } catch (err) {
-      toast.error(`Unarchive failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.unarchiveFailed", { error: errMsg(err) }))
     }
   },
 
@@ -1079,7 +1080,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
     try {
       const ver = Number(version)
       if (!Number.isFinite(ver) || ver < 1) {
-        toast.error("Cannot update definitive: missing file version")
+        toast.error(tr("fileMgmt.missingFileVersion"))
         return
       }
 
@@ -1095,11 +1096,11 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       triggerInfoRefresh({ collectionId, reason: "definitive" })
       toast.success(
         definitive
-          ? "Marked definitive — feeds Collection Summary"
-          : "Cleared definitive"
+          ? tr("fileMgmt.markedDefinitive")
+          : tr("fileMgmt.clearedDefinitive")
       )
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failed", { error: errMsg(err) }))
     }
   },
 
@@ -1314,9 +1315,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       set((s) => ({
         currentFolderMessages: [enriched, ...s.currentFolderMessages],
       }))
-      toast.success("Message added")
+      toast.success(tr("fileMgmt.messageAdded"))
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failed", { error: errMsg(err) }))
     }
   },
 
@@ -1332,9 +1333,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
           m.message_id === messageId ? enriched : m
         ),
       }))
-      toast.success("Message updated")
+      toast.success(tr("fileMgmt.messageUpdated"))
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failed", { error: errMsg(err) }))
     }
   },
 
@@ -1344,9 +1345,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
       set((s) => ({
         currentFolderMessages: s.currentFolderMessages.filter((m) => m.message_id !== messageId),
       }))
-      toast.success("Message deleted")
+      toast.success(tr("fileMgmt.messageDeleted"))
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(tr("fileMgmt.failed", { error: errMsg(err) }))
     }
   },
 
@@ -1410,7 +1411,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
         ingestingFiles[fid] = {
           taskId,
           progress: 0,
-          message: "Queued for processing",
+          message: tr("fileMgmt.queued"),
         }
         selectedFileIds.delete(fid)
       }
@@ -1446,7 +1447,9 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
           await get().refreshFiles(collectionId, { silent: true })
           await get().refreshMessages(collectionId)
           if (!silentToast) {
-            toast.success(`Ingest complete: ${task.filename}`)
+            toast.success(
+              tr("fileMgmt.ingestComplete", { filename: task.filename })
+            )
           }
         } else if (task.status === "failed") {
           clearIngesting()
@@ -1454,7 +1457,10 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
           await get().refreshMessages(collectionId)
           if (!silentToast) {
             toast.error(
-              `Ingest failed: ${task.filename} — ${task.error || "unknown error"}`
+              tr("fileMgmt.ingestFailed", {
+                filename: task.filename,
+                error: task.error || tr("fileMgmt.unknown"),
+              })
             )
           }
         } else {
@@ -1468,7 +1474,7 @@ export const useFileMgmtStore = create<FileMgmtState>((set, get) => ({
                   [fid]: {
                     taskId,
                     progress: task.progress ?? 0,
-                    message: task.message || "Processing…",
+                    message: task.message || tr("fileMgmt.processing"),
                   },
                 },
               }

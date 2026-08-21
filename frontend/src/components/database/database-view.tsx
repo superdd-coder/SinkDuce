@@ -20,6 +20,7 @@ import { TimelineView } from "@/components/file-mgmt/timeline-view"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 // Module-level: allows note-editor-dialog to trigger files refresh after ingestion
 let _refreshFilesCallback: (() => void) | null = null
@@ -82,6 +83,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       fetchCollections: s.fetchCollections,
     }))
   )
+  const t = useT()
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
@@ -479,9 +481,9 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
           />
           {(
             [
-              ["info", "Overview"],
-              ["files", "Files"],
-              ["timeline", "Timeline"],
+              ["info", t("library.overview")],
+              ["files", t("library.files")],
+              ["timeline", t("library.timeline")],
             ] as const
           ).map(([value, label]) => (
             <TabsTrigger
@@ -510,11 +512,11 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
             variant="ghost"
             size="sm"
             onClick={() => setClassicFilesOpen(true)}
-            title="All Files"
+            title={t("library.allFiles")}
             className="pm-collection-all-files-btn shrink-0 gap-1.5"
           >
             <List className="size-3.5" />
-            <span>All Files</span>
+            <span>{t("library.allFiles")}</span>
           </Button>
         </div>
       )}
@@ -547,13 +549,13 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
               style={{ marginBottom: "var(--pm-ov-gap, 14px)" }}
             >
               <div className="min-w-0">
-                <p className="pm-label mb-0.5">Collection</p>
+                <p className="pm-label mb-0.5">{t("library.collection")}</p>
                 <h1 className="pm-display truncate">{collectionDisplayName}</h1>
               </div>
               <button
                 type="button"
-                title="Collection settings"
-                aria-label="Collection settings"
+                title={t("library.collectionSettings")}
+                aria-label={t("library.collectionSettings")}
                 aria-pressed={activeTab === "config"}
                 onClick={() => {
                   // Toggle: open config, or close back to last content tab
@@ -709,7 +711,7 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
         ) : (
           <div className="pm-stage h-full flex items-center justify-center text-muted-foreground pm-collection-enter">
             <div className="pm-collection-chrome text-center">
-              <p className="text-sm t-body-family">Select a collection or create one</p>
+              <p className="text-sm t-body-family">{t("library.selectOrCreate")}</p>
             </div>
           </div>
         )}
@@ -806,27 +808,27 @@ export function DatabaseView({ active = true }: { active?: boolean }) {
       <Dialog open={!!deleteFileTarget} onOpenChange={(v) => !v && setDeleteFileTarget(null)}>
         <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
-            <DialogTitle>Delete File</DialogTitle>
+            <DialogTitle>{t("library.deleteFile")}</DialogTitle>
           </DialogHeader>
           <p className="pm-dialog-body">
-            Are you sure you want to delete{" "}
+            {t("library.deleteFileBody", { name: "\u0000" }).split("\u0000")[0]}
             <span className="font-medium text-[var(--pm-ink)] truncate max-w-[200px] inline-block align-bottom">
               {deleteFileDisplay}
             </span>
-            ? This will remove all its chunks from the database.
+            {t("library.deleteFileBody", { name: "\u0000" }).split("\u0000")[1]}
           </p>
           <div className="flex justify-end gap-2 pt-2">
             <Button
               variant="ghost"
               onClick={() => setDeleteFileTarget(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive-solid"
               onClick={handleDeleteFile}
             >
-              Delete
+              {t("common.delete")}
             </Button>
           </div>
         </DialogContent>

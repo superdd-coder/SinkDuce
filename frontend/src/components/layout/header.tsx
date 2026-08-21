@@ -5,8 +5,10 @@ import { Terminal } from "lucide-react"
 import { useAppStore } from "@/stores/app-store"
 import { getHealth } from "@/api/client"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 export function Header() {
+  const t = useT()
   const { isOnline, setOnline, toggleLogPanel, developerMode } =
     useAppStore(
       useShallow((s) => ({
@@ -52,7 +54,7 @@ export function Header() {
           size="icon"
           onClick={toggleLogPanel}
           className="shrink-0 h-7 w-7 text-[var(--pm-muted)] hover:text-[var(--pm-green)] hover:bg-[var(--pm-green-soft)]"
-          title="Toggle backend logs"
+          title={t("shell.toggleLogs")}
         >
           <Terminal className="h-3.5 w-3.5" />
         </Button>
@@ -62,10 +64,10 @@ export function Header() {
         <button
           type="button"
           className="pm-shell-refresh"
-          title="Reload"
+          title={t("shell.reload")}
           onClick={() => window.location.reload()}
         >
-          Refresh
+          {t("common.refresh")}
         </button>
       )}
 
@@ -76,7 +78,7 @@ export function Header() {
         )}
       >
         <span className="pm-shell-status-dot" aria-hidden />
-        {isOnline ? "Online" : "Offline"}
+        {isOnline ? t("shell.online") : t("shell.offline")}
       </div>
     </header>
   )

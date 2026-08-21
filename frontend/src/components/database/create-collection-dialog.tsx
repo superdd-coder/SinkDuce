@@ -6,6 +6,8 @@ import { DropdownSelect } from "@/components/ui/dropdown-select"
 import { createCollection } from "@/api/client"
 import { toast } from "sonner"
 import { ChevronDown } from "lucide-react"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface CreateCollectionDialogProps {
   open: boolean
@@ -24,6 +26,7 @@ const FILE_TYPES = [
 ]
 
 export function CreateCollectionDialog({ open, onOpenChange, onCreated }: CreateCollectionDialogProps) {
+  const t = useT()
   const [name, setName] = useState("")
   const [dimensions, setDimensions] = useState("1536")
   const [chunkMode, setChunkMode] = useState("normal")
@@ -58,13 +61,13 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
       const res = await createCollection(name.trim(), parseInt(dimensions), chunkConfig)
       if (res.error) toast.error(res.error)
       else {
-        toast.success(res.message || "Collection created")
+        toast.success(res.message || t("library.collectionCreated"))
         setName("")
         onOpenChange(false)
         onCreated()
       }
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     } finally {
       setSaving(false)
     }
@@ -74,20 +77,20 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
-          <DialogKicker>Library</DialogKicker>
-          <DialogTitle>Create collection</DialogTitle>
+          <DialogKicker>{t("nav.library")}</DialogKicker>
+          <DialogTitle>{t("library.createCollection")}</DialogTitle>
           <DialogDescription>
-            Name a collection and optionally tune embedding and chunk settings.
+            {t("library.createCollectionDesc")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">
           <div>
-            <label className="pm-field-label">Name</label>
+            <label className="pm-field-label">{t("common.name")}</label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="my-collection"
+              placeholder={t("library.namePh")}
               className="h-8"
             />
           </div>
@@ -102,7 +105,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                 advancedOpen ? "rotate-0" : "-rotate-90"
               }`}
             />
-            Advanced
+            {t("settings.advanced")}
           </button>
 
           <div
@@ -115,8 +118,8 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
             <div className="overflow-hidden">
               <div className="space-y-4 pt-1">
                 <div>
-                  <label className="pm-field-label">Allowed File Types</label>
-                  <p className="pm-meta mb-2">Leave empty to allow all types.</p>
+                  <label className="pm-field-label">{t("library.allowedTypes")}</label>
+                  <p className="pm-meta mb-2">{t("library.leaveEmptyAllTypes")}</p>
                   <div className="flex flex-wrap gap-2">
                     {FILE_TYPES.map((ft) => (
                       <label
@@ -145,7 +148,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="pm-field-label">Dimensions</label>
+                    <label className="pm-field-label">{t("library.dimensions")}</label>
                     <DropdownSelect
                       size="sm"
                       value={dimensions}
@@ -156,14 +159,14 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                     />
                   </div>
                   <div>
-                    <label className="pm-field-label">Chunk Mode</label>
+                    <label className="pm-field-label">{t("library.chunkMode")}</label>
                     <DropdownSelect
                       size="sm"
                       value={chunkMode}
                       onChange={setChunkMode}
                       options={[
-                        { value: "normal", label: "Normal" },
-                        { value: "parent_child", label: "Parent-Child" },
+                        { value: "normal", label: t("library.chunkModeNormal") },
+                        { value: "parent_child", label: t("library.chunkModeParentChild") },
                       ]}
                     />
                   </div>
@@ -172,7 +175,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                 {chunkMode === "normal" ? (
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="pm-field-label">Chunk Size</label>
+                      <label className="pm-field-label">{t("library.chunkSize")}</label>
                       <Input
                         value={chunkSize}
                         onChange={(e) => setChunkSize(e.target.value)}
@@ -181,7 +184,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                       />
                     </div>
                     <div>
-                      <label className="pm-field-label">Chunk Overlap</label>
+                      <label className="pm-field-label">{t("library.chunkOverlap")}</label>
                       <Input
                         value={chunkOverlap}
                         onChange={(e) => setChunkOverlap(e.target.value)}
@@ -193,21 +196,21 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                 ) : (
                   <>
                     <div>
-                      <label className="pm-field-label">Parent Strategy</label>
+                      <label className="pm-field-label">{t("library.parentStrategy")}</label>
                       <DropdownSelect
                         size="sm"
                         value={parentStrategy}
                         onChange={setParentStrategy}
                         options={[
-                          { value: "paragraph", label: "Paragraph" },
-                          { value: "fixed_token", label: "Fixed Token" },
-                          { value: "heading", label: "Heading" },
+                          { value: "paragraph", label: t("library.strategyParagraph") },
+                          { value: "fixed_token", label: t("library.strategyFixedToken") },
+                          { value: "heading", label: t("library.strategyHeading") },
                         ]}
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="pm-field-label">Parent Chunk Size</label>
+                        <label className="pm-field-label">{t("library.parentChunkSize")}</label>
                         <Input
                           value={parentChunkSize}
                           onChange={(e) => setParentChunkSize(e.target.value)}
@@ -216,7 +219,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                         />
                       </div>
                       <div>
-                        <label className="pm-field-label">Parent Chunk Overlap</label>
+                        <label className="pm-field-label">{t("library.parentChunkOverlap")}</label>
                         <Input
                           value={parentChunkOverlap}
                           onChange={(e) => setParentChunkOverlap(e.target.value)}
@@ -227,7 +230,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="pm-field-label">Child Chunk Size</label>
+                        <label className="pm-field-label">{t("library.childChunkSize")}</label>
                         <Input
                           value={childChunkSize}
                           onChange={(e) => setChildChunkSize(e.target.value)}
@@ -236,7 +239,7 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
                         />
                       </div>
                       <div>
-                        <label className="pm-field-label">Child Chunk Overlap</label>
+                        <label className="pm-field-label">{t("library.childChunkOverlap")}</label>
                         <Input
                           value={childChunkOverlap}
                           onChange={(e) => setChildChunkOverlap(e.target.value)}
@@ -257,13 +260,13 @@ export function CreateCollectionDialog({ open, onOpenChange, onCreated }: Create
             variant="ghost"
             onClick={() => onOpenChange(false)}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             onClick={handleCreate}
             disabled={saving || !name.trim()}
           >
-            {saving ? "Creating..." : "Create"}
+            {saving ? t("common.loading") : t("common.create")}
           </Button>
         </div>
       </DialogContent>

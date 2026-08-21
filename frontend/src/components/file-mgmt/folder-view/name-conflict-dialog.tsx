@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
+import { useT } from "@/i18n/use-t"
 
 /** Last suffix including dot, e.g. ".pdf"; empty if none. */
 function fileExt(name: string): string {
@@ -28,6 +29,7 @@ function fileStem(name: string, ext: string): string {
 }
 
 export function NameConflictDialog() {
+  const t = useT()
   const nameConflict = useFileMgmtStore((s) => s.nameConflict)
   const resolveNameConflict = useFileMgmtStore((s) => s.resolveNameConflict)
   const cancelNameConflict = useFileMgmtStore((s) => s.cancelNameConflict)
@@ -58,7 +60,7 @@ export function NameConflictDialog() {
 
   const open = !!nameConflict
   const resourceLabel =
-    nameConflict?.resource === "folder" ? "folder" : "file"
+    nameConflict?.resource === "folder" ? t("common.folder") : t("common.file")
 
   const handleConfirm = async () => {
     if (!nameConflict) return
@@ -94,12 +96,12 @@ export function NameConflictDialog() {
         className="pm-dialog w-[min(32rem,calc(100vw-2rem))] max-w-[min(32rem,calc(100vw-2rem))] overflow-hidden"
       >
         <DialogHeader>
-          <DialogTitle>Name already used</DialogTitle>
+          <DialogTitle>{t("fileMgmt.nameAlreadyUsed")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 min-w-0">
           <p className="pm-dialog-body break-words [overflow-wrap:anywhere]">
             {nameConflict?.message ||
-              `A ${resourceLabel} with this name already exists in this location. Choose another name.`}
+              t("fileMgmt.conflictDefault", { resource: resourceLabel })}
           </p>
           {nameConflict?.name && (
             <p
@@ -110,7 +112,7 @@ export function NameConflictDialog() {
             </p>
           )}
           <div className="min-w-0">
-            <label className="pm-field-label">New name</label>
+            <label className="pm-field-label">{t("library.newName")}</label>
             {isFile && lockedExt ? (
               <>
                 <div className="flex items-center gap-1.5 min-w-0">
@@ -126,13 +128,13 @@ export function NameConflictDialog() {
                   />
                   <span
                     className="shrink-0 pm-meta font-mono bg-[var(--pm-green-wash)] rounded-[var(--pm-r-sm)] px-2 h-8 inline-flex items-center"
-                    title="Extension cannot be changed"
+                    title={t("fileMgmt.extCannotChange")}
                   >
                     {lockedExt}
                   </span>
                 </div>
                 <p className="pm-meta mt-1.5">
-                  Extension is fixed and cannot be changed.
+                  {t("fileMgmt.extensionFixed")}
                 </p>
               </>
             ) : (
@@ -155,13 +157,13 @@ export function NameConflictDialog() {
             onClick={() => cancelNameConflict()}
             disabled={submitting}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             onClick={() => void handleConfirm()}
             disabled={!value.trim() || submitting}
           >
-            {submitting ? "Saving…" : "Use this name"}
+            {submitting ? t("common.saving") : t("fileMgmt.useThisName")}
           </Button>
         </DialogFooter>
       </DialogContent>

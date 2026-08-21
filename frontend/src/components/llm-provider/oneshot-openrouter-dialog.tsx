@@ -12,6 +12,7 @@ import {
 } from "@/api/client"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 import { oneshotSlotSnapshot, type OneshotSlotSnapshot } from "./oneshot-slots"
 
 interface OneShotOpenRouterDialogProps {
@@ -53,6 +54,7 @@ function openrouterCapabilityTags(selected: string[], chatModel: string, imageMo
 }
 
 export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShotOpenRouterDialogProps) {
+  const t = useT()
   const [apiKey, setApiKey] = useState("")
   const [llmModel, setLlmModel] = useState(DEFAULT_MODEL)
   const [agenticModel, setAgenticModel] = useState(DEFAULT_MODEL)
@@ -68,7 +70,7 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
 
   const handleSave = async () => {
     if (!apiKey.trim() || !llmModel.trim() || !chatModel.trim() || !embModel.trim() || !rerankerModel.trim()) {
-      toast.error("API Key, LLM, Chat, Embedding, and Reranker are required")
+      toast.error(t("settings.apiKeyStackRequired"))
       return
     }
     setSaving(true)
@@ -128,11 +130,11 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
         agentic_query_model: slots.agentic_query_model,
         note_distill_model: slots.note_distill_model,
       })
-      toast.success("OpenRouter configured")
+      toast.success(t("settings.openRouterConfigured"))
       onSaved(slots)
       onOpenChange(false)
       setApiKey("")
-    } catch (err) { toast.error(`Setup failed: ${err instanceof Error ? err.message : String(err)}`) }
+    } catch (err) { toast.error(t("settings.setupFailed", { error: err instanceof Error ? err.message : String(err) })) }
     finally { setSaving(false) }
   }
 
@@ -147,19 +149,19 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
         overlayClassName="pm-dialog-overlay--silk"
       >
         <DialogHeader>
-          <DialogKicker>Settings</DialogKicker>
-          <DialogTitle>OneShot OpenRouter</DialogTitle>
+          <DialogKicker>{t("nav.settings")}</DialogKicker>
+          <DialogTitle>{t("settings.oneshotOpenRouter")}</DialogTitle>
           <DialogDescription>
-            One API key configures each slot: type the model name for every function.
+            {t("settings.oneshotDesc")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="pm-settings-dlg-scroll">
           <div className="pm-dialog-body pm-settings-dlg-body">
             <section className="pm-settings-dlg-card">
-              <span className="pm-settings-dlg-card-kicker">API key</span>
+              <span className="pm-settings-dlg-card-kicker">{t("settings.apiKey")}</span>
               <div className="pm-settings-dlg-field">
-                <FieldLabel>OpenRouter key</FieldLabel>
+                <FieldLabel>{t("settings.openRouterKey")}</FieldLabel>
                 <div className="pm-settings-dlg-secret">
                   <Input
                     type={showApiKey ? "text" : "password"}
@@ -180,48 +182,48 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
             </section>
 
             <section className="pm-settings-dlg-card">
-                <span className="pm-settings-dlg-card-kicker">Models</span>
+                <span className="pm-settings-dlg-card-kicker">{t("settings.models")}</span>
                 <div className="pm-settings-dlg-fields">
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Default</FieldLabel>
+                    <FieldLabel>{t("common.default")}</FieldLabel>
                     <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder={DEFAULT_MODEL} />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Agentic query</FieldLabel>
+                    <FieldLabel>{t("settings.agenticQuery")}</FieldLabel>
                     <Input value={agenticModel} onChange={(e) => setAgenticModel(e.target.value)} placeholder={DEFAULT_MODEL} />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Chat</FieldLabel>
+                    <FieldLabel>{t("common.chat")}</FieldLabel>
                     <Input value={chatModel} onChange={(e) => setChatModel(e.target.value)} placeholder={CHAT_MODEL} />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Image description</FieldLabel>
+                    <FieldLabel>{t("settings.imageDescription")}</FieldLabel>
                     <Input value={visualModel} onChange={(e) => setVisualModel(e.target.value)} placeholder={LIBRARY_MODEL} />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Library LLM</FieldLabel>
+                    <FieldLabel>{t("settings.libraryLlm")}</FieldLabel>
                     <Input value={libraryModel} onChange={(e) => setLibraryModel(e.target.value)} placeholder={LIBRARY_MODEL} />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Note distill</FieldLabel>
+                    <FieldLabel>{t("settings.noteDistill")}</FieldLabel>
                     <Input value={distillModel} onChange={(e) => setDistillModel(e.target.value)} placeholder={LIBRARY_MODEL} />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Meeting summary</FieldLabel>
+                    <FieldLabel>{t("settings.meetingSummary")}</FieldLabel>
                     <Input value={meetingModel} onChange={(e) => setMeetingModel(e.target.value)} placeholder={MEETING_MODEL} />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Embedding</FieldLabel>
+                    <FieldLabel>{t("settings.embedding")}</FieldLabel>
                     <Input value={embModel} onChange={(e) => setEmbModel(e.target.value)} placeholder="qwen/qwen3-embedding-4b" />
                   </div>
                   <div className="pm-settings-dlg-field">
-                    <FieldLabel>Reranker</FieldLabel>
+                    <FieldLabel>{t("settings.reranker")}</FieldLabel>
                     <Input value={rerankerModel} onChange={(e) => setRerankerModel(e.target.value)} placeholder="cohere/rerank-v3.5" />
                   </div>
                   <p className="pm-settings-dlg-card-hint">
-                    qwen3.7-plus / flash: vision + tools · DeepSeek: tools only
+                    {t("settings.oneshotCapsHint")}
                     {" · "}
-                    Base URL · {BASE_URL}
+                    {t("settings.baseUrl")} · {BASE_URL}
                   </p>
                 </div>
               </section>
@@ -229,9 +231,9 @@ export function OneShotOpenRouterDialog({ open, onOpenChange, onSaved }: OneShot
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
           <Button variant="default" onClick={handleSave} disabled={saving}>
-            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Setting up…</> : "Apply"}
+            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />{t("settings.settingUp")}</> : t("common.apply")}
           </Button>
         </DialogFooter>
       </DialogContent>

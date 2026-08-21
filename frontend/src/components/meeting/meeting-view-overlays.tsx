@@ -9,6 +9,7 @@ import {
   DialogKicker,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { useT } from "@/i18n/use-t"
 
 export type MeetingSectionTip = {
   id: string
@@ -41,6 +42,7 @@ export function MeetingViewOverlays({
   sideRailOpen,
   sideTab,
 }: MeetingViewOverlaysProps) {
+  const t = useT()
   return (
     <>
       {/* Dialogs */}
@@ -52,18 +54,18 @@ export function MeetingViewOverlays({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Meeting</DialogKicker>
-            <DialogTitle>Delete meeting?</DialogTitle>
+            <DialogKicker>{t("nav.meeting")}</DialogKicker>
+            <DialogTitle>{t("meeting.deleteMeetingQ")}</DialogTitle>
             <DialogDescription>
-              This meeting and its audio will be permanently removed.
+              {t("meeting.deleteMeetingBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="ghost" size="sm" onClick={() => setDeleteTarget(null)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="button" variant="destructive-solid" size="sm" onClick={confirmDelete}>
-              Delete
+              {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -76,15 +78,15 @@ export function MeetingViewOverlays({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Transcript</DialogKicker>
-            <DialogTitle>Re-transcribe meeting?</DialogTitle>
+            <DialogKicker>{t("common.transcript")}</DialogKicker>
+            <DialogTitle>{t("meeting.reTranscribeQ")}</DialogTitle>
             <DialogDescription>
-              Re-transcribing will overwrite the existing transcript and speaker names.
+              {t("meeting.reTranscribeBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="ghost" size="sm" onClick={() => setRetranscribeConfirmOpen(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -92,7 +94,7 @@ export function MeetingViewOverlays({
               size="sm"
               onClick={() => { setRetranscribeConfirmOpen(false); handleTranscribe() }}
             >
-              Continue
+              {t("common.continue")}
             </Button>
           </DialogFooter>
         </DialogContent>

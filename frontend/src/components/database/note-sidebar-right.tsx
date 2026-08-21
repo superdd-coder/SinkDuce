@@ -10,6 +10,7 @@ import {
 import { Link2, ArrowUpRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type NoteReference } from "@/api/client"
+import { useT } from "@/i18n/use-t"
 
 interface NoteSidebarRightProps {
   references: NoteReference[]
@@ -28,6 +29,7 @@ export function NoteSidebarRight({
   onSelectBlock,
   onNavigateToNote,
 }: NoteSidebarRightProps) {
+  const t = useT()
   const hasReferences = references.length > 0
   const hasInjectedInto = injectedInto.length > 0
 
@@ -57,7 +59,7 @@ export function NoteSidebarRight({
   const sourcesContent = (
     <div className="p-1.5 space-y-0">
       {references.length === 0 ? (
-        <p className="pm-ws-empty">No distill blocks from other notes</p>
+        <p className="pm-ws-empty">{t("library.noDistillOthers")}</p>
       ) : (
         (() => {
           const sourceMap = new Map<
@@ -91,7 +93,7 @@ export function NoteSidebarRight({
                   onClick={() => handleSourceClick(sourceId, blockIds)}
                   title={
                     count > 1
-                      ? `Click to cycle through ${count} blocks`
+                      ? t("library.cycleBlocks", { n: count })
                       : undefined
                   }
                 >
@@ -114,7 +116,7 @@ export function NoteSidebarRight({
   const injectedContent = (
     <div className="p-1.5 space-y-0">
       {injectedInto.length === 0 ? (
-        <p className="pm-ws-empty">Not distilled into any notes</p>
+        <p className="pm-ws-empty">{t("library.notDistilled")}</p>
       ) : (
         injectedInto.map((targetId) => (
           <button
@@ -138,7 +140,7 @@ export function NoteSidebarRight({
       <div className="pm-ws-rail pm-ws-rail-r">
         <div className="pm-ws-seg !justify-start">
           <span className="pm-label px-1">
-            {hasReferences ? "Distill In" : "Distill Out"}
+            {hasReferences ? t("library.distillIn") : t("library.distillOut")}
           </span>
         </div>
         <ScrollArea className="flex-1 min-h-0">
@@ -155,10 +157,10 @@ export function NoteSidebarRight({
           <TabsList variant="pill" className="w-full !h-auto">
             <TabsIndicator renderBeforeHydration className="pm-tabs-indicator" />
             <TabsTrigger value="in" className="flex-1">
-              In ({new Set(references.map((r) => r.source_note_id)).size})
+              {t("library.inCount", { n: new Set(references.map((r) => r.source_note_id)).size })}
             </TabsTrigger>
             <TabsTrigger value="out" className="flex-1">
-              Out ({injectedInto.length})
+              {t("library.outCount", { n: injectedInto.length })}
             </TabsTrigger>
           </TabsList>
         </div>

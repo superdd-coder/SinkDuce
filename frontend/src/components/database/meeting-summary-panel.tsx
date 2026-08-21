@@ -11,6 +11,7 @@ import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { Button } from "@/components/ui/button"
 import { SummaryMarkdownViewer } from "@/components/meeting/summary-markdown-viewer"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 const SAVE_DELAY = 800
 
@@ -101,6 +102,7 @@ export function MeetingSummaryPanel({
   onMeetingLoaded,
   paneChrome,
 }: MeetingSummaryPanelProps) {
+  const t = useT()
   const [loading, setLoading] = useState(true)
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   type DocSwapPhase = "idle" | "out" | "in"
@@ -113,7 +115,7 @@ export function MeetingSummaryPanel({
   /** Tiptap-bound value with protected citations (⟦…⟧). */
   const [editContent, setEditContent] = useState("")
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({})
-  const [sectionTitle, setSectionTitle] = useState("General Summary")
+  const [sectionTitle, setSectionTitle] = useState(() => t("library.generalSummary"))
   const [meetingTitle, setMeetingTitle] = useState("")
   const [mode, setMode] = useState<"view" | "edit">("view")
   const baselineRef = useRef("")
@@ -154,7 +156,7 @@ export function MeetingSummaryPanel({
         setMeetingTitle(m.title || "")
         setSpeakerNames(m.speaker_names ?? {})
 
-        let name = "General Summary"
+        let name = t("library.generalSummary")
         if (tabId !== "tab_general") {
           const tab = (m.tabs ?? []).find((t) => t.tab_id === tabId)
           name = tab?.name || tabId
@@ -209,7 +211,7 @@ export function MeetingSummaryPanel({
         }
       } catch {
         if (!cancelled) {
-          toast.error("Failed to load meeting summary")
+          toast.error(t("library.failedLoadSummary"))
           setLoading(false)
           setDocSwapPhase("idle")
         }
@@ -236,7 +238,7 @@ export function MeetingSummaryPanel({
         baselineRef.current = toSave
         setRawContent(toSave)
       } catch {
-        toast.error("Failed to save summary")
+        toast.error(t("library.failedSaveSummary"))
       }
     }, SAVE_DELAY)
   }
@@ -260,7 +262,7 @@ export function MeetingSummaryPanel({
         .then(() => {
           baselineRef.current = canonical
         })
-        .catch(() => toast.error("Failed to save summary"))
+        .catch(() => toast.error(t("library.failedSaveSummary")))
     }
     setMode("view")
   }
@@ -284,7 +286,7 @@ export function MeetingSummaryPanel({
     return (
       <div className="pm-ws-loading flex-1 is-doc-in min-h-0">
         <Loader2 className="h-5 w-5 animate-spin" />
-        Loading…
+        {t("common.loading")}
       </div>
     )
   }
@@ -310,7 +312,7 @@ export function MeetingSummaryPanel({
     a.download = `${safeMeet} - ${safeSec}.md`
     a.click()
     URL.revokeObjectURL(url)
-    toast.success("Downloaded")
+    toast.success(t("library.downloaded"))
   }
 
   const downloadBtn = (
@@ -319,8 +321,8 @@ export function MeetingSummaryPanel({
       size="sm"
       className="pm-ws-icon-btn"
       onClick={handleDownload}
-      title="Download"
-      aria-label="Download"
+      title={t("common.download")}
+      aria-label={t("common.download")}
     >
       <Download className="h-3.5 w-3.5" />
     </Button>
@@ -338,26 +340,26 @@ export function MeetingSummaryPanel({
       }}
       title={
         mode === "view"
-          ? "Edit with Tiptap (citations protected)"
-          : "Back to Meeting-style preview"
+          ? t("library.editTiptap")
+          : t("library.backToPreview")
       }
     >
       {mode === "view" ? (
         <>
           <Pencil className="h-3.5 w-3.5" />
-          Edit
+          {t("common.edit")}
         </>
       ) : (
         <>
           <Eye className="h-3.5 w-3.5" />
-          Preview
+          {t("common.preview")}
         </>
       )}
     </Button>
   )
 
   /** Title for row 1 — meeting name (not section) */
-  const headerMeetingTitle = meetingTitle || "Meeting"
+  const headerMeetingTitle = meetingTitle || t("nav.meeting")
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -387,7 +389,7 @@ export function MeetingSummaryPanel({
                   claimFocus()
                   paneChrome.onSplit?.()
                 }}
-                title="Split into second page"
+                title={t("library.splitPage")}
               >
                 <Columns2 className="h-3.5 w-3.5" />
               </Button>
@@ -398,7 +400,7 @@ export function MeetingSummaryPanel({
                 size="sm"
                 className="pm-ws-icon-btn !h-6 !w-6"
                 onClick={() => paneChrome.onClose?.()}
-                title="Close page"
+                title={t("library.closePage")}
               >
                 <X className="h-3.5 w-3.5" />
               </Button>
@@ -467,7 +469,7 @@ export function MeetingSummaryPanel({
                 showToolbar={false}
                 flush
                 className="min-h-[200px] w-full max-w-none"
-                placeholder="Summary is empty..."
+                placeholder={t("library.summaryEmpty")}
               />
             </div>
           )}

@@ -13,10 +13,12 @@ import {
   transcribeMeeting, cancelTranscribeMeeting,
   getMeetingTranscript, updateMeeting, commitMeetingSpeakers,
   getRealtimeTranscriptionProviders, getFileTranscriptionProviders,
-  getActiveProviderInfo, getHotWordsLibraries,
-  type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary,
+  getActiveProviderInfo,
+  type Meeting, type TranscriptSegment, type LanguageHintOption,
 } from "@/api/client"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import {
   type SectionRailActions,
   type SectionRailModel,
@@ -49,6 +51,7 @@ function mergeMeetingUpdate(prev: Meeting | null, next: Meeting): Meeting {
 }
 
 export function MeetingView({ active = true }: { active?: boolean }) {
+  const t = useT()
   const {
     activeMeeting,
     setActiveMeeting,
@@ -113,7 +116,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   /** Active adapter hot-words capability (from registry class flag) */
   const [fileSupportsHotWords, setFileSupportsHotWords] = useState(false)
   const [rtSupportsHotWords, setRtSupportsHotWords] = useState(false)
-  const [hotWordsLibraries, setHotWordsLibraries] = useState<HotWordsLibrarySummary[]>([])
+
   // Per-meeting + path language hints (`${meetingId}:rt` | `${meetingId}:file`)
   const perMeetingLanguageHints = useRef<Map<string, string[]>>(new Map())
   /** Which model path the language selector is bound to right now */
@@ -616,12 +619,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       .catch(() => setHasFileProvider(false))
   }, [active])
 
-  // Load meetings and hot words on mount
+  // Load meetings on mount
   useEffect(() => {
     fetchMeetings()
-    getHotWordsLibraries()
-      .then(setHotWordsLibraries)
-      .catch(() => setHotWordsLibraries([]))
   }, [fetchMeetings])
 
   // Load meeting detail when active changes — keep previous paint (no blank flash)
@@ -813,7 +813,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       setPostLiveFileTxMeetingId((mid) => (mid === paintedId ? null : mid))
       setSegments([])
       void fetchTranscript(paintedId)
-      toast.success("File transcription ready")
+      toast.success(t("meeting.fileTxReady"))
       return
     }
     // Failed file-tx: backend sets status back to "created" + transcription_error.
@@ -827,10 +827,10 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       setPostLiveFileTxMeetingId((mid) => (mid === paintedId ? null : mid))
       const err = (meeting?.transcription_error || "").trim()
       const friendly = /ASR_RESPONSE_HAVE_NO_WORDS|no.?words/i.test(err)
-        ? "No speech detected in the audio. Check the recording or try another file."
+        ? t("meeting.noSpeechDetected")
         : err
-          ? `Transcription failed: ${err}`
-          : "Transcription failed."
+          ? t("meeting.transcriptionFailed", { error: err })
+          : t("meeting.transcriptionFailedShort")
       toast.error(friendly)
       return
     }
@@ -893,7 +893,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             applyMeeting(m)
             setAudioVersion((v) => v + 1)
           }
-          toast.success("Audio uploaded")
+          toast.success(t("meeting.audioUploaded"))
           recorder.reset()
           fetchMeetings()
 
@@ -906,13 +906,13 @@ export function MeetingView({ active = true }: { active?: boolean }) {
             lockBackToCapture(uploadTo)
             transcribeMeeting(uploadTo, languageHintsRef.current)
               .then(() => {
-                toast.info("File transcription started")
+                toast.info(t("meeting.fileTxStarted"))
                 fetchMeeting(uploadTo)
               })
               .catch((err) => {
                 setPostLiveFileTxMeetingId((mid) => (mid === uploadTo ? null : mid))
                 toast.error(
-                  `Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
+                  t("meeting.transcriptionFailed", { error: formatApiError(err, t) }),
                 )
               })
           } else {
@@ -924,7 +924,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         })
         .catch((err) => {
           setPostLiveFileTxMeetingId((mid) => (mid === uploadTo ? null : mid))
-          toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`)
+          toast.error(t("chat.uploadFailed", { error: formatApiError(err, t) }))
         })
     }
   }, [recorder.audioBlob])
@@ -936,11 +936,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       const m = await uploadMeetingAudio(activeMeeting, file)
       applyMeeting(m)
       setAudioVersion((v) => v + 1)
-      toast.success("Audio ready — review then Transcribe")
+      toast.success(t("meeting.audioReadyReview"))
       fetchMeetings()
       // Do NOT auto-transcribe on upload; user clicks Transcribe on capture page
     } catch (err) {
-      toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("chat.uploadFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -977,16 +977,16 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       ownerId &&
       recordingMeetingId !== ownerId
     ) {
-      toast.error("Already recording another meeting", {
-        description: "Stop or discard that recording before starting a new one.",
+      toast.error(t("meeting.alreadyRecordingOther"), {
+        description: t("meeting.stopDiscardFirst"),
       })
       return
     }
     if (recorder.isRecording || recorder.isPaused) {
-      toast.message("Recording already in progress")
+      toast.message(t("meeting.recordingInProgress"))
       return
     }
-    toast.message("Starting capture…")
+    toast.message(t("meeting.startingCapture"))
     // Bind owner before start so the first PCM chunks persist to this meeting.
     if (ownerId) {
       captureOwnerRef.current = ownerId
@@ -1005,7 +1005,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       const peak = Math.max(0, ...(levelsRef.current ?? [0]))
       if (peak < 0.02) {
         toast.warning(
-          "No audio detected. Allow SinkDuce in System Settings → Privacy & Security → Microphone and Screen Recording, then Cmd+Q and try again.",
+          t("meeting.noAudioDetected"),
           { duration: 8000 },
         )
       }
@@ -1069,8 +1069,8 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   const handleTranscribe = async () => {
     if (!activeMeeting) return
     if (!hasFileProvider) {
-      toast.error("No transcription provider configured. Go to Settings → Transcription to set one up.", {
-        action: { label: "Settings", onClick: () => setSidebarView("llm_provider") },
+      toast.error(t("meeting.noProviderSetup"), {
+        action: { label: t("nav.settings"), onClick: () => setSidebarView("llm_provider") },
       })
       return
     }
@@ -1086,7 +1086,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
         hotWordsDraftRef.current = undefined
       } catch (err) {
         toast.error(
-          `Failed to update hot words: ${err instanceof Error ? err.message : String(err)}`,
+          t("meeting.hotWordsUpdateFailed", { error: formatApiError(err, t) }),
         )
         return
       }
@@ -1097,16 +1097,16 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     lockBackToCapture(activeMeeting)
     try {
       await transcribeMeeting(activeMeeting, languageHints)
-      toast.info("Transcription started")
+      toast.info(t("meeting.transcriptionStarted"))
       fetchMeeting(activeMeeting)
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err)
       const msg = /No audio/i.test(raw)
-        ? "This meeting has no saved audio file. Record again or upload audio, then re-transcribe."
+        ? t("meeting.noAudioFile")
         : /No active file transcription provider/i.test(raw)
-          ? "No file transcription provider is set. Go to Settings → Transcription and set a Default for File."
+          ? t("meeting.noFileProviderDefault")
           : raw.replace(/^API \d+:\s*/, "")
-      toast.error(`Transcription failed: ${msg}`)
+      toast.error(t("meeting.transcriptionFailed", { error: msg }))
     }
   }
 
@@ -1116,9 +1116,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       await cancelTranscribeMeeting(activeMeeting)
       setPostLiveFileTxMeetingId((mid) => (mid === activeMeeting ? null : mid))
       fetchMeeting(activeMeeting)
-      toast.info("Transcription cancelled")
+      toast.info(t("meeting.transcriptionCancelled"))
     } catch (err) {
-      toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.cancelFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -1137,11 +1137,11 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     captureOwnerRef.current = null
     try {
       await discardMeetingRecording(owner)
-      toast.success("Recording discarded")
+      toast.success(t("meeting.recordingDiscarded"))
       if (activeMeeting === owner) fetchMeeting(owner)
       fetchMeetings()
     } catch (err) {
-      toast.error(`Discard failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.discardFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -1176,9 +1176,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
           }
         } catch { /* Database view may be unmounted */ }
       }
-      toast.success("Meeting deleted")
+      toast.success(t("meeting.meetingDeleted"))
     } catch {
-      toast.error("Delete failed")
+      toast.error(t("settings.deleteFailed"))
     }
   }
 
@@ -1281,7 +1281,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       setEditingTitle(false)
       fetchMeetings()
     } catch (err) {
-      toast.error(`Rename failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.renameFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -1294,12 +1294,12 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       })
       applyMeeting(m)
     } catch (err) {
-      toast.error(`Failed to update hot words: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.hotWordsUpdateFailed", { error: formatApiError(err, t) }))
     }
   }
 
   const metaCreated = meeting?.created_at
-    ? new Date(meeting.created_at).toLocaleDateString("en-US", {
+    ? new Date(meeting.created_at).toLocaleDateString(undefined, {
         month: "short", day: "numeric", year: "numeric",
         hour: "2-digit", minute: "2-digit",
       })
@@ -1310,7 +1310,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
     const named = meeting.speaker_names ? Object.values(meeting.speaker_names).filter(Boolean) : []
     if (named.length > 0) return named.join(", ")
     const count = new Set(transcript.map((s) => s.speaker_id).filter(Boolean)).size
-    return `${count || 0} speaker${count !== 1 ? "s" : ""}`
+    return count === 1
+      ? t("meeting.nSpeaker", { n: count || 0 })
+      : t("meeting.nSpeakers", { n: count || 0 })
   })()
 
   /**
@@ -1694,9 +1696,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 hasRealtimeProvider={hasRealtimeProvider}
                 realtimeEnabled={realtimeEnabled}
                 setRealtimeEnabled={setRealtimeEnabled}
-                hotWordsLibraries={hotWordsLibraries}
                 activeHotWordsSupported={activeHotWordsSupported}
                 handleSelectHotWordsLibraries={handleSelectHotWordsLibraries}
+                handleHotWordsDraftChange={handleHotWordsDraftChange}
                 languageHints={languageHints}
                 supportedLanguageHints={supportedLanguageHints}
                 updateLanguageHints={updateLanguageHints}
@@ -1730,7 +1732,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
               />
             ) : (
               <div className="pm-meeting-empty pm-meeting-empty--span">
-                <p>Select a meeting or create one</p>
+                <p>{t("meeting.selectOrCreate")}</p>
               </div>
             )}
           </div>

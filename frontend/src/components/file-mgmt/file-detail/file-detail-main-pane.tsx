@@ -37,6 +37,8 @@ import {
   resolveRawFilename,
 } from "@/components/file-mgmt/raw-file-viewer"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import { useAppStore } from "@/stores/app-store"
 import { _genKey, _markGenerating, _unmarkGenerating } from "./file-detail-utils"
 
@@ -84,6 +86,7 @@ export interface FileDetailMainPaneProps {
 }
 
 export function FileDetailMainPane(p: FileDetailMainPaneProps) {
+  const t = useT()
   const {
     collectionId,
     fileId,
@@ -158,14 +161,14 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           "after:!opacity-0 after:!content-none"
                         )}
                       >
-                        Preview
+                        {t("common.preview")}
                       </TabsTrigger>
                       <TabsTrigger
                         value="source"
                         disabled={isIngesting}
                         title={
                           isIngesting
-                            ? "Available after ingest finishes"
+                            ? t("fileMgmt.availableAfterIngest")
                             : undefined
                         }
                         className={cn(
@@ -176,14 +179,14 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           "disabled:opacity-40"
                         )}
                       >
-                        Parse
+                        {t("fileMgmt.parse")}
                       </TabsTrigger>
                       <TabsTrigger
                         value="summary"
                         disabled={isIngesting}
                         title={
                           isIngesting
-                            ? "Available after ingest finishes"
+                            ? t("fileMgmt.availableAfterIngest")
                             : undefined
                         }
                         className={cn(
@@ -194,14 +197,14 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           "disabled:opacity-40"
                         )}
                       >
-                        Summary
+                        {t("common.summary")}
                       </TabsTrigger>
                       <TabsTrigger
                         value="chunks"
                         disabled={isIngesting}
                         title={
                           isIngesting
-                            ? "Available after ingest finishes"
+                            ? t("fileMgmt.availableAfterIngest")
                             : undefined
                         }
                         className={cn(
@@ -212,7 +215,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           "disabled:opacity-40"
                         )}
                       >
-                        Chunks
+                        {t("fileMgmt.chunks")}
                         {chunksTotal > 0 && !isIngesting && (
                           <span className="ml-1.5 tabular-nums pm-meta normal-case tracking-normal">
                             {chunksTotal}
@@ -225,8 +228,8 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           disabled={isIngesting}
                           title={
                             isIngesting
-                              ? "Available after ingest finishes"
-                              : "Parse / vision / summary / context steps"
+                              ? t("fileMgmt.availableAfterIngest")
+                              : t("fileMgmt.ingestStepsHint")
                           }
                           className={cn(
                             "pm-vtab relative z-[1]",
@@ -236,7 +239,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                             "disabled:opacity-40"
                           )}
                         >
-                          Ingest
+                          {t("fileMgmt.ingestRun")}
                         </TabsTrigger>
                       ) : null}
                     </TabsList>
@@ -247,10 +250,10 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           className="pm-ws-link shrink-0 inline-flex items-center gap-1"
                           disabled={rollingBack || actionBusy}
                           onClick={() => setRollbackConfirm(true)}
-                          title="Make this version current and permanently delete newer versions"
+                          title={t("fileMgmt.makeCurrentDeleteNewer")}
                         >
                           <History className="h-3 w-3" strokeWidth={1.75} />
-                          Roll back
+                          {t("fileMgmt.rollBack")}
                         </button>
                       )}
                       {goToLabel && (
@@ -311,11 +314,11 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                       (!isUnsupported && chunksLoading && !previewContent) ? (
                         <div className="pm-ws-loading h-full">
                           <Loader2 className="h-5 w-5 animate-spin" />
-                          Loading…
+                          {t("common.loading")}
                         </div>
                       ) : isUnsupported ? (
                         <div className="pm-ws-empty h-full flex flex-col items-center justify-center gap-2 px-6">
-                          <p>No parse text for this version (unsupported type).</p>
+                          <p>{t("fileMgmt.noParseUnsupported")}</p>
                         </div>
                       ) : previewContent ? (
                         <ParseTextViewer
@@ -327,7 +330,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                         <ParseTextViewer
                           text={
                             (isHistoricalFocus
-                              ? "Parse text reconstructed from this version’s chunks\n\n"
+                              ? t("fileMgmt.parseFromChunksPrefix")
                               : "") +
                             chunks
                               .slice(0, 80)
@@ -339,7 +342,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                         />
                       ) : (
                         <div className="pm-ws-empty h-full flex flex-col items-center justify-center gap-2 px-4">
-                          <p>No extracted text for this version.</p>
+                          <p>{t("fileMgmt.noExtractedText")}</p>
                         </div>
                       )}
                     </div>
@@ -356,31 +359,30 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                         {isGenerating ? (
                           <div className="pm-ws-loading flex-col py-8">
                             <Loader2 className="h-5 w-5 animate-spin" />
-                            <p className="pm-meta">Generating summary…</p>
+                            <p className="pm-meta">{t("fileMgmt.generatingSummary")}</p>
                           </div>
                         ) : isUnsupported ? (
                           <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
                             <p className="pm-meta">
-                              No summary for this unsupported version.
+                              {t("fileMgmt.noSummaryUnsupported")}
                             </p>
                           </div>
                         ) : summaryLoading ? (
                           <div className="pm-ws-loading py-8">
                             <Loader2 className="h-5 w-5 animate-spin" />
-                            Loading summary…
+                            {t("chat.loadingSummary")}
                           </div>
                         ) : docSummary ? (
                           <div className="space-y-4">
                             {isHistoricalFocus && (
                               <p className="pm-meta px-0.5">
-                                Summary for this version (read-only). Re-summarize
-                                is only available on the current version.
+                                {t("fileMgmt.summaryReadonlyHint")}
                               </p>
                             )}
                             {detail?.is_definitive && !isHistoricalFocus && (
                               <p className="pm-meta flex items-center gap-1.5 px-0.5">
                                 <Star className="h-3 w-3 text-[var(--pm-green)] fill-[var(--pm-green)]" />
-                                Definitive — included in Collection Summary
+                                {t("fileMgmt.definitiveIncluded")}
                               </p>
                             )}
                             {!isHistoricalFocus && (
@@ -409,7 +411,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                       _unmarkGenerating(key)
                                       setRenderTick((k) => k + 1)
                                       toast.error(
-                                        `Failed: ${err instanceof Error ? err.message : String(err)}`
+                                        t("fileMgmt.failed", { error: formatApiError(err, t) })
                                       )
                                     }
                                   }}
@@ -419,25 +421,25 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                   ) : (
                                     <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
                                   )}
-                                  Re-summarize
+                                  {t("fileMgmt.reSummarize")}
                                 </Button>
                               </div>
                             )}
                             {docSummary.data.length > 0 && (
                               <SummarySection
-                                title="Data Points"
+                                title={t("chat.dataPoints")}
                                 items={docSummary.data}
                               />
                             )}
                             {docSummary.facts.length > 0 && (
                               <SummarySection
-                                title="Facts"
+                                title={t("chat.facts")}
                                 items={docSummary.facts}
                               />
                             )}
                             {docSummary.insights.length > 0 && (
                               <SummarySection
-                                title="Insights"
+                                title={t("chat.insights")}
                                 items={docSummary.insights}
                               />
                             )}
@@ -452,11 +454,10 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                         ) : isHistoricalFocus ? (
                           <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
                             <p className="pm-meta">
-                              No summary stored for this version.
+                              {t("fileMgmt.noSummaryStored")}
                             </p>
                             <p className="pm-meta max-w-sm">
-                              Summarize / Re-summarize is only available for the
-                              current version.
+                              {t("fileMgmt.summarizeCurrentOnly")}
                             </p>
                           </div>
                         ) : (
@@ -493,13 +494,13 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                   _unmarkGenerating(key)
                                   setRenderTick((k) => k + 1)
                                   toast.error(
-                                    `Failed: ${err instanceof Error ? err.message : String(err)}`
+                                    t("fileMgmt.failed", { error: formatApiError(err, t) })
                                   )
                                 }
                               }}
                             >
                               <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                              Summarize
+                              {t("fileMgmt.summarize")}
                             </Button>
                           </div>
                         )}
@@ -518,23 +519,23 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                           {chunksLoading ? (
                             <div className="pm-ws-loading py-12">
                               <Loader2 className="h-5 w-5 animate-spin" />
-                              Loading chunks…
+                              {t("chat.loadingChunks")}
                             </div>
                           ) : chunks.length === 0 ? (
                             <div className="flex flex-col items-center justify-center gap-2 p-6 text-center">
                               <p className="pm-meta">
                                 {isHistoricalFocus
-                                  ? "No chunks for this old version."
+                                  ? t("fileMgmt.noChunksOld")
                                   : isUnsupported
-                                    ? "No chunks — current version is not supported for ingest."
-                                    : "No chunks for this version."}
+                                    ? t("fileMgmt.noChunksUnsupported")
+                                    : t("fileMgmt.noChunksVersion")}
                               </p>
                               <p className="pm-meta max-w-sm leading-relaxed">
                                 {isHistoricalFocus
-                                  ? "Chunks are stored per version_id. Older uploads may predate version tracking, or this blob was never ingested. Preview/Parse still show the original file when available."
+                                  ? t("fileMgmt.chunksOldHint")
                                   : isUnsupported
-                                    ? "Unsupported types skip RAG ingest. Previous version chunks are kept in history (All Files → Old versions / Log) and are not mixed into this view."
-                                    : "Upload or re-ingest a supported file to create chunks for search and this tab."}
+                                    ? t("fileMgmt.chunksUnsupportedHint")
+                                    : t("fileMgmt.chunksUploadHint")}
                               </p>
                             </div>
                           ) : groupedChunks ? (
@@ -578,7 +579,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                         <div
                                           role="button"
                                           tabIndex={0}
-                                          title="Locate in Source"
+                                          title={t("fileMgmt.locateInSource")}
                                           className="ml-auto p-0.5 rounded hover:bg-[var(--pm-green-wash)] text-[var(--pm-faint)] cursor-pointer"
                                           onClick={(e) => {
                                             e.stopPropagation()
@@ -680,7 +681,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                                     )}
                                     <button
                                       type="button"
-                                      title="Locate in Source"
+                                      title={t("fileMgmt.locateInSource")}
                                       className="ml-auto p-0.5 rounded hover:bg-[var(--pm-green-wash)] text-[var(--pm-faint)]"
                                       onClick={() => handleLocate(chunk)}
                                     >
@@ -738,7 +739,7 @@ export function FileDetailMainPane(p: FileDetailMainPaneProps) {
                       />
                     ) : (
                       <div className="pm-ws-empty p-8">
-                        <p className="pm-meta">Ingest trace is only stored for managed files.</p>
+                        <p className="pm-meta">{t("fileMgmt.ingestTraceManaged")}</p>
                       </div>
                     )}
                   </TabsContent>

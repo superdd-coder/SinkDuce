@@ -29,6 +29,8 @@ import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 import { FileTypeIcon } from "@/components/file-mgmt/file-type-icon"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 function formatTime(iso: string | null | undefined): string {
   if (!iso) return ""
@@ -54,6 +56,7 @@ export function ClassicFilesDialog({
   open,
   onOpenChange,
 }: ClassicFilesDialogProps) {
+  const t = useT()
   const [files, setFiles] = useState<FileListItem[]>([])
   /** Full-list spinner only on first load (empty list); never on silent refresh. */
   const [initialLoading, setInitialLoading] = useState(false)
@@ -150,7 +153,7 @@ export function ClassicFilesDialog({
       await deleteDocument(collectionId, src)
       void fetchFiles({ silent: true })
     } catch {
-      toast.error("Failed to delete file")
+      toast.error(t("library.failedDeleteFile"))
       void fetchFiles({ silent: true })
     } finally {
       setDeletingSource(null)
@@ -190,7 +193,7 @@ export function ClassicFilesDialog({
         }
       } catch (err) {
         toast.error(
-          `Summary generation failed: ${err instanceof Error ? err.message : String(err)}`
+          t("library.summaryGenFailed", { error: formatApiError(err, t) })
         )
       } finally {
         setGeneratingSummaries((prev) => {
@@ -217,7 +220,7 @@ export function ClassicFilesDialog({
           )
         )
         toast.error(
-          `Failed: ${err instanceof Error ? err.message : String(err)}`
+          t("common.failedWithError", { error: formatApiError(err, t) })
         )
       }
     }
@@ -252,16 +255,16 @@ export function ClassicFilesDialog({
           <DialogHeader className="pm-all-files-header shrink-0">
             <DialogTitle className="pm-all-files-title">
               <List className="h-4 w-4 shrink-0 text-[var(--pm-muted)]" strokeWidth={1.75} />
-              All Files
+              {t("library.allFiles")}
             </DialogTitle>
             <p className="pm-all-files-sub">
-              Flat list of every document in this collection.
+              {t("library.allFilesSub")}
             </p>
           </DialogHeader>
 
           {coverage ? (
             <div className="pm-all-files-coverage">
-              <span className="pm-label">Coverage ·</span>
+              <span className="pm-label">{t("library.coverage")} ·</span>
               <span className="pm-meta">{coverage}</span>
             </div>
           ) : null}
@@ -272,11 +275,11 @@ export function ClassicFilesDialog({
               {initialLoading && files.length === 0 ? (
                 <div className="pm-all-files-empty">
                   <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
-                  <span className="pm-meta">Loading…</span>
+                  <span className="pm-meta">{t("common.loading")}</span>
                 </div>
               ) : files.length === 0 ? (
                 <div className="pm-all-files-empty">
-                  <p className="pm-meta">No files yet</p>
+                  <p className="pm-meta">{t("library.noFilesYet")}</p>
                 </div>
               ) : (
                 <div className="pm-all-files-rows">
@@ -293,9 +296,7 @@ export function ClassicFilesDialog({
                         )}
                         onClick={() => {
                           if (ingesting) {
-                            toast.info(
-                              "File is still ingesting — open it when progress finishes."
-                            )
+                            toast.info(t("library.stillIngesting"))
                             return
                           }
                           setDetailOpen({
@@ -307,10 +308,10 @@ export function ClassicFilesDialog({
                         <div className="pm-all-files-row-main">
                           <div className="pm-all-files-tags">
                             {file.file_type === "note" && (
-                              <span className="pm-files-tag">Note</span>
+                              <span className="pm-files-tag">{t("common.note")}</span>
                             )}
                             {file.has_meeting && (
-                              <span className="pm-files-tag">Meeting</span>
+                              <span className="pm-files-tag">{t("nav.meeting")}</span>
                             )}
                             {!file.file_type && !file.has_meeting && (
                               <FileTypeIcon
@@ -326,7 +327,7 @@ export function ClassicFilesDialog({
                           </span>
                         </div>
                         <span className="pm-all-files-chunks pm-meta tabular-nums shrink-0">
-                          {file.chunk_count} chunks
+                          {t("library.nChunks", { n: file.chunk_count })}
                         </span>
                         {file.has_summary !== null && (
                           <button
@@ -338,8 +339,8 @@ export function ClassicFilesDialog({
                             onClick={(e) => void handleToggleDefinitive(file, e)}
                             title={
                               file.include_in_summary !== false
-                                ? "Included in collection summary — click to exclude"
-                                : "Not included in collection summary — click to include"
+                                ? t("library.includedInSummary")
+                                : t("library.notIncludedInSummary")
                             }
                           >
                             {generatingSummaries.has(file.source) ? (
@@ -349,7 +350,7 @@ export function ClassicFilesDialog({
                                 {file.include_in_summary !== false ? "✓" : ""}
                               </span>
                             )}
-                            <span>Definitive</span>
+                            <span>{t("library.definitive")}</span>
                           </button>
                         )}
                         <button
@@ -360,7 +361,7 @@ export function ClassicFilesDialog({
                             setDeleteFileTarget(file.source)
                           }}
                         >
-                          Delete
+                          {t("common.delete")}
                         </button>
                       </div>
                     )
@@ -384,7 +385,7 @@ export function ClassicFilesDialog({
                   )}
                 />
                 <History className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-                <span className="pm-label">Old versions</span>
+                <span className="pm-label">{t("library.oldVersions")}</span>
                 <span className="pm-all-files-history-count">
                   {oldVersionsLoading ? "…" : oldVersions.length}
                 </span>
@@ -406,12 +407,11 @@ export function ClassicFilesDialog({
                     {oldVersionsLoading ? (
                       <div className="pm-all-files-empty !py-4">
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--pm-faint)]" />
-                        <span className="pm-meta">Loading…</span>
+                        <span className="pm-meta">{t("common.loading")}</span>
                       </div>
                     ) : oldVersions.length === 0 ? (
                       <p className="pm-meta px-1 py-2">
-                        No archived versions yet. Updating a file keeps the
-                        previous blob as an old version (not moved into Archive).
+                        {t("library.noArchivedVersions")}
                       </p>
                     ) : (
                       <div className="pm-all-files-rows">
@@ -434,9 +434,14 @@ export function ClassicFilesDialog({
                               }
                               title={
                                 blobMissing
-                                  ? "Blob missing on disk — Raw cannot show this version"
+                                  ? t("library.blobMissing")
                                   : ov.commit_message ||
-                                    `${ov.filename || "version"} of ${ov.current_display_name || ov.current_filename}`
+                                    t("library.versionOf", {
+                                      filename: ov.filename || t("common.version"),
+                                      current:
+                                        ov.current_display_name ||
+                                        ov.current_filename,
+                                    })
                               }
                             >
                               <FileTypeIcon
@@ -453,18 +458,20 @@ export function ClassicFilesDialog({
                                   </span>
                                   {ov.filename ||
                                     ov.storage_file_id ||
-                                    `version ${ov.version_no}`}
+                                    `${t("common.version")} ${ov.version_no}`}
                                   {blobMissing ? (
                                     <span className="ml-1.5 pm-meta text-[var(--pm-danger)]">
-                                      · blob missing
+                                      · {t("library.blobMissingShort")}
                                     </span>
                                   ) : null}
                                 </div>
                                 <div className="truncate pm-meta">
-                                  history of{" "}
-                                  {ov.current_display_name ||
-                                    ov.current_filename ||
-                                    ov.file_id.slice(0, 8)}
+                                  {t("library.historyOf", {
+                                    name:
+                                      ov.current_display_name ||
+                                      ov.current_filename ||
+                                      ov.file_id.slice(0, 8),
+                                  })}
                                   {ov.commit_message
                                     ? ` · ${ov.commit_message}`
                                     : ""}
@@ -534,27 +541,27 @@ export function ClassicFilesDialog({
           className="pm-dialog pm-dialog--silk max-w-sm animate-none data-open:animate-none data-closed:animate-none"
         >
           <DialogHeader>
-            <DialogTitle>Delete File</DialogTitle>
+            <DialogTitle>{t("library.deleteFile")}</DialogTitle>
           </DialogHeader>
           <p className="pm-dialog-body">
-            Are you sure you want to delete{" "}
+            {t("library.deleteFileBody", { name: "\u0000" }).split("\u0000")[0]}
             <span className="font-medium text-[var(--pm-ink)] truncate max-w-[200px] inline-block align-bottom">
               {deleteFileDisplay}
             </span>
-            ? This will remove all its chunks from the database.
+            {t("library.deleteFileBody", { name: "\u0000" }).split("\u0000")[1]}
           </p>
           <div className="flex justify-end gap-2 pt-2">
             <Button
               variant="ghost"
               onClick={() => setDeleteFileTarget(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive-solid"
               onClick={() => void handleDeleteFile()}
             >
-              Delete
+              {t("common.delete")}
             </Button>
           </div>
         </DialogContent>

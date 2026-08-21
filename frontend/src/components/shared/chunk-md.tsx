@@ -7,6 +7,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import rehypeRaw from "rehype-raw"
 import { cn, transformImageBlocks } from "@/lib/utils"
+import { tr } from "@/i18n/tr"
 
 function fileIdFromSource(source?: string): string | undefined {
   const s = (source || "").trim()
@@ -142,7 +143,7 @@ export const ChunkMd = memo(function ChunkMd({
                 ) : null}
                 {desc ? (
                   <span className="pm-recall-md-figdesc">
-                    <span className="pm-recall-md-figlabel">Description</span>
+                    <span className="pm-recall-md-figlabel">{tr("common.description")}</span>
                     {desc}
                   </span>
                 ) : null}

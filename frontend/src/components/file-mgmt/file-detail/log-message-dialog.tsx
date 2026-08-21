@@ -34,7 +34,6 @@ import { cn, transformImageBlocks } from "@/lib/utils"
 import { ChunkMd } from "@/components/shared/chunk-md"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { MessageBody } from "@/components/file-mgmt/message-card"
 import type { FileVersion, Message } from "@/types/file-mgmt"
 import {
@@ -57,6 +56,9 @@ import {
   resolveRawFilename,
 } from "@/components/file-mgmt/raw-file-viewer"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { tr } from "@/i18n/tr"
+import { formatApiError } from "@/api/http"
 
 function formatTime(iso: string | null | undefined): string {
   if (!iso) return ""
@@ -72,8 +74,11 @@ function formatTime(iso: string | null | undefined): string {
 }
 
 function versionUpdateBody(body: string | null | undefined): string {
-  const t = (body || "").trim()
-  return t || "version update"
+  const text = (body || "").trim()
+  if (!text || text.toLowerCase() === "version update") {
+    return tr("fileMgmt.versionUpdateLower")
+  }
+  return text
 }
 
 const silkShell = cn(
@@ -136,6 +141,7 @@ export function LogMessageDialog({
   onVersionDeleted,
   onVersionRolledBack,
 }: LogMessageDialogProps) {
+  const t = useT()
   /**
    * Keep last payload while closing so exit animation can finish.
    * Parent often clears `message` in the same tick as `open=false`.
@@ -240,7 +246,7 @@ export function LogMessageDialog({
         typeof lockMsg.version !== "number" ||
         Number.isNaN(lockMsg.version)
       ) {
-        toast.error("Save failed: could not read message version — reopen and try again")
+        toast.error(tr("fileMgmt.saveFailedReopen"))
         return
       }
 
@@ -273,14 +279,14 @@ export function LogMessageDialog({
         }
       }
       applySavedMessage(updated)
-      toast.success("Message saved")
+      toast.success(tr("fileMgmt.messageSaved"))
       setEditing(false)
       onSaved?.(updated)
     } catch (err) {
       const msg =
         err instanceof FileMgmtApiError && err.status === 409
-          ? "Save failed: message changed while saving — try again"
-          : `Save failed: ${err instanceof Error ? err.message : String(err)}`
+          ? tr("fileMgmt.saveConflict")
+          : tr("fileMgmt.failed", { error: formatApiError(err, tr) })
       toast.error(msg)
     } finally {
       setSaving(false)
@@ -302,13 +308,13 @@ export function LogMessageDialog({
     setDeleting(true)
     try {
       await deleteFileVersion(collectionId, fileId, versionId)
-      toast.success("Version deleted")
+      toast.success(tr("fileMgmt.versionDeleted"))
       setDeleteConfirmOpen(false)
       onOpenChange(false)
       onVersionDeleted?.()
     } catch (err) {
       toast.error(
-        `Delete failed: ${err instanceof Error ? err.message : String(err)}`
+        tr("fileMgmt.deleteFailed", { error: formatApiError(err, tr) })
       )
     } finally {
       setDeleting(false)
@@ -332,8 +338,12 @@ export function LogMessageDialog({
       const n = res.deleted_count ?? res.deleted_version_ids?.length ?? 0
       toast.success(
         n > 0
-          ? `Rolled back to v${res.version_no} — permanently deleted ${n} later version${n === 1 ? "" : "s"}`
-          : `Rolled back to v${res.version_no}`
+          ? tr("fileMgmt.rolledBackDeleted", {
+              n: res.version_no,
+              count: n,
+              s: n === 1 ? "" : "s",
+            })
+          : tr("fileMgmt.rolledBack", { n: res.version_no })
       )
       setRollbackConfirmOpen(false)
       onOpenChange(false)
@@ -342,7 +352,7 @@ export function LogMessageDialog({
       toast.error(
         err instanceof FileMgmtApiError
           ? err.message
-          : `Rollback failed: ${err instanceof Error ? err.message : String(err)}`
+          : tr("fileMgmt.rollbackFailed", { error: formatApiError(err, tr) })
       )
     } finally {
       setRollingBack(false)
@@ -384,7 +394,7 @@ export function LogMessageDialog({
             tabIndex={editing ? 0 : -1}
             onClick={handleCancelEdit}
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="button"
@@ -408,14 +418,14 @@ export function LogMessageDialog({
         type="button"
         className="pm-log-msg-edit"
         aria-expanded={editing}
-        aria-label="Edit message"
+        aria-label={t("fileMgmt.editMessage")}
         tabIndex={editing ? -1 : 0}
         onClick={() => {
           if (!editing) setEditing(true)
         }}
       >
         <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
-        Edit
+        {t("common.edit")}
       </button>
     </div>
   )
@@ -428,7 +438,7 @@ export function LogMessageDialog({
           value={content}
           onChange={setContent}
           minHeight={minHeight}
-          placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+          placeholder={t("fileMgmt.writeMessagePh")}
           showToolbar
           flush
           className="flex-1 min-h-0"
@@ -451,7 +461,7 @@ export function LogMessageDialog({
         }}
         role={allowEdit ? "button" : undefined}
         tabIndex={allowEdit ? 0 : undefined}
-        title={allowEdit ? "Click to edit" : undefined}
+        title={allowEdit ? t("fileMgmt.clickToEdit") : undefined}
       >
         <MessageBody body={content} className={proseBodyClass} />
       </div>
@@ -463,8 +473,8 @@ export function LogMessageDialog({
   if (isVersionUpdate) {
     const versionLabel = activeVersion
       ? `v${activeVersion.version_no}${
-          activeVersion.archived ? " · archived" : ""
-        }${activeIsCurrent ? " · current" : ""}`
+          activeVersion.archived ? ` · ${t("fileMgmt.archived")}` : ""
+        }${activeIsCurrent ? ` · ${t("fileMgmt.current")}` : ""}`
       : null
 
     return (
@@ -483,7 +493,7 @@ export function LogMessageDialog({
             <div className="pm-ws-chrome">
               <DialogHeader className="shrink-0 flex-1 min-w-0 !p-0">
                 <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
-                  <span className="pm-ws-title truncate">Version Update</span>
+                  <span className="pm-ws-title truncate">{t("fileMgmt.versionUpdate")}</span>
                   <span className="pm-meta tabular-nums shrink-0">
                     {formatTime(activeMessage.created_at)}
                   </span>
@@ -565,18 +575,17 @@ export function LogMessageDialog({
             className={cn(silkShell, "pm-dialog max-w-sm gap-4")}
           >
             <DialogHeader>
-              <DialogTitle>Delete this version?</DialogTitle>
+              <DialogTitle>{t("fileMgmt.deleteVersionQ")}</DialogTitle>
             </DialogHeader>
             <p className="pm-dialog-body">
-              Permanently remove{" "}
+              {t("fileMgmt.deleteVersionLead")}{" "}
               <span className="text-[var(--pm-ink)]">
                 v{activeVersion?.version_no}
                 {activeVersion?.storage_file_id
                   ? ` (${activeVersion.storage_file_id})`
                   : ""}
               </span>
-              . This deletes the version blob, its vectors in the database, and
-              the linked log entry. This cannot be undone.
+              {t("fileMgmt.deleteVersionTrail")}
             </p>
             <div className="flex justify-end gap-2 pt-1">
               <Button
@@ -585,7 +594,7 @@ export function LogMessageDialog({
                 disabled={deleting}
                 onClick={() => setDeleteConfirmOpen(false)}
               >
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button
                 variant="destructive"
@@ -595,10 +604,10 @@ export function LogMessageDialog({
                 {deleting ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                    Deleting…
+                    {t("fileMgmt.deleting")}
                   </>
                 ) : (
-                  "Delete version"
+                  t("fileMgmt.deleteVersion")
                 )}
               </Button>
             </div>
@@ -618,8 +627,8 @@ export function LogMessageDialog({
             className="pm-dialog pm-dialog-confirm"
           >
             <DialogHeader>
-              <DialogKicker>Version</DialogKicker>
-              <DialogTitle>Roll back to this version?</DialogTitle>
+              <DialogKicker>{t("common.version")}</DialogKicker>
+              <DialogTitle>{t("fileMgmt.rollbackQ")}</DialogTitle>
               {activeVersion ? (
                 <p
                   className="pm-dialog-confirm-target"
@@ -636,8 +645,7 @@ export function LogMessageDialog({
                 </p>
               ) : null}
               <DialogDescription>
-                Make this the live revision. Later revisions are permanently
-                deleted. This cannot be undone.
+                {t("fileMgmt.rollbackBody")}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
@@ -648,7 +656,7 @@ export function LogMessageDialog({
                 disabled={rollingBack}
                 onClick={() => setRollbackConfirmOpen(false)}
               >
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button
                 type="button"
@@ -660,10 +668,10 @@ export function LogMessageDialog({
                 {rollingBack ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                    Rolling back…
+                    {t("fileMgmt.rollingBack")}
                   </>
                 ) : (
-                  "Roll back"
+                  t("fileMgmt.rollBack")
                 )}
               </Button>
             </DialogFooter>
@@ -703,7 +711,7 @@ export function LogMessageDialog({
         {/* Title only — Edit/Save live on the message card (not dialog chrome) */}
         <DialogHeader className="pm-msg-dialog-chrome pm-msg-dialog-chrome--title-only shrink-0">
           <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
-            <span className="shrink-0">Message</span>
+            <span className="shrink-0">{t("common.message")}</span>
             {authorLabel && (
               <span className="pm-meta normal-case tracking-normal">
                 {authorLabel}
@@ -730,7 +738,7 @@ export function LogMessageDialog({
                     letterSpacing: "0.02em",
                   }}
                 >
-                  Message
+                  {t("common.message")}
                 </span>
                 <div className="ml-auto shrink-0">{messageCardActions}</div>
               </div>
@@ -760,6 +768,7 @@ function VersionFileTabs({
   onRequestDelete?: () => void
   onRequestRollback?: () => void
 }) {
+  const t = useT()
   const [tab, setTab] = useState("raw")
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -914,10 +923,10 @@ function VersionFileTabs({
                 type="button"
                 className="pm-ws-link shrink-0 inline-flex items-center gap-1"
                 onClick={onRequestRollback}
-                title="Make this version current and permanently delete newer versions"
+                title={t("fileMgmt.makeCurrentDeleteNewer")}
               >
                 <History className="h-3 w-3" strokeWidth={1.75} />
-                Roll back
+                {t("fileMgmt.rollBack")}
               </button>
             )}
             {onRequestDelete && (
@@ -925,7 +934,7 @@ function VersionFileTabs({
                 type="button"
                 className="pm-ws-link shrink-0 inline-flex items-center gap-1 !text-[var(--pm-danger)]"
                 onClick={onRequestDelete}
-                title="Permanently delete this version"
+                title={t("fileMgmt.permanentlyDeleteVersion")}
               >
                 <Trash2 className="h-3 w-3" strokeWidth={1.75} />
                 Delete
@@ -978,16 +987,14 @@ function VersionFileTabs({
           ) : (
             <div className="pm-ws-empty h-full flex flex-col items-center justify-center gap-2 px-6">
               {!storageFile ? (
-                <p className="pm-meta">No version file linked to this message.</p>
+                <p className="pm-meta">{t("fileMgmt.noVersionFile")}</p>
               ) : (
                 <>
-                  <p className="pm-meta">No parsed text for this version.</p>
+                  <p className="pm-meta">{t("fileMgmt.noParsedText")}</p>
                   <p className="pm-meta max-w-sm">
-                    Parse shows text after parse/ingest. If this version was
-                    never ingested (or the parse cache is missing), use{" "}
-                    <span className="text-[var(--pm-green)]">Preview</span> for
-                    the original file
-                    {isPdf ? " (PDF preview)" : ""}.
+                    {t("fileMgmt.parseShowsHint", {
+                      pdf: isPdf ? t("fileMgmt.pdfPreview") : "",
+                    })}
                   </p>
                 </>
               )}
@@ -1039,12 +1046,12 @@ function VersionFileTabs({
                 {!docSummary.data?.length &&
                   !docSummary.facts?.length &&
                   !docSummary.insights?.length && (
-                    <p className="pm-meta">No summary content.</p>
+                    <p className="pm-meta">{t("fileMgmt.noSummaryContent")}</p>
                   )}
               </div>
             ) : (
               <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
-                <p className="pm-meta">No summary for this version.</p>
+                <p className="pm-meta">{t("fileMgmt.noSummaryVersion")}</p>
                 {!isCurrentVersion && (
                   <p className="pm-meta max-w-sm">
                     Summaries are only generated for the current version.
@@ -1071,7 +1078,7 @@ function VersionFileTabs({
                 </div>
               ) : chunks.length === 0 ? (
                 <div className="pm-ws-empty flex flex-col items-center justify-center py-8 gap-2 px-4">
-                  <p className="pm-meta">No chunks for this version.</p>
+                  <p className="pm-meta">{t("fileMgmt.noChunksVersion")}</p>
                   <p className="pm-meta max-w-sm">
                     Chunks appear after this version was ingested into the
                     vector store. Unsupported uploads and failed ingests leave

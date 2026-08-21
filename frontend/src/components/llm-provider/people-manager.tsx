@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
 import {
   deletePerson,
   getPerson,
@@ -58,11 +59,13 @@ function formatSpeech(sec: number): string {
 
 function SlideConfirmDelete({
   onConfirm,
-  label = "Delete",
+  label,
 }: {
   onConfirm: () => void
   label?: string
 }) {
+  const t = useT()
+  const actionLabel = label ?? t("common.delete")
   const [armed, setArmed] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -102,7 +105,7 @@ function SlideConfirmDelete({
       type="button"
       className={cn("pm-people-pill pm-people-delete", armed && "is-armed")}
       aria-expanded={armed}
-      aria-label={armed ? "Confirm delete" : label}
+      aria-label={armed ? t("common.confirm") : actionLabel}
       onClick={() => {
         if (!armed) {
           setArmed(true)
@@ -115,10 +118,10 @@ function SlideConfirmDelete({
       <Trash2 className="size-3.5 shrink-0" />
       <span className="pm-people-delete-track">
         <span className="pm-people-delete-idle" aria-hidden={armed}>
-          {label}
+          {actionLabel}
         </span>
         <span className="pm-people-delete-ask" aria-hidden={!armed}>
-          Confirm
+          {t("common.confirm")}
         </span>
       </span>
     </button>
@@ -134,6 +137,7 @@ export function PeopleManager({
   onOpenChange: (open: boolean) => void
   nested?: boolean
 }) {
+  const t = useT()
   const [people, setPeople] = useState<SpeakerPerson[]>([])
   const [query, setQuery] = useState("")
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -247,7 +251,7 @@ export function PeopleManager({
     saveTimer.current = setTimeout(() => {
       void updatePerson(id, patch)
         .then(() => void loadList())
-        .catch(() => toast.error("Failed to save"))
+        .catch(() => toast.error(t("settings.failedSave")))
     }, 420)
   }
 
@@ -266,12 +270,12 @@ export function PeopleManager({
       el.addEventListener("ended", () => setPlaying(false))
       el.addEventListener("error", () => {
         setPlaying(false)
-        toast.error("No playable clip")
+        toast.error(t("meeting.noPlayableClipShort"))
       })
       await el.play()
     } catch {
       setPlaying(false)
-      toast.error("No playable clip")
+      toast.error(t("meeting.noPlayableClipShort"))
     }
   }
 
@@ -289,9 +293,9 @@ export function PeopleManager({
       )
       triggerMePersonRefresh(updated.is_me ? updated.id : null)
       await loadList()
-      toast.success(updated.is_me ? "Marked as you" : "Unmarked")
+      toast.success(updated.is_me ? t("settings.markedAsYou") : t("settings.unmarked"))
     } catch {
-      toast.error("Failed to update Me")
+      toast.error(t("settings.failedUpdateMe"))
     }
   }
 
@@ -305,7 +309,7 @@ export function PeopleManager({
       if (wasMe) triggerMePersonRefresh(null)
       await loadList()
     } catch {
-      toast.error("Failed to delete person")
+      toast.error(t("settings.failedDeletePerson"))
     }
   }
 
@@ -324,21 +328,21 @@ export function PeopleManager({
         )}
       >
         <DialogHeader className="shrink-0">
-          <DialogKicker>Settings</DialogKicker>
-          <DialogTitle>People</DialogTitle>
+          <DialogKicker>{t("nav.settings")}</DialogKicker>
+          <DialogTitle>{t("settings.people")}</DialogTitle>
         </DialogHeader>
 
         <div className="pm-settings-hw pm-people-shell">
           <div className="pm-settings-hw-rail">
             <div className="pm-settings-hw-rail-head">
-              <span className="pm-label text-[var(--pm-ink)]">Directory</span>
+              <span className="pm-label text-[var(--pm-ink)]">{t("common.directory")}</span>
               <span className="pm-settings-hw-count">{people.length}</span>
             </div>
             <div className="px-3 pb-2">
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search"
+                placeholder={t("common.search")}
                 className="pm-settings-hw-input"
               />
             </div>
@@ -381,17 +385,17 @@ export function PeopleManager({
                     <span className="min-w-0 flex-1 text-left">
                       <span className="pm-people-rail-name pm-rail-name">
                         {p.label}
-                        {p.is_me && <span className="pm-people-me-tag">Me</span>}
+                        {p.is_me && <span className="pm-people-me-tag">{t("common.me")}</span>}
                       </span>
                       <span className="pm-people-rail-meta">
-                        {p.has_voiceprint ? formatSpeech(p.speech_sec) : "No print"}
+                        {p.has_voiceprint ? formatSpeech(p.speech_sec) : t("settings.noPrint")}
                       </span>
                     </span>
                     {p.has_voiceprint && <span className="pm-people-dot" aria-hidden />}
                   </button>
                 ))}
                 {people.length === 0 && (
-                  <p className="pm-meta p-2 text-center">No people yet</p>
+                  <p className="pm-meta p-2 text-center">{t("settings.noPeopleYet")}</p>
                 )}
               </div>
             </ScrollArea>
@@ -401,7 +405,7 @@ export function PeopleManager({
             <div className={cn("pm-settings-hw-main-body", mainIn && "is-in")}>
               {detail ? (
                 <>
-                  <section className="pm-people-identity" aria-label="Person">
+                  <section className="pm-people-identity" aria-label={t("common.person")}>
                     <div className="pm-people-identity-top">
                       <span
                         className="pm-people-avatar pm-people-avatar--lg"
@@ -412,22 +416,22 @@ export function PeopleManager({
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="pm-people-kicker">
-                          {detail.has_voiceprint ? "Enrolled" : "Unenrolled"}
+                          {detail.has_voiceprint ? t("settings.enrolled") : t("settings.unenrolled")}
                           {detail.has_voiceprint
                             ? ` · ${formatSpeech(detail.speech_sec)}`
                             : ""}
                         </p>
-                        <h3 className="pm-people-display">{detail.display_name || "Unnamed"}</h3>
+                        <h3 className="pm-people-display">{detail.display_name || t("common.unnamed")}</h3>
                       </div>
                       <div className="pm-people-pills">
                         <button
                           type="button"
                           className={cn("pm-people-pill", detail.is_me && "is-on")}
-                          title={detail.is_me ? "Unmark as you" : "Mark as you"}
+                          title={detail.is_me ? t("settings.unmarkAsYou") : t("settings.markAsYou")}
                           onClick={() => void handleToggleMe()}
                         >
                           <UserRound className="size-3.5" />
-                          Me
+                          {t("common.me")}
                         </button>
                         <button
                           type="button"
@@ -435,14 +439,14 @@ export function PeopleManager({
                           onClick={() => void handlePlay()}
                         >
                           <Play className="size-3.5" />
-                          {playing ? "Next clip" : "Listen"}
+                          {playing ? t("settings.nextClip") : t("common.listen")}
                         </button>
                         <SlideConfirmDelete onConfirm={() => void handleDelete()} />
                       </div>
                     </div>
                     <div className="pm-people-fields">
                       <div className="pm-settings-hw-field pm-settings-hw-field--name">
-                        <FieldLabel className="pm-settings-hw-field-label">Name</FieldLabel>
+                        <FieldLabel className="pm-settings-hw-field-label">{t("common.name")}</FieldLabel>
                         <Input
                           className="pm-settings-hw-input"
                           value={detail.display_name}
@@ -450,29 +454,29 @@ export function PeopleManager({
                         />
                       </div>
                       <div className="pm-settings-hw-field">
-                        <FieldLabel className="pm-settings-hw-field-label">Note</FieldLabel>
+                        <FieldLabel className="pm-settings-hw-field-label">{t("common.note")}</FieldLabel>
                         <Input
                           className="pm-settings-hw-input"
                           value={detail.disambiguator}
-                          placeholder="Engineering, Client…"
+                          placeholder={t("settings.notePh")}
                           onChange={(e) => scheduleSave({ disambiguator: e.target.value })}
                         />
                       </div>
                     </div>
                   </section>
 
-                  <section className="pm-people-history" aria-label="Meetings">
+                  <section className="pm-people-history" aria-label={t("meeting.meetings")}>
                     <div className="pm-settings-hw-words-head">
                       <div className="pm-settings-hw-words-title">
-                        <span className="pm-settings-hw-words-label">Meetings</span>
+                        <span className="pm-settings-hw-words-label">{t("meeting.meetings")}</span>
                         <span className="pm-settings-hw-count">{detail.meetings.length}</span>
                       </div>
                     </div>
                     {detail.meetings.length === 0 ? (
                       <div className="pm-settings-hw-words-empty">
-                        <p className="pm-settings-hw-words-empty-title">No meetings yet</p>
+                        <p className="pm-settings-hw-words-empty-title">{t("settings.noMeetingsYet")}</p>
                         <p className="pm-settings-hw-words-empty-hint">
-                          Assign this person on a Speakers card to start a history.
+                          {t("settings.assignPersonHint")}
                         </p>
                       </div>
                     ) : (
@@ -481,7 +485,7 @@ export function PeopleManager({
                           <li key={row.meeting_id} className="pm-people-meeting-card">
                             <span className="pm-people-meeting-title pm-rail-name">{row.title}</span>
                             <span className="pm-meta">
-                              {row.speaker_id ? `Slot ${row.speaker_id}` : "Seen"}
+                              {row.speaker_id ? t("settings.slot", { id: row.speaker_id }) : t("settings.seen")}
                               {row.speech_sec ? ` · ${formatSpeech(row.speech_sec)}` : ""}
                             </span>
                           </li>
@@ -495,9 +499,9 @@ export function PeopleManager({
                   <div className="pm-settings-hw-empty-icon" aria-hidden>
                     <Users className="size-5" />
                   </div>
-                  <p className="pm-settings-hw-empty-title">People directory</p>
+                  <p className="pm-settings-hw-empty-title">{t("settings.peopleDirectory")}</p>
                   <p className="pm-settings-hw-empty-hint">
-                    Names assigned in Meetings live here. Rename, listen, or remove.
+                    {t("settings.peopleEmptyHint")}
                   </p>
                 </div>
               )}

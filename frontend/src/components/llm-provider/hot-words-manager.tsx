@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/menu"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 /** Client-only row key for stable list animation (not sent to API). */
 type WordRow = HotWordItem & { uid: string }
@@ -95,13 +96,15 @@ function waitMs(ms: number) {
  */
 function SlideConfirmDeleteButton({
   onConfirm,
-  title = "Delete",
+  title,
   className,
 }: {
   onConfirm: () => void
   title?: string
   className?: string
 }) {
+  const t = useT()
+  const actionTitle = title ?? t("common.delete")
   const [deleteArmed, setDeleteArmed] = useState(false)
   const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const deleteBtnRef = useRef<HTMLButtonElement>(null)
@@ -156,8 +159,8 @@ function SlideConfirmDeleteButton({
         deleteArmed ? "is-confirm opacity-100" : "opacity-40 group-hover:opacity-100",
         className,
       )}
-      title={deleteArmed ? "Click again to delete" : title}
-      aria-label={deleteArmed ? `Confirm ${title.toLowerCase()}` : title}
+      title={deleteArmed ? t("settings.clickAgainDelete") : actionTitle}
+      aria-label={deleteArmed ? t("common.confirm") : actionTitle}
       aria-expanded={deleteArmed}
       onClick={(e) => {
         e.preventDefault()
@@ -176,7 +179,7 @@ function SlideConfirmDeleteButton({
           ×
         </span>
       ) : (
-        <span className="pm-msg-delete-label is-solo">Delete</span>
+        <span className="pm-msg-delete-label is-solo">{t("common.delete")}</span>
       )}
     </button>
   )
@@ -187,16 +190,16 @@ function SlideConfirmDeleteButton({
  * Keep in sync with `DashScopeFileTranscriptionProvider` — exclude `auto`.
  * Empty = no language limit (recommended when unsure).
  */
-const HOT_WORD_LANG_OPTIONS: DropdownSelectOption[] = [
-  { value: "", label: "Any" },
-  { value: "zh", label: "zh · Chinese" },
-  { value: "en", label: "en · English" },
-  { value: "ja", label: "ja · Japanese" },
-  { value: "ko", label: "ko · Korean" },
-  { value: "vi", label: "vi · Vietnamese" },
-  { value: "th", label: "th · Thai" },
-  { value: "id", label: "id · Indonesian" },
-  { value: "ms", label: "ms · Malay" },
+const HOT_WORD_LANG_KEYS: { value: string; key: string }[] = [
+  { value: "", key: "common.any" },
+  { value: "zh", key: "settings.hwLangZh" },
+  { value: "en", key: "settings.hwLangEn" },
+  { value: "ja", key: "settings.hwLangJa" },
+  { value: "ko", key: "settings.hwLangKo" },
+  { value: "vi", key: "settings.hwLangVi" },
+  { value: "th", key: "settings.hwLangTh" },
+  { value: "id", key: "settings.hwLangId" },
+  { value: "ms", key: "settings.hwLangMs" },
 ]
 
 interface Props {
@@ -210,6 +213,11 @@ interface Props {
 }
 
 export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
+  const t = useT()
+  const langOptions: DropdownSelectOption[] = HOT_WORD_LANG_KEYS.map((o) => ({
+    value: o.value,
+    label: t(o.key),
+  }))
   const [libraries, setLibraries] = useState<HotWordsLibrarySummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedLib, setSelectedLib] = useState<HotWordsLibrary | null>(null)
@@ -321,12 +329,12 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
       }
       await fetchList()
     } catch {
-      toast.error("Auto-save failed")
+      toast.error(t("library.autoSaveFailed"))
     } finally {
       saveInFlightRef.current = false
       setIsSaving(false)
     }
-  }, [clearSaveTimer, fetchList])
+  }, [clearSaveTimer, fetchList, t])
 
   const scheduleSave = useCallback(() => {
     setIsDirty(true)
@@ -419,7 +427,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
         })
       } catch {
         if (!cancelled) {
-          toast.error("Failed to load library")
+          toast.error(t("settings.failedLoadLibrary"))
           setMainIn(true)
         }
       }
@@ -526,17 +534,17 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
   const handleNew = async () => {
     try {
       await flushSave()
-      const lib = await createHotWordsLibrary({ name: "New Library" })
+      const lib = await createHotWordsLibrary({ name: t("settings.newLibrary") })
       await fetchList()
       setSelectedId(lib.id)
-    } catch { toast.error("Failed to create library") }
+    } catch { toast.error(t("settings.failedCreateLibrary")) }
   }
 
   const handleDownloadTemplate = (format: "csv" | "xlsx") => {
     downloadHotWordsTemplate(format)
     setImportMenuOpen(false)
     toast.success(
-      format === "csv" ? "CSV template downloading" : "Excel template downloading",
+      format === "csv" ? t("settings.csvDownloading") : t("settings.excelDownloading"),
     )
   }
 
@@ -550,10 +558,10 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
       await fetchList()
       setSelectedId(lib.id)
       toast.success(
-        `Imported “${lib.name}” · ${lib.words?.length ?? 0} words`,
+        t("settings.importedLibrary", { name: lib.name, n: lib.words?.length ?? 0 }),
       )
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Import failed")
+      toast.error(err instanceof Error ? err.message : t("settings.importFailed"))
     } finally {
       setImporting(false)
       if (importFileRef.current) importFileRef.current.value = ""
@@ -573,11 +581,11 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
       await fetchList()
       toast.success(
         next.includes(selectedId)
-          ? "Pinned — new meetings start with this library on (you can turn it off per meeting)"
-          : "Unpinned — new meetings will not include this library",
+          ? t("settings.pinnedToast")
+          : t("settings.unpinnedToast"),
       )
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update pin")
+      toast.error(err instanceof Error ? err.message : t("settings.failedPin"))
     } finally {
       setSettingPin(false)
     }
@@ -586,7 +594,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
   const handleExport = () => {
     if (!selectedId) return
     exportHotWordsLibrary(selectedId, selectedLib?.name)
-    toast.success("Excel export started")
+    toast.success(t("settings.excelExportStarted"))
   }
 
   const handleDelete = async (id: string) => {
@@ -601,8 +609,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
         isDirtyRef.current = false
       }
       await fetchList()
-      toast.success("Library deleted")
-    } catch { toast.error("Failed to delete") }
+      toast.success(t("settings.libraryDeleted"))
+    } catch { toast.error(t("settings.failedDelete")) }
   }
 
   const updateField = (field: "name" | "description", value: string) => {
@@ -726,15 +734,15 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
         )}
       >
         <DialogHeader className="shrink-0">
-          <DialogKicker>Settings</DialogKicker>
-          <DialogTitle>Hot words</DialogTitle>
+          <DialogKicker>{t("nav.settings")}</DialogKicker>
+          <DialogTitle>{t("settings.hotWords")}</DialogTitle>
         </DialogHeader>
 
         <div className="pm-settings-hw">
           {/* Left rail */}
           <div className="pm-settings-hw-rail">
             <div className="pm-settings-hw-rail-head">
-              <span className="pm-label text-[var(--pm-ink)]">Libraries</span>
+              <span className="pm-label text-[var(--pm-ink)]">{t("common.libraries")}</span>
               <div
                 ref={importAnchorRef}
                 className="pm-settings-hw-rail-actions pm-settings-hw-import-anchor"
@@ -743,8 +751,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  title="Import library"
-                  aria-label="Import library"
+                  title={t("settings.importLibrary")}
+                  aria-label={t("settings.importLibrary")}
                   aria-expanded={importMenuOpen}
                   aria-haspopup="menu"
                   disabled={importing}
@@ -767,8 +775,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                   variant="ghost"
                   size="icon-sm"
                   onClick={handleNew}
-                  title="New library"
-                  aria-label="New library"
+                  title={t("settings.newLibrary")}
+                  aria-label={t("settings.newLibrary")}
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
@@ -779,7 +787,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                   className="pm-settings-hw-import-menu"
                 >
                   <div className="pm-settings-hw-import-menu-label" aria-hidden>
-                    Import
+                    {t("common.import")}
                   </div>
                   <MenuItem
                     type="button"
@@ -790,7 +798,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                       <FileText className="size-3.5" strokeWidth={2} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <MenuItemTitle>CSV template</MenuItemTitle>
+                      <MenuItemTitle>{t("settings.csvTemplate")}</MenuItemTitle>
                       <MenuItemDescription>.csv</MenuItemDescription>
                     </span>
                   </MenuItem>
@@ -803,7 +811,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                       <FileSpreadsheet className="size-3.5" strokeWidth={2} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <MenuItemTitle>Excel template</MenuItemTitle>
+                      <MenuItemTitle>{t("settings.excelTemplate")}</MenuItemTitle>
                       <MenuItemDescription>.xlsx</MenuItemDescription>
                     </span>
                   </MenuItem>
@@ -819,9 +827,9 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                     </span>
                     <span className="min-w-0 flex-1">
                       <MenuItemTitle>
-                        {importing ? "Importing…" : "Import file"}
+                        {importing ? t("settings.importing") : t("settings.importFile")}
                       </MenuItemTitle>
-                      <MenuItemDescription>CSV · Excel</MenuItemDescription>
+                      <MenuItemDescription>{t("settings.csvExcel")}</MenuItemDescription>
                     </span>
                   </MenuItem>
                 </SoftMenu>
@@ -867,22 +875,22 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                       <div className="pm-rail-name truncate flex items-center gap-1.5">
                         <span className="truncate">{lib.name}</span>
                         {lib.is_system && (
-                          <span className="pm-settings-hw-default-pill" title="System library">
-                            System
+                          <span className="pm-settings-hw-default-pill" title={t("settings.systemLibrary")}>
+                            {t("common.system")}
                           </span>
                         )}
                         {(lib.is_pinned || pinnedIds.includes(lib.id)) && (
-                          <span className="pm-settings-hw-default-pill" title="Pinned for new meetings">
-                            Pin
+                          <span className="pm-settings-hw-default-pill" title={t("settings.pinnedForMeetings")}>
+                            {t("common.pin")}
                           </span>
                         )}
                       </div>
-                      <div className="pm-meta">{lib.word_count} words</div>
+                      <div className="pm-meta">{t("settings.nWords", { n: lib.word_count })}</div>
                     </div>
                     {!lib.is_system && (
                       <SlideConfirmDeleteButton
                         className="shrink-0 ml-1"
-                        title="Delete library"
+                        title={t("settings.deleteLibrary")}
                         onConfirm={() => { void handleDelete(lib.id) }}
                       />
                     )}
@@ -890,7 +898,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                 ))}
                 {libraries.length === 0 && (
                   <p className="pm-meta p-2 text-center">
-                    No libraries yet. Click + to create one.
+                    {t("settings.noLibrariesYet")}
                   </p>
                 )}
               </div>
@@ -908,15 +916,15 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
               {selectedLib ? (
                 <>
                   {/* Library meta — soft inset card */}
-                  <section className="pm-settings-hw-meta" aria-label="Library details">
+                  <section className="pm-settings-hw-meta" aria-label={t("settings.libraryDetails")}>
                     <div className="pm-settings-hw-meta-top">
                       <div className="pm-settings-hw-field pm-settings-hw-field--name">
-                        <FieldLabel className="pm-settings-hw-field-label">Name</FieldLabel>
+                        <FieldLabel className="pm-settings-hw-field-label">{t("common.name")}</FieldLabel>
                         <Input
                           value={selectedLib.name}
                           onChange={(e) => updateField("name", e.target.value)}
                           className="pm-settings-hw-input"
-                          placeholder="Library name"
+                          placeholder={t("settings.libraryName")}
                           readOnly={!!selectedLib.is_system}
                           disabled={!!selectedLib.is_system}
                         />
@@ -933,8 +941,8 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                           disabled={settingPin || !selectedId}
                           title={
                             pinnedIds.includes(selectedId ?? "")
-                              ? "Unpin — new meetings will not include this library"
-                              : "Pin for new meetings (can still turn off per meeting)"
+                              ? t("settings.unpinNewMeetings")
+                              : t("settings.pinNewMeetings")
                           }
                           onClick={() => { void handleTogglePin() }}
                         >
@@ -943,7 +951,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                             strokeWidth={1.75}
                             fill={pinnedIds.includes(selectedId ?? "") ? "currentColor" : "none"}
                           />
-                          {pinnedIds.includes(selectedId ?? "") ? "Pinned" : "Pin"}
+                          {pinnedIds.includes(selectedId ?? "") ? t("common.pinned") : t("common.pin")}
                         </Button>
                         <Button
                           type="button"
@@ -951,21 +959,21 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                           size="sm"
                           className="pm-settings-hw-action-btn"
                           disabled={!selectedId}
-                          title="Export as Excel"
+                          title={t("settings.exportExcel")}
                           onClick={handleExport}
                         >
                           <FileUp className="h-3.5 w-3.5" strokeWidth={2} />
-                          Export
+                          {t("common.export")}
                         </Button>
                       </div>
                     </div>
                     <div className="pm-settings-hw-field">
-                      <FieldLabel className="pm-settings-hw-field-label">Description</FieldLabel>
+                      <FieldLabel className="pm-settings-hw-field-label">{t("common.description")}</FieldLabel>
                       <Textarea
                         value={selectedLib.description}
                         onChange={(e) => updateField("description", e.target.value)}
                         className="pm-settings-hw-textarea"
-                        placeholder="Optional note for this library"
+                        placeholder={t("settings.optionalLibraryNote")}
                         readOnly={!!selectedLib.is_system}
                         disabled={!!selectedLib.is_system}
                       />
@@ -973,10 +981,10 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                   </section>
 
                   {/* Word list — dense soft tray */}
-                  <section className="pm-settings-hw-words" aria-label="Hot words">
+                  <section className="pm-settings-hw-words" aria-label={t("settings.hotWords")}>
                     <div className="pm-settings-hw-words-head">
                       <div className="pm-settings-hw-words-title">
-                        <span className="pm-settings-hw-words-label">Words</span>
+                        <span className="pm-settings-hw-words-label">{t("common.words")}</span>
                         <span className="pm-settings-hw-count">
                           {wordRows.length}
                         </span>
@@ -989,10 +997,10 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                           aria-live="polite"
                         >
                           {isSaving
-                            ? "Saving…"
+                            ? t("common.saving")
                             : isDirty
-                              ? "Editing"
-                              : "Saved"}
+                              ? t("common.editing")
+                              : t("common.saved")}
                         </span>
                       </div>
                       {!selectedLib.is_system && (
@@ -1004,7 +1012,7 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                           onClick={addWord}
                         >
                           <Plus className="h-3 w-3" strokeWidth={1.75} />
-                          Add
+                          {t("common.add")}
                         </Button>
                       )}
                     </div>
@@ -1023,12 +1031,12 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                               <Input
                                 value={word.text}
                                 onChange={(e) => updateWord(word.uid, "text", e.target.value)}
-                                placeholder="Hot word"
+                                placeholder={t("settings.hotWord")}
                                 className="pm-settings-hw-word-text"
                                 readOnly={!!selectedLib.is_system}
                                 disabled={!!selectedLib.is_system}
                               />
-                              <div className="pm-settings-hw-weight" title="Weight 1–10">
+                              <div className="pm-settings-hw-weight" title={t("settings.weightRange")}>
                                 <span className="pm-settings-hw-weight-label">W</span>
                                 <Input
                                   type="number"
@@ -1057,25 +1065,25 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                                 value={word.lang || ""}
                                 onChange={(v) => updateWord(word.uid, "lang", v)}
                                 options={
-                                  HOT_WORD_LANG_OPTIONS.some((o) => o.value === (word.lang || ""))
-                                    ? HOT_WORD_LANG_OPTIONS
+                                  langOptions.some((o) => o.value === (word.lang || ""))
+                                    ? langOptions
                                     : [
                                         {
                                           value: word.lang || "",
-                                          label: word.lang || "Any",
+                                          label: word.lang || t("common.any"),
                                         },
-                                        ...HOT_WORD_LANG_OPTIONS,
+                                        ...langOptions,
                                       ]
                                 }
-                                placeholder="Lang"
+                                placeholder={t("common.lang")}
                                 className="pm-settings-hw-lang"
                               />
                               {!selectedLib.is_system && (
                               <button
                                 type="button"
                                 className="pm-settings-hw-word-del"
-                                title="Remove word"
-                                aria-label="Remove word"
+                                title={t("settings.removeWord")}
+                                aria-label={t("settings.removeWord")}
                                 disabled={leavingUid === word.uid}
                                 onClick={() => { void removeWord(word.uid) }}
                               >
@@ -1087,9 +1095,9 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                         ))}
                         {wordRows.length === 0 && (
                           <div className="pm-settings-hw-words-empty">
-                            <p className="pm-settings-hw-words-empty-title">No words yet</p>
+                            <p className="pm-settings-hw-words-empty-title">{t("settings.noWordsYet")}</p>
                             <p className="pm-settings-hw-words-empty-hint">
-                              Add terms to boost recognition accuracy.
+                              {t("settings.addTermsBoost")}
                             </p>
                           </div>
                         )}
@@ -1102,9 +1110,9 @@ export function HotWordsManager({ open, onOpenChange, nested = false }: Props) {
                   <div className="pm-settings-hw-empty-icon" aria-hidden>
                     <BookOpen className="h-6 w-6" strokeWidth={1.5} />
                   </div>
-                  <p className="pm-settings-hw-empty-title">Pick a library</p>
+                  <p className="pm-settings-hw-empty-title">{t("settings.pickLibrary")}</p>
                   <p className="pm-settings-hw-empty-hint">
-                    Select one from the left, or create a new library.
+                    {t("settings.pickLibraryHint")}
                   </p>
                 </div>
               )}

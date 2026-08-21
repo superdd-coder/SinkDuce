@@ -20,13 +20,15 @@ import {
   RawFileViewer,
   resolveRawFilename,
 } from "@/components/file-mgmt/raw-file-viewer"
+import { useT } from "@/i18n/use-t"
+import { tr } from "@/i18n/tr"
 
 const DOC_FADE_OUT_MS = 140
 const DOC_FADE_IN_MS = 180
 
 function previewTitle(file: FileSummary | null): string {
-  if (!file) return "Preview"
-  return file.display_name || file.filename || "Preview"
+  if (!file) return tr("common.preview")
+  return file.display_name || file.filename || tr("common.preview")
 }
 
 function previewName(file: FileSummary | null): string {
@@ -52,6 +54,7 @@ export function FileSelectPreviewPanel({
   className?: string
   bodyPhase?: "in" | "out"
 }) {
+  const t = useT()
   const source =
     file?.source || (file ? `__file__:${file.file_id}` : null)
   const url =
@@ -73,8 +76,8 @@ export function FileSelectPreviewPanel({
             type="button"
             className="pm-select-preview-close"
             onClick={onClose}
-            title="Close preview"
-            aria-label="Close preview"
+            title={t("fileMgmt.closePreview")}
+            aria-label={t("fileMgmt.closePreview")}
           >
             <X className="h-3.5 w-3.5" strokeWidth={1.75} />
           </button>
@@ -98,7 +101,7 @@ export function FileSelectPreviewPanel({
         ) : (
           <div className="h-full flex items-center justify-center p-6">
             <p className="pm-meta text-[var(--pm-faint)] text-center">
-              Click a file to preview
+              {t("fileMgmt.clickToPreview")}
             </p>
           </div>
         )}

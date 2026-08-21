@@ -31,6 +31,8 @@ import {
   type Meeting,
 } from "@/api/client"
 import { triggerTodoRefresh } from "@/lib/todo-refresh"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 export interface MeetingCreateTodosDialogProps {
   open: boolean
@@ -83,10 +85,11 @@ export function MeetingCreateTodosDialog({
   meetingId,
   candidates,
   defaultSectionTabId = null,
-  title = "From summary",
+  title,
   loading = false,
   onCreated,
 }: MeetingCreateTodosDialogProps) {
+  const t = useT()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   /** Per-candidate deadline overrides (yyyy-mm-dd or ""). */
   const [ddlById, setDdlById] = useState<Record<string, string>>({})
@@ -137,7 +140,7 @@ export function MeetingCreateTodosDialog({
   const handleCreate = async () => {
     const picked = openItems.filter((i) => selected.has(i.candidate_id))
     if (picked.length === 0) {
-      toast.error("Select at least one todo")
+      toast.error(t("meeting.selectOneTodo"))
       return
     }
     setSubmitting(true)
@@ -176,7 +179,7 @@ export function MeetingCreateTodosDialog({
           console.warn("markTodoCandidatesCreated failed", err)
         }
       }
-      toast.success(ok === 1 ? "Created 1 todo" : `Created ${ok} todos`)
+      toast.success(ok === 1 ? t("meeting.created1Todo") : t("meeting.createdNTodos", { n: ok }))
       triggerTodoRefresh({ collectionId })
       onCreated?.(ok, updatedMeeting)
       onOpenChange(false)
@@ -190,9 +193,9 @@ export function MeetingCreateTodosDialog({
         }
       }
       toast.error(
-        `Create failed${ok ? ` (after ${ok} ok)` : ""}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        ok
+          ? t("meeting.createFailedAfter", { ok, error: formatApiError(err, t) })
+          : t("common.failedWithError", { error: formatApiError(err, t) }),
       )
     } finally {
       setSubmitting(false)
@@ -202,19 +205,19 @@ export function MeetingCreateTodosDialog({
   const groups = useMemo(() => {
     const map = new Map<string, MeetingTodoCandidate[]>()
     for (const c of items) {
-      const key = c.section_name || c.section_tab_id || "Section"
+      const key = c.section_name || c.section_tab_id || t("meeting.section")
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(c)
     }
     return [...map.entries()]
-  }, [items])
+  }, [items, t])
 
   const subtitle =
     title &&
-    title !== "Create todos from summary" &&
-    title !== "From summary"
+    title !== t("fileMgmt.createTodosSummary") &&
+    title !== t("meeting.fromSummary")
       ? title
-      : "Pick items from the section summary · set deadlines"
+      : t("meeting.todosSubtitle")
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -228,8 +231,8 @@ export function MeetingCreateTodosDialog({
         showCloseButton
       >
         <DialogHeader className="pm-meeting-todos-dialog-head">
-          <DialogKicker>Meeting</DialogKicker>
-          <DialogTitle>Create todos</DialogTitle>
+          <DialogKicker>{t("nav.meeting")}</DialogKicker>
+          <DialogTitle>{t("meeting.createTodos")}</DialogTitle>
           <DialogDescription>{subtitle}</DialogDescription>
         </DialogHeader>
 
@@ -238,7 +241,7 @@ export function MeetingCreateTodosDialog({
             <div className="pm-meeting-todos-stage is-empty">
               <div className="pm-meeting-todos-empty">
                 <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-faint)]" />
-                <span>Extracting from summary…</span>
+                <span>{t("meeting.extractingTodos")}</span>
               </div>
             </div>
           ) : items.length === 0 ? (
@@ -248,9 +251,18 @@ export function MeetingCreateTodosDialog({
                   <ListTodo className="h-5 w-5" strokeWidth={1.5} />
                 </span>
                 <p>
-                  No candidates found. Add a{" "}
-                  <code className="pm-meeting-todos-code">## Todo</code> list
-                  in the summary, then try again.
+                  {(() => {
+                    const full = t("meeting.noTodoCandidates", { heading: "## Todo" })
+                    const parts = full.split("## Todo")
+                    if (parts.length < 2) return full
+                    return (
+                      <>
+                        {parts[0]}
+                        <code className="pm-meeting-todos-code">## Todo</code>
+                        {parts[1]}
+                      </>
+                    )
+                  })()}
                 </p>
               </div>
             </div>
@@ -261,7 +273,7 @@ export function MeetingCreateTodosDialog({
                   <div
                     className="pm-meeting-todos-seg"
                     role="group"
-                    aria-label="Selection"
+                    aria-label={t("meeting.selection")}
                   >
                     <button
                       type="button"
@@ -269,7 +281,7 @@ export function MeetingCreateTodosDialog({
                       onClick={selectAll}
                       disabled={openItems.length === 0}
                     >
-                      Select all
+                      {t("common.selectAll")}
                     </button>
                     <button
                       type="button"
@@ -277,7 +289,7 @@ export function MeetingCreateTodosDialog({
                       onClick={clearAll}
                       disabled={selected.size === 0}
                     >
-                      Clear
+                      {t("common.clear")}
                     </button>
                   </div>
                   <span
@@ -323,7 +335,7 @@ export function MeetingCreateTodosDialog({
                                 </span>
                                 {already ? (
                                   <span className="pm-meeting-todos-done-tag">
-                                    Created
+                                    {t("common.created")}
                                   </span>
                                 ) : null}
                               </span>
@@ -380,7 +392,7 @@ export function MeetingCreateTodosDialog({
                                     onChange={(v) =>
                                       setRowDdl(c.candidate_id, v)
                                     }
-                                    placeholder="Deadline"
+                                    placeholder={t("library.deadline")}
                                     allowClear
                                     disabled={already || submitting}
                                   />
@@ -407,7 +419,7 @@ export function MeetingCreateTodosDialog({
             onClick={() => onOpenChange(false)}
             disabled={submitting}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             type="button"
@@ -424,12 +436,12 @@ export function MeetingCreateTodosDialog({
             {submitting ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                Creating…
+                {t("common.creating")}
               </>
             ) : selected.size > 0 ? (
-              `Create ${selected.size}`
+              t("meeting.createN", { n: selected.size })
             ) : (
-              "Create"
+              t("common.create")
             )}
           </Button>
         </DialogFooter>

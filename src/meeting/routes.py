@@ -28,13 +28,14 @@ def _serialize_meeting(meeting, *, include_transcript: bool = False) -> dict:
     """
     data = meeting.model_dump(mode="json")
     data.pop("speaker_slots", None)
-    if meeting.speaker_people:
-        try:
-            from src.speakers.service import rebuild_speaker_names
+    try:
+        from src.speakers.service import rebuild_speaker_names
 
-            data["speaker_names"] = rebuild_speaker_names(meeting.speaker_people)
-        except Exception:
-            logger.debug("speaker name rebuild skipped for %s", meeting.id, exc_info=True)
+        data["speaker_names"] = rebuild_speaker_names(
+            meeting.speaker_people, keep=meeting.speaker_names
+        ) or None
+    except Exception:
+        logger.debug("speaker name rebuild skipped for %s", meeting.id, exc_info=True)
     notes = store.get_notes(meeting.id)
     if notes is not None:
         data["notes_content"] = notes

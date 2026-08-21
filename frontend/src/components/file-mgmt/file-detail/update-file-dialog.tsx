@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import {
   FileIcon,
   Loader2,
@@ -33,6 +32,8 @@ import {
   Image as ImageIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import { cn } from "@/lib/utils"
 import { uploadFileVersion } from "@/api/file-mgmt"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
@@ -91,6 +92,7 @@ export function UpdateFileDialog({
   currentFilename,
   onSuccess,
 }: UpdateFileDialogProps) {
+  const t = useT()
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   /** Local temp preview — always revoked on replace / cancel / unmount. */
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -201,7 +203,7 @@ export function UpdateFileDialog({
    */
   const handleConfirmUpload = async () => {
     if (!pendingFile || !fileId) {
-      toast.error("Choose a file first")
+      toast.error(t("fileMgmt.chooseFileFirst"))
       return
     }
     if (busy || uploadStartedRef.current) return
@@ -225,21 +227,19 @@ export function UpdateFileDialog({
       // Refresh metadata immediately (version row / message); chunks when task done
       onSuccess?.()
       if (result.unsupported) {
-        toast.warning(
-          "Version saved — file type not supported for ingest"
-        )
+        toast.warning(t("fileMgmt.versionSavedNoIngest"))
       } else if (result.task_id) {
-        toast.info("Version uploaded, ingesting…")
+        toast.info(t("fileMgmt.versionUploadedIngesting"))
         useFileMgmtStore
           .getState()
           ._startTaskPolling(collectionId, result.task_id, fileId)
       } else {
-        toast.success("New version uploaded")
+        toast.success(t("fileMgmt.newVersionUploaded"))
       }
     } catch (err) {
       uploadStartedRef.current = false
       toast.error(
-        `Update failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.updateFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setBusy(false)
@@ -263,12 +263,12 @@ export function UpdateFileDialog({
         <div className="pm-ws-chrome pm-ws-chrome--actions">
           <DialogHeader className="shrink-0 flex-1 min-w-0 !p-0 !space-y-0">
             <DialogTitle className="flex items-center gap-2 min-w-0 text-left">
-              <span className="pm-ws-title truncate">Update file</span>
+              <span className="pm-ws-title truncate">{t("fileMgmt.updateFile")}</span>
             </DialogTitle>
             <DialogDescription className="pm-meta !mt-1 normal-case tracking-normal text-left">
               {currentFilename
-                ? `New version of “${currentFilename}”. Local preview only — nothing is saved until you upload.`
-                : "Local preview only — nothing is saved until you upload."}
+                ? `${t("fileMgmt.newVersionUploaded")} “${currentFilename}”. ${t("fileMgmt.localPreviewOnly")}`
+                : t("fileMgmt.localPreviewOnly")}
             </DialogDescription>
           </DialogHeader>
           <div className="pm-ws-chrome-actions">
@@ -279,7 +279,7 @@ export function UpdateFileDialog({
               disabled={busy}
               onClick={() => handleClose(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -291,12 +291,12 @@ export function UpdateFileDialog({
               {busy ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Queuing…
+                  {t("fileMgmt.queuing")}
                 </>
               ) : (
                 <>
                   <Upload className="h-3.5 w-3.5" strokeWidth={1.75} />
-                  Upload version
+                  {t("fileMgmt.uploadVersion")}
                 </>
               )}
             </Button>
@@ -504,7 +504,7 @@ export function UpdateFileDialog({
                         setMessage(v)
                       }}
                       minHeight="100%"
-                      placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+                      placeholder={t("fileMgmt.writeMessagePh")}
                       showToolbar={false}
                       flush
                       className="flex-1 min-h-0"
