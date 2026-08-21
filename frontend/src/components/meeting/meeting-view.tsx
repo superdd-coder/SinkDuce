@@ -13,8 +13,8 @@ import {
   transcribeMeeting, cancelTranscribeMeeting,
   getMeetingTranscript, updateMeeting, commitMeetingSpeakers,
   getRealtimeTranscriptionProviders, getFileTranscriptionProviders,
-  getActiveProviderInfo, getHotWordsLibraries,
-  type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary,
+  getActiveProviderInfo,
+  type Meeting, type TranscriptSegment, type LanguageHintOption,
 } from "@/api/client"
 import { toast } from "sonner"
 import { useT } from "@/i18n/use-t"
@@ -116,7 +116,7 @@ export function MeetingView({ active = true }: { active?: boolean }) {
   /** Active adapter hot-words capability (from registry class flag) */
   const [fileSupportsHotWords, setFileSupportsHotWords] = useState(false)
   const [rtSupportsHotWords, setRtSupportsHotWords] = useState(false)
-  const [hotWordsLibraries, setHotWordsLibraries] = useState<HotWordsLibrarySummary[]>([])
+
   // Per-meeting + path language hints (`${meetingId}:rt` | `${meetingId}:file`)
   const perMeetingLanguageHints = useRef<Map<string, string[]>>(new Map())
   /** Which model path the language selector is bound to right now */
@@ -619,12 +619,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
       .catch(() => setHasFileProvider(false))
   }, [active])
 
-  // Load meetings and hot words on mount
+  // Load meetings on mount
   useEffect(() => {
     fetchMeetings()
-    getHotWordsLibraries()
-      .then(setHotWordsLibraries)
-      .catch(() => setHotWordsLibraries([]))
   }, [fetchMeetings])
 
   // Load meeting detail when active changes — keep previous paint (no blank flash)
@@ -1699,9 +1696,9 @@ export function MeetingView({ active = true }: { active?: boolean }) {
                 hasRealtimeProvider={hasRealtimeProvider}
                 realtimeEnabled={realtimeEnabled}
                 setRealtimeEnabled={setRealtimeEnabled}
-                hotWordsLibraries={hotWordsLibraries}
                 activeHotWordsSupported={activeHotWordsSupported}
                 handleSelectHotWordsLibraries={handleSelectHotWordsLibraries}
+                handleHotWordsDraftChange={handleHotWordsDraftChange}
                 languageHints={languageHints}
                 supportedLanguageHints={supportedLanguageHints}
                 updateLanguageHints={updateLanguageHints}

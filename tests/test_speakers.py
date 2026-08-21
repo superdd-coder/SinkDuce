@@ -653,6 +653,77 @@ class TestAssignAndCommit:
         assert fetched.speaker_matches["spk0"].cleared is True
         assert fetched.speaker_matches["spk0"].auto is False
 
+    def test_assign_display_name_does_not_create_person(self, meeting_and_speakers):
+        from src.meeting.models import TranscriptSegment
+        from src.meeting.store import create_meeting, get_meeting
+        from src.speakers.service import assign_speaker
+        from src.speakers.store import list_people
+
+        meeting = create_meeting("BGM")
+        _seed_transcript(
+            meeting,
+            [TranscriptSegment(start=0.0, end=4.0, text="music", speaker_id="spk0")],
+        )
+        before = {p.id for p in list_people()}
+        assign_speaker(meeting.id, "spk0", None, display_name="Background")
+        fetched = get_meeting(meeting.id)
+        assert fetched.speaker_names["spk0"] == "Background"
+        assert "spk0" not in (fetched.speaker_people or {})
+        assert {p.id for p in list_people()} == before
+        assert fetched.speaker_matches["spk0"].cleared is True
+        assert fetched.speaker_matches["spk0"].enrolled is False
+
+    def test_assign_display_name_survives_name_rebuild(self, meeting_and_speakers):
+        from src.meeting.models import TranscriptSegment
+        from src.meeting.store import create_meeting, get_meeting
+        from src.speakers.service import assign_speaker, rebuild_speaker_names
+        from src.speakers.store import create_person
+
+        person = create_person("Ray")
+        meeting = create_meeting("Mixed")
+        _seed_transcript(
+            meeting,
+            [
+                TranscriptSegment(start=0.0, end=2.0, text="a", speaker_id="spk0"),
+                TranscriptSegment(start=2.0, end=4.0, text="b", speaker_id="spk1"),
+            ],
+        )
+        assign_speaker(meeting.id, "spk0", person.id)
+        assign_speaker(meeting.id, "spk1", None, display_name="BGM")
+        fetched = get_meeting(meeting.id)
+        names = rebuild_speaker_names(
+            fetched.speaker_people, keep=fetched.speaker_names
+        )
+        assert names["spk0"] == "Ray"
+        assert names["spk1"] == "BGM"
+
+    def test_assign_display_name_not_overwritten_by_auto_match(self, meeting_and_speakers):
+        from src.meeting.models import TranscriptSegment
+        from src.meeting.store import create_meeting, get_meeting
+        from src.speakers.service import (
+            apply_matches_from_slots,
+            assign_speaker,
+            attach_after_transcription,
+            enroll,
+        )
+        from src.speakers.store import create_person
+
+        person = create_person("Zhang")
+        enroll(person.id, "prior", "spk0", _unit([1.0, 0.0]).tolist(), 20.0)
+        meeting = create_meeting("Keep tag")
+        _seed_transcript(
+            meeting,
+            [TranscriptSegment(start=0.0, end=8.0, text="hello", speaker_id="spk0")],
+        )
+        attach_after_transcription(
+            meeting.id, segment_embeddings=[_unit([1.0, 0.0])]
+        )
+        assign_speaker(meeting.id, "spk0", None, display_name="Background")
+        apply_matches_from_slots(meeting.id)
+        fetched = get_meeting(meeting.id)
+        assert fetched.speaker_names["spk0"] == "Background"
+        assert "spk0" not in (fetched.speaker_people or {})
+
     def test_assign_new_person_does_not_decode_audio(self, meeting_and_speakers):
         from src.meeting.models import TranscriptSegment
         from src.meeting.store import create_meeting, get_meeting

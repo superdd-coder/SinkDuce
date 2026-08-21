@@ -16,7 +16,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { cn } from "@/lib/utils"
 import { FolderOpen, Paperclip, Upload, X, XCircle } from "lucide-react"
 import { toast } from "sonner"
@@ -640,7 +639,7 @@ export function AddNodeDialog({
                           <div className="pm-timeline-attach-list-inner">
                             {pending.length === 0 ? (
                               <p className="pm-meta text-[var(--pm-faint)] px-1 py-2">
-                                No files attached yet
+                                {t("fileMgmt.noFilesAttachedYet")}
                               </p>
                             ) : (
                               <ul className="pm-ws-list pm-timeline-attach-list">
@@ -739,7 +738,7 @@ export function AddNodeDialog({
                         value={messageBody}
                         onChange={setMessageBody}
                         minHeight="100%"
-                        placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+                        placeholder={t("fileMgmt.writeMessagePh")}
                         showToolbar
                         flush
                         className="pm-add-node-md-editor"

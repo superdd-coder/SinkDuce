@@ -618,7 +618,7 @@ export function GroupFormDialog({
                     )}
                     onClick={chooseKeepOrNew}
                   >
-                    New folder
+                    {t("fileMgmt.newFolder")}
                   </button>
                 )}
                 {isEdit && (
@@ -645,7 +645,7 @@ export function GroupFormDialog({
                   )}
                   onClick={openTree}
                 >
-                  {isEdit ? "Rebind" : "Existing"}
+                  {isEdit ? t("fileMgmt.rebind") : t("fileMgmt.existing")}
                 </button>
               </div>
 
@@ -680,11 +680,11 @@ export function GroupFormDialog({
                   <div className="pm-group-tree-list">
                     {folderTree.length === 0 ? (
                       <p className="pm-meta text-center py-6 text-[var(--pm-faint)]">
-                        No folders yet
+                        {t("fileMgmt.noFoldersYet")}
                       </p>
                     ) : visibleFolders.length === 0 ? (
                       <p className="pm-meta text-center py-6 text-[var(--pm-faint)]">
-                        No matches
+                        {t("common.noMatches")}
                       </p>
                     ) : (
                       <div className="pm-timeline-ftree pm-group-ftree">

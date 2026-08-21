@@ -15,7 +15,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
+import { EditorToolbar } from "@/components/ui/tiptap-editor"
+import type { Editor } from "@tiptap/react"
 import { Clock, GitBranch, Loader2, Paperclip, Pencil } from "lucide-react"
 import type { Chain, Message, NodeDetail, NodeGroup } from "@/types/file-mgmt"
 import {
@@ -111,6 +112,7 @@ export function MessageEditorDialog({
   const [content, setContent] = useState(initialContent)
   const [editing, setEditing] = useState(!readonly)
   const [saving, setSaving] = useState(false)
+  const [msgEditor, setMsgEditor] = useState<Editor | null>(null)
 
   const isNodeMsg =
     !!activeMsg &&
@@ -223,6 +225,8 @@ export function MessageEditorDialog({
         setActiveMsg(message)
         setContent(initialContent)
         setEditing(!readonly)
+      } else {
+        setMsgEditor(null)
       }
       onOpenChange(o)
     },
@@ -547,14 +551,20 @@ export function MessageEditorDialog({
       >
         {editing ? (
           <div className="flex-1 min-h-0 flex flex-col pm-msg-editor-host">
+            <div className="pm-msg-fmt-bar">
+              {msgEditor && !msgEditor.isDestroyed ? (
+                <EditorToolbar editor={msgEditor} pinned />
+              ) : null}
+            </div>
             <MarkdownEditor
               value={content}
               onChange={setContent}
               minHeight={isNodeMsg ? "140px" : "280px"}
-              placeholder={MESSAGE_EDITOR_PLACEHOLDER}
-              showToolbar
+              placeholder={t("fileMgmt.writeMessagePh")}
+              showToolbar={false}
               flush
               className="flex-1 min-h-0"
+              onEditorReady={(ed) => setMsgEditor(ed as Editor)}
             />
           </div>
         ) : (

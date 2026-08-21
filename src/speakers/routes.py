@@ -117,7 +117,10 @@ async def delete_speaker(person_id: str):
                 meeting.id,
                 speaker_people=people_map or None,
                 speaker_matches=matches or None,
-                speaker_names=service.rebuild_speaker_names(people_map),
+                speaker_names=service.rebuild_speaker_names(
+                    people_map, keep=meeting.speaker_names
+                )
+                or None,
             )
         except Exception:
             logger.warning("Failed to unbind person %s from meeting %s", person_id, row.meeting_id, exc_info=True)
@@ -241,14 +244,16 @@ async def assign_meeting_speaker(meeting_id: str, speaker_id: str, body: dict = 
         raise HTTPException(404, "Meeting not found")
     new_person = body.get("new_person")
     person_id = body.get("person_id")
-    if new_person is None and "person_id" not in body:
-        raise HTTPException(400, "person_id or new_person is required")
+    display_name = (body.get("display_name") or "").strip() or None
+    if new_person is None and "person_id" not in body and not display_name:
+        raise HTTPException(400, "person_id, new_person, or display_name is required")
     try:
         meeting = service.assign_speaker(
             meeting_id,
             speaker_id,
             None if person_id is None and not new_person else person_id,
             new_person=new_person,
+            display_name=None if new_person or "person_id" in body else display_name,
         )
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc

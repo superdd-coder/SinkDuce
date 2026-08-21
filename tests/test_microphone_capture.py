@@ -362,4 +362,4 @@ def test_meeting_view_toasts_start_recording_error():
     chunk = src[start : start + 1800]
     assert "recorder.error" not in chunk
     assert "toast.error" in chunk
-    assert "No audio detected" in src
+    assert 't("meeting.noAudioDetected")' in src

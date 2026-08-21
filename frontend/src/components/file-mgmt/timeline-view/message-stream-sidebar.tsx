@@ -9,7 +9,6 @@ import {
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { Bot, Clock, Loader2, Pencil, Plus, X } from "lucide-react"
 import { toast } from "sonner"
 import { useT } from "@/i18n/use-t"
@@ -736,7 +735,7 @@ export function MessageStreamSidebar({
                     value={detailDraft}
                     onChange={setDetailDraft}
                     minHeight="100%"
-                    placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+                    placeholder={t("fileMgmt.writeMessagePh")}
                     showToolbar={false}
                   />
                 </div>

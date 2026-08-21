@@ -64,17 +64,40 @@ test("timeline message-stream chrome is localized", () => {
   assert.equal(t("en", "fileMgmt.mainChain"), "Main chain")
   assert.equal(t("zh-CN", "fileMgmt.mainChain"), "主链")
   assert.equal(t("en", "fileMgmt.focusLabel", { name: "Main chain" }), "Focus: Main chain")
-  assert.equal(t("zh-CN", "fileMgmt.focusLabel", { name: "主链" }), "焦点：主链")
+  assert.equal(t("zh-CN", "fileMgmt.focusLabel", { name: "主链" }), "当前：主链")
   assert.equal(
     t("en", "fileMgmt.noMessagesInScope"),
     "No messages in this scope. Click + to add at focus layer.",
   )
   assert.equal(
     t("zh-CN", "fileMgmt.noMessagesInScope"),
-    "此范围内没有消息。点 + 在焦点层添加。",
+    "此范围内没有消息。点 + 在当前层添加。",
   )
   assert.equal(t("en", "fileMgmt.branches"), "Branches")
   assert.equal(t("zh-CN", "fileMgmt.branches"), "分支")
+})
+
+test("group form and chat scroll chrome are localized", () => {
+  assert.equal(t("en", "fileMgmt.customSymbol"), "Custom symbol")
+  assert.equal(t("zh-CN", "fileMgmt.customSymbol"), "自定义符号")
+  assert.equal(t("en", "fileMgmt.newFolder"), "New Folder")
+  assert.equal(t("zh-CN", "fileMgmt.newFolder"), "新建文件夹")
+  assert.equal(t("en", "fileMgmt.existing"), "Existing")
+  assert.equal(t("zh-CN", "fileMgmt.existing"), "已有")
+  assert.equal(t("en", "fileMgmt.rebind"), "Rebind")
+  assert.equal(t("zh-CN", "fileMgmt.rebind"), "重新绑定")
+  assert.equal(t("en", "chat.scrollBottom"), "Scroll to bottom")
+  assert.equal(t("zh-CN", "chat.scrollBottom"), "滚到底部")
+})
+
+test("add-node message editor chrome is localized", () => {
+  assert.equal(
+    t("en", "fileMgmt.writeMessagePh"),
+    "Write a message… type / for commands",
+  )
+  assert.equal(t("zh-CN", "fileMgmt.writeMessagePh"), "写一条消息… 输入 / 使用命令")
+  assert.equal(t("en", "fileMgmt.noFilesAttachedYet"), "No files attached yet")
+  assert.equal(t("zh-CN", "fileMgmt.noFilesAttachedYet"), "还没有附件")
 })
 
 test("t interpolates {var} placeholders", () => {

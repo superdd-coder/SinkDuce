@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react
 import { createPortal } from "react-dom"
 import { Send, Loader2, AlertTriangle, Globe, MessageCircle, BrushCleaning } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { createImeEnterGuard } from "@/lib/ime"
 import { useT } from "@/i18n/use-t"
 import { humanSourceLabel } from "@/lib/source-display"
 import { StreamingAnswerBody } from "@/components/chat/streaming-answer-body"
@@ -194,6 +195,7 @@ export function QuickChat({
   const stickToBottom = useRef(true)
   const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const imeGuardRef = useRef(createImeEnterGuard())
   /** Stable host for web-confirm portal — avoid inline ref callbacks (re-fire every render). */
   const webConfirmHostRef = useRef<HTMLDivElement | null>(null)
   // ── Hint bubble state ──
@@ -679,7 +681,14 @@ export function QuickChat({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
+    if (!imeGuardRef.current.isSubmitEnter(e)) return
+    e.preventDefault()
+    send()
+  }
+  const handleCompositionStart = () => imeGuardRef.current.onCompositionStart()
+  const handleCompositionEnd = () => {
+    imeGuardRef.current.onCompositionEnd()
+    requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
   }
 
   const hasMessages = messages.length > 0
@@ -989,6 +998,8 @@ export function QuickChat({
             onToggleWebSearch={toggleWebSearch}
             onSend={send}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             textareaRef={textareaRef}
           />
         </div>
@@ -1091,7 +1102,8 @@ export function QuickChat({
 // ── Chat Input Bar ──
 
 function ChatInputBar({
-  input, setInput, streaming, webSearch, onToggleWebSearch, onSend, onKeyDown, textareaRef,
+  input, setInput, streaming, webSearch, onToggleWebSearch, onSend, onKeyDown,
+  onCompositionStart, onCompositionEnd, textareaRef,
 }: {
   input: string
   setInput: (v: string) => void
@@ -1100,6 +1112,8 @@ function ChatInputBar({
   onToggleWebSearch: () => void
   onSend: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
+  onCompositionStart: () => void
+  onCompositionEnd: () => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
   const t = useT()
@@ -1138,6 +1152,8 @@ function ChatInputBar({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
           placeholder={t("library.messageCollection")}
           disabled={streaming}
           rows={1}

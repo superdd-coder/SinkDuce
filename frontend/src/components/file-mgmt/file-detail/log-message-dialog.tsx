@@ -34,7 +34,6 @@ import { cn, transformImageBlocks } from "@/lib/utils"
 import { ChunkMd } from "@/components/shared/chunk-md"
 import { TiptapEditor } from "@/components/ui/tiptap-editor"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { MessageBody } from "@/components/file-mgmt/message-card"
 import type { FileVersion, Message } from "@/types/file-mgmt"
 import {
@@ -439,7 +438,7 @@ export function LogMessageDialog({
           value={content}
           onChange={setContent}
           minHeight={minHeight}
-          placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+          placeholder={t("fileMgmt.writeMessagePh")}
           showToolbar
           flush
           className="flex-1 min-h-0"

@@ -390,7 +390,7 @@ export function NodeFileAttach({
           <div className="pm-timeline-attach-list-inner">
             {displayAttachments.length === 0 ? (
               <p className="pm-meta text-[var(--pm-faint)] px-1 py-2">
-                No files attached yet
+                {t("fileMgmt.noFilesAttachedYet")}
               </p>
             ) : (
               <ul className="pm-ws-list pm-timeline-attach-list">

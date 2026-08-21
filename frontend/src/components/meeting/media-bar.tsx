@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, forwardRef, useImperativeHandle, type RefObject } from "react"
+import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -8,12 +8,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { SoftMenu } from "@/components/ui/menu"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, BookOpen, Languages, Trash2, Download, Ban } from "lucide-react"
-import type { MeetingStatus, HotWordsLibrarySummary, LanguageHintOption } from "@/api/client"
-import { toggleLanguageHint } from "./language-hints-selector"
+import { Upload, Mic, Square, Pause, Loader2, FileAudio, RefreshCw, Play, AlertCircle, Trash2, Download } from "lucide-react"
+import type { MeetingStatus, LanguageHintOption } from "@/api/client"
+import { LanguageHintsSelector } from "./language-hints-selector"
+import { HotWordsSelector } from "./hot-words-selector"
 import { useT } from "@/i18n/use-t"
 
 interface MediaBarProps {
@@ -43,10 +43,10 @@ interface MediaBarProps {
   onToggleRealtime?: () => void
   hasTranscript?: boolean
   hotWordsLibraryIds?: string[]
-  hotWordsLibraries?: HotWordsLibrarySummary[]
   /** File-model adapter flag. When false the chip is visible but disabled. */
   hotWordsSupported?: boolean
   onSelectHotWords?: (libraryIds: string[]) => void
+  onHotWordsDraftChange?: (draftIds: string[] | undefined) => void
   languageHints?: string[]
   languageHintOptions?: LanguageHintOption[]
   onChangeLanguageHints?: (hints: string[]) => void
@@ -87,9 +87,9 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   onToggleRealtime,
   hasTranscript,
   hotWordsLibraryIds = [],
-  hotWordsLibraries = [],
   hotWordsSupported = true,
   onSelectHotWords,
+  onHotWordsDraftChange,
   languageHints = [],
   languageHintOptions = [],
   onChangeLanguageHints,
@@ -112,36 +112,6 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
   const [scrubbing, setScrubbing] = useState(false)
   const [scrubRatio, setScrubRatio] = useState(0)
   const scrubbingRef = useRef(false)
-
-  // Hot Words / Language menus (SoftMenu + portal)
-  const [hwOpen, setHwOpen] = useState(false)
-  const hwBtnRef = useRef<HTMLElement>(null)
-  const [langOpen, setLangOpen] = useState(false)
-  const langBtnRef = useRef<HTMLElement>(null)
-
-  useEffect(() => {
-    if (!hotWordsSupported) setHwOpen(false)
-  }, [hotWordsSupported])
-
-  // Click outside closes SoftMenu (portal items are still under document)
-  useEffect(() => {
-    if (!hwOpen && !langOpen) return
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (hwOpen) {
-        const hitBtn = hwBtnRef.current?.contains(t)
-        const hitMenu = (e.target as Element)?.closest?.("[data-slot='menu']")
-        if (!hitBtn && !hitMenu) setHwOpen(false)
-      }
-      if (langOpen) {
-        const hitBtn = langBtnRef.current?.contains(t)
-        const hitMenu = (e.target as Element)?.closest?.("[data-slot='menu']")
-        if (!hitBtn && !hitMenu) setLangOpen(false)
-      }
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [hwOpen, langOpen])
 
   // Pause + reset local player chrome when meeting changes (no parent remount)
   useEffect(() => {
@@ -506,12 +476,6 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
 
   // Has audio — custom player card (tools row + scrubbable progress row)
   if (hasAudio) {
-    const hwSelectedLabel = hotWordsLibraryIds
-      .map((id) => hotWordsLibraries.find((l) => l.id === id)?.name)
-      .filter(Boolean)
-      .join(" · ")
-    const langCount = languageHints.length
-    const langCustomized = langCount > 0 && !(langCount === 1 && languageHints[0] === "auto")
     const dur = audioDuration > 0 && Number.isFinite(audioDuration) ? audioDuration : 0
     const ratio = scrubbing
       ? scrubRatio
@@ -656,168 +620,26 @@ export const MediaBar = forwardRef<MediaBarHandle, MediaBarProps>(function Media
           )}
 
           {onSelectHotWords && (
-            <div className="relative" ref={hwBtnRef as RefObject<HTMLDivElement>}>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      disabled={!hotWordsSupported}
-                      className={cn(
-                        "pm-meeting-player-chip",
-                        hotWordsSupported && hotWordsLibraryIds.length > 0 && "is-active",
-                      )}
-                      onClick={() => {
-                        if (!hotWordsSupported) return
-                        setHwOpen(!hwOpen)
-                        setLangOpen(false)
-                      }}
-                      aria-label={t("meeting.hotWords")}
-                    >
-                      <BookOpen className="size-3.5" strokeWidth={1.75} />
-                    </button>
-                  }
-                />
-                <TooltipContent side="top">
-                  {hotWordsSupported
-                    ? hwSelectedLabel
-                      ? `${t("meeting.hotWords")} · ${hwSelectedLabel}`
-                      : t("meeting.hotWords")
-                    : t("settings.hotWordsUnavailableTitle")}
-                </TooltipContent>
-              </Tooltip>
-              <SoftMenu
-                open={hotWordsSupported && hwOpen}
-                portal
-                anchorRef={hwBtnRef}
-                align="end"
-                className="pm-hw-menu min-w-[240px]"
-              >
-                <div className="pm-hw-list pm-hw-list--menu" role="listbox" aria-label={t("meeting.hotWordLibraries")}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={hotWordsLibraryIds.length === 0}
-                    className={cn("pm-hw-option", hotWordsLibraryIds.length === 0 ? "is-on" : "is-off")}
-                    onClick={() => { onSelectHotWords([]) }}
-                  >
-                    <span className="pm-hw-option-icon" aria-hidden>
-                      <Ban className="size-3.5" />
-                    </span>
-                    <span className="pm-hw-option-body">
-                      <span className="pm-hw-option-name">{t("common.none")}</span>
-                      <span className="pm-hw-option-meta">{t("meeting.noVocabBoost")}</span>
-                    </span>
-                  </button>
-                  {hotWordsLibraries.map((lib) => {
-                    const isOn = hotWordsLibraryIds.includes(lib.id)
-                    return (
-                      <button
-                        key={lib.id}
-                        type="button"
-                        role="option"
-                        aria-selected={isOn}
-                        className={cn("pm-hw-option", isOn ? "is-on" : "is-off")}
-                        onClick={() => {
-                          onSelectHotWords(
-                            isOn
-                              ? hotWordsLibraryIds.filter((id) => id !== lib.id)
-                              : [...hotWordsLibraryIds, lib.id],
-                          )
-                        }}
-                      >
-                        <span className="pm-hw-option-icon" aria-hidden>
-                          <BookOpen className="size-3.5" />
-                        </span>
-                        <span className="pm-hw-option-body">
-                          <span className="pm-hw-option-name">{lib.name}</span>
-                          <span className="pm-hw-option-meta">
-                            {lib.word_count === 1
-                              ? t("meeting.nWord", { n: lib.word_count })
-                              : t("meeting.nWords", { n: lib.word_count })}
-                          </span>
-                        </span>
-                      </button>
-                    )
-                  })}
-                  {hotWordsLibraries.length === 0 && (
-                    <p className="pm-hw-empty">{t("meeting.noHotWordLibs")}</p>
-                  )}
-                </div>
-              </SoftMenu>
-            </div>
+            <HotWordsSelector
+              meetingId={meetingId}
+              currentLibraryIds={hotWordsLibraryIds}
+              hasTranscript={!!hasTranscript}
+              providerSupportsHotWords={hotWordsSupported}
+              onSelectLibraries={onSelectHotWords}
+              onDraftChange={onHotWordsDraftChange}
+              variant="chip"
+            />
           )}
 
           {showLanguageSelector && (
-            <div className="relative" ref={langBtnRef as RefObject<HTMLDivElement>}>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      className={cn(
-                        "pm-meeting-player-chip",
-                        langCustomized && "is-active",
-                      )}
-                      onClick={() => { setLangOpen(!langOpen); setHwOpen(false) }}
-                      aria-label={t("meeting.language")}
-                    >
-                      <Languages className="size-3.5" strokeWidth={1.75} />
-                    </button>
-                  }
-                />
-                <TooltipContent side="top">
-                  {langCustomized
-                    ? t("meeting.langCountSelected", { n: langCount })
-                    : t("meeting.languageAuto")}
-                </TooltipContent>
-              </Tooltip>
-              <SoftMenu
-                open={langOpen}
-                portal
-                anchorRef={langBtnRef}
-                align="end"
-                className="pm-lang-menu min-w-[220px]"
-              >
-                <p className="pm-meta px-1 pb-1.5">
-                  {maxLanguageHints <= 1
-                    ? t("meeting.oneLanguage")
-                    : t("meeting.upToLanguages", { n: maxLanguageHints })}
-                </p>
-                <div className="pm-lang-pills pm-lang-pills--menu" role="group" aria-label={t("meeting.languageHints")}>
-                  {(() => {
-                    const opts = languageHintOptions.some((o) => o.code === "auto")
-                      ? languageHintOptions
-                      : [{ code: "auto", label: t("meeting.auto") }, ...languageHintOptions]
-                    const isAutoOnly =
-                      languageHints.length === 0 ||
-                      (languageHints.length === 1 && languageHints[0] === "auto")
-                    return opts.map(({ code, label }) => {
-                      const isSelected =
-                        code === "auto" ? isAutoOnly : languageHints.includes(code)
-                      return (
-                        <button
-                          key={code}
-                          type="button"
-                          className={cn("pm-lang-pill", isSelected ? "is-on" : "is-off")}
-                          aria-pressed={isSelected}
-                          onClick={() => {
-                            onChangeLanguageHints?.(
-                              toggleLanguageHint(languageHints, code, maxLanguageHints),
-                            )
-                          }}
-                        >
-                          <span className="pm-lang-pill-label">{code === "auto" ? t("meeting.auto") : label}</span>
-                          {code !== "auto" && (
-                            <span className="pm-lang-pill-code t-mono-family">{code}</span>
-                          )}
-                        </button>
-                      )
-                    })
-                  })()}
-                </div>
-              </SoftMenu>
-            </div>
+            <LanguageHintsSelector
+              selected={languageHints}
+              onChange={(hints) => onChangeLanguageHints?.(hints)}
+              options={languageHintOptions}
+              maxHints={maxLanguageHints}
+              showTipBubble={false}
+              variant="chip"
+            />
           )}
 
           {/* Rightmost: Replace / Transcribe (pre-tx) or Re-transcribe (post-tx) */}

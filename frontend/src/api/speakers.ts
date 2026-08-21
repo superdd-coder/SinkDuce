@@ -105,7 +105,10 @@ export function speakerPreviewAudioUrl(
 export const assignMeetingSpeaker = (
   meetingId: string,
   speakerId: string,
-  body: { person_id: string | null } | { new_person: { display_name: string; disambiguator?: string } },
+  body:
+    | { person_id: string | null }
+    | { new_person: { display_name: string; disambiguator?: string } }
+    | { display_name: string },
 ) =>
   request<Meeting>(`/meetings/${meetingId}/speakers/${encodeURIComponent(speakerId)}`, {
     method: "PUT",

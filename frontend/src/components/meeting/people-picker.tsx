@@ -134,7 +134,10 @@ export function PeoplePicker({
   )
 
   const assign = async (
-    body: { person_id: string | null } | { new_person: { display_name: string; disambiguator?: string } },
+    body:
+      | { person_id: string | null }
+      | { new_person: { display_name: string; disambiguator?: string } }
+      | { display_name: string },
   ) => {
     setBusy(true)
     try {
@@ -159,6 +162,12 @@ export function PeoplePicker({
       return
     }
     await assign({ person_id: personId })
+  }
+
+  const handleTag = async () => {
+    const name = query.trim()
+    if (!name) return
+    await assign({ display_name: name })
   }
 
   const handleAdd = async () => {
@@ -224,10 +233,10 @@ export function PeoplePicker({
           {initialOf(person.label || person.display_name)}
         </span>
         <span className="min-w-0 flex-1 text-left">
-          <span className="pm-people-picker-name">{person.label}</span>
-          {person.has_voiceprint && (
-            <span className="pm-people-picker-sub">{t("meeting.voiceprint")}</span>
-          )}
+          <span className="pm-people-picker-name">{person.display_name || person.label}</span>
+          {person.disambiguator.trim() ? (
+            <span className="pm-people-picker-sub">{person.disambiguator.trim()}</span>
+          ) : null}
         </span>
         {score != null && (
           <span className="pm-people-picker-score">{Math.round(score * 100)}</span>
@@ -292,7 +301,10 @@ export function PeoplePicker({
               onKeyDown={(e) => {
                 e.stopPropagation()
                 if (e.key === "Escape") setOpen(false)
-                if (e.key === "Enter") void handleAdd()
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  void handleTag()
+                }
               }}
               autoFocus
             />
@@ -310,7 +322,10 @@ export function PeoplePicker({
               onChange={(e) => setDisambiguator(e.target.value)}
               onKeyDown={(e) => {
                 e.stopPropagation()
-                if (e.key === "Enter") void handleAdd()
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  void handleTag()
+                }
                 if (e.key === "Escape") setOpen(false)
               }}
             />
@@ -327,15 +342,25 @@ export function PeoplePicker({
           {rest.map((person) => row(person))}
         </div>
         {query.trim() ? (
-          <button
-            type="button"
-            className="pm-people-picker-add"
-            disabled={busy}
-            onClick={() => void handleAdd()}
-          >
-            <Plus className="size-3.5 shrink-0" />
-            {t("meeting.addQuoted", { name: query.trim() })}
-          </button>
+          <>
+            <button
+              type="button"
+              className="pm-people-picker-add"
+              disabled={busy}
+              onClick={() => void handleTag()}
+            >
+              {t("meeting.tagQuoted", { name: query.trim() })}
+            </button>
+            <button
+              type="button"
+              className="pm-people-picker-add"
+              disabled={busy}
+              onClick={() => void handleAdd()}
+            >
+              <Plus className="size-3.5 shrink-0" />
+              {t("meeting.addQuoted", { name: query.trim() })}
+            </button>
+          </>
         ) : null}
         {assigned && (
           <button

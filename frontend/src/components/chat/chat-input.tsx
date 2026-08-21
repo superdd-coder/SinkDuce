@@ -8,6 +8,7 @@ import { uploadFiles } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { createImeEnterGuard } from "@/lib/ime"
 import { useT } from "@/i18n/use-t"
 import { formatApiError } from "@/api/http"
 import {
@@ -68,6 +69,7 @@ export function ChatInput() {
   )
   const { sendMessage, stopGeneration } = useStreamChat()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const imeGuardRef = useRef(createImeEnterGuard())
   const fileRef = useRef<HTMLInputElement>(null)
   const collectionMenuRef = useRef<HTMLDivElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -158,7 +160,9 @@ export function ChatInput() {
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
+    if (!imeGuardRef.current.isSubmitEnter(e)) return
+    e.preventDefault()
+    void handleSend()
   }
 
   const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -497,6 +501,11 @@ export function ChatInput() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => imeGuardRef.current.onCompositionStart()}
+            onCompositionEnd={() => {
+              imeGuardRef.current.onCompositionEnd()
+              requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
+            }}
             disabled={isStreaming}
           />
           {isStreaming && (

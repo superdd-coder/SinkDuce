@@ -25,6 +25,8 @@ interface Props {
   onRetranscribe?: () => void
   disabled?: boolean
   compact?: boolean
+  /** Player toolbar: icon chip that still opens the same Dialog as setup. */
+  variant?: "pill" | "chip"
 }
 
 export function hotWordsSelectionLabel(
@@ -45,6 +47,7 @@ export function HotWordsSelector({
   onDraftChange,
   disabled = false,
   compact = false,
+  variant = "pill",
 }: Props) {
   const t = useT()
   const [open, setOpen] = useState(false)
@@ -162,41 +165,65 @@ export function HotWordsSelector({
 
   const isDisabled = disabled || !providerSupportsHotWords
 
+  const title =
+    !providerSupportsHotWords
+      ? t("settings.hotWordsUnavailableTitle")
+      : disabled
+        ? t("meeting.unavailableWhileTx")
+        : t("meeting.chooseHotWordLibs")
+
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={isDisabled}
-        title={
-          !providerSupportsHotWords
-            ? t("settings.hotWordsUnavailableTitle")
-            : disabled
-              ? t("meeting.unavailableWhileTx")
-              : t("meeting.chooseHotWordLibs")
-        }
-        className={cn(
-          "pm-meeting-pill",
-          compact && "is-compact",
-          hasSelection && providerSupportsHotWords && "is-active",
-          !providerSupportsHotWords && "is-unsupported",
-        )}
-        onClick={() => {
-          if (isDisabled) return
-          setOpen(true)
-        }}
-      >
-        <BookOpen className="size-3.5 shrink-0 opacity-80" />
-        <span className="pm-meeting-pill-label">
-          {displayName}
-        </span>
-        {isPending && providerSupportsHotWords && (
-          <span className="text-[10px] text-amber-700 px-1.5 py-0.5 rounded-full bg-amber-50">
-            {t("meeting.hotWordsDraft")}
+      {variant === "chip" ? (
+        <button
+          type="button"
+          disabled={isDisabled}
+          title={
+            isPending && providerSupportsHotWords
+              ? `${title} · ${t("meeting.hotWordsDraft")}`
+              : title
+          }
+          className={cn(
+            "pm-meeting-player-chip",
+            ((hasSelection && providerSupportsHotWords) || isPending) && "is-active",
+          )}
+          aria-label={t("meeting.hotWords")}
+          onClick={() => {
+            if (isDisabled) return
+            setOpen(true)
+          }}
+        >
+          <BookOpen className="size-3.5" strokeWidth={1.75} />
+        </button>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={isDisabled}
+          title={title}
+          className={cn(
+            "pm-meeting-pill",
+            compact && "is-compact",
+            hasSelection && providerSupportsHotWords && "is-active",
+            !providerSupportsHotWords && "is-unsupported",
+          )}
+          onClick={() => {
+            if (isDisabled) return
+            setOpen(true)
+          }}
+        >
+          <BookOpen className="size-3.5 shrink-0 opacity-80" />
+          <span className="pm-meeting-pill-label">
+            {displayName}
           </span>
-        )}
-      </Button>
+          {isPending && providerSupportsHotWords && (
+            <span className="text-[10px] text-amber-700 px-1.5 py-0.5 rounded-full bg-amber-50">
+              {t("meeting.hotWordsDraft")}
+            </span>
+          )}
+        </Button>
+      )}
 
       <HotWordsManager
         nested

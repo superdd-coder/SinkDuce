@@ -391,7 +391,7 @@ export function ChatView() {
                 className="pm-chat-scroll-btn"
               >
                 <ArrowDown className="size-3" />
-                Scroll to bottom
+                {t("chat.scrollBottom")}
               </button>
             )}
 

@@ -408,7 +408,7 @@ export function IconPickerPanel({
 
       <div className="pm-group-custom-field">
         <label className="pm-field-label" htmlFor="pm-group-custom-icon">
-          Custom symbol
+          {t("fileMgmt.customSymbol")}
         </label>
         <input
           id="pm-group-custom-icon"

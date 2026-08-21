@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -3368,16 +3368,19 @@ export function EditorToolbar({
   editor,
   stickyOffset = 0,
   actions,
+  pinned = false,
 }: {
   editor: Editor
   stickyOffset?: number
   actions?: ReactNode
+  /** Stay visible; do not hide on editor blur (dialog / notes chrome). */
+  pinned?: boolean
 }) {
   const [, setTick] = useState(0)
   const barRef = useRef<HTMLDivElement>(null)
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [compactColors, setCompactColors] = useState(false)
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(pinned)
 
   const showToolbar = useCallback(() => {
     if (hideTimerRef.current) {
@@ -3389,6 +3392,7 @@ export function EditorToolbar({
 
   /** Debounced hide — avoids flash when PM blurs for a frame on toolbar click */
   const scheduleHideToolbar = useCallback(() => {
+    if (pinned) return
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
     hideTimerRef.current = setTimeout(() => {
       hideTimerRef.current = null
@@ -3419,7 +3423,7 @@ export function EditorToolbar({
       }
       setEditing(false)
     }, 160)
-  }, [editor])
+  }, [editor, pinned])
 
   useEffect(() => {
     let alive = true
@@ -3457,12 +3461,14 @@ export function EditorToolbar({
     }
   }, [editor, showToolbar, scheduleHideToolbar])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = barRef.current
-    if (!el || typeof ResizeObserver === "undefined") return
+    if (!el) return
+    const apply = (w: number) => setCompactColors(w > 0 && w < FMT_COMPACT_PX)
+    apply(el.getBoundingClientRect().width)
+    if (typeof ResizeObserver === "undefined") return
     const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width ?? 0
-      setCompactColors(w > 0 && w < FMT_COMPACT_PX)
+      apply(entries[0]?.contentRect.width ?? 0)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -3512,10 +3518,11 @@ export function EditorToolbar({
     <div
       ref={barRef}
       className={cn(
-        "pm-fmt-toolbar shrink-0 sticky z-10",
-        editing && "is-editing",
+        "pm-fmt-toolbar shrink-0 z-10",
+        (stickyOffset ?? 0) > 0 && "sticky",
+        (pinned || editing) && "is-editing",
       )}
-      style={{ top: stickyOffset ?? 0 }}
+      style={(stickyOffset ?? 0) > 0 ? { top: stickyOffset } : undefined}
       onMouseDown={(e) => {
         // Keep visible + keep PM selection (table-menu pattern)
         showToolbar()
@@ -3715,6 +3722,10 @@ const PremiumHighlight = Highlight.extend({
 export const MESSAGE_EDITOR_PLACEHOLDER =
   "Write a message… type / for commands"
 
+function defaultMessagePlaceholder(enableSlash: boolean): string {
+  return enableSlash ? tr("fileMgmt.writeMessagePh") : tr("fileMgmt.writePh")
+}
+
 export function TiptapEditor({
   value, onChange, className, placeholder, children,
   readonly = false, onImageUpload, onNoteLinkClick, onDistillNavigate, onEditorReady,
@@ -3734,9 +3745,7 @@ export function TiptapEditor({
   onEditorFocusRef.current = onEditorFocus
   // Placeholder extension is configured once; read latest text via ref so
   // prop updates / HMR are not stuck on the first mount string.
-  const defaultPlaceholder = enableSlash
-    ? MESSAGE_EDITOR_PLACEHOLDER
-    : "Write…"
+  const defaultPlaceholder = defaultMessagePlaceholder(enableSlash)
   const placeholderRef = useRef(placeholder || defaultPlaceholder)
   placeholderRef.current = placeholder || defaultPlaceholder
 
@@ -3823,8 +3832,7 @@ export function TiptapEditor({
       TaskList, TaskItem.configure({ nested: true }),
       Placeholder.configure({
         placeholder: () =>
-          placeholderRef.current ||
-          (enableSlash ? MESSAGE_EDITOR_PLACEHOLDER : "Write…"),
+          placeholderRef.current || defaultMessagePlaceholder(enableSlash),
         showOnlyWhenEditable: true,
         showOnlyCurrent: false,
         includeChildren: false,
@@ -4107,7 +4115,6 @@ export function TiptapEditor({
       )}
       <style>{`
         .tiptap-editor .ProseMirror {
-          min-height: 100%;
           overflow-anchor: none;
         }
         /* TipTap Placeholder extension — without this, data-placeholder is invisible */
@@ -4158,7 +4165,7 @@ export function TiptapEditor({
       <EditorContent
         editor={editor}
         className={cn(
-          "prose prose-sm dark:prose-invert max-w-none min-h-full flex-1 w-full",
+          "prose prose-sm dark:prose-invert max-w-none min-h-0 flex-1 w-full",
           flush ? "p-0 !max-w-none" : "p-4"
         )}
       />
@@ -4189,7 +4196,7 @@ function PlainEditor({ value, onChange, className, minHeight, placeholder }: Mar
       )}
       {!focused && isEmpty && (
         <div className="md-editor-overlay" onClick={() => textareaRef.current?.focus()}>
-          <span className="text-muted-foreground italic text-sm">{placeholder || MESSAGE_EDITOR_PLACEHOLDER}</span>
+          <span className="text-muted-foreground italic text-sm">{placeholder || defaultMessagePlaceholder(true)}</span>
         </div>
       )}
     </div>

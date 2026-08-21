@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import { Send, Loader2, AlertTriangle, MessageCircle, BrushCleaning } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { createImeEnterGuard } from "@/lib/ime"
 import { humanSourceLabel } from "@/lib/source-display"
 import { parseMeetingRefGroups, MEETING_CITE_RE_SOURCE } from "@/lib/meeting-ref-chips"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
@@ -453,6 +454,7 @@ export function MeetingQuickChat({
   const stickToBottom = useRef(true)
   const ignoreScrollEvent = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const imeGuardRef = useRef(createImeEnterGuard())
   // ── Hint bubble state ──
   const [hintVisible, setHintVisible] = useState(false)
   const [hintExiting, setHintExiting] = useState(false)
@@ -742,7 +744,14 @@ export function MeetingQuickChat({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
+    if (!imeGuardRef.current.isSubmitEnter(e)) return
+    e.preventDefault()
+    send()
+  }
+  const handleCompositionStart = () => imeGuardRef.current.onCompositionStart()
+  const handleCompositionEnd = () => {
+    imeGuardRef.current.onCompositionEnd()
+    requestAnimationFrame(() => imeGuardRef.current.clearJustEnded())
   }
 
   const hasMessages = messages.length > 0
@@ -1012,6 +1021,8 @@ export function MeetingQuickChat({
             streaming={streaming}
             onSend={send}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             textareaRef={textareaRef}
           />
         </div>
@@ -1208,13 +1219,16 @@ function TimeContent({ content, onRefClick }: {
 }
 
 function ChatInputBar({
-  input, setInput, streaming, onSend, onKeyDown, textareaRef,
+  input, setInput, streaming, onSend, onKeyDown,
+  onCompositionStart, onCompositionEnd, textareaRef,
 }: {
   input: string
   setInput: (v: string) => void
   streaming: boolean
   onSend: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
+  onCompositionStart: () => void
+  onCompositionEnd: () => void
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
 }) {
   const t = useT()
@@ -1232,6 +1246,8 @@ function ChatInputBar({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
+          onCompositionStart={onCompositionStart}
+          onCompositionEnd={onCompositionEnd}
           placeholder={t("meeting.messageMeeting")}
           disabled={streaming}
           rows={1}

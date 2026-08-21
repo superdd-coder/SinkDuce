@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import {
   FileIcon,
   Loader2,
@@ -505,7 +504,7 @@ export function UpdateFileDialog({
                         setMessage(v)
                       }}
                       minHeight="100%"
-                      placeholder={MESSAGE_EDITOR_PLACEHOLDER}
+                      placeholder={t("fileMgmt.writeMessagePh")}
                       showToolbar={false}
                       flush
                       className="flex-1 min-h-0"

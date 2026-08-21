@@ -42,6 +42,8 @@ interface Props {
   compact?: boolean
   /** Official cap for the active model (1 = single-select, 4 = Qwen). */
   maxHints?: number
+  /** Player toolbar: icon chip that still opens the same Dialog as setup. */
+  variant?: "pill" | "chip"
 }
 
 export function LanguageHintsSelector({
@@ -52,6 +54,7 @@ export function LanguageHintsSelector({
   disabled = false,
   compact = false,
   maxHints = 1,
+  variant = "pill",
 }: Props) {
   const t = useT()
   const [open, setOpen] = useState(false)
@@ -132,53 +135,79 @@ export function LanguageHintsSelector({
       : [{ code: "auto", label: t("meeting.auto") }, ...options]
   })()
 
-  return (
-    <>
-      {/* Language button fixed; bubble sits top-right and bobs on its own */}
-      <div className={cn("pm-lang-hint-anchor", compact ? "w-auto" : "w-full")}>
-        {(hintVisible || hintExiting) && showTipBubble && !open && !disabled && (
-          <div className="pm-lang-hint-bubble-slot" aria-hidden>
-            {/* Bob on outer wrap; scale emerge on inner — no transform fight */}
-            <div className="pm-lang-hint-bob">
-              <div
-                className={cn(
-                  "pm-lang-hint-bubble",
-                  hintExiting ? "is-retracting" : "is-emerging",
-                )}
-              >
-                <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">
-                  {hintMessage}
-                </span>
-              </div>
+  const chipTrigger = (
+    <button
+      type="button"
+      disabled={disabled}
+      className={cn(
+        "pm-meeting-player-chip",
+        !isAutoOnly && "is-active",
+      )}
+      aria-label={t("meeting.language")}
+      title={
+        isAutoOnly
+          ? t("meeting.languageAuto")
+          : t("meeting.langCountSelected", { n: selected.filter((c) => c !== "auto").length || selected.length })
+      }
+      onClick={() => {
+        if (disabled) return
+        setOpen(true)
+      }}
+    >
+      <Languages className="size-3.5" strokeWidth={1.75} />
+    </button>
+  )
+
+  const pillTrigger = (
+    <div className={cn("pm-lang-hint-anchor", compact ? "w-auto" : "w-full")}>
+      {(hintVisible || hintExiting) && showTipBubble && !open && !disabled && (
+        <div className="pm-lang-hint-bubble-slot" aria-hidden>
+          {/* Bob on outer wrap; scale emerge on inner — no transform fight */}
+          <div className="pm-lang-hint-bob">
+            <div
+              className={cn(
+                "pm-lang-hint-bubble",
+                hintExiting ? "is-retracting" : "is-emerging",
+              )}
+            >
+              <span className="pm-meta whitespace-nowrap text-[var(--pm-green)]">
+                {hintMessage}
+              </span>
             </div>
           </div>
+        </div>
+      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        className={cn(
+          "pm-meeting-pill",
+          compact && "is-compact",
+          !isAutoOnly && "is-active",
         )}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={disabled}
+        onClick={() => {
+          if (disabled) return
+          setOpen(true)
+        }}
+      >
+        <Languages className="size-3.5 shrink-0 opacity-80" />
+        <span
           className={cn(
-            "pm-meeting-pill",
-            compact && "is-compact",
-            !isAutoOnly && "is-active",
+            "pm-meeting-pill-label",
+            disabled && "t-mono-family uppercase tracking-wide",
           )}
-          onClick={() => {
-            if (disabled) return
-            setOpen(true)
-          }}
         >
-          <Languages className="size-3.5 shrink-0 opacity-80" />
-          <span
-            className={cn(
-              "pm-meeting-pill-label",
-              disabled && "t-mono-family uppercase tracking-wide",
-            )}
-          >
-            {display}
-          </span>
-        </Button>
-      </div>
+          {display}
+        </span>
+      </Button>
+    </div>
+  )
+
+  return (
+    <>
+      {variant === "chip" ? chipTrigger : pillTrigger}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="pm-dialog sm:max-w-[340px]">

@@ -15,7 +15,7 @@ import {
   MeetingQcFab,
   type MeetingQcSpinPhase,
 } from "./meeting-quick-chat"
-import { type Meeting, type TranscriptSegment, type LanguageHintOption, type HotWordsLibrarySummary } from "@/api/client"
+import { type Meeting, type TranscriptSegment, type LanguageHintOption } from "@/api/client"
 import type { SidebarView } from "@/stores/app-store"
 import { useT } from "@/i18n/use-t"
 
@@ -86,9 +86,9 @@ export interface MeetingStudioStageProps {
   hasRealtimeProvider: boolean
   realtimeEnabled: boolean
   setRealtimeEnabled: Dispatch<SetStateAction<boolean>>
-  hotWordsLibraries: HotWordsLibrarySummary[]
   activeHotWordsSupported: boolean
   handleSelectHotWordsLibraries: (ids: string[]) => void
+  handleHotWordsDraftChange: (draft: string[] | undefined) => void
   languageHints: string[]
   supportedLanguageHints: LanguageHintOption[]
   updateLanguageHints: (next: string[]) => void
@@ -177,9 +177,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
     hasRealtimeProvider,
     realtimeEnabled,
     setRealtimeEnabled,
-    hotWordsLibraries,
     activeHotWordsSupported,
     handleSelectHotWordsLibraries,
+    handleHotWordsDraftChange,
     languageHints,
     supportedLanguageHints,
     updateLanguageHints,
@@ -417,9 +417,9 @@ export function MeetingStudioStage(p: MeetingStudioStageProps) {
                       onToggleRealtime={() => setRealtimeEnabled((v) => !v)}
                       hasTranscript={displaySegments.length > 0}
                       hotWordsLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
-                      hotWordsLibraries={hotWordsLibraries}
                       hotWordsSupported={activeHotWordsSupported}
                       onSelectHotWords={handleSelectHotWordsLibraries}
+                      onHotWordsDraftChange={handleHotWordsDraftChange}
                       languageHints={languageHints}
                       languageHintOptions={supportedLanguageHints}
                       onChangeLanguageHints={updateLanguageHints}
