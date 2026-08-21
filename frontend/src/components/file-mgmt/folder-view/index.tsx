@@ -10,6 +10,7 @@ import { FolderUploadConfirmDialog } from "./folder-upload-confirm-dialog"
 import { Toolbar } from "./toolbar"
 import { FileMgmtDetailDialog } from "@/components/file-mgmt/file-detail"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 /**
  * Files surface — dual column when Messages open (Overview geometry).
@@ -27,6 +28,7 @@ export function FolderView({
   /** Quick Chat open — fade message stack in place (same as Overview rail). */
   railCovered?: boolean
 }) {
+  const t = useT()
   const {
     fetchFolderTree,
     navigateToRoot,
@@ -112,13 +114,13 @@ export function FolderView({
                 <button
                   type="button"
                   onClick={toggleMessageSidebar}
-                  title="Show messages"
+                  title={t("fileMgmt.showMessages")}
                   className="pm-files-msg-reopen"
                   tabIndex={msgCollapsed ? 0 : -1}
                   aria-hidden={!msgCollapsed}
                 >
                   <PanelRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  <span>Messages</span>
+                  <span>{t("common.messages")}</span>
                   {msgCount > 0 && (
                     <span className="pm-files-msg-count">{msgCount}</span>
                   )}

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { useT } from "@/i18n/use-t"
 
 interface CreateNoteDialogProps {
   open: boolean
@@ -10,6 +11,7 @@ interface CreateNoteDialogProps {
 }
 
 export function CreateNoteDialog({ open, onOpenChange, onCreate }: CreateNoteDialogProps) {
+  const t = useT()
   const [title, setTitle] = useState("")
   const [creating, setCreating] = useState(false)
 
@@ -35,13 +37,13 @@ export function CreateNoteDialog({ open, onOpenChange, onCreate }: CreateNoteDia
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
-          <DialogTitle>Create New Note</DialogTitle>
+          <DialogTitle>{t("library.createNote")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 pt-1">
           <div>
-            <label className="pm-field-label">Title</label>
+            <label className="pm-field-label">{t("common.title")}</label>
             <Input
-              placeholder="Note title..."
+              placeholder={t("library.noteTitlePh")}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
@@ -54,13 +56,13 @@ export function CreateNoteDialog({ open, onOpenChange, onCreate }: CreateNoteDia
               variant="ghost"
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               onClick={handleCreate}
               disabled={!title.trim() || creating}
             >
-              {creating ? "Creating..." : "Create"}
+              {creating ? t("common.loading") : t("common.create")}
             </Button>
           </div>
         </div>

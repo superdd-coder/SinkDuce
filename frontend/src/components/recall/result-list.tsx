@@ -3,6 +3,7 @@ import { useAppStore } from "@/stores/app-store"
 import type { RecallResult } from "@/api/client"
 import { cn } from "@/lib/utils"
 import { ChunkMd } from "@/components/shared/chunk-md"
+import { useT } from "@/i18n/use-t"
 
 function getCollectionName(id: string) {
   const collections = useAppStore.getState().collections
@@ -69,6 +70,7 @@ function resolveSource(
     collection?: string
   },
   filesMap: Record<string, string>,
+  t: (key: string, vars?: Record<string, string | number>) => string,
 ): string {
   const source = result.source || ""
   // 1) filesMap first when server only has a weak/generic name
@@ -99,10 +101,10 @@ function resolveSource(
   }
 
   // Last resort — short type tag (better than raw UUID key)
-  if (source.startsWith("__meeting__:")) return "Meeting"
-  if (source.startsWith("__note__:")) return "Note"
-  if (source.startsWith("__file__:") || source.startsWith("file:")) return "Document"
-  return "Document"
+  if (source.startsWith("__meeting__:")) return t("nav.meeting")
+  if (source.startsWith("__note__:")) return t("common.note")
+  if (source.startsWith("__file__:") || source.startsWith("file:")) return t("common.file")
+  return t("common.file")
 }
 
 interface ResultListProps {
@@ -119,6 +121,7 @@ function ResultCard({
   rank: number
   filesMap: Record<string, string>
 }) {
+  const t = useT()
   const scorePct = Math.max(0, Math.min(100, result.score * 100))
   return (
     <div className="pm-recall-result">
@@ -144,7 +147,7 @@ function ResultCard({
           )}
           {(result.source || result.display_name) && (
             <span className="pm-recall-result-source">
-              {resolveSource(result, filesMap)}
+              {resolveSource(result, filesMap, t)}
             </span>
           )}
         </div>
@@ -172,8 +175,9 @@ function ChildCard({
   index: number
   filesMap: Record<string, string>
 }) {
+  const t = useT()
   const scorePct = Math.max(0, Math.min(100, child.score * 100))
-  const sourceLabel = resolveSource(child, filesMap)
+  const sourceLabel = resolveSource(child, filesMap, t)
   return (
     <article className="pm-recall-child-card">
       <header className="pm-recall-child-head">
@@ -182,10 +186,10 @@ function ChildCard({
         </span>
         <div className="pm-recall-child-head-main">
           <div className="pm-recall-child-badges">
-            <Badge variant="secondary">child</Badge>
+            <Badge variant="secondary">{t("recall.child")}</Badge>
             <Badge variant="default">{scorePct.toFixed(0)}%</Badge>
           </div>
-          {sourceLabel && sourceLabel !== "Document" && (
+          {sourceLabel && sourceLabel !== t("common.file") && (
             <span className="pm-recall-result-source" title={sourceLabel}>
               {sourceLabel}
             </span>
@@ -209,6 +213,7 @@ function ChildCard({
 }
 
 export function ResultList({ results, filesMap }: ResultListProps) {
+  const t = useT()
   const map = filesMap || {}
   return (
     <div className="pm-recall-list">
@@ -216,10 +221,10 @@ export function ResultList({ results, filesMap }: ResultListProps) {
         <div key={result.id || i} className={cn("pm-recall-result-card")}>
           <ResultCard result={result} rank={i + 1} filesMap={map} />
           {result.children && result.children.length > 0 && (
-            <section className="pm-recall-children" aria-label="Matched child chunks">
+            <section className="pm-recall-children" aria-label={t("recall.matchedChildren")}>
               <div className="pm-recall-children-head">
                 <span className="pm-recall-children-title">
-                  Matched child chunks
+                  {t("recall.matchedChildren")}
                 </span>
                 <span className="pm-recall-children-count">
                   {result.children.length}

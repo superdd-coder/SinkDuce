@@ -40,6 +40,8 @@ import { SoftMenu, MenuItem } from "@/components/ui/menu"
 import { _triggerFilesRefresh } from "@/components/database/database-view"
 import { triggerInfoRefresh } from "@/lib/info-refresh"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 const _ingestingIds = new Set<string>()
 
@@ -73,11 +75,12 @@ async function persistDistillResult(opts: {
   noteId: string
   tempBlockId: string
   distillFn: () => Promise<DistillApiResult>
+  fallbackError: string
 }): Promise<
   | { ok: true; finalContent: string; result: DistillApiResult }
   | { ok: false; error: string; cleanedContent?: string }
 > {
-  const { collection, noteId, tempBlockId, distillFn } = opts
+  const { collection, noteId, tempBlockId, distillFn, fallbackError } = opts
   try {
     const res = await distillFn()
     const blockMd = `:::distill-block${JSON.stringify({
@@ -96,7 +99,7 @@ async function persistDistillResult(opts: {
     await updateNote(collection, noteId, { content: patched })
     return { ok: true, finalContent: patched, result: res }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Distillation failed"
+    const message = err instanceof Error ? err.message : fallbackError
     // Best-effort: strip loading fence from server
     try {
       const remote = await getNote(collection, noteId)
@@ -162,6 +165,7 @@ export function NotePane({
   onCloseDialog,
   className,
 }: NotePaneProps) {
+  const t = useT()
   const [loading, setLoading] = useState(true)
   /** After first note loads, further switches keep chrome and soft-fade body */
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
@@ -351,7 +355,7 @@ export function NotePane({
         }
       } catch {
         if (!cancelled && swapGenRef.current === gen) {
-          toast.error("Failed to load note")
+          toast.error(t("library.failedLoadNote"))
           setLoading(false)
           setDocSwapPhase("idle")
         }
@@ -391,7 +395,7 @@ export function NotePane({
         try {
           await updateNote(collection, id, { content: value })
         } catch {
-          toast.error("Auto-save failed")
+          toast.error(t("library.autoSaveFailed"))
         }
       }, 800)
     },
@@ -445,7 +449,7 @@ export function NotePane({
       onTitleChange?.(note.id, nextTitle)
       onNoteMeta?.(next)
     } catch {
-      toast.error("Failed to update title")
+      toast.error(t("library.failedUpdateTitle"))
       setTitleDraft(note.title || "")
     }
     setEditingTitle(false)
@@ -476,8 +480,8 @@ export function NotePane({
       await deleteNote(collection, nid)
       toast.success(
         fid
-          ? `Deleted "${title}" and all file versions`
-          : `Deleted "${title}"`
+          ? t("library.deletedTitleVersions", { title })
+          : t("library.deletedTitle", { title })
       )
       try {
         const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
@@ -488,7 +492,7 @@ export function NotePane({
       setDeleteOpen(false)
       onDeleted?.(nid)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete note")
+      toast.error(formatApiError(err, t))
     }
   }
 
@@ -505,14 +509,14 @@ export function NotePane({
     a.download = `${note.title || "note"}.md`
     a.click()
     URL.revokeObjectURL(url)
-    toast.success("Exported")
+    toast.success(t("library.exported"))
   }
 
   // ── Go to folder ──────────────────────────────────────
 
   const handleGoToFolder = () => {
     if (!managedFileId || !note) {
-      toast.error("This note is not linked to a folder file yet — ingest first")
+      toast.error(t("library.noteNotLinked"))
       return
     }
     onCloseDialog?.()
@@ -540,7 +544,7 @@ export function NotePane({
       const n = await getNote(collection, nid)
       if (noteIdRef.current === nid) await applyMeta(n)
     } catch { /* ignore */ }
-    toast.success(`"${title}" ingestion complete`)
+    toast.success(t("library.ingestionComplete", { title }))
   }
 
   const handleIngestClick = async () => {
@@ -561,7 +565,7 @@ export function NotePane({
     try {
       if (needsReingest || (ingested && managedFileId)) {
         const res = await reingestNote(collection, nid)
-        toast.success("Reingest started (new file version)")
+        toast.success(t("library.reingestStarted"))
         const taskId = res.task_id
         const fileId = res.file_id || managedFileId
         if (taskId && fileId) {
@@ -584,10 +588,10 @@ export function NotePane({
                 return
               }
               if (task.status === "failed") {
-                throw new Error(task.error || "Reingest failed")
+                throw new Error(task.error || t("library.reingestFailed"))
               }
             } catch (e) {
-              if (e instanceof Error && e.message !== "Reingest failed" && i < 89) continue
+              if (e instanceof Error && e.message !== t("library.reingestFailed") && i < 89) continue
               throw e
             }
           }
@@ -596,7 +600,7 @@ export function NotePane({
         if (noteIdRef.current === nid) setIngesting(false)
       } else {
         await ingestNote(collection, nid)
-        toast.success("Ingestion started")
+        toast.success(t("library.ingestionStarted"))
         for (let i = 0; i < 45; i++) {
           await new Promise((r) => setTimeout(r, 2000))
           try {
@@ -614,12 +618,12 @@ export function NotePane({
         }
         _ingestingIds.delete(nid)
         if (noteIdRef.current === nid) setIngesting(false)
-        toast.error("Ingestion is taking longer than expected — check Files later")
+        toast.error(t("library.ingestionSlow"))
       }
     } catch (err) {
       _ingestingIds.delete(nid)
       if (noteIdRef.current === nid) setIngesting(false)
-      toast.error(err instanceof Error ? err.message : "Ingestion failed")
+      toast.error(formatApiError(err, t))
     }
   }
 
@@ -668,10 +672,10 @@ export function NotePane({
       }
       await updateNote(collection, note.id, { content: contentRef.current })
       await triggerPropagation(collection, note.id)
-      toast.success("Sync Changes started")
+      toast.success(t("library.syncStarted"))
       setPropagateDismissed(true)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Sync Changes failed")
+      toast.error(formatApiError(err, t))
     } finally {
       setPropagating(false)
     }
@@ -788,7 +792,7 @@ export function NotePane({
       try {
         await updateNote(collection, targetId, { content: loadingContent })
       } catch {
-        toast.error("Failed to save distill placeholder — retry")
+        toast.error(t("library.failedSaveDistill"))
         return
       }
 
@@ -801,12 +805,13 @@ export function NotePane({
         noteId: targetId,
         tempBlockId,
         distillFn,
+        fallbackError: t("library.distillationFailed"),
       })
 
       // ── 3) Optional UI sync if this pane is still open on the same note ──
       const stillHere = noteIdRef.current === targetId
       if (outcome.ok) {
-        toast.success(`Distilled "${outcome.result.source_title}"`)
+        toast.success(t("library.distilledTitle", { title: outcome.result.source_title }))
         if (stillHere) {
           const res = outcome.result
           const patchedPm = patchDistillNode(tempBlockId, {
@@ -1030,7 +1035,7 @@ export function NotePane({
                 )}
                 onClick={claimFocus}
               >
-                {note?.title || "Note"}
+                {note?.title || t("common.note")}
               </span>
               <Button
                 variant="ghost"
@@ -1041,7 +1046,7 @@ export function NotePane({
                   setTitleDraft(note?.title || "")
                   setEditingTitle(true)
                 }}
-                title="Rename"
+                title={t("common.rename")}
               >
                 <Pencil className="h-3 w-3" />
               </Button>
@@ -1056,7 +1061,7 @@ export function NotePane({
                 claimFocus()
                 onSplit()
               }}
-              title="Split into second page"
+              title={t("library.splitPage")}
             >
               <Columns2 className="h-3.5 w-3.5" />
             </Button>
@@ -1070,7 +1075,7 @@ export function NotePane({
                 // Close this pane only — do not claim focus first (would steal from sibling)
                 onClosePane()
               }}
-              title="Close page"
+              title={t("library.closePage")}
             >
               <X className="h-3.5 w-3.5" />
             </Button>
@@ -1087,7 +1092,7 @@ export function NotePane({
           <div className="flex items-center min-w-0 flex-1 overflow-hidden">
             {ingested && (
               <span className="pm-ws-status truncate max-w-full">
-                {needsReingest ? "Ingested · edited" : "Ingested"}
+                {needsReingest ? t("library.ingestedEdited") : t("common.ingested")}
               </span>
             )}
           </div>
@@ -1102,10 +1107,10 @@ export function NotePane({
                   claimFocus()
                   handleGoToFolder()
                 }}
-                title="Open file detail"
+                title={t("library.openFileDetail")}
               >
                 <PanelRight className="h-3.5 w-3.5" />
-                Detail
+                {t("common.details")}
               </Button>
             )}
 
@@ -1120,14 +1125,14 @@ export function NotePane({
                   void handleIngestClick()
                 }}
                 disabled={ingesting || loading}
-                title="Ingest note into the collection"
+                title={t("library.ingestNote")}
               >
                 {ingesting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Database className="h-3.5 w-3.5" />
                 )}
-                {ingesting ? "Ingesting…" : "Ingest"}
+                {ingesting ? t("library.ingesting") : t("library.ingest")}
               </Button>
             ) : (
               <div ref={updateMenuRef} className="relative">
@@ -1144,7 +1149,7 @@ export function NotePane({
                     setUpdateMenuOpen((v) => !v)
                   }}
                   disabled={ingesting || propagating || loading}
-                  title="Update ingested note"
+                  title={t("library.updateIngested")}
                   aria-haspopup="menu"
                   aria-expanded={updateMenuOpen}
                 >
@@ -1153,7 +1158,7 @@ export function NotePane({
                   ) : (
                     <RefreshCw className="h-3.5 w-3.5" />
                   )}
-                  {ingesting ? "Updating…" : "Update"}
+                  {ingesting ? t("library.updatingEllipsis") : t("library.update")}
                   <ChevronDown
                     className={cn(
                       "h-3 w-3 opacity-70 transition-transform duration-[180ms] ease-[cubic-bezier(0.32,0.72,0,1)]",
@@ -1174,7 +1179,7 @@ export function NotePane({
                       disabled={propagating}
                     >
                       <Share2 className="h-3.5 w-3.5 shrink-0" />
-                      Sync Changes
+                      {t("library.syncChanges")}
                     </MenuItem>
                   )}
                   <MenuItem
@@ -1186,7 +1191,7 @@ export function NotePane({
                     disabled={ingesting}
                   >
                     <RefreshCw className="h-3.5 w-3.5 shrink-0" />
-                    Reingest
+                    {t("library.reingest")}
                   </MenuItem>
                 </SoftMenu>
               </div>
@@ -1206,8 +1211,8 @@ export function NotePane({
                   setUpdateMenuOpen(false)
                   setMoreMenuOpen((v) => !v)
                 }}
-                title="More actions"
-                aria-label="More actions"
+                title={t("library.moreActions")}
+                aria-label={t("library.moreActions")}
                 aria-haspopup="menu"
                 aria-expanded={moreMenuOpen}
               >
@@ -1225,7 +1230,7 @@ export function NotePane({
                   }}
                 >
                   <Download className="h-3.5 w-3.5 shrink-0" />
-                  Download
+                  {t("common.download")}
                 </MenuItem>
                 <MenuItem
                   destructive
@@ -1236,7 +1241,7 @@ export function NotePane({
                   }}
                 >
                   <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                  Delete
+                  {t("common.delete")}
                 </MenuItem>
               </SoftMenu>
             </div>
@@ -1247,7 +1252,7 @@ export function NotePane({
       {hardLoading ? (
         <div className="pm-ws-loading flex-1 is-doc-in">
           <Loader2 className="h-5 w-5 animate-spin" />
-          Loading…
+          {t("common.loading")}
         </div>
       ) : (
         <div
@@ -1280,7 +1285,7 @@ export function NotePane({
           {distilling && (
             <div className="pm-ws-status-bar">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Distilling…
+              {t("library.distilling")}
             </div>
           )}
           {/* Stable editor shell — content swaps only while opacity is 0 */}
@@ -1303,7 +1308,7 @@ export function NotePane({
               onNoteLinkClick={(id) => onNavigateSource(id)}
               className="px-6 pt-1 pb-5"
               flush
-              placeholder="Start writing your note..."
+              placeholder={t("library.startWriting")}
             />
           </div>
         </div>
@@ -1312,7 +1317,7 @@ export function NotePane({
       {dropOver && (
         <div className="pm-ws-drop">
           <ArrowDownToLine className="h-8 w-8" />
-          <span>Drop to distill</span>
+          <span>{t("library.dropToDistill")}</span>
         </div>
       )}
 
@@ -1322,9 +1327,9 @@ export function NotePane({
           showCloseButton={false}
         >
           <DialogHeader>
-            <DialogKicker>{managedFileId ? "File" : "Note"}</DialogKicker>
+            <DialogKicker>{managedFileId ? t("common.file") : t("common.note")}</DialogKicker>
             <DialogTitle>
-              {managedFileId ? "Delete file globally?" : "Delete note?"}
+              {managedFileId ? t("library.deleteFileGloballyQ") : t("library.deleteNoteQ")}
             </DialogTitle>
             {note?.title ? (
               <p className="pm-dialog-confirm-target" title={note.title}>
@@ -1333,8 +1338,8 @@ export function NotePane({
             ) : null}
             <DialogDescription>
               {managedFileId
-                ? "Permanently removes this note and its managed file, including every version. This cannot be undone."
-                : "This note will be permanently removed. This cannot be undone."}
+                ? t("library.deleteNoteFileBody")
+                : t("library.noteDeleteBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1344,7 +1349,7 @@ export function NotePane({
               size="sm"
               onClick={() => setDeleteOpen(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -1352,7 +1357,7 @@ export function NotePane({
               size="sm"
               onClick={() => void handleDeleteConfirm()}
             >
-              {managedFileId ? "Delete all versions" : "Delete"}
+              {managedFileId ? t("library.deleteAllVersions") : t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

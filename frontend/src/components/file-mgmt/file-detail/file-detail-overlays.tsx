@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog"
 import { Loader2, Star } from "lucide-react"
 import type { FileDetail, FileVersion } from "@/types/file-mgmt"
+import { useT } from "@/i18n/use-t"
 
 export function FileDetailTitleChrome({
   titleName,
@@ -29,6 +30,7 @@ export function FileDetailTitleChrome({
   chunksTotal: number
   detail: FileDetail | null
 }) {
+  const t = useT()
   return (
           <div className="pm-ws-chrome">
             <DialogHeader className="shrink-0 flex-1 min-w-0 !p-0">
@@ -40,10 +42,10 @@ export function FileDetailTitleChrome({
                   <Badge
                     variant="secondary"
                     className="pm-ws-badge is-live"
-                    title={ingestProgress?.message || "Ingesting…"}
+                    title={ingestProgress?.message || t("fileMgmt.ingestingEllipsis")}
                   >
                     <Loader2 className="h-3 w-3 animate-spin mr-1 inline" />
-                    Ingesting
+                    {t("fileMgmt.ingestingEllipsis")}
                     {typeof ingestProgress?.progress === "number"
                       ? ` ${Math.round(ingestProgress.progress)}%`
                       : ""}
@@ -52,23 +54,23 @@ export function FileDetailTitleChrome({
                 {isHistoricalFocus && (
                   <Badge variant="secondary" className="pm-ws-badge">
                     {focusVersion
-                      ? `v${focusVersion.version_no} · old version`
-                      : "old version"}
+                      ? `v${focusVersion.version_no} · ${t("fileMgmt.oldVersion")}`
+                      : t("fileMgmt.oldVersion")}
                   </Badge>
                 )}
                 {chunksTotal > 0 && !isIngesting && (
                   <Badge variant="secondary" className="ml-1 pm-ws-badge">
-                    {chunksTotal} chunks
+                    {t("fileMgmt.chunksN", { n: chunksTotal })}
                   </Badge>
                 )}
                 {detail?.archived && (
                   <Badge variant="secondary" className="pm-ws-badge">
-                    archived
+                    {t("fileMgmt.archived")}
                   </Badge>
                 )}
                 {detail?.unsupported && !isHistoricalFocus && (
                   <Badge variant="outline" className="pm-ws-badge">
-                    unsupported
+                    {t("fileMgmt.unsupported")}
                   </Badge>
                 )}
                 {detail?.is_definitive && (
@@ -98,6 +100,7 @@ export function FileDetailRollbackDialog({
   focusVersionId: string | null | undefined
   handleRollback: () => void | Promise<void>
 }) {
+  const t = useT()
   return (
     <>
       {/* Rollback historical version — premium compact confirm */}
@@ -113,8 +116,8 @@ export function FileDetailRollbackDialog({
           className="pm-dialog pm-dialog-confirm"
         >
           <DialogHeader>
-            <DialogKicker>Version</DialogKicker>
-            <DialogTitle>Roll back to this version?</DialogTitle>
+            <DialogKicker>{t("common.version")}</DialogKicker>
+            <DialogTitle>{t("fileMgmt.rollbackQ")}</DialogTitle>
             {focusVersion || focusVersionId ? (
               <p
                 className="pm-dialog-confirm-target"
@@ -123,7 +126,7 @@ export function FileDetailRollbackDialog({
                     ? `v${focusVersion.version_no} · ${focusVersion.storage_file_id}`
                     : focusVersion
                       ? `v${focusVersion.version_no}`
-                      : "Selected version"
+                      : t("fileMgmt.selectedVersion")
                 }
               >
                 {focusVersion ? (
@@ -136,13 +139,12 @@ export function FileDetailRollbackDialog({
                       : ""}
                   </>
                 ) : (
-                  "Selected version"
+                  t("fileMgmt.selectedVersion")
                 )}
               </p>
             ) : null}
             <DialogDescription>
-              Make this the live revision. Later revisions are permanently
-              deleted. This cannot be undone.
+              {t("fileMgmt.rollbackBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -153,7 +155,7 @@ export function FileDetailRollbackDialog({
               disabled={rollingBack}
               onClick={() => setRollbackConfirm(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -165,10 +167,10 @@ export function FileDetailRollbackDialog({
               {rollingBack ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                  Rolling back…
+                  {t("fileMgmt.rollingBack")}
                 </>
               ) : (
-                "Roll back"
+                t("fileMgmt.rollBack")
               )}
             </Button>
           </DialogFooter>

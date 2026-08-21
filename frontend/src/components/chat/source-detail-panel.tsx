@@ -8,6 +8,7 @@ import { Loader2, X, ChevronRight, ChevronDown, Locate } from "lucide-react"
 import { ParseTextViewer } from "@/components/file-mgmt/file-detail/parse-text-viewer"
 import { getFileChunks, getFilePreviewUrl, getDocSummary, getExtractedText, type ChunkDetail, type DocSummary } from "@/api/client"
 import { useAppStore, type Source } from "@/stores/app-store"
+import { useT } from "@/i18n/use-t"
 import {
   isRawViewerSupported,
   RawFileViewer,
@@ -60,6 +61,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
   source,
   onClose,
 }: SourceDetailPanelProps) {
+  const t = useT()
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [chunks, setChunks] = useState<ChunkDetail[]>([])
@@ -268,7 +270,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
           size="icon-sm"
           className="shrink-0"
           onClick={onClose}
-          aria-label="Close source panel"
+          aria-label={t("chat.closeSource")}
         >
           <X className="size-4" />
         </Button>
@@ -285,7 +287,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
             variant="ghost"
             size="icon-xs"
             className="shrink-0 mt-0.5"
-            title="Locate in preview"
+            title={t("chat.locatePreview")}
             onClick={() =>
               handleLocate(
                 _getHighlightOffset(source),
@@ -304,12 +306,12 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full min-h-0">
           <TabsList className="mb-2 shrink-0 w-fit">
             <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
-            <TabsTrigger value="parsed">Parsed</TabsTrigger>
-            {showRawTab && <TabsTrigger value="preview">Preview</TabsTrigger>}
+            <TabsTrigger value="parsed">{t("chat.parsed")}</TabsTrigger>
+            {showRawTab && <TabsTrigger value="preview">{t("common.preview")}</TabsTrigger>}
             <TabsTrigger value="chunks">
-              Chunks{chunks.length > 0 ? ` · ${chunks.length}` : ""}
+              {t("chat.chunks")}{chunks.length > 0 ? ` · ${chunks.length}` : ""}
             </TabsTrigger>
-            <TabsTrigger value="summary">Summary</TabsTrigger>
+            <TabsTrigger value="summary">{t("common.summary")}</TabsTrigger>
           </TabsList>
 
           {/* Parsed — extracted text (locate-in-doc targets this) */}
@@ -322,7 +324,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
               {previewLoading || chunksLoading ? (
                 <div className="flex items-center justify-center h-full gap-2">
                   <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
-                  <span className="pm-meta">Loading…</span>
+                  <span className="pm-meta">{t("common.loading")}</span>
                 </div>
               ) : previewContent !== null ? (
                 <div ref={sourceContentRef} className="h-full min-h-0">
@@ -380,10 +382,10 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                   {chunksLoading ? (
                     <div className="flex items-center justify-center py-8 gap-2">
                       <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
-                      <span className="pm-meta">Loading chunks…</span>
+                      <span className="pm-meta">{t("chat.loadingChunks")}</span>
                     </div>
                   ) : chunks.length === 0 ? (
-                    <p className="pm-meta py-4 text-center">No chunks</p>
+                    <p className="pm-meta py-4 text-center">{t("chat.noChunks")}</p>
                   ) : groupedChunks ? (
                     groupedChunks.map((group) => {
                       const isExpanded = expandedParents.has(group.parent.id)
@@ -410,9 +412,9 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                                 <Badge variant={isTargetParent ? "default" : "outline"}>
-                                  Parent #{group.parent.chunk_index}
+                                  {t("chat.parentN", { n: group.parent.chunk_index })}
                                 </Badge>
-                                <Badge variant="outline">{group.children.length} children</Badge>
+                                <Badge variant="outline">{t("chat.nChildren", { n: group.children.length })}</Badge>
                                 {group.parent.section_label && (
                                   <Badge variant="secondary">{group.parent.section_label}</Badge>
                                 )}
@@ -421,7 +423,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                                   variant="ghost"
                                   size="icon-xs"
                                   className="ml-auto"
-                                  title="Locate in preview"
+                                  title={t("chat.locatePreview")}
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     handleLocate(
@@ -442,7 +444,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                           {isExpanded && (
                             <div className="mt-2 pt-2 space-y-2 pl-6 border-t border-[color-mix(in_srgb,var(--pm-ink)_6%,transparent)]">
                               <div>
-                                <p className="pm-label mb-1">Full text</p>
+                                <p className="pm-label mb-1">{t("chat.fullText")}</p>
                                 <p className="pm-meta whitespace-pre-wrap m-0 leading-relaxed">
                                   {group.parent.text}
                                 </p>
@@ -473,7 +475,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                                   >
                                     <div className="flex items-center gap-1.5 mb-1.5">
                                       <Badge variant={isTargetChild ? "default" : "secondary"}>
-                                        Child #{child.chunk_index}
+                                        {t("chat.childN", { n: child.chunk_index })}
                                       </Badge>
                                       <Locate className="ml-auto size-3 text-[var(--pm-faint)] shrink-0" />
                                     </div>
@@ -513,16 +515,16 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                         >
                           <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
                             <Badge variant={isTarget ? "default" : "outline"}>
-                              Chunk #{chunk.chunk_index}
+                              {t("chat.chunkN", { n: chunk.chunk_index })}
                             </Badge>
                             {chunk.section_label && (
                               <Badge variant="secondary">{chunk.section_label}</Badge>
                             )}
                             {chunk.context && (
-                              <span className="pm-meta italic">with context</span>
+                              <span className="pm-meta italic">{t("chat.withContext")}</span>
                             )}
                             {isTarget && (
-                              <span className="pm-meta text-[var(--pm-green)]">← retrieved</span>
+                              <span className="pm-meta text-[var(--pm-green)]">← {t("chat.retrieved")}</span>
                             )}
                             <Locate className="ml-auto size-3 text-[var(--pm-faint)] shrink-0" />
                           </div>
@@ -554,13 +556,13 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                   {summaryLoading ? (
                     <div className="flex items-center justify-center py-8 gap-2">
                       <Loader2 className="size-4 animate-spin text-[var(--pm-faint)]" />
-                      <span className="pm-meta">Loading summary…</span>
+                      <span className="pm-meta">{t("chat.loadingSummary")}</span>
                     </div>
                   ) : docSummary ? (
                     <div className="space-y-4">
                       {docSummary.data.length > 0 && (
                         <div>
-                          <h5 className="pm-label mb-2">Data Points</h5>
+                          <h5 className="pm-label mb-2">{t("chat.dataPoints")}</h5>
                           <ul className="space-y-1">
                             {docSummary.data.map((item, i) => (
                               <li key={i} className="pm-prose max-w-none">
@@ -572,7 +574,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                       )}
                       {docSummary.facts.length > 0 && (
                         <div>
-                          <h5 className="pm-label mb-2">Facts</h5>
+                          <h5 className="pm-label mb-2">{t("chat.facts")}</h5>
                           <ul className="space-y-1">
                             {docSummary.facts.map((item, i) => (
                               <li key={i} className="pm-prose max-w-none">
@@ -584,7 +586,7 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                       )}
                       {docSummary.insights.length > 0 && (
                         <div>
-                          <h5 className="pm-label mb-2">Insights</h5>
+                          <h5 className="pm-label mb-2">{t("chat.insights")}</h5>
                           <ul className="space-y-1">
                             {docSummary.insights.map((item, i) => (
                               <li key={i} className="pm-prose max-w-none">
@@ -597,11 +599,11 @@ export const SourceDetailPanel = memo(function SourceDetailPanel({
                       {docSummary.data.length === 0 &&
                         docSummary.facts.length === 0 &&
                         docSummary.insights.length === 0 && (
-                          <p className="pm-meta text-center py-4">No summary data available.</p>
+                          <p className="pm-meta text-center py-4">{t("chat.noSummaryData")}</p>
                         )}
                     </div>
                   ) : (
-                    <p className="pm-meta text-center py-8">No summary available.</p>
+                    <p className="pm-meta text-center py-8">{t("chat.noSummary")}</p>
                   )}
                 </CardContent>
               </ScrollArea>

@@ -77,6 +77,58 @@ def test_app_config_has_parsing():
     assert cfg.parsing.default_chunk_size == 512
 
 
+def test_app_config_locale_defaults_en():
+    cfg = AppConfig()
+    assert cfg.locale == "en"
+
+
+def test_load_config_locale_missing_defaults_en():
+    config_content = """
+llm:
+  providers: []
+embedding:
+  providers: []
+rerank:
+  providers: []
+qdrant:
+  host: localhost
+  port: 6333
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(config_content)
+        f.flush()
+        config = load_config(f.name)
+        assert config.locale == "en"
+
+
+def test_load_config_locale_zh_cn():
+    config_content = """
+locale: zh-CN
+llm:
+  providers: []
+embedding:
+  providers: []
+rerank:
+  providers: []
+qdrant:
+  host: localhost
+  port: 6333
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(config_content)
+        f.flush()
+        config = load_config(f.name)
+        assert config.locale == "zh-CN"
+
+
+def test_app_config_rejects_unknown_locale():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        AppConfig(locale="fr")
+
+
 # ── "remote" alias backward-compat ──────────────────────
 
 

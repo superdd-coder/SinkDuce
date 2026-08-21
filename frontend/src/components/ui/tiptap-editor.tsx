@@ -28,6 +28,7 @@ import {
 } from "lucide-react"
 import { SoftMenu, MenuItem } from "@/components/ui/menu"
 import { scrollCaretIntoNearestView } from "@/lib/editor-scroll"
+import { tr } from "@/i18n/tr"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -1293,17 +1294,17 @@ function showImageFloatingMenu(
     {
       value: "left",
       svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M2 7h8M2 11h10M2 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
-      label: "Align left",
+      label: tr("editor.alignLeft"),
     },
     {
       value: "center",
       svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M4 7h8M3 11h10M5 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
-      label: "Align center",
+      label: tr("editor.alignCenter"),
     },
     {
       value: "right",
       svg: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M6 7h8M4 11h10M8 15h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
-      label: "Align right",
+      label: tr("editor.alignRight"),
     },
   ]
 
@@ -1549,7 +1550,7 @@ function createDistillBlockExtension(onNavigate?: (noteId: string) => void) {
         delBtn.type = "button"
         delBtn.className = "distill-block__delete"
         delBtn.innerHTML =
-          '<span class="distill-block__delete-x" aria-hidden="true">×</span><span class="distill-block__delete-label">Delete</span>'
+          `<span class="distill-block__delete-x" aria-hidden="true">×</span><span class="distill-block__delete-label">${tr("common.delete")}</span>`
         delBtn.title = "Remove distill block"
         delBtn.setAttribute("aria-label", "Remove distill block")
         delBtn.setAttribute("aria-expanded", "false")
@@ -2124,25 +2125,25 @@ function showSlashMenu(
 
   const commandGroups = [
     {
-      label: "Basic Blocks",
+      label: tr("editor.basicBlocks"),
       commands: [
-        { label: "Heading 1", icon: "H1", desc: "Large heading", action: () => editor.chain().focus().toggleHeading({ level: 1 }).run() },
-        { label: "Heading 2", icon: "H2", desc: "Medium heading", action: () => editor.chain().focus().toggleHeading({ level: 2 }).run() },
-        { label: "Heading 3", icon: "H3", desc: "Small heading", action: () => editor.chain().focus().toggleHeading({ level: 3 }).run() },
-        { label: "Bullet List", icon: "•", desc: "Unordered list", action: () => editor.chain().focus().toggleBulletList().run() },
-        { label: "Numbered List", icon: "1.", desc: "Ordered list", action: () => editor.chain().focus().toggleOrderedList().run() },
-        { label: "Task List", icon: "☑️", desc: "Track tasks", action: () => editor.chain().focus().insertContent('<ul data-type="taskList"><li data-type="taskItem" data-checked="false">Task</li></ul>').run() },
-        { label: "Quote", icon: "❝", desc: "Blockquote", action: () => editor.chain().focus().toggleBlockquote().run() },
-        { label: "Divider", icon: "—", desc: "Horizontal line", action: () => editor.chain().focus().setHorizontalRule().run() },
+        { label: tr("editor.heading1"), icon: "H1", desc: tr("editor.h1desc"), action: () => editor.chain().focus().toggleHeading({ level: 1 }).run() },
+        { label: tr("editor.heading2"), icon: "H2", desc: tr("editor.h2desc"), action: () => editor.chain().focus().toggleHeading({ level: 2 }).run() },
+        { label: tr("editor.heading3"), icon: "H3", desc: tr("editor.h3desc"), action: () => editor.chain().focus().toggleHeading({ level: 3 }).run() },
+        { label: tr("editor.bulletList"), icon: "•", desc: tr("editor.bulletDesc"), action: () => editor.chain().focus().toggleBulletList().run() },
+        { label: tr("editor.numberedList"), icon: "1.", desc: tr("editor.numberedDesc"), action: () => editor.chain().focus().toggleOrderedList().run() },
+        { label: tr("editor.taskList"), icon: "☑️", desc: tr("editor.taskDesc"), action: () => editor.chain().focus().insertContent(`<ul data-type="taskList"><li data-type="taskItem" data-checked="false">${tr("editor.task")}</li></ul>`).run() },
+        { label: tr("editor.quote"), icon: "❝", desc: tr("editor.quoteDesc"), action: () => editor.chain().focus().toggleBlockquote().run() },
+        { label: tr("editor.divider"), icon: "—", desc: tr("editor.dividerDesc"), action: () => editor.chain().focus().setHorizontalRule().run() },
       ],
     },
     {
-      label: "Media",
+      label: tr("editor.media"),
       commands: [
         {
-          label: "Image",
+          label: tr("editor.image"),
           icon: "🖼️",
-          desc: "Upload image",
+          desc: tr("editor.uploadImage"),
           action: () => {
             const input = document.createElement("input")
             input.type = "file"
@@ -2164,14 +2165,14 @@ function showSlashMenu(
       ],
     },
     {
-      label: "Advanced",
+      label: tr("editor.advanced"),
       commands: [
-        { label: "Table", icon: "📊", desc: "Insert table", action: () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
-        { label: "Code Block", icon: "💻", desc: "Code block", action: () => editor.chain().focus().toggleCodeBlock().run() },
+        { label: tr("editor.table"), icon: "📊", desc: tr("editor.insertTable"), action: () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
+        { label: tr("editor.codeBlock"), icon: "💻", desc: tr("editor.codeBlock"), action: () => editor.chain().focus().toggleCodeBlock().run() },
         {
-          label: "Callout",
+          label: tr("editor.callout"),
           icon: "💡",
-          desc: "Info callout",
+          desc: tr("editor.calloutDesc"),
           action: () =>
             editor
               .chain()
@@ -3248,7 +3249,7 @@ function ColorPaletteMenu({
           {kind === "highlight" && (
             <button
               type="button"
-              title="No highlight"
+              title={tr("editor.noHighlight")}
               className={cn("pm-fmt-hl is-none", !activeColor && "is-on")}
               onClick={() => {
                 onClearHighlight?.()
@@ -3322,7 +3323,7 @@ function HeadingDropdown({ editor }: { editor: Editor }) {
       <button
         ref={anchorRef}
         type="button"
-        title="Heading"
+        title={tr("editor.heading")}
         className={cn("pm-fmt-hd", level && "is-on")}
         onClick={() => setOpen((o) => !o)}
       >

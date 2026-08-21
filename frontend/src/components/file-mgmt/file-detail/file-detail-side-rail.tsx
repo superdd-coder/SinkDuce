@@ -28,6 +28,8 @@ import {
 } from "@/components/ui/tooltip"
 import type { FileDetail, FilePath, FileVersion, Message } from "@/types/file-mgmt"
 import { MessageBody } from "@/components/file-mgmt/message-card"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayPath } from "@/i18n/system-folder"
 import { formatTime, versionUpdateBody, type TimelineItem } from "./file-detail-utils"
 
 export type FileDetailSidePanel = "paths" | "nodes" | "log"
@@ -90,6 +92,7 @@ export interface FileDetailSideRailProps {
 }
 
 export function FileDetailSideRail(p: FileDetailSideRailProps) {
+  const t = useT()
   const {
     detail,
     isManagedFile,
@@ -147,8 +150,8 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                   <div className="pm-ws-side-card flex-1 flex items-center justify-center p-6 text-center border-dashed">
                     <p className="pm-meta leading-relaxed max-w-[220px]">
                       {isManagedFile
-                        ? "Could not load file management metadata."
-                        : "This document is not a managed file. Paths, versions, and archive actions are unavailable. You can still read Source, Summary, and Chunks."}
+                        ? t("fileMgmt.metadataLoadFailed")
+                        : t("fileMgmt.notManagedFile")}
                     </p>
                   </div>
                 ) : (
@@ -160,10 +163,10 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                       className="pm-label"
                       style={{ textTransform: "none", letterSpacing: "0.02em" }}
                     >
-                      Metadata
+                      {t("fileMgmt.metadata")}
                     </span>
                     {isHistoricalFocus ? (
-                      <span className="pm-meta ml-1.5">this version</span>
+                      <span className="pm-meta ml-1.5">{t("fileMgmt.thisVersion")}</span>
                     ) : null}
                     <div className="ml-auto shrink-0">
                       <TooltipProvider delay={300}>
@@ -188,8 +191,8 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                                 />
                                 <span className="pm-ws-definitive-label">
                                   {detail?.is_definitive
-                                    ? "Definitive"
-                                    : "Mark definitive"}
+                                    ? t("library.definitive")
+                                    : t("fileMgmt.markDefinitiveShort")}
                                 </span>
                               </button>
                             }
@@ -210,37 +213,37 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                       {isHistoricalFocus &&
                       (focusVersionId || focusVersion || storageFileIdProp) ? (
                         <>
-                          <dt>Filename</dt>
+                          <dt>{t("fileMgmt.filename")}</dt>
                           <dd
                             className="truncate"
                             title={viewStorageFile || storageFileIdProp || ""}
                           >
                             {viewStorageFile || storageFileIdProp || "—"}
                           </dd>
-                          <dt>File ID</dt>
+                          <dt>{t("fileMgmt.fileId")}</dt>
                           <dd
                             className="font-mono truncate pm-meta"
                             title={detail.file_id}
                           >
                             {detail.file_id}
                           </dd>
-                          <dt>Version</dt>
+                          <dt>{t("common.version")}</dt>
                           <dd>
                             v{focusVersion?.version_no ?? "—"}
                             {focusVersion?.archived ? " · archived" : ""}
                             {" · old"}
                           </dd>
-                          <dt>Created</dt>
+                          <dt>{t("common.created")}</dt>
                           <dd>
                             {formatTime(
                               focusVersion?.created_at || detail?.created_at
                             )}
                           </dd>
-                          <dt>Versions</dt>
+                          <dt>{t("common.versions")}</dt>
                           <dd>{detail?.versions?.length ?? 0}</dd>
                           {focusVersion?.commit_message ? (
                             <>
-                              <dt>Note</dt>
+                              <dt>{t("common.note")}</dt>
                               <dd
                                 className="truncate"
                                 title={focusVersion.commit_message}
@@ -252,7 +255,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                         </>
                       ) : (
                         <>
-                          <dt>Filename</dt>
+                          <dt>{t("fileMgmt.filename")}</dt>
                           <dd
                             className="truncate"
                             title={
@@ -261,16 +264,16 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                           >
                             {detail?.display_name || detail?.filename || "—"}
                           </dd>
-                          <dt>File ID</dt>
+                          <dt>{t("fileMgmt.fileId")}</dt>
                           <dd
                             className="font-mono truncate pm-meta"
                             title={detail.file_id}
                           >
                             {detail.file_id}
                           </dd>
-                          <dt>Created</dt>
+                          <dt>{t("common.created")}</dt>
                           <dd>{formatTime(detail?.created_at)}</dd>
-                          <dt>Versions</dt>
+                          <dt>{t("common.versions")}</dt>
                           <dd>{detail?.versions?.length ?? 0}</dd>
                         </>
                       )}
@@ -296,7 +299,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                         type="button"
                         className="pm-collapse-h-main"
                         aria-expanded={openSide === "paths"}
-                        aria-label="Toggle Paths"
+                        aria-label={t("fileMgmt.togglePaths")}
                         onClick={() => toggleSide("paths")}
                       >
                         <span
@@ -315,7 +318,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             letterSpacing: "0.02em",
                           }}
                         >
-                          Paths
+                          {t("fileMgmt.paths")}
                         </span>
                         <span className="pm-count-pill">
                           {detail?.paths?.length ?? 0}
@@ -332,7 +335,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                         <div className="pm-ws-side-pad pt-0">
                           {(detail?.paths?.length ?? 0) === 0 ? (
                             <p className="pm-meta">
-                              No folder paths (orphan / root file)
+                              {t("fileMgmt.noFolderPaths")}
                             </p>
                           ) : (
                             <ul className="pm-ws-list">
@@ -365,7 +368,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                                     sourceNodeTitle={
                                       srcNode?.title?.trim() ||
                                       (p.source_node_id
-                                        ? "Untitled node"
+                                        ? t("fileMgmt.untitledNode")
                                         : null)
                                     }
                                     folderHasPinned={folderHasPinned}
@@ -401,7 +404,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                         type="button"
                         className="pm-collapse-h-main"
                         aria-expanded={openSide === "nodes"}
-                        aria-label="Toggle Nodes"
+                        aria-label={t("fileMgmt.toggleNodes")}
                         onClick={() => toggleSide("nodes")}
                       >
                         <span
@@ -420,7 +423,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             letterSpacing: "0.02em",
                           }}
                         >
-                          Nodes
+                          {t("common.nodes")}
                         </span>
                         <span className="pm-count-pill">
                           {detail?.nodes?.length ?? 0}
@@ -436,7 +439,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                       <div className="pm-ws-side-collapse-inner">
                         <div className="pm-ws-side-pad pt-0">
                           {(detail?.nodes?.length ?? 0) === 0 ? (
-                            <p className="pm-meta">Not attached to any node</p>
+                            <p className="pm-meta">{t("fileMgmt.notAttachedNode")}</p>
                           ) : (
                             <ul className="pm-ws-list">
                               {detail!.nodes.map((n) => (
@@ -465,7 +468,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                         type="button"
                         className="pm-collapse-h-main"
                         aria-expanded={openSide === "log"}
-                        aria-label="Toggle Log"
+                        aria-label={t("fileMgmt.toggleLog")}
                         onClick={() => toggleSide("log")}
                       >
                         <span
@@ -484,7 +487,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             letterSpacing: "0.02em",
                           }}
                         >
-                          Log
+                          {t("fileMgmt.log")}
                         </span>
                         <span className="pm-count-pill">{timeline.length}</span>
                       </button>
@@ -495,7 +498,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                           disabled={msgBusy || !fileId}
                           onClick={() => setAddMsgDialogOpen(true)}
                         >
-                          Add
+                          {t("common.add")}
                         </button>
                         <div
                           ref={logScopeRef}
@@ -520,7 +523,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             )}
                             onClick={() => handleTimelineFilter("all")}
                           >
-                            All
+                            {t("common.all")}
                           </button>
                           <button
                             ref={logScopeVerRef}
@@ -531,7 +534,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             )}
                             onClick={() => handleTimelineFilter("versions")}
                           >
-                            Versions
+                            {t("common.versions")}
                           </button>
                         </div>
                       </div>
@@ -552,7 +555,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             )}
                           >
                             {timeline.length === 0 ? (
-                              <p className="pm-meta px-2 py-1">No log yet</p>
+                              <p className="pm-meta px-2 py-1">{t("fileMgmt.noLogYet")}</p>
                             ) : (
                               timeline.map((item) => {
                                 if (item.kind === "version") {
@@ -606,11 +609,11 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                                           variant="secondary"
                                           className="pm-ws-badge is-live shrink-0"
                                         >
-                                          version update
+                                          {t("fileMgmt.versionUpdateLower")}
                                         </Badge>
                                         {item.version.archived && (
                                           <span className="pm-meta uppercase shrink-0">
-                                            archived
+                                            {t("fileMgmt.archived")}
                                           </span>
                                         )}
                                         <span className="pm-meta shrink-0">
@@ -662,7 +665,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                                             variant="secondary"
                                             className="pm-ws-badge is-live shrink-0"
                                           >
-                                            version update
+                                            {t("fileMgmt.versionUpdateLower")}
                                           </Badge>
                                           {item.version && (
                                             <span className="pm-meta shrink-0">
@@ -671,7 +674,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                                           )}
                                           {item.version?.archived && (
                                             <span className="pm-meta uppercase shrink-0">
-                                              archived
+                                              {t("fileMgmt.archived")}
                                             </span>
                                           )}
                                         </>
@@ -743,23 +746,23 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                   {deleteConfirm ? (
                     <div className="rounded-[var(--pm-r-sm)] bg-[color-mix(in_srgb,var(--pm-danger)_6%,transparent)] p-2.5 space-y-2">
                       <p className="pm-title text-[var(--pm-danger)]">
-                        Permanently delete this file?
+                        {t("fileMgmt.deleteThisFileQ")}
                       </p>
                       <p className="pm-meta">
-                        All paths will be removed:
+                        {t("fileMgmt.allPathsRemoved")}
                       </p>
                       <ul className="pm-meta space-y-0.5 max-h-24 overflow-y-auto">
                         {(detail?.paths?.length ?? 0) === 0 ? (
                           <li className="italic">
-                            (no folder paths — orphan file)
+                            {t("fileMgmt.orphanFile")}
                           </li>
                         ) : (
                           detail!.paths.map((p) => (
                             <li key={p.path_id} className="truncate">
-                              {p.folder_path || p.folder_id || "—"}
+                              {systemFolderDisplayPath(p.folder_path || "", t) || p.folder_id || "—"}
                               {p.source_node_id
-                                ? " (via timeline node)"
-                                : " (pinned to folder)"}
+                                ? t("fileMgmt.viaTimelineNode")
+                                : t("fileMgmt.pinnedToFolderParen")}
                             </li>
                           ))
                         )}
@@ -776,14 +779,14 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                           ) : (
                             <Trash2 />
                           )}
-                          Confirm
+                          {t("common.confirm")}
                         </button>
                         <button
                           type="button"
                           className="pm-ws-foot-btn pm-ws-foot-btn--ghost"
                           onClick={() => setDeleteConfirm(false)}
                         >
-                          Cancel
+                          {t("common.cancel")}
                         </button>
                       </div>
                     </div>
@@ -802,7 +805,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                         }}
                       >
                         <Upload />
-                        Update
+                        {t("common.update")}
                       </button>
 
                       {/* Archive dropdown — context-aware path vs global */}
@@ -817,7 +820,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                               actionMenu === "archive" && "is-on"
                             )}
                             disabled={actionBusy}
-                            title="Archive options"
+                            title={t("fileMgmt.archiveOptions")}
                             onClick={() =>
                               setActionMenu((m) =>
                                 m === "archive" ? null : "archive"
@@ -825,7 +828,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             }
                           >
                             <Archive />
-                            Archive
+                            {t("common.archive")}
                             <ChevronDown className="opacity-50 !w-3 !h-3" />
                           </button>
                           <SoftMenu
@@ -837,13 +840,13 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                                 icon={
                                   <ArchiveRestore className="h-3.5 w-3.5" />
                                 }
-                                title="Restore"
+                                title={t("common.restore")}
                                 description={
                                   fileArchived
-                                    ? "Re-enable search (and restore current path if archived)."
+                                    ? t("fileMgmt.restoreSearchPath")
                                     : contextNodeId
-                                      ? "Restore this file's path(s) for the current node."
-                                      : "Restore this file's current path."
+                                      ? t("fileMgmt.restoreNodePaths")
+                                      : t("fileMgmt.restoreCurrentPath")
                                 }
                                 onClick={() => {
                                   setActionMenu(null)
@@ -854,11 +857,11 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             {canArchiveCurrentPath && (
                               <ActionMenuItem
                                 icon={<Archive className="h-3.5 w-3.5" />}
-                                title="Archive current path"
+                                title={t("fileMgmt.archiveCurrent")}
                                 description={
                                   contextNodeId
-                                    ? "Grey out node-related path(s) only (group + branch). Leaves other mounts active."
-                                    : "Grey out this file on the current folder path only."
+                                    ? t("fileMgmt.archiveNodePathsHint")
+                                    : t("fileMgmt.archiveCurrentPathHint")
                                 }
                                 onClick={() => {
                                   setActionMenu(null)
@@ -869,8 +872,8 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             {canArchiveGlobally && (
                               <ActionMenuItem
                                 icon={<SearchX className="h-3.5 w-3.5" />}
-                                title="Archive globally"
-                                description="Exclude this file from search everywhere."
+                                title={t("fileMgmt.archiveGlobally")}
+                                description={t("fileMgmt.excludeSearchEverywhere")}
                                 onClick={() => {
                                   setActionMenu(null)
                                   void handleArchiveGlobally()
@@ -890,7 +893,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                             actionMenu === "delete" && "is-on"
                           )}
                           disabled={actionBusy}
-                          title="Remove or delete"
+                          title={t("fileMgmt.removeOrDelete")}
                           onClick={() =>
                             setActionMenu((m) =>
                               m === "delete" ? null : "delete"
@@ -898,7 +901,7 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                           }
                         >
                           <Trash2 />
-                          Delete
+                          {t("common.delete")}
                           <ChevronDown className="opacity-50 !w-3 !h-3" />
                         </button>
                         <SoftMenu
@@ -908,11 +911,11 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                           {canRemoveCurrentPath && (
                             <ActionMenuItem
                               icon={<X className="h-3.5 w-3.5" />}
-                              title="Remove current path"
+                              title={t("fileMgmt.removeCurrentPath")}
                               description={
                                 contextNodeId
-                                  ? "Detach from this node and remove its path(s) (group + branch). Other mounts stay."
-                                  : "Remove this file from the current folder path only."
+                                  ? t("fileMgmt.removeNodePathsHint")
+                                  : t("fileMgmt.removeCurrentPathHint")
                               }
                               onClick={() => {
                                 setActionMenu(null)
@@ -922,8 +925,8 @@ export function FileDetailSideRail(p: FileDetailSideRailProps) {
                           )}
                           <ActionMenuItem
                             icon={<Trash2 className="h-3.5 w-3.5" />}
-                            title="Delete file globally"
-                            description="Permanently delete this file everywhere."
+                            title={t("fileMgmt.deleteFileGlobally")}
+                            description={t("fileMgmt.deleteFileEverywhere")}
                             destructive
                             onClick={() => {
                               setActionMenu(null)

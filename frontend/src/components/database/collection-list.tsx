@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import { Pencil, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import type { CollectionItem } from "@/stores/app-store"
 
@@ -121,19 +122,20 @@ export function CollectionList({
   }, [])
 
   const edgeFade = useScrollEdgeFade(listRef, collections.length)
+  const t = useT()
 
   return (
-    <aside className="pm-shell-collections" aria-label="Collections">
+    <aside className="pm-shell-collections" aria-label={t("library.collections")}>
       <div className="pm-shell-collections-surface">
         <div className="pm-shell-collections-head pm-rail-head">
-          <h2 className="pm-shell-collections-title pm-rail-title">Collections</h2>
+          <h2 className="pm-shell-collections-title pm-rail-title">{t("library.collections")}</h2>
           <button
             type="button"
             onClick={onCreate}
             className="pm-shell-collections-new pm-rail-new"
-            title="New collection"
+            title={t("library.newCollection")}
           >
-            New
+            {t("common.new")}
           </button>
         </div>
 
@@ -192,7 +194,7 @@ export function CollectionList({
                           e.stopPropagation()
                           onRename(col.id)
                         }}
-                        title="Rename"
+                        title={t("common.rename")}
                       >
                         <Pencil className="size-3" />
                       </button>
@@ -203,7 +205,7 @@ export function CollectionList({
                           e.stopPropagation()
                           onDelete(col.id)
                         }}
-                        title="Delete"
+                        title={t("common.delete")}
                       >
                         <Trash2 className="size-3" />
                       </button>

@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { getHealth, type HealthInfo } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 export interface ConnectionInfo {
   host: string
@@ -57,6 +58,7 @@ function claudeSnippet(url: string): string {
 }
 
 function CopyBtn({ text, label }: { text: string; label: string }) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -65,7 +67,7 @@ function CopyBtn({ text, label }: { text: string; label: string }) {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1600)
     } catch {
-      toast.error(`Could not copy ${label}`)
+      toast.error(t("settings.couldNotCopy", { label }))
     }
   }
 
@@ -80,12 +82,12 @@ function CopyBtn({ text, label }: { text: string; label: string }) {
       {copied ? (
         <>
           <Check className="h-3.5 w-3.5" strokeWidth={2} />
-          Copied
+          {t("common.copied")}
         </>
       ) : (
         <>
           <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
-          Copy
+          {t("common.copy")}
         </>
       )}
     </Button>
@@ -93,6 +95,7 @@ function CopyBtn({ text, label }: { text: string; label: string }) {
 }
 
 export function ConnectionInfoCard() {
+  const t = useT()
   const [info, setInfo] = useState<ConnectionInfo>(() => connectionFromHealth())
 
   useEffect(() => {
@@ -117,50 +120,45 @@ export function ConnectionInfoCard() {
         <div className="pm-settings-card-head-text">
           <h2 className="pm-settings-card-kicker">MCP</h2>
           <p className="pm-meta pm-settings-card-desc">
-            This running instance. Point an agent here — not at Docker&rsquo;s
-            18900 unless that is the process you opened.
+            {t("settings.mcpHelp")}
           </p>
         </div>
 
         <div className="pm-settings-conn-rows">
           <div className="pm-settings-conn-row">
-            <span className="pm-label">Port</span>
+            <span className="pm-label">{t("settings.port")}</span>
             <span className="pm-settings-conn-value">{info.port}</span>
           </div>
           <div className="pm-settings-conn-row">
-            <span className="pm-label">Runtime</span>
+            <span className="pm-label">{t("settings.runtime")}</span>
             <span className="pm-settings-conn-value">
-              {info.desktop ? "Desktop app" : "Docker / local server"}
+              {info.desktop ? t("settings.desktopApp") : t("settings.dockerLocal")}
             </span>
           </div>
           <div className="pm-settings-conn-row">
-            <span className="pm-label">MCP URL</span>
+            <span className="pm-label">{t("settings.mcpUrl")}</span>
             <div className="pm-settings-conn-url">
               <span className="pm-settings-conn-value pm-settings-conn-url-text">
                 {info.mcpUrl}
               </span>
-              <CopyBtn text={info.mcpUrl} label="MCP URL" />
+              <CopyBtn text={info.mcpUrl} label={t("settings.mcpUrl")} />
             </div>
           </div>
         </div>
 
         <p className="pm-meta">
           {info.desktop
-            ? "Keep the app running. The red close button hides it to the menu bar; Quit from the tray or Cmd+Q stops MCP."
-            : "Start the backend first (docker compose up -d). MCP shares this process — no extra port."}
+            ? t("settings.mcpKeepRunning")
+            : t("settings.mcpDockerHelp")}
         </p>
 
         <div className="pm-settings-conn-snippet">
           <div className="pm-settings-conn-snippet-head">
-            <h3 className="pm-settings-subhead">Claude Code / Cursor</h3>
-            <CopyBtn text={claude} label="Claude snippet" />
+            <h3 className="pm-settings-subhead">{t("settings.claudeCursor")}</h3>
+            <CopyBtn text={claude} label={t("settings.claudeCursor")} />
           </div>
           <p className="pm-meta">
-            Project <code className="pm-settings-conn-inline">.mcp.json</code>
-            {" "}or{" "}
-            <code className="pm-settings-conn-inline">~/.claude/.mcp.json</code>
-            {" / "}
-            <code className="pm-settings-conn-inline">~/.cursor/mcp.json</code>
+            {t("settings.mcpConfigHint")}
           </p>
           <pre className="pm-settings-conn-pre">{claude}</pre>
         </div>

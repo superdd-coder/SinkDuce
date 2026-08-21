@@ -5,8 +5,10 @@ import { ThinkingSteps } from "./thinking-steps"
 import { StreamingAnswerBody } from "./streaming-answer-body"
 import type { Message, Source, TimelineBlock, ThinkingSummary } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(true)
   useEffect(() => { if (!isStreaming) setExpanded(false) }, [isStreaming])
   if (!text) return null
@@ -25,7 +27,7 @@ function ThinkingContent({ text, isStreaming }: { text: string; isStreaming: boo
           <ChevronRight className="size-3 opacity-40" />
         </span>
         <span className={cn("sk-diamond", isStreaming ? "breathing" : "on sk-diamond-static")} aria-hidden />
-        Thinking{isStreaming ? "…" : ""}
+        {t("chat.thinking")}{isStreaming ? "…" : ""}
       </button>
       <div className={cn("pm-chat-trail-body", expanded && "is-open")}>
         <div>
@@ -49,6 +51,7 @@ function ToolCallBlock({
   block: TimelineBlock
   messageStreaming?: boolean
 }) {
+  const t = useT()
   const result = (block.toolResult || "").trim()
   const hasResult = result.length > 0
   const [open, setOpen] = useState(false)
@@ -108,14 +111,14 @@ function ToolCallBlock({
         <span className="pm-meta font-mono truncate normal-case tracking-normal">{name}</span>
         {running && (
           <span className="pm-meta italic shrink-0 normal-case tracking-normal">
-            {statusRaw === "awaiting_confirm" ? "waiting…" : "running…"}
+            {statusRaw === "awaiting_confirm" ? t("chat.waiting") : t("chat.running")}
           </span>
         )}
         {isDeclined && (
-          <span className="pm-meta italic shrink-0 normal-case tracking-normal">declined</span>
+          <span className="pm-meta italic shrink-0 normal-case tracking-normal">{t("chat.declined")}</span>
         )}
         {isError && (
-          <span className="pm-meta italic shrink-0 normal-case tracking-normal">error</span>
+          <span className="pm-meta italic shrink-0 normal-case tracking-normal">{t("chat.error")}</span>
         )}
       </button>
       <div className={cn("pm-chat-trail-body", open && hasResult && "is-open")}>
@@ -191,6 +194,7 @@ function ProcessTrail({
   thinkingCount: number
   children: React.ReactNode
 }) {
+  const t = useT()
   const [open, setOpen] = useState(true)
   useEffect(() => {
     if (!isStreaming) {
@@ -205,9 +209,15 @@ function ProcessTrail({
   }, [isStreaming, answerStarted])
 
   const parts: string[] = []
-  if (toolCount > 0) parts.push(`${toolCount} tool${toolCount === 1 ? "" : "s"}`)
-  if (thinkingCount > 0) parts.push("reasoning")
-  const summary = parts.length > 0 ? parts.join(" · ") : "steps"
+  if (toolCount > 0) {
+    parts.push(
+      toolCount === 1
+        ? t("chat.nTool", { n: toolCount })
+        : t("chat.nTools", { n: toolCount }),
+    )
+  }
+  if (thinkingCount > 0) parts.push(t("chat.reasoning"))
+  const summary = parts.length > 0 ? parts.join(" · ") : t("chat.steps")
 
   return (
     <div className="pm-chat-trail">
@@ -228,7 +238,7 @@ function ProcessTrail({
           aria-hidden
         />
         <span>
-          {isStreaming ? "Working" : "Steps"}
+          {isStreaming ? t("chat.working") : t("chat.steps")}
           {isStreaming ? "…" : ""}
           <span className="pm-chat-trail-sum">· {summary}</span>
         </span>
@@ -321,13 +331,14 @@ const AssistantProcessTrail = memo(function AssistantProcessTrail({
 })
 
 export const MessageBubble = memo(function MessageBubble({ message, onSelectSource, selectedSourceId }: MessageBubbleProps) {
+  const t = useT()
   const isUser = message.role === "user"
   const streaming = !!message.isStreaming
 
   if (isUser) {
     return (
       <div className="pm-chat-msg pm-chat-msg--user">
-        <span className="pm-chat-msg-role">You</span>
+        <span className="pm-chat-msg-role">{t("chat.you")}</span>
         <div className="pm-chat-msg-user-body">
           <p>{message.content}</p>
         </div>
@@ -342,7 +353,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
         streaming && "is-streaming",
       )}
     >
-      <span className="pm-chat-msg-role pm-chat-msg-role--ai">Assistant</span>
+      <span className="pm-chat-msg-role pm-chat-msg-role--ai">{t("chat.assistant")}</span>
 
       <AssistantProcessTrail
         timeline={message.timeline}
@@ -358,7 +369,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
       {streaming && !message.content ? (
         <div className="pm-chat-typing">
           <span className="sk-diamond breathing" aria-hidden />
-          <span>Educing…</span>
+          <span>{t("chat.educing")}</span>
         </div>
       ) : message.content ? (
         <div className="pm-chat-msg-answer">
@@ -381,10 +392,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onSelectSour
         <div className="pm-chat-web-banner" role="note">
           <Globe className="size-3.5 pm-chat-web-banner-icon" strokeWidth={1.75} aria-hidden />
           <p className="m-0 min-w-0">
-            <strong>Internet sources used</strong>
+            <strong>{t("chat.internetSources")}</strong>
             {" — "}
-            Some evidence below is from the public web, not your private knowledge base.
-            Treat <span className="pm-chat-web-badge inline-flex mx-0.5 align-middle">web</span> badges as external data.
+            {t("chat.internetSourcesHint")}
           </p>
         </div>
       )}

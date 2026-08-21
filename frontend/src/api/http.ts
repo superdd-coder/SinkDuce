@@ -20,38 +20,93 @@ export type NameConflictDetail = {
   message: string
 }
 
-export class FileMgmtApiError extends Error {
+export class ApiError extends Error {
   status: number
+  code: string | null
+  params: Record<string, string | number>
   detail: unknown
   rawBody: string
 
-  constructor(status: number, rawBody: string) {
-    let detail: unknown = rawBody
-    try {
-      detail = JSON.parse(rawBody)
-    } catch {
-      /* keep raw string */
-    }
-    if (
-      detail &&
-      typeof detail === "object" &&
-      "detail" in (detail as Record<string, unknown>)
-    ) {
-      detail = (detail as { detail: unknown }).detail
-    }
-    const msg =
-      typeof detail === "string"
-        ? detail
-        : detail &&
-            typeof detail === "object" &&
-            "message" in (detail as object)
-          ? String((detail as { message: unknown }).message)
-          : `API ${status}: ${rawBody}`
-    super(msg)
-    this.name = "FileMgmtApiError"
+  constructor(
+    status: number,
+    rawBody: string,
+    opts?: {
+      code?: string | null
+      params?: Record<string, string | number>
+      message?: string
+      detail?: unknown
+    },
+  ) {
+    super(opts?.message ?? `API ${status}: ${rawBody}`)
+    this.name = "ApiError"
     this.status = status
-    this.detail = detail
     this.rawBody = rawBody
+    this.code = opts?.code ?? null
+    this.params = opts?.params ?? {}
+    this.detail = opts?.detail ?? rawBody
+  }
+}
+
+function unwrapDetail(json: unknown): unknown {
+  let d = json
+  if (
+    d &&
+    typeof d === "object" &&
+    "detail" in (d as Record<string, unknown>)
+  ) {
+    d = (d as { detail: unknown }).detail
+  }
+  return d
+}
+
+export function parseApiErrorBody(status: number, rawBody: string): ApiError {
+  const json = parseJsonMaybe(rawBody)
+  const detail = unwrapDetail(json)
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const rec = detail as Record<string, unknown>
+    const code = typeof rec.code === "string" ? rec.code : null
+    const params =
+      rec.params && typeof rec.params === "object" && !Array.isArray(rec.params)
+        ? (rec.params as Record<string, string | number>)
+        : {}
+    const message =
+      typeof rec.message === "string"
+        ? rec.message
+        : `API ${status}: ${rawBody}`
+    return new ApiError(status, rawBody, { code, params, message, detail })
+  }
+  if (typeof detail === "string") {
+    return new ApiError(status, rawBody, {
+      message: detail,
+      detail,
+    })
+  }
+  return new ApiError(status, rawBody, { detail: detail ?? rawBody })
+}
+
+export function formatApiError(
+  err: unknown,
+  translate: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (err instanceof ApiError && err.code) {
+    const key = `errors.${err.code}`
+    const msg = translate(key, err.params)
+    if (msg !== key) return msg
+  }
+  if (err instanceof Error && err.message) return err.message
+  return String(err)
+}
+
+export class FileMgmtApiError extends ApiError {
+  constructor(status: number, rawBody: string) {
+    const parsed = parseApiErrorBody(status, rawBody)
+    super(status, rawBody, {
+      code: parsed.code,
+      params: parsed.params,
+      message: parsed.message,
+      detail: parsed.detail,
+    })
+    this.name = "FileMgmtApiError"
   }
 }
 
@@ -142,7 +197,7 @@ async function requestClient<T>(url: string, options?: RequestInit): Promise<T> 
   })
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`API ${res.status}: ${body}`)
+    throw parseApiErrorBody(res.status, body)
   }
   return res.json()
 }

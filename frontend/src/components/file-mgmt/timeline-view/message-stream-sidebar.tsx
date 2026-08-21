@@ -12,6 +12,8 @@ import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { MESSAGE_EDITOR_PLACEHOLDER } from "@/components/ui/tiptap-editor"
 import { Bot, Clock, Loader2, Pencil, Plus, X } from "lucide-react"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import type { Chain, Message, Node } from "@/types/file-mgmt"
 import {
   createCollectionMessage,
@@ -178,18 +180,21 @@ function messagePlainExcerpt(body: string): string {
     .trim()
 }
 
-function ownerLabel(msg: Message): string {
+function ownerLabel(
+  msg: Message,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
   switch (msg.owner_type) {
     case "node":
-      return "Node"
+      return t("fileMgmt.node")
     case "file":
-      return "File"
+      return t("common.file")
     case "folder":
-      return "Folder"
+      return t("common.folder")
     case "system_version":
-      return "System"
+      return t("common.system")
     default:
-      return msg.owner_type || "Message"
+      return msg.owner_type || t("common.message")
   }
 }
 
@@ -203,6 +208,7 @@ export function MessageStreamSidebar({
   onDetailChange,
   detailOpen: externalDetailOpen,
 }: MessageStreamSidebarProps) {
+  const t = useT()
   void _onFocusChange
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
@@ -244,17 +250,17 @@ export function MessageStreamSidebar({
   )
 
   const focusLabel = useMemo(() => {
-    if (focus.kind === "main") return "Main chain"
+    if (focus.kind === "main") return t("fileMgmt.mainChain")
     if (focus.kind === "chain") {
       const c = chains.find((x) => x.chain_id === focus.chainId)
-      return c?.title || "Branch"
+      return c?.title || t("fileMgmt.branch")
     }
     for (const nodes of chainNodes.values()) {
       const n = nodes.find((x) => x.node_id === focus.nodeId)
-      if (n) return n.title || "Node"
+      if (n) return n.title || t("fileMgmt.node")
     }
-    return "Node"
-  }, [focus, chains, chainNodes])
+    return t("fileMgmt.node")
+  }, [focus, chains, chainNodes, t])
 
   /** Persist draft when leaving edit (close panel / switch message). Empty draft is skipped. */
   const persistEditIfNeeded = useCallback(async (): Promise<boolean> => {
@@ -275,7 +281,7 @@ export function MessageStreamSidebar({
       return true
     } catch (err) {
       toast.error(
-        `Failed to save: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.failedToSave", { error: formatApiError(err, t) })
       )
       return false
     }
@@ -554,7 +560,7 @@ export function MessageStreamSidebar({
         }
       }
     } catch (err) {
-      toast.error(`Failed to load messages: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failedLoadMessages", { error: formatApiError(err, t) }))
       setMessages([])
     } finally {
       setLoading(false)
@@ -590,7 +596,7 @@ export function MessageStreamSidebar({
       } else if (focus.kind === "chain") {
         const ch = chains.find((c) => c.chain_id === focus.chainId)
         if (!ch?.folder_id) {
-          toast.error("This chain has no folder to attach messages")
+          toast.error(t("fileMgmt.noFolderAttach"))
           return
         }
         await createFolderMessage(collectionId, ch.folder_id, {
@@ -607,10 +613,10 @@ export function MessageStreamSidebar({
           author_type: "user",
         })
       }
-      toast.success("Message added")
+      toast.success(t("fileMgmt.messageAdded"))
       void load()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -642,28 +648,28 @@ export function MessageStreamSidebar({
       await deleteMessage(collectionId, messageId)
       void load()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.failed", { error: formatApiError(err, t) }))
     }
   }
 
   const addHint =
     focus.kind === "main"
-      ? "Add main-chain (collection) message"
+      ? t("fileMgmt.addMainChainMessage")
       : focus.kind === "chain"
-        ? "Add branch folder message"
-        : "Add node message"
+        ? t("fileMgmt.addBranchFolderMessage")
+        : t("fileMgmt.addNodeMessage")
   const addKicker =
     focus.kind === "main"
-      ? "Main chain"
+      ? t("fileMgmt.mainChain")
       : focus.kind === "chain"
-        ? "Branch"
-        : "Node"
+        ? t("fileMgmt.branch")
+        : t("fileMgmt.node")
   const addDescription =
     focus.kind === "main"
-      ? "New message on the main chain (collection scope)."
+      ? t("fileMgmt.newMessageOnMainChain")
       : focus.kind === "chain"
-        ? "New message on this branch (folder scope)."
-        : "New message on this timeline node."
+        ? t("fileMgmt.newMessageOnThisBranch")
+        : t("fileMgmt.newMessageOnThisNode")
 
   const detailOpen = !!detailMsg
 
@@ -681,7 +687,7 @@ export function MessageStreamSidebar({
           <div className="pm-timeline-panel-head justify-between gap-2">
             <div className="min-w-0">
               <h3 className="pm-timeline-panel-title">
-                {detailEditing ? "Edit message" : "Message"}
+                {detailEditing ? t("fileMgmt.editMessage") : t("common.message")}
               </h3>
               <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
                 {detailMsg.author_type === "system" ? (
@@ -691,9 +697,9 @@ export function MessageStreamSidebar({
                 )}
                 <span className="pm-timeline-panel-meta truncate">
                   {formatMsgTime(detailMsg.created_at)}
-                  {detailMsg.edited_at ? " · edited" : ""}
+                  {detailMsg.edited_at ? ` · ${t("common.edited")}` : ""}
                   {" · "}
-                  {ownerLabel(detailMsg)}
+                  {ownerLabel(detailMsg, t)}
                 </span>
               </div>
             </div>
@@ -702,7 +708,7 @@ export function MessageStreamSidebar({
                 <button
                   type="button"
                   className="p-1 text-[var(--pm-faint)] hover:text-[var(--pm-ink)] rounded-[var(--pm-r-sm)] transition-colors"
-                  title="Edit"
+                  title={t("common.edit")}
                   onClick={() => {
                     setDetailEditing(true)
                     setDetailDraft(detailMsg.body || "")
@@ -780,9 +786,9 @@ export function MessageStreamSidebar({
       >
         <div className="pm-timeline-panel-head justify-between">
           <div className="min-w-0">
-            <h3 className="pm-timeline-panel-title">Message stream</h3>
+            <h3 className="pm-timeline-panel-title">{t("fileMgmt.messageStream")}</h3>
             <p className="pm-timeline-panel-meta truncate mt-0.5">
-              Focus: {focusLabel}
+              {t("fileMgmt.focusLabel", { name: focusLabel })}
             </p>
           </div>
           <button
@@ -805,9 +811,9 @@ export function MessageStreamSidebar({
                   includeBranches && "is-on"
                 )}
                 onClick={() => setIncludeBranches(!includeBranches)}
-                title="Include branch messages"
+                title={t("fileMgmt.includeBranchMessages")}
               >
-                Branches
+                {t("fileMgmt.branches")}
               </button>
             )}
             <button
@@ -817,9 +823,9 @@ export function MessageStreamSidebar({
                 includeFiles && "is-on"
               )}
               onClick={() => setIncludeFiles(!includeFiles)}
-              title="Include file messages"
+              title={t("fileMgmt.includeFileMessages")}
             >
-              Files
+              {t("common.files")}
             </button>
           </div>
           <button
@@ -845,7 +851,7 @@ export function MessageStreamSidebar({
           </div>
         ) : messages.length === 0 ? (
           <p className="text-center pm-meta text-[var(--pm-faint)] py-8 px-3">
-            No messages in this scope. Click + to add at focus layer.
+            {t("fileMgmt.noMessagesInScope")}
           </p>
         ) : (
           /*
@@ -940,7 +946,7 @@ export function MessageStreamSidebar({
                       <button
                         type="button"
                         className="ml-auto shrink-0 pm-meta text-[var(--pm-faint)] hover:text-[var(--pm-danger)] opacity-0 group-hover:opacity-100 transition-opacity px-1"
-                        title="Delete message"
+                        title={t("fileMgmt.deleteMessage")}
                         onClick={(e) => {
                           e.stopPropagation()
                           void handleDelete(msg.message_id)
@@ -967,7 +973,7 @@ export function MessageStreamSidebar({
         onOpenChange={(next) => {
           setAddDialogOpen(next)
         }}
-        title="Add message"
+        title={t("fileMgmt.addMessage")}
         kicker={addKicker}
         description={addDescription}
         initialContent=""

@@ -1,4 +1,12 @@
 import { create } from "zustand"
+import {
+  applyDocumentLang,
+  normalizeLocale,
+  notifyDesktopLocale,
+  type Locale,
+} from "@/i18n"
+import { bindLocaleGetter } from "@/i18n/tr"
+import { updateConfig } from "@/api/client"
 
 function loadPersisted<T>(key: string, fallback: T): T {
   try {
@@ -198,6 +206,10 @@ interface AppState {
 
   developerMode: boolean
   toggleDeveloperMode: () => void
+
+  locale: Locale
+  setLocale: (locale: Locale) => void
+  hydrateLocale: (raw: unknown) => void
 
   activeMeeting: string | null
   setActiveMeeting: (id: string | null) => void
@@ -638,6 +650,36 @@ export const useAppStore = create<AppState>((set) => ({
   developerMode: loadPersisted<boolean>("developerMode", false),
   toggleDeveloperMode: () => set((s) => ({ developerMode: !s.developerMode })),
 
+  locale: (() => {
+    const locale = normalizeLocale(loadPersisted<unknown>("locale", "en"))
+    applyDocumentLang(locale)
+    return locale
+  })(),
+  setLocale: (locale) => {
+    const next = normalizeLocale(locale)
+    const cur = useAppStore.getState().locale
+    if (next === cur) return
+    try {
+      localStorage.setItem("rag_locale", JSON.stringify(next))
+    } catch { /* ignore */ }
+    applyDocumentLang(next)
+    set({ locale: next })
+    updateConfig("locale", { locale: next }).catch(() => {})
+    notifyDesktopLocale(next)
+  },
+  hydrateLocale: (raw) => {
+    if (raw !== "en" && raw !== "zh-CN") return
+    const next = raw
+    const cur = useAppStore.getState().locale
+    if (next === cur) return
+    try {
+      localStorage.setItem("rag_locale", JSON.stringify(next))
+    } catch { /* ignore */ }
+    applyDocumentLang(next)
+    set({ locale: next })
+    notifyDesktopLocale(next)
+  },
+
   activeMeeting: null,
   setActiveMeeting: (id) => set({ activeMeeting: id }),
 
@@ -856,3 +898,5 @@ useAppStore.subscribe((state) => {
     localStorage.setItem("rag_developerMode", JSON.stringify(state.developerMode))
   }, 500)
 })
+
+bindLocaleGetter(() => useAppStore.getState().locale)

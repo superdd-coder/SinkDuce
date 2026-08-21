@@ -47,6 +47,8 @@ import {
   type MessageDetailState,
 } from './message-stream-sidebar'
 import { useFileMgmtStore } from '@/stores/file-mgmt-store'
+import { useT } from '@/i18n/use-t'
+import { tr } from '@/i18n/tr'
 
 /** Visible/sortable nodes on a chain row (branch hides start/end anchors). */
 function visibleNodesForChain(chain: Chain, nodes: Node[]): Node[] {
@@ -348,6 +350,7 @@ export function TimelineView({
   active = true,
   railCovered = false,
 }: TVP) {
+  const t = useT()
   const [chains,setChains]=useState<Chain[]>([])
   const [chainData,setChainData]=useState<Map<string,CWN>>(new Map())
   const [groups,setGroups]=useState<NodeGroup[]>([])
@@ -457,7 +460,9 @@ export function TimelineView({
         setMeetingTodosOpen(true)
       } catch (err) {
         toast.error(
-          `Load meeting todos failed: ${err instanceof Error ? err.message : String(err)}`,
+          tr("fileMgmt.loadMeetingTodosFailed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
         )
       } finally {
         setMeetingTodosLoading(false)
@@ -534,7 +539,7 @@ export function TimelineView({
       if (gen !== collectionLoadGen.current) return
       setChainData(m)
     }catch{
-      if (gen === collectionLoadGen.current) toast.error('Failed to load')
+      if (gen === collectionLoadGen.current) toast.error(tr('fileMgmt.failedToLoad'))
     }finally{
       if (gen === collectionLoadGen.current && !opts?.silent) setLoading(false)
     }
@@ -739,11 +744,11 @@ export function TimelineView({
     },
     []
   )
-  const cc=useCallback(async(pCid:string,pNid:string)=>{try{const mcd2=chainData.get(pCid);const pn=mcd2?.nodes.find(n=>n.node_id===pNid);if(chains.filter(bc=>bc.parent_node_id===pNid&&!bc.has_end_node).length>0){toast.error("Node already has an active branch");return}const title=pn?.title||"Branch";await createChain(collectionId,{parent_chain_id:pCid,parent_node_id:pNid,title});await updateNode(collectionId,pNid,{node_type:"start",version:pn?.version??1});toast.success("Branch "+title+" created");fetch({silent:true})}catch(e){toast.error("Failed: "+String(e))}},[collectionId,chainData,fetch,chains])
+  const cc=useCallback(async(pCid:string,pNid:string)=>{try{const mcd2=chainData.get(pCid);const pn=mcd2?.nodes.find(n=>n.node_id===pNid);if(chains.filter(bc=>bc.parent_node_id===pNid&&!bc.has_end_node).length>0){toast.error(tr("fileMgmt.nodeHasBranch"));return}const title=pn?.title||tr("fileMgmt.branch");await createChain(collectionId,{parent_chain_id:pCid,parent_node_id:pNid,title});await updateNode(collectionId,pNid,{node_type:"start",version:pn?.version??1});toast.success(tr("fileMgmt.branchCreated",{title}));fetch({silent:true})}catch(e){toast.error(tr("fileMgmt.failed",{error:String(e)}))}},[collectionId,chainData,fetch,chains])
   const confirmDeleteBranchTitle = useMemo(() => {
-    if (!confirmDeleteBranchId) return 'Empty branch'
+    if (!confirmDeleteBranchId) return tr('fileMgmt.emptyBranch')
     const ch = chains.find(c => c.chain_id === confirmDeleteBranchId)
-    return ch?.title?.trim() || 'Empty branch'
+    return ch?.title?.trim() || tr('fileMgmt.emptyBranch')
   }, [confirmDeleteBranchId, chains])
   /**
    * Merge / end branch: only open the form. The end marker is created on
@@ -757,7 +762,7 @@ export function TimelineView({
       const nodes = await listNodes(collectionId, cid)
       const events = nodes.filter(n => n.node_type === 'event')
       if (events.length === 0) {
-        toast.error('Branch has no event nodes to merge')
+        toast.error(tr('fileMgmt.noEventNodesMerge'))
         return
       }
       const leftoverEnd = nodes.find(n => n.node_type === 'end')
@@ -765,11 +770,11 @@ export function TimelineView({
       setEcTgt({ chainId: cid, nodes, endNodeId: leftoverEnd?.node_id ?? '' })
       setEcOpen(true)
     } catch (e) {
-      toast.error('Failed to prepare merge: ' + String(e))
+      toast.error(tr('fileMgmt.failedPrepareMerge', { error: String(e) }))
     }
   }, [collectionId, chainData])
-  const ro=useCallback(async(cid:string)=>{try{await reopenChain(collectionId,cid);toast.success('Chain reopened');fetch({silent:true})}catch(e){toast.error('Reopen failed: '+String(e))}},[collectionId,fetch])
-  const gn=(gid:string|null):string=>{if(!gid)return'No Group';return groups.find(g=>g.group_id===gid)?.name??'Unknown'}
+  const ro=useCallback(async(cid:string)=>{try{await reopenChain(collectionId,cid);toast.success(tr('fileMgmt.chainReopened'));fetch({silent:true})}catch(e){toast.error(tr('fileMgmt.reopenFailed',{error:String(e)}))}},[collectionId,fetch])
+  const gn=(gid:string|null):string=>{if(!gid)return tr('fileMgmt.noGroup');return groups.find(g=>g.group_id===gid)?.name??tr('fileMgmt.unknown')}
 
   const allNodes = useMemo(() => {
     const out: Node[] = []
@@ -914,7 +919,7 @@ export function TimelineView({
     if (!cd || !ch) return
     const hasEvents = cd.nodes.some(n => n.node_type === 'event')
     if (hasEvents) {
-      toast.error('Only empty branches can be deleted here')
+      toast.error(tr('fileMgmt.onlyEmptyBranches'))
       setConfirmDeleteBranchId(null)
       return
     }
@@ -940,11 +945,11 @@ export function TimelineView({
           }
         }
       }
-      toast.success('Branch removed')
+      toast.success(tr('fileMgmt.branchRemoved'))
       setConfirmDeleteBranchId(null)
       fetch({ silent: true })
     } catch (e) {
-      toast.error('Failed: ' + String(e))
+      toast.error(tr('fileMgmt.failed', { error: String(e) }))
     }
   }, [chainData, chains, collectionId, fetch, nodeById])
 
@@ -1348,7 +1353,7 @@ export function TimelineView({
         srcNode.node_type === 'start' ||
         srcNode.node_type === 'end')
     ) {
-      toast.error('Branch start/end nodes must stay on the main chain')
+      toast.error(tr('fileMgmt.branchNodesStayMain'))
       remasureSoon()
       return
     }
@@ -1374,7 +1379,7 @@ export function TimelineView({
         if (newOrder !== moved.order) {
           await reorderNode(collectionId, sid, newOrder)
         }
-        toast.success('Node moved to ' + (destChain.title || 'chain'))
+        toast.success(tr('fileMgmt.nodeMovedTo', { title: destChain.title || tr('fileMgmt.chain') }))
       } else {
         const newOrder = orderForDesiredIndex(
           destChain,
@@ -1387,7 +1392,7 @@ export function TimelineView({
           return
         }
         await reorderNode(collectionId, sid, newOrder)
-        toast.success('Order updated')
+        toast.success(tr('fileMgmt.orderUpdated'))
       }
       // Optimistic local state so layout/connectors match drop before refetch
       setChainData(prev => {
@@ -1444,7 +1449,7 @@ export function TimelineView({
       window.setTimeout(() => bumpMeasure(), 80)
       window.setTimeout(() => bumpMeasure(), 250)
     } catch (err) {
-      toast.error('Move failed: ' + String(err))
+      toast.error(tr('fileMgmt.moveFailed', { error: String(err) }))
       try {
         await fetch({ silent: true })
       } catch {
@@ -2012,14 +2017,14 @@ export function TimelineView({
   if (loading && chains.length === 0) {
     return (
       <div className="pm-timeline items-center justify-center">
-        <p className="pm-meta text-[var(--pm-muted)]">Loading…</p>
+        <p className="pm-meta text-[var(--pm-muted)]">{t("common.loading")}</p>
       </div>
     )
   }
   if (!mc) {
     return (
       <div className="pm-timeline items-center justify-center">
-        <p className="pm-meta text-[var(--pm-muted)]">No main chain found</p>
+        <p className="pm-meta text-[var(--pm-muted)]">{t("fileMgmt.noMainChain")}</p>
       </div>
     )
   }
@@ -2098,7 +2103,7 @@ export function TimelineView({
                       )}
                       style={{ top: -CONN_GAP / 2 }}
                       onClick={() => setConfirmDeleteBranchId(bi.bc.chain_id)}
-                      title="Delete empty branch"
+                      title={t("fileMgmt.deleteEmptyBranch")}
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -2112,7 +2117,7 @@ export function TimelineView({
                       const maxO = all.reduce((m, n) => Math.max(m, n.order), 0)
                       addN(bi.bc.chain_id, maxO)
                     }}
-                    title="Add first node to branch"
+                    title={t("fileMgmt.addFirstNodeBranch")}
                   >
                     <Plus className="h-4 w-4" />
                   </button>
@@ -2123,7 +2128,7 @@ export function TimelineView({
                     <button
                       type="button"
                       data-branch-msg-focus
-                      title="Focus branch messages"
+                      title={t("fileMgmt.focusBranchMessages")}
                       className={cn(
                         'absolute -left-6 top-1/2 -translate-y-1/2 z-10 p-1.5 rounded-full',
                         'bg-white shadow-[var(--pm-shadow-sm)]',
@@ -2233,7 +2238,7 @@ export function TimelineView({
         <div className="pm-timeline-toolbar" data-groups-menu>
           <button
             type="button"
-            title={msgMode ? 'Exit message stream' : 'Message stream'}
+            title={msgMode ? t("fileMgmt.exitMessageStream") : t("fileMgmt.messageStream")}
             className={cn('pm-timeline-tb-btn', msgMode && 'is-on')}
             onClick={(e) => {
               e.stopPropagation()
@@ -2241,7 +2246,7 @@ export function TimelineView({
             }}
           >
             <MessageSquareText />
-            Messages
+            {t("common.messages")}
           </button>
           <GroupsMenu
             collectionId={collectionId}
@@ -2532,7 +2537,7 @@ export function TimelineView({
         meetingId={meetingTodosCtx?.meetingId ?? ''}
         candidates={meetingTodosCtx?.candidates ?? []}
         loading={meetingTodosLoading}
-        title="Create todos from meeting"
+        title={t("fileMgmt.createTodosMeeting")}
         onCreated={() => {
           setTodoSidebarKey((k) => k + 1)
           setSuggestRefreshKey((k) => k + 1)
@@ -2585,13 +2590,12 @@ export function TimelineView({
         >
           <DialogHeader>
             <DialogTitle>
-              Delete branch “{confirmDeleteBranchTitle}”?
+              {t("fileMgmt.deleteEmptyBranchQ", { title: confirmDeleteBranchTitle })}
             </DialogTitle>
           </DialogHeader>
           <div className="pm-dialog-body">
             <p className="pm-meta text-[var(--pm-muted)]">
-              This empty branch will be removed. You can create a new branch from
-              the same node later.
+              {t("fileMgmt.deleteEmptyBranchBody")}
             </p>
           </div>
           <DialogFooter className="gap-2 sm:justify-end">
@@ -2601,7 +2605,7 @@ export function TimelineView({
               className="pm-btn-ghost"
               onClick={() => setConfirmDeleteBranchId(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -2612,7 +2616,7 @@ export function TimelineView({
                 }
               }}
             >
-              Delete
+              {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

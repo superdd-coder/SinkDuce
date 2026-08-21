@@ -1,3 +1,6 @@
+import { tr } from "@/i18n/tr"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
+
 /** Technical source keys must never be shown as filenames. */
 export function isOpaqueSourceKey(value: string | undefined | null): boolean {
   const s = (value || "").trim()
@@ -57,7 +60,7 @@ export function humanSourceLabel(
     const last = source.split("/").pop() || source
     if (last && !isOpaqueSourceKey(last)) return last
   }
-  if (source.startsWith("__meeting__:")) return "Meeting"
-  if (source.startsWith("__note__:")) return "Note"
-  return "Document"
+  if (source.startsWith("__meeting__:")) return systemFolderDisplayName("Meeting", tr)
+  if (source.startsWith("__note__:")) return systemFolderDisplayName("Note", tr)
+  return tr("common.file")
 }

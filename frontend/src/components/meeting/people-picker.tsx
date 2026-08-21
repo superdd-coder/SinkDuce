@@ -3,6 +3,8 @@ import { ChevronDown, Play, Plus, Search, UserMinus, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SoftMenu } from "@/components/ui/menu"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import { PeopleManager } from "@/components/llm-provider/people-manager"
 import {
   assignMeetingSpeaker,
@@ -38,6 +40,7 @@ export function PeoplePicker({
   match?: SpeakerMatch
   onAssigned: (meeting: Meeting) => void
 }) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [people, setPeople] = useState<SpeakerPerson[]>([])
@@ -50,7 +53,7 @@ export function PeoplePicker({
   const anchorRef = useRef<HTMLButtonElement>(null)
   const noteRef = useRef<HTMLInputElement>(null)
 
-  const label = displayName?.trim() || `Speaker ${speakerId}`
+  const label = displayName?.trim() || t("meeting.speakerN", { id: speakerId })
   const assigned = Boolean(displayName?.trim())
 
   const load = useCallback(async () => {
@@ -141,8 +144,7 @@ export function PeoplePicker({
       setQuery("")
       setDisambiguator("")
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to assign person"
-      toast.error(msg)
+      toast.error(formatApiError(err, t) || t("meeting.failedAssignPerson"))
     } finally {
       setBusy(false)
     }
@@ -153,7 +155,7 @@ export function PeoplePicker({
     ev.stopPropagation()
     const personId = match?.top?.[0]?.person_id
     if (!personId) {
-      toast.error("No person to apply")
+      toast.error(t("meeting.noPersonApply"))
       return
     }
     await assign({ person_id: personId })
@@ -167,7 +169,7 @@ export function PeoplePicker({
     }
     const note = disambiguator.trim()
     if (nameTaken && !note) {
-      toast.error("Add a note to tell them apart")
+      toast.error(t("meeting.addNoteApart"))
       noteRef.current?.focus()
       return
     }
@@ -196,12 +198,12 @@ export function PeoplePicker({
       el.addEventListener("ended", () => setPlaying((cur) => (cur === personId ? null : cur)))
       el.addEventListener("error", () => {
         setPlaying(null)
-        toast.error("No playable clip for this person")
+        toast.error(t("meeting.noPlayableClip"))
       })
       await el.play()
     } catch {
       setPlaying(null)
-      toast.error("No playable clip for this person")
+      toast.error(t("meeting.noPlayableClip"))
     }
   }
 
@@ -224,7 +226,7 @@ export function PeoplePicker({
         <span className="min-w-0 flex-1 text-left">
           <span className="pm-people-picker-name">{person.label}</span>
           {person.has_voiceprint && (
-            <span className="pm-people-picker-sub">Voiceprint</span>
+            <span className="pm-people-picker-sub">{t("meeting.voiceprint")}</span>
           )}
         </span>
         {score != null && (
@@ -234,7 +236,7 @@ export function PeoplePicker({
       <button
         type="button"
         className={cn("pm-people-picker-play", playing === person.id && "is-on")}
-        aria-label={`Play sample of ${person.label}`}
+        aria-label={t("meeting.playSample", { name: person.label })}
         onClick={(e) => void handlePlay(person.id, e)}
       >
         <Play className="size-3" />
@@ -261,11 +263,11 @@ export function PeoplePicker({
             type="button"
             className="pm-people-auto-pill"
             disabled={busy}
-            aria-label="Apply auto match"
+            aria-label={t("meeting.applyAutoMatch")}
             onClick={(e) => void handleApplyAuto(e)}
           >
-            <span className="pm-people-auto-pill-idle">Auto</span>
-            <span className="pm-people-auto-pill-apply">Apply</span>
+            <span className="pm-people-auto-pill-idle">{t("meeting.auto")}</span>
+            <span className="pm-people-auto-pill-apply">{t("common.apply")}</span>
           </button>
         )}
       </div>
@@ -281,7 +283,7 @@ export function PeoplePicker({
           <div className="pm-people-picker-search">
             <Search className="size-3.5 shrink-0 opacity-40" />
             <input
-              placeholder="Search or add a name"
+              placeholder={t("meeting.searchOrAddName")}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value)
@@ -301,8 +303,8 @@ export function PeoplePicker({
               className="pm-people-picker-note"
               placeholder={
                 nameTaken
-                  ? "Note to tell them apart — Engineering"
-                  : "Note — Engineering, Client…"
+                  ? t("meeting.noteApartPh")
+                  : t("meeting.notePh")
               }
               value={disambiguator}
               onChange={(e) => setDisambiguator(e.target.value)}
@@ -316,11 +318,11 @@ export function PeoplePicker({
         </div>
         <div className="pm-people-picker-list">
           {topRows.length > 0 && (
-            <div className="pm-people-picker-sec">Most similar</div>
+            <div className="pm-people-picker-sec">{t("meeting.mostSimilar")}</div>
           )}
           {topRows.map(({ person, score }) => row(person, score))}
           {rest.length > 0 && (
-            <div className="pm-people-picker-sec">Directory</div>
+            <div className="pm-people-picker-sec">{t("common.directory")}</div>
           )}
           {rest.map((person) => row(person))}
         </div>
@@ -332,7 +334,7 @@ export function PeoplePicker({
             onClick={() => void handleAdd()}
           >
             <Plus className="size-3.5 shrink-0" />
-            {`Add “${query.trim()}”`}
+            {t("meeting.addQuoted", { name: query.trim() })}
           </button>
         ) : null}
         {assigned && (
@@ -343,7 +345,7 @@ export function PeoplePicker({
             onClick={() => void assign({ person_id: null })}
           >
             <UserMinus className="size-3.5" />
-            Clear selection
+            {t("meeting.clearSelection")}
           </button>
         )}
         <button
@@ -355,7 +357,7 @@ export function PeoplePicker({
           }}
         >
           <Users className="size-3.5" />
-          Manage people
+          {t("meeting.managePeople")}
         </button>
       </SoftMenu>
       <PeopleManager

@@ -48,6 +48,8 @@ import {
   IconPickerPanel,
   buildIconPayload,
 } from "@/components/file-mgmt/timeline-view/group-icons"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
 
 /** Active in this folder (not file-archived, not path-greyed here). */
 function isActiveInFolder(f: FileSummary): boolean {
@@ -204,6 +206,7 @@ export function Toolbar({
   collectionId: string
   trailing?: ReactNode
 }) {
+  const t = useT()
   const {
     currentFolderId,
     currentFolder,
@@ -544,34 +547,34 @@ export function Toolbar({
                 variant="ghost"
                 size="xs"
                 onClick={() => on && setNewFolderDialog(true)}
-                title="New folder"
+                title={t("fileMgmt.newFolder")}
                 className={tbBtn}
                 tabIndex={tab}
               >
                 <FolderPlus />
-                New Folder
+                {t("fileMgmt.newFolder")}
               </Button>
               <Button
                 variant="ghost"
                 size="xs"
                 onClick={() => on && fileInputRef.current?.click()}
-                title="Upload file"
+                title={t("fileMgmt.uploadFile")}
                 className={tbBtn}
                 tabIndex={tab}
               >
                 <Upload />
-                Upload
+                {t("common.upload")}
               </Button>
               <Button
                 variant="ghost"
                 size="xs"
                 onClick={() => on && folderInputRef.current?.click()}
-                title="Upload folder"
+                title={t("fileMgmt.uploadFolder")}
                 className={tbBtn}
                 tabIndex={tab}
               >
                 <FolderInput />
-                Upload Folder
+                {t("fileMgmt.uploadFolder")}
               </Button>
               <ToolbarDivider />
             </>
@@ -585,12 +588,12 @@ export function Toolbar({
                 on &&
                 setOpenMenu((m) => (m === "sort" ? null : "sort"))
               }
-              title="Sort files"
+              title={t("fileMgmt.sortFiles")}
               className={cn(tbBtn, openMenu === "sort" && opts.menus && "is-on")}
               tabIndex={tab}
             >
               <ArrowUpDown />
-              Sort
+              {t("fileMgmt.sort")}
               <ChevronDown className="size-3 opacity-60" />
             </Button>
             {opts.menus && (
@@ -600,8 +603,8 @@ export function Toolbar({
               >
                 {(
                   [
-                    { id: "name" as const, label: "By name" },
-                    { id: "type" as const, label: "By type" },
+                    { id: "name" as const, label: t("fileMgmt.sortByName") },
+                    { id: "type" as const, label: t("fileMgmt.sortByType") },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -627,7 +630,7 @@ export function Toolbar({
                     "pm-files-menu-opt",
                     isCreatedSortMode(folderFileSort) && "is-on"
                   )}
-                  title="Click again to toggle newest ↔ oldest"
+                  title={t("fileMgmt.clickToggleSort")}
                   onClick={() => {
                     setFolderFileSort(
                       collectionId,
@@ -636,12 +639,12 @@ export function Toolbar({
                     setOpenMenu(null)
                   }}
                 >
-                  By created
+                  {t("fileMgmt.sortByCreated")}
                   {folderFileSort === "created_desc" && (
-                    <span className="text-[var(--pm-faint)]"> · newest</span>
+                    <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.newest")}</span>
                   )}
                   {folderFileSort === "created_asc" && (
-                    <span className="text-[var(--pm-faint)]"> · oldest</span>
+                    <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.oldest")}</span>
                   )}
                 </button>
                 <button
@@ -651,7 +654,7 @@ export function Toolbar({
                     "pm-files-menu-opt",
                     isUpdatedSortMode(folderFileSort) && "is-on"
                   )}
-                  title="Folder time = latest file update inside. Click again to toggle direction."
+                  title={t("fileMgmt.sortByUpdatedHint")}
                   onClick={() => {
                     setFolderFileSort(
                       collectionId,
@@ -660,12 +663,12 @@ export function Toolbar({
                     setOpenMenu(null)
                   }}
                 >
-                  By updated
+                  {t("fileMgmt.sortByUpdated")}
                   {folderFileSort === "updated_desc" && (
-                    <span className="text-[var(--pm-faint)]"> · newest</span>
+                    <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.newest")}</span>
                   )}
                   {folderFileSort === "updated_asc" && (
-                    <span className="text-[var(--pm-faint)]"> · oldest</span>
+                    <span className="text-[var(--pm-faint)]"> · {t("fileMgmt.oldest")}</span>
                   )}
                 </button>
               </SoftMenu>
@@ -675,12 +678,12 @@ export function Toolbar({
             variant="ghost"
             size="xs"
             onClick={() => on && enterMultiSelectMode()}
-            title="Select multiple files or folders"
+            title={t("fileMgmt.selectMultiple")}
             className={tbBtn}
             tabIndex={tab}
           >
             <CheckSquare />
-            Select
+            {t("common.select")}
           </Button>
         </>
       )
@@ -693,24 +696,24 @@ export function Toolbar({
             variant="secondary"
             size="xs"
             onClick={() => on && exitMultiSelectMode()}
-            title="Exit multi-select (or click empty area)"
+            title={t("fileMgmt.exitMultiSelect")}
             className={cn(tbBtn, "is-accent")}
             tabIndex={tab}
           >
             <CheckSquare />
-            Select
+            {t("common.select")}
           </Button>
           <ToolbarDivider />
-          <span className={cn(tbLabel, "is-accent")}>Tap to select</span>
+          <span className={cn(tbLabel, "is-accent")}>{t("fileMgmt.tapToSelect")}</span>
           <Button
             variant="ghost"
             size="xs"
             onClick={() => on && selectAllFiles()}
-            title="Select all files in this folder"
+            title={t("fileMgmt.selectAllFolder")}
             className={tbBtn}
             tabIndex={tab}
           >
-            Select All
+            {t("fileMgmt.selectAll")}
           </Button>
         </>
       )
@@ -720,7 +723,9 @@ export function Toolbar({
       return (
         <>
           <span className={tbLabel}>
-            {chrome.folderCount} folder{chrome.folderCount === 1 ? "" : "s"}
+            {chrome.folderCount === 1
+              ? t("fileMgmt.nFolders", { n: chrome.folderCount })
+              : t("fileMgmt.nFoldersPlural", { n: chrome.folderCount })}
           </span>
           {chrome.canDelete && (
             <>
@@ -730,11 +735,11 @@ export function Toolbar({
                 size="xs"
                 className={cn(tbBtn, "is-danger")}
                 onClick={() => on && setConfirmAction("deleteFolder")}
-                title="Delete folder(s)"
+                title={t("fileMgmt.deleteFolders")}
                 tabIndex={tab}
               >
                 <Trash2 />
-                Delete
+                {t("common.delete")}
               </Button>
             </>
           )}
@@ -751,8 +756,9 @@ export function Toolbar({
         {folderPart && (
           <>
             <span className={tbLabel}>
-              {folderPart.folderCount} folder
-              {folderPart.folderCount === 1 ? "" : "s"}
+              {folderPart.folderCount === 1
+                ? t("fileMgmt.nFolders", { n: folderPart.folderCount })
+                : t("fileMgmt.nFoldersPlural", { n: folderPart.folderCount })}
             </span>
             {folderPart.canDelete && (
               <>
@@ -762,11 +768,11 @@ export function Toolbar({
                   size="xs"
                   className={cn(tbBtn, "is-danger")}
                   onClick={() => on && setConfirmAction("deleteFolder")}
-                  title="Delete folder(s)"
+                  title={t("fileMgmt.deleteFolders")}
                   tabIndex={tab}
                 >
                   <Trash2 />
-                  Delete
+                  {t("common.delete")}
                 </Button>
               </>
             )}
@@ -776,17 +782,17 @@ export function Toolbar({
 
         {filePart && (
           <>
-            <span className={tbLabel}>{filePart.fileCount} selected</span>
+            <span className={tbLabel}>{t("fileMgmt.nSelected", { n: filePart.fileCount })}</span>
             {filePart.multiSelectMode && (
               <Button
                 variant="ghost"
                 size="xs"
                 onClick={() => on && selectAllFiles()}
-                title="Select all files in this folder"
+                title={t("fileMgmt.selectAllFolder")}
                 className={tbBtn}
                 tabIndex={tab}
               >
-                All
+                {t("common.all")}
               </Button>
             )}
 
@@ -806,24 +812,24 @@ export function Toolbar({
                     setOpenMenu(null)
                     setMoveDialogOpen(true)
                   }}
-                  title="Move selected files to a folder"
+                  title={t("fileMgmt.moveSelected")}
                   className={tbBtn}
                   tabIndex={tab}
                 >
                   <MoveRight />
-                  Move
+                  {t("fileMgmt.move")}
                 </Button>
                 {filePart.archive.showExcludeSearch && (
                   <Button
                     variant="ghost"
                     size="xs"
                     onClick={() => on && pickMenuAction("excludeSearch")}
-                    title="Exclude selected files from search everywhere"
+                    title={t("fileMgmt.excludeSearchEverywhere")}
                     className={tbBtn}
                     tabIndex={tab}
                   >
                     <SearchX />
-                    Archive
+                    {t("common.archive")}
                   </Button>
                 )}
                 {filePart.archive.showUnarchive && (
@@ -831,24 +837,24 @@ export function Toolbar({
                     variant="ghost"
                     size="xs"
                     onClick={() => on && pickMenuAction("unarchive")}
-                    title="Restore selected files"
+                    title={t("fileMgmt.restoreSelected")}
                     className={tbBtn}
                     tabIndex={tab}
                   >
                     <ArchiveRestore />
-                    Restore
+                    {t("common.restore")}
                   </Button>
                 )}
                 <Button
                   variant="ghost"
                   size="xs"
                   onClick={() => on && pickMenuAction("delete")}
-                  title="Permanently delete selected files"
+                  title={t("fileMgmt.permanentlyDeleteSelected")}
                   className={cn(tbBtn, "is-danger")}
                   tabIndex={tab}
                 >
                   <Trash2 />
-                  Delete
+                  {t("common.delete")}
                 </Button>
               </>
             ) : (
@@ -862,11 +868,11 @@ export function Toolbar({
                       tbBtn,
                       openMenu === "move" && opts.menus && "is-on"
                     )}
-                    title="Move or mirror to another folder"
+                    title={t("fileMgmt.moveOrMirror")}
                     tabIndex={tab}
                   >
                     <MoveRight />
-                    Move
+                    {t("fileMgmt.move")}
                     <ChevronDown className="size-3 opacity-60" />
                   </Button>
                   {opts.menus && (
@@ -876,8 +882,8 @@ export function Toolbar({
                     >
                       <MenuItem
                         icon={<MoveRight className="h-3.5 w-3.5" />}
-                        title="Move to…"
-                        description="Move selected files to the destination."
+                        title={t("fileMgmt.moveTo")}
+                        description={t("fileMgmt.moveToDest")}
                         onClick={() => {
                           setOpenMenu(null)
                           setMoveDialogOpen(true)
@@ -885,8 +891,8 @@ export function Toolbar({
                       />
                       <MenuItem
                         icon={<Link2 className="h-3.5 w-3.5" />}
-                        title="Mirror to…"
-                        description="Create a mirror of selected files in the destination."
+                        title={t("fileMgmt.mirrorTo")}
+                        description={t("fileMgmt.mirrorToDest")}
                         onClick={() => {
                           setOpenMenu(null)
                           setCopyDialogOpen(true)
@@ -906,11 +912,11 @@ export function Toolbar({
                         tbBtn,
                         openMenu === "archive" && opts.menus && "is-on"
                       )}
-                      title="Archive options"
+                      title={t("fileMgmt.archiveOptions")}
                       tabIndex={tab}
                     >
                       <Archive />
-                      Archive
+                      {t("common.archive")}
                       <ChevronDown className="size-3 opacity-60" />
                     </Button>
                     {opts.menus && (
@@ -918,11 +924,11 @@ export function Toolbar({
                         {filePart.archive.showUnarchive && (
                           <MenuItem
                             icon={<ArchiveRestore className="h-3.5 w-3.5" />}
-                            title="Restore"
+                            title={t("common.restore")}
                             description={
                               filePart.isArchivedView
-                                ? "Re-enable search for selected files."
-                                : "Restore selected files in this folder."
+                                ? t("fileMgmt.restoreSearch")
+                                : t("fileMgmt.restoreInFolder")
                             }
                             onClick={() => pickMenuAction("unarchive")}
                           />
@@ -930,16 +936,16 @@ export function Toolbar({
                         {filePart.archive.showArchiveHere && (
                           <MenuItem
                             icon={<Archive className="h-3.5 w-3.5" />}
-                            title="Archive in this folder"
-                            description="Grey out selected files in this folder only."
+                            title={t("fileMgmt.archiveInFolder")}
+                            description={t("fileMgmt.archiveInFolderBody")}
                             onClick={() => pickMenuAction("archiveFolder")}
                           />
                         )}
                         {filePart.archive.showExcludeSearch && (
                           <MenuItem
                             icon={<SearchX className="h-3.5 w-3.5" />}
-                            title="Archive globally"
-                            description="Exclude selected files from search everywhere."
+                            title={t("fileMgmt.archiveGlobally")}
+                            description={t("fileMgmt.excludeSearchEverywhere")}
                             onClick={() => pickMenuAction("excludeSearch")}
                           />
                         )}
@@ -958,11 +964,11 @@ export function Toolbar({
                       "is-danger",
                       openMenu === "delete" && opts.menus && "is-on"
                     )}
-                    title="Remove or delete"
+                    title={t("fileMgmt.removeOrDelete")}
                     tabIndex={tab}
                   >
                     <Trash2 />
-                    Delete
+                    {t("common.delete")}
                     <ChevronDown className="size-3 opacity-60" />
                   </Button>
                   {opts.menus && (
@@ -970,15 +976,15 @@ export function Toolbar({
                       {!filePart.isArchivedView && (
                         <MenuItem
                           icon={<X className="h-3.5 w-3.5" />}
-                          title="Remove from this folder"
-                          description="Remove selected files from this folder only."
+                          title={t("fileMgmt.removeFromFolder")}
+                          description={t("fileMgmt.removeFromFolderBody")}
                           onClick={() => pickMenuAction("unlink")}
                         />
                       )}
                       <MenuItem
                         icon={<Trash2 className="h-3.5 w-3.5" />}
-                        title="Delete file globally"
-                        description="Permanently delete selected files everywhere."
+                        title={t("fileMgmt.deleteFileGlobally")}
+                        description={t("fileMgmt.permanentlyDeleteSelected")}
                         destructive
                         onClick={() => pickMenuAction("delete")}
                       />
@@ -1009,8 +1015,8 @@ export function Toolbar({
                   }}
                   title={
                     filePart.isDefinitive
-                      ? "Remove definitive"
-                      : "Mark as definitive"
+                      ? t("fileMgmt.removeDefinitive")
+                      : t("fileMgmt.markDefinitive")
                   }
                 >
                   <Star
@@ -1020,7 +1026,7 @@ export function Toolbar({
                         : "text-[var(--pm-green)]"
                     )}
                   />
-                  Definitive
+                  {t("library.definitive")}
                 </Button>
               </>
             )}
@@ -1040,7 +1046,7 @@ export function Toolbar({
           size="icon-sm"
           onClick={handleGoUp}
           disabled={!canGoUp}
-          title={canGoUp ? "Go up one level" : "Already at root"}
+          title={canGoUp ? t("fileMgmt.goUp") : t("fileMgmt.alreadyAtRoot")}
           className={tbIconBtn}
         >
           <ChevronLeft />
@@ -1115,23 +1121,23 @@ export function Toolbar({
       >
         <DialogContent className="pm-dialog max-w-md">
           <DialogHeader>
-            <DialogTitle>New Folder</DialogTitle>
+            <DialogTitle>{t("fileMgmt.newFolder")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-1">
             <div className="flex items-center gap-3">
               <div
                 key={`${newFolderIconMode}-${newFolderIconKey}-${newFolderIconColor}-${newFolderSymbol}`}
                 className="h-10 w-10 rounded-[var(--pm-r-sm)] flex items-center justify-center bg-[var(--pm-green-wash)] shrink-0"
-                title="Preview"
+                title={t("common.preview")}
               >
                 <GroupIconView source={newFolderPreview} className="h-5 w-5" />
               </div>
               <div className="flex-1 min-w-0">
-                <label className="pm-field-label">Name</label>
+                <label className="pm-field-label">{t("common.name")}</label>
                 <Input
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
-                  placeholder="Folder name"
+                  placeholder={t("fileMgmt.folderName")}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleCreateFolder()
                   }}
@@ -1157,7 +1163,7 @@ export function Toolbar({
               size="sm"
               onClick={() => setNewFolderDialog(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               size="sm"
@@ -1167,7 +1173,7 @@ export function Toolbar({
                 (newFolderIconMode === "emoji" && !newFolderSymbol.trim())
               }
             >
-              Create
+              {t("common.create")}
             </Button>
           </div>
         </DialogContent>
@@ -1176,7 +1182,7 @@ export function Toolbar({
       <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
         <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
-            <DialogTitle>Move to… ({selectedIds.length} file(s))</DialogTitle>
+            <DialogTitle>{t("fileMgmt.moveToN", { n: selectedIds.length })}</DialogTitle>
           </DialogHeader>
           <ScrollArea className="max-h-[300px]">
             <div className="flex flex-col gap-0.5">
@@ -1191,7 +1197,7 @@ export function Toolbar({
                     setMoveDialogOpen(false)
                   }}
                 >
-                  {f.name}
+                  {systemFolderDisplayName(f.name, t)}
                 </button>
               ))}
             </div>
@@ -1202,7 +1208,7 @@ export function Toolbar({
       <Dialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
         <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
-            <DialogTitle>Mirror to… ({selectedIds.length} file(s))</DialogTitle>
+            <DialogTitle>{t("fileMgmt.mirrorToN", { n: selectedIds.length })}</DialogTitle>
           </DialogHeader>
           <ScrollArea className="max-h-[300px]">
             <div className="flex flex-col gap-0.5">
@@ -1217,7 +1223,7 @@ export function Toolbar({
                     setCopyDialogOpen(false)
                   }}
                 >
-                  {f.name}
+                  {systemFolderDisplayName(f.name, t)}
                 </button>
               ))}
             </div>
@@ -1232,29 +1238,24 @@ export function Toolbar({
         <DialogContent className="pm-dialog max-w-sm">
           <DialogHeader>
             <DialogTitle>
-              {confirmAction === "delete" && "Delete file globally?"}
-              {confirmAction === "deleteFolder" && "Delete folder(s)?"}
-              {confirmAction === "archiveFolder" && "Archive in this folder?"}
-              {confirmAction === "excludeSearch" && "Archive globally?"}
-              {confirmAction === "unarchive" && "Restore files?"}
-              {confirmAction === "unlink" && "Remove from this folder?"}
+              {confirmAction === "delete" && t("fileMgmt.deleteFileGloballyQ")}
+              {confirmAction === "deleteFolder" && t("fileMgmt.deleteFoldersQ")}
+              {confirmAction === "archiveFolder" && t("fileMgmt.archiveInFolderQ")}
+              {confirmAction === "excludeSearch" && t("fileMgmt.archiveGloballyQ")}
+              {confirmAction === "unarchive" && t("fileMgmt.restoreFilesQ")}
+              {confirmAction === "unlink" && t("fileMgmt.removeFromFolderQ")}
             </DialogTitle>
           </DialogHeader>
           <p className="pm-dialog-body">
-            {confirmAction === "delete" &&
-              "Permanently delete selected files everywhere. This cannot be undone."}
-            {confirmAction === "deleteFolder" &&
-              "Delete selected folders. Files inside stay in storage."}
-            {confirmAction === "archiveFolder" &&
-              "Grey out selected files in this folder only."}
-            {confirmAction === "excludeSearch" &&
-              "Exclude selected files from search everywhere."}
+            {confirmAction === "delete" && t("fileMgmt.deletePermanentlyBody")}
+            {confirmAction === "deleteFolder" && t("fileMgmt.deleteFoldersBody")}
+            {confirmAction === "archiveFolder" && t("fileMgmt.archiveInFolderBody")}
+            {confirmAction === "excludeSearch" && t("fileMgmt.excludeSearchEverywhere")}
             {confirmAction === "unarchive" &&
               (isArchivedView
-                ? "Re-enable search for selected files."
-                : "Restore selected files in this folder.")}
-            {confirmAction === "unlink" &&
-              "Remove selected files from this folder only."}
+                ? t("fileMgmt.restoreSearch")
+                : t("fileMgmt.restoreInFolder"))}
+            {confirmAction === "unlink" && t("fileMgmt.removeFromFolderBody")}
           </p>
           <div className="flex justify-end gap-2">
             <Button
@@ -1262,7 +1263,7 @@ export function Toolbar({
               size="sm"
               onClick={() => setConfirmAction(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant={
@@ -1315,8 +1316,8 @@ export function Toolbar({
               }}
             >
               {confirmAction === "delete" || confirmAction === "deleteFolder"
-                ? "Delete"
-                : "Confirm"}
+                ? t("common.delete")
+                : t("common.confirm")}
             </Button>
           </div>
         </DialogContent>

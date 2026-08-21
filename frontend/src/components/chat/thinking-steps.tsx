@@ -7,6 +7,7 @@ import {
 } from "lucide-react"
 import type { ThinkingIteration, ThinkingSummary, TaskSummary, AqSummary, MetaInfo } from "@/stores/app-store"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 interface ThinkingStepsProps {
   steps: ThinkingIteration[]
@@ -49,6 +50,7 @@ function TrailFold({
 // ── AQ row ──
 
 function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const variants = aq.variants ?? []
   const totalQueries = 1 + (aq.variant_count ?? 0)
@@ -83,17 +85,17 @@ function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
         <span className="text-[var(--pm-muted)] truncate">{aq.query}</span>
         <span className="text-[var(--pm-faint)] shrink-0">
           {(aq.final_chunks ?? 0) > 0 ? (
-            <>→ {aq.final_chunks} chunks</>
+            <>→ {t("chat.nChunks", { n: aq.final_chunks ?? 0 })}</>
           ) : (aq.current_chunks ?? 0) > 0 ? (
             <span>
               <Loader2 className="size-2.5 inline animate-spin mr-0.5" />
-              {aq.current_chunks} chunks so far
+              {t("chat.chunksSoFar", { n: aq.current_chunks ?? 0 })}
             </span>
           ) : (
-            <span className="italic">searching…</span>
+            <span className="italic">{t("chat.searching")}</span>
           )}
           {totalQueries > 1 && (
-            <span className="ml-1">({totalQueries} queries)</span>
+            <span className="ml-1">{t("chat.nQueries", { n: totalQueries })}</span>
           )}
         </span>
       </button>
@@ -102,12 +104,12 @@ function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
         <div className="ml-7 mb-1 space-y-0.5 pt-0.5">
           <div className="pm-meta flex items-center gap-1 opacity-80">
             <Sparkles className="size-2.5 shrink-0" />
-            <span>original</span>
+            <span>{t("chat.original")}</span>
           </div>
           {variants.map((v, i) => (
             <div key={i} className="pm-meta flex items-center gap-1 opacity-70">
               <Sparkles className="size-2.5 shrink-0 opacity-50" />
-              <span>variant {i + 1}: {v}</span>
+              <span>{t("chat.variantN", { n: i + 1, v })}</span>
             </div>
           ))}
         </div>
@@ -119,6 +121,7 @@ function AqRow({ aq, isStreaming }: { aq: AqSummary; isStreaming: boolean }) {
 // ── Task group ──
 
 function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: boolean }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(isStreaming)
   useEffect(() => {
     if (!isStreaming) setExpanded(false)
@@ -138,9 +141,9 @@ function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: bool
           <ChevronRight className="size-3 text-[var(--pm-faint)]" />
         </span>
         <Layers className="size-3 text-[var(--pm-faint)]" />
-        <span className="text-[var(--pm-text)]">{task.task || "Task"}</span>
+        <span className="text-[var(--pm-text)]">{task.task || t("chat.task")}</span>
         <span className="text-[var(--pm-faint)]">
-          — {task.aq_count} AQ{task.aq_count > 1 ? "s" : ""}, {task.useful_chunks} useful chunks
+          {t("chat.aqUseful", { aqCount: task.aq_count, chunks: task.useful_chunks })}
         </span>
       </button>
 
@@ -163,6 +166,7 @@ function TaskGroup({ task, isStreaming }: { task: TaskSummary; isStreaming: bool
 // ── Main component ──
 
 export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: ThinkingStepsProps) {
+  const t = useT()
   const [topExpanded, setTopExpanded] = useState(true)
   useEffect(() => {
     if (!isStreaming) setTopExpanded(false)
@@ -174,8 +178,8 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
       <div className="pm-chat-trail">
         <div className="pm-chat-trail-toggle" style={{ cursor: "default" }}>
           <span className="sk-diamond breathing" aria-hidden />
-          <span>Agentic RAG</span>
-          <span className="pm-chat-trail-sum">· searching…</span>
+          <span>{t("chat.agenticRag")}</span>
+          <span className="pm-chat-trail-sum">· {t("chat.searching")}</span>
         </div>
       </div>
     )
@@ -210,9 +214,9 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
             aria-hidden
           />
           <span>
-            Agentic RAG
+            {t("chat.agenticRag")}
             <span className="pm-chat-trail-sum">
-              · {summary.task_count} task{summary.task_count > 1 ? "s" : ""}, {summary.aq_count} AQ
+              {t("chat.taskAqCount", { tasks: summary.task_count, aq: summary.aq_count })}
             </span>
           </span>
         </button>
@@ -233,7 +237,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
             {isStreaming && (
               <div className="flex items-center gap-2 py-1 pm-meta italic">
                 <Loader2 className="size-3 animate-spin text-[var(--pm-faint)]" />
-                Generating answer…
+                {t("chat.generating")}
               </div>
             )}
           </div>
@@ -248,11 +252,11 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
       <div className="pm-chat-trail">
         <div className="pm-chat-trail-toggle" style={{ cursor: "default" }}>
           <span className="sk-diamond on sk-diamond-static" aria-hidden />
-          <span>Agentic RAG</span>
+          <span>{t("chat.agenticRag")}</span>
           <span className="pm-chat-trail-sum">
             · {summary.aq_count > 0
-              ? `${summary.aq_count} AQ searched`
-              : "search completed"}
+              ? t("chat.aqSearched", { n: summary.aq_count })
+              : t("chat.searchCompleted")}
           </span>
         </div>
       </div>
@@ -280,7 +284,7 @@ export function ThinkingSteps({ steps, summary, metaInfo, isStreaming }: Thinkin
         </span>
         <span className="sk-diamond on sk-diamond-static" aria-hidden />
         <span>
-          Steps
+          {t("chat.steps")}
           <span className="pm-chat-trail-sum">· {totalSteps}</span>
         </span>
       </button>

@@ -4,6 +4,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel
@@ -348,6 +349,7 @@ class AppConfig(BaseModel):
     enrichment: EnrichmentConfig = EnrichmentConfig()
     visual_model_id: str | None = None
     default_chat_model: str | None = None
+    locale: Literal["en", "zh-CN"] = "en"
 
 
 def _resolve_config_path(path: str | Path | None = None) -> Path:

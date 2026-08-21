@@ -67,6 +67,7 @@ import {
 import { toast } from "sonner"
 import { ResultList } from "./result-list"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -142,6 +143,7 @@ function ParamSlot({
 // ── Search Tab ─────────────────────────────────────────────
 
 function SearchTab() {
+  const t = useT()
   const {
     recallCollections,
     toggleRecallCollection,
@@ -247,8 +249,10 @@ function SearchTab() {
 
   const collectionLabel =
     recallCollections.length === 0
-      ? "All collections"
-      : `${recallCollections.length} collection${recallCollections.length !== 1 ? "s" : ""}`
+      ? t("chat.allCollections")
+      : recallCollections.length === 1
+        ? t("chat.nCollection", { n: 1 })
+        : t("chat.nCollections", { n: recallCollections.length })
 
   // Chat-style pop: open below the chip (Search toolbar is near top, not bottom)
   const colBtnRect = collectionBtnRef.current?.getBoundingClientRect()
@@ -285,7 +289,9 @@ function SearchTab() {
       setHasSearched(true)
     } catch (err) {
       toast.error(
-        `Search failed: ${err instanceof Error ? err.message : String(err)}`,
+        t("recall.failed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       )
       setHasSearched(true)
     } finally {
@@ -303,7 +309,7 @@ function SearchTab() {
         <div className="pm-recall-query-row">
           <Textarea
             className="pm-recall-query min-h-0 py-0"
-            placeholder="Enter a search query…"
+            placeholder={t("recall.enterQuery")}
             rows={1}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -326,7 +332,7 @@ function SearchTab() {
             ) : (
               <Search className="h-3 w-3" />
             )}
-            {searching ? "Searching" : "Search"}
+            {searching ? t("recall.searching") : t("recall.search")}
           </Button>
         </div>
 
@@ -368,10 +374,10 @@ function SearchTab() {
                   left: colHostRect ? colHostRect.left : 0,
                 }}
                 role="listbox"
-                aria-label="Collections"
+                aria-label={t("common.collections")}
               >
                 {collections.length === 0 ? (
-                  <div className="pm-chat-pop-empty">No collections</div>
+                  <div className="pm-chat-pop-empty">{t("chat.noCollections")}</div>
                 ) : (
                   <div className="pm-chat-pop-scroll">
                     {collections.map((col) => (
@@ -417,12 +423,12 @@ function SearchTab() {
             }}
             title={
               useAgent
-                ? "Agentic RAG ON"
-                : "Agentic RAG OFF — direct retrieval"
+                ? t("recall.agenticOn")
+                : t("recall.agenticOff")
             }
           >
             <Bot className="size-3" />
-            <ChipSwap a="Direct" b="Agent" showB={useAgent} />
+            <ChipSwap a={t("recall.direct")} b={t("recall.agent")} showB={useAgent} />
           </button>
 
           <button
@@ -437,11 +443,11 @@ function SearchTab() {
             }}
             title={
               useAgent
-                ? "Reranker is required for Agentic RAG"
-                : "Toggle reranker"
+                ? t("recall.rerankerRequired")
+                : t("recall.toggleReranker")
             }
           >
-            Rerank
+            {t("recall.rerank")}
           </button>
 
           <div
@@ -461,13 +467,13 @@ function SearchTab() {
               }
               title={
                 searchMode === "hybrid"
-                  ? "Hybrid — Dense + BM25"
-                  : "Dense — vector similarity"
+                  ? t("recall.hybridTitle")
+                  : t("recall.denseHybrid")
               }
             >
               <ChipSwap
-                a="Dense"
-                b="Hybrid"
+                a={t("recall.dense")}
+                b={t("recall.hybrid")}
                 showB={searchMode === "hybrid"}
                 mode
               />
@@ -485,10 +491,10 @@ function SearchTab() {
                 }}
                 title={
                   useAgent
-                    ? "Always on in Agentic mode"
+                    ? t("recall.alwaysOnAgentic")
                     : sparseLlmTokenize
-                      ? "LLM keyword extraction ON"
-                      : "LLM keyword extraction OFF — raw tokenization"
+                      ? t("recall.llmKeywordOn")
+                      : t("recall.llmKeywordOff")
                 }
               >
                 <Sparkles className="size-3" />
@@ -500,8 +506,8 @@ function SearchTab() {
 
           <div className="pm-recall-field">
             <FieldTip
-              label="Top K"
-              tooltip="Number of top results to retrieve."
+              label={t("recall.topK")}
+              tooltip={t("recall.topKTip")}
             />
             <Input
               value={topK}
@@ -513,8 +519,8 @@ function SearchTab() {
           <ParamSlot open={useReranker}>
             <div className="pm-recall-field">
               <FieldTip
-                label="Rerank K"
-                tooltip="Number of results after reranking."
+                label={t("recall.rerankK")}
+                tooltip={t("recall.rerankKTip")}
               />
               <Input
                 value={rerankTopK}
@@ -527,8 +533,8 @@ function SearchTab() {
           <ParamSlot open={searchMode !== "hybrid"}>
             <div className="pm-recall-field">
               <FieldTip
-                label="Min"
-                tooltip="Minimum similarity score (0–100%). Results below this are filtered out."
+                label={t("recall.min")}
+                tooltip={t("recall.minTip")}
               />
               <Input
                 inputMode="numeric"
@@ -560,10 +566,9 @@ function SearchTab() {
                   className="h-8 w-8 pm-recall-empty-icon"
                   strokeWidth={1.25}
                 />
-                <p className="pm-recall-empty-title">Ready to search</p>
+                <p className="pm-recall-empty-title">{t("recall.readyToSearch")}</p>
                 <p className="pm-recall-empty-sub">
-                  Run a query to inspect ranked chunks, scores, and agentic
-                  context.
+                  {t("recall.runQueryHint")}
                 </p>
               </div>
             </div>
@@ -579,10 +584,10 @@ function SearchTab() {
               <div className="pm-recall-card-head">
                 <div className="pm-recall-card-head-text">
                   <h3 className="pm-recall-section-title">
-                    {results.length} result{results.length === 1 ? "" : "s"}
+                    {t("recall.nResults", { n: results.length })}
                   </h3>
                   <p className="pm-recall-section-desc">
-                    Retrieved in {timeMs}ms
+                    {t("recall.retrievedIn")} {timeMs}ms
                   </p>
                 </div>
                 <div className="pm-recall-results-meta">
@@ -590,10 +595,10 @@ function SearchTab() {
                     {String(searchParams.search_mode || searchMode)}
                   </Badge>
                   {!!searchParams.use_reranker && (
-                    <Badge variant="default">Reranked</Badge>
+                    <Badge variant="default">{t("recall.reranked")}</Badge>
                   )}
                   {!!searchParams.use_agent && (
-                    <Badge variant="default">Agentic</Badge>
+                    <Badge variant="default">{t("recall.agentic")}</Badge>
                   )}
                   {searchContext && (
                     <Button
@@ -602,7 +607,7 @@ function SearchTab() {
                       size="sm"
                       onClick={() => setShowContext(!showContext)}
                     >
-                      {showContext ? "Hide context" : "View context"}
+                      {showContext ? t("recall.hideContext") : t("recall.viewContext")}
                     </Button>
                   )}
                 </div>
@@ -613,11 +618,11 @@ function SearchTab() {
                     <ResultList results={results} filesMap={filesMap} />
                   ) : (
                     <div className="pm-recall-empty pm-recall-empty--inline">
-                      <p className="pm-recall-empty-title">No chunks returned</p>
+                      <p className="pm-recall-empty-title">{t("recall.noChunks")}</p>
                       <p className="pm-recall-empty-sub">
                         {searchParams.use_agent
-                          ? "Agent graded all candidates as irrelevant, or retrieval found nothing. Open View context for gaps."
-                          : "Try another query, lower Min score, or enable Hybrid / Rerank."}
+                          ? t("recall.agentEmpty")
+                          : t("recall.tryAnother")}
                       </p>
                     </div>
                   )}
@@ -648,6 +653,7 @@ const EVAL_RUNNING_PREFIX = "eval_running_"
 const GEN_RUNNING_PREFIX = "gen_running_"
 
 function EvaluateTab() {
+  const t = useT()
   const {
     recallCollections,
     setRecallCollections,
@@ -769,7 +775,9 @@ function EvaluateTab() {
           })
           .catch((err) =>
             toast.error(
-              `Evaluation failed: ${err instanceof Error ? err.message : String(err)}`,
+              t("recall.evalFailed", {
+                error: err instanceof Error ? err.message : String(err),
+              }),
             ),
           )
           .finally(() => {
@@ -799,7 +807,9 @@ function EvaluateTab() {
           })
           .catch((err) =>
             toast.error(
-              `Failed: ${err instanceof Error ? err.message : String(err)}`,
+              t("recall.failed", {
+                error: err instanceof Error ? err.message : String(err),
+              }),
             ),
           )
           .finally(() => {
@@ -870,7 +880,9 @@ function EvaluateTab() {
       loadCases()
     } catch (err) {
       toast.error(
-        `Failed: ${err instanceof Error ? err.message : String(err)}`,
+        t("recall.failed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       )
     } finally {
       setLoading(false)
@@ -902,7 +914,9 @@ function EvaluateTab() {
       loadHistory()
     } catch (err) {
       toast.error(
-        `Evaluation failed: ${err instanceof Error ? err.message : String(err)}`,
+        t("recall.evalFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       )
     } finally {
       setRunning(false)
@@ -925,9 +939,9 @@ function EvaluateTab() {
             className="h-9 w-9 pm-recall-empty-icon"
             strokeWidth={1.25}
           />
-          <p className="pm-recall-empty-title">Choose a collection</p>
+          <p className="pm-recall-empty-title">{t("recall.chooseCollection")}</p>
           <p className="pm-recall-empty-sub">
-            Evaluate retrieval quality against auto-generated test cases.
+            {t("recall.emptySub")}
           </p>
           <div className="w-full max-w-xs mt-2">
             <DropdownSelect
@@ -936,7 +950,7 @@ function EvaluateTab() {
                 if (id) setRecallCollections([id])
               }}
               options={collectionOptions}
-              placeholder="Choose a collection…"
+              placeholder={t("recall.chooseCollectionPh")}
             />
           </div>
         </div>
@@ -956,9 +970,9 @@ function EvaluateTab() {
       <div className="pm-recall-card pm-recall-card--composer">
         <div className="pm-recall-card-head">
           <div className="pm-recall-card-head-text">
-            <h3 className="pm-recall-section-title">Run configuration</h3>
+            <h3 className="pm-recall-section-title">{t("recall.runConfig")}</h3>
             <p className="pm-recall-section-desc">
-              Collection, retrieval mode, and ranking parameters.
+              {t("recall.runConfigDesc")}
             </p>
           </div>
         </div>
@@ -971,7 +985,7 @@ function EvaluateTab() {
                 else setRecallCollections([id])
               }}
               options={collectionOptions}
-              placeholder="Choose a collection…"
+              placeholder={t("recall.chooseCollectionPh")}
               size="sm"
             />
           </div>
@@ -985,9 +999,9 @@ function EvaluateTab() {
               evalUseReranker && "is-on",
             )}
             onClick={() => setEvalUseReranker(!evalUseReranker)}
-            title="Toggle reranker"
+            title={t("recall.toggleReranker")}
           >
-            Rerank
+            {t("recall.rerank")}
           </button>
 
           <div
@@ -1009,13 +1023,13 @@ function EvaluateTab() {
               }
               title={
                 evalSearchMode === "hybrid"
-                  ? "Hybrid — Dense + BM25"
-                  : "Dense — vector similarity"
+                  ? t("recall.hybridTitle")
+                  : t("recall.denseHybrid")
               }
             >
               <ChipSwap
-                a="Dense"
-                b="Hybrid"
+                a={t("recall.dense")}
+                b={t("recall.hybrid")}
                 showB={evalSearchMode === "hybrid"}
                 mode
               />
@@ -1032,8 +1046,8 @@ function EvaluateTab() {
                 }
                 title={
                   evalSparseLlmTokenize
-                    ? "LLM keyword extraction ON"
-                    : "LLM keyword extraction OFF — raw tokenization"
+                    ? t("recall.llmKeywordOn")
+                    : t("recall.llmKeywordOff")
                 }
               >
                 <Sparkles className="size-3" />
@@ -1044,7 +1058,7 @@ function EvaluateTab() {
           <span className="pm-recall-toolbar-sep" aria-hidden />
 
           <div className="pm-recall-field">
-            <FieldTip label="Top K" tooltip="Results to retrieve per query" />
+            <FieldTip label={t("recall.topK")} tooltip={t("recall.topKTip")} />
             <Input
               value={evalTopK}
               onChange={(e) => setEvalTopK(e.target.value)}
@@ -1055,8 +1069,8 @@ function EvaluateTab() {
           <ParamSlot open={evalUseReranker}>
             <div className="pm-recall-field">
               <FieldTip
-                label="Rerank K"
-                tooltip="Number of results after reranking."
+                label={t("recall.rerankK")}
+                tooltip={t("recall.rerankKTip")}
               />
               <Input
                 value={evalRerankTopK}
@@ -1069,8 +1083,8 @@ function EvaluateTab() {
           <ParamSlot open={evalSearchMode !== "hybrid"}>
             <div className="pm-recall-field">
               <FieldTip
-                label="Min"
-                tooltip="Minimum similarity score (0–100%)."
+                label={t("recall.min")}
+                tooltip={t("recall.minTip")}
               />
               <Input
                 inputMode="numeric"
@@ -1102,7 +1116,7 @@ function EvaluateTab() {
             ) : (
               <Play className="h-4 w-4" />
             )}
-            Run Evaluation ({cases.length})
+            {t("recall.runEval", { n: cases.length })}
           </Button>
         </div>
       </div>
@@ -1112,11 +1126,10 @@ function EvaluateTab() {
         <div className="pm-recall-card-head">
           <div className="pm-recall-card-head-text">
             <h3 className="pm-recall-section-title">
-              Test cases
+              {t("recall.testCases")}
             </h3>
             <p className="pm-recall-section-desc">
-              {cases.length} case{cases.length === 1 ? "" : "s"} · target
-              chunk per query
+              {t("recall.caseCount", { n: cases.length })}
             </p>
           </div>
           <div className="flex gap-2 shrink-0">
@@ -1132,7 +1145,7 @@ function EvaluateTab() {
                 ) : (
                   <Wand2 className="h-3 w-3" />
                 )}
-                Auto-generate
+                {t("recall.autoGenerate")}
               </Button>
             ) : (
               <Button
@@ -1146,7 +1159,7 @@ function EvaluateTab() {
                 ) : (
                   <RotateCw className="h-3 w-3" />
                 )}
-                Regenerate
+                {t("recall.regenerate")}
               </Button>
             )}
           </div>
@@ -1155,13 +1168,13 @@ function EvaluateTab() {
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10">
             <Loader2 className="h-4 w-4 animate-spin text-[var(--pm-muted)]" />
-            <span className="pm-meta">Generating test cases…</span>
+            <span className="pm-meta">{t("recall.generating")}</span>
           </div>
         ) : cases.length === 0 ? (
           <div className="pm-recall-empty !py-10">
-            <p className="pm-recall-empty-title">No cases yet</p>
+            <p className="pm-recall-empty-title">{t("recall.noCases")}</p>
             <p className="pm-recall-empty-sub">
-              Auto-generate queries from indexed files to start evaluation.
+              {t("recall.autoGenerateHint")}
             </p>
           </div>
         ) : (
@@ -1236,20 +1249,20 @@ function EvaluateTab() {
                     <div className="pm-recall-fold-clip">
                       <div className="pm-recall-fold-body pm-recall-row-detail">
                         <div>
-                          <div className="pm-label mb-1">Query</div>
+                          <div className="pm-label mb-1">{t("recall.query")}</div>
                           <div className="text-[var(--pm-text)] whitespace-pre-wrap leading-relaxed font-[family-name:var(--pm-ff)] font-[300]">
                             {c.query}
                           </div>
                         </div>
                         <div className="flex gap-4 flex-wrap pm-meta">
                           <span>
-                            Target chunk:{" "}
+                            {t("recall.targetChunk")}:{" "}
                             <span className="t-mono-family text-[var(--pm-text)]">
                               {c.target_chunk_id}
                             </span>
                           </span>
                           <span>
-                            Source:{" "}
+                            {t("recall.source")}:{" "}
                             <span className="text-[var(--pm-text)]">
                               {evalFilesMap[c.target_source] ||
                                 c.target_source?.split("/").pop() ||
@@ -1259,12 +1272,12 @@ function EvaluateTab() {
                         </div>
                         <div>
                           <div className="pm-label mb-1">
-                            Target Chunk Content
+                            {t("recall.targetChunkContent")}
                           </div>
                           {chunkLoading ? (
                             <div className="flex items-center gap-2 pm-meta py-2">
                               <Loader2 className="h-3 w-3 animate-spin" />
-                              Loading…
+                              {t("common.loading")}
                             </div>
                           ) : expandedChunk ? (
                             <div className="pm-recall-chunk">
@@ -1272,7 +1285,7 @@ function EvaluateTab() {
                             </div>
                           ) : (
                             <div className="pm-meta italic">
-                              Chunk not found (may have been deleted)
+                              {t("recall.chunkNotFound")}
                             </div>
                           )}
                         </div>
@@ -1291,9 +1304,9 @@ function EvaluateTab() {
         <div className="pm-recall-card">
           <div className="pm-recall-card-head">
             <div className="pm-recall-card-head-text">
-              <h3 className="pm-recall-section-title">History</h3>
+              <h3 className="pm-recall-section-title">{t("recall.history")}</h3>
               <p className="pm-recall-section-desc">
-                Past evaluation runs for this collection
+                {t("recall.historyDesc")}
               </p>
             </div>
             {moreCount > 0 && (
@@ -1302,7 +1315,7 @@ function EvaluateTab() {
                 size="sm"
                 onClick={() => setHistoryExpanded(!historyExpanded)}
               >
-                {history.length} Record{history.length !== 1 ? "s" : ""}
+                {t("recall.nRecords", { n: history.length })}
               </Button>
             )}
           </div>
@@ -1335,13 +1348,13 @@ function EvaluateTab() {
                 <span className="pm-meta">
                   {hSelected.timestamp
                     ? new Date(hSelected.timestamp).toLocaleString()
-                    : "Run 1"}
+                    : t("recall.runN", { n: 1 })}
                 </span>
                 <Badge variant="outline">
-                  {hSelected.total_cases} cases
+                  {t("recall.nCases", { n: hSelected.total_cases })}
                 </Badge>
                 <span className="text-[var(--pm-text)] font-[family-name:var(--pm-ff)] font-[300]">
-                  Recall:{" "}
+                  {t("recall.recallMetric")}:{" "}
                   {(
                     (hSelected.avg_recall ?? hSelected.avg_hard_recall ?? 0) *
                     100
@@ -1361,7 +1374,7 @@ function EvaluateTab() {
                 </span>
               </>
             ) : (
-              <span className="pm-meta">Browse Evaluation Records</span>
+              <span className="pm-meta">{t("recall.browseRecords")}</span>
             )}
           </div>
 
@@ -1395,11 +1408,11 @@ function EvaluateTab() {
                       <span className="pm-meta">
                         {h.timestamp
                           ? new Date(h.timestamp).toLocaleString()
-                          : `Run ${i + 1}`}
+                          : t("recall.runN", { n: i + 1 })}
                       </span>
-                      <Badge variant="outline">{h.total_cases} cases</Badge>
+                      <Badge variant="outline">{t("recall.nCases", { n: h.total_cases })}</Badge>
                       <span className="text-[var(--pm-text)] font-[family-name:var(--pm-ff)] font-[300]">
-                        Recall:{" "}
+                        {t("recall.recallMetric")}:{" "}
                         {(
                           (h.avg_recall ?? h.avg_hard_recall ?? 0) * 100
                         ).toFixed(0)}
@@ -1428,10 +1441,9 @@ function EvaluateTab() {
       <Dialog open={regenConfirmOpen} onOpenChange={setRegenConfirmOpen}>
         <DialogContent className="pm-dialog sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Regenerate all test cases?</DialogTitle>
+            <DialogTitle>{t("recall.regenerateAllQ")}</DialogTitle>
             <DialogDescription>
-              This deletes existing test cases and generates a fresh set from
-              indexed files.
+              {t("recall.regenBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1440,7 +1452,7 @@ function EvaluateTab() {
               size="sm"
               onClick={() => setRegenConfirmOpen(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="default"
@@ -1450,7 +1462,7 @@ function EvaluateTab() {
                 void runGenerate(true)
               }}
             >
-              Regenerate
+              {t("recall.regenerate")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1464,9 +1476,9 @@ function EvaluateTab() {
               <div className="pm-recall-card space-y-6">
                 <div className="pm-recall-card-head">
                   <div className="pm-recall-card-head-text">
-                    <h3 className="pm-recall-section-title">Scoreboard</h3>
+                    <h3 className="pm-recall-section-title">{t("recall.scoreboard")}</h3>
                     <p className="pm-recall-section-desc">
-                      Aggregate retrieval quality for this run
+                      {t("recall.scoreboardDesc")}
                     </p>
                   </div>
                 </div>
@@ -1474,25 +1486,25 @@ function EvaluateTab() {
                   {(
                     [
                       {
-                        label: "Recall",
+                        label: t("recall.recallMetric"),
                         value: `${((report.avg_recall ?? 0) * 100).toFixed(1)}%`,
                         good: (report.avg_recall ?? 0) >= 0.7,
                         delay: 0,
                       },
                       {
-                        label: "Hard Recall",
+                        label: t("recall.hardRecall"),
                         value: `${((report.avg_hard_recall ?? 0) * 100).toFixed(1)}%`,
                         good: (report.avg_hard_recall ?? 0) >= 0.7,
                         delay: 70,
                       },
                       {
-                        label: "Quality",
+                        label: t("recall.quality"),
                         value: formatSigned(report.avg_quality_score ?? 0),
                         good: (report.avg_quality_score ?? 0) >= 0.5,
                         delay: 140,
                       },
                       {
-                        label: "MRR",
+                        label: t("recall.mrr"),
                         value: (report.avg_mrr ?? 0).toFixed(3),
                         good: (report.avg_mrr ?? 0) >= 0.5,
                         delay: 210,
@@ -1528,10 +1540,10 @@ function EvaluateTab() {
                   <div className="pm-recall-card-head mb-3">
                     <div className="pm-recall-card-head-text">
                       <h3 className="pm-recall-section-title">
-                        Per-query results
+                        {t("recall.perQuery")}
                       </h3>
                       <p className="pm-recall-section-desc">
-                        Expand a row for chunk-level judgments
+                        {t("recall.perQueryDesc")}
                       </p>
                     </div>
                   </div>
@@ -1569,11 +1581,11 @@ function EvaluateTab() {
                             )}
                             <span className="pm-recall-row-query">{r.query}</span>
                             {r.hard_recall ? (
-                              <Badge variant="default">target</Badge>
+                              <Badge variant="default">{t("recall.target")}</Badge>
                             ) : r.holistic_can_answer ? (
-                              <Badge variant="secondary">holistic</Badge>
+                              <Badge variant="secondary">{t("recall.holistic")}</Badge>
                             ) : (
-                              <Badge variant="destructive">miss</Badge>
+                              <Badge variant="destructive">{t("recall.miss")}</Badge>
                             )}
                             <span
                               className={cn(
@@ -1595,7 +1607,7 @@ function EvaluateTab() {
                               <div className="pm-recall-fold-body pm-recall-row-detail">
                                 <div className="flex gap-3 flex-wrap pm-meta">
                                   <span>
-                                    Recall:{" "}
+                                    {t("recall.recallMetric")}:{" "}
                                     <span
                                       className={
                                         r.recalled
@@ -1607,7 +1619,7 @@ function EvaluateTab() {
                                     </span>
                                   </span>
                                   <span>
-                                    Hard:{" "}
+                                    {t("recall.hardRecall")}:{" "}
                                     <span
                                       className={
                                         r.hard_recall
@@ -1619,7 +1631,7 @@ function EvaluateTab() {
                                     </span>
                                   </span>
                                   <span>
-                                    Holistic:{" "}
+                                    {t("recall.holistic")}:{" "}
                                     <span
                                       className={
                                         r.holistic_can_answer
@@ -1631,7 +1643,7 @@ function EvaluateTab() {
                                     </span>
                                   </span>
                                   <span>
-                                    Quality:{" "}
+                                    {t("recall.quality")}:{" "}
                                     <span
                                       className={cn(
                                         "t-mono-family",
@@ -1642,17 +1654,17 @@ function EvaluateTab() {
                                     </span>{" "}
                                     <span className="pm-meta">[-1, 1]</span>
                                   </span>
-                                  <span>MRR: {(r.mrr ?? 0).toFixed(3)}</span>
+                                  <span>{t("recall.mrr")}: {(r.mrr ?? 0).toFixed(3)}</span>
                                   {(r.target_position ?? 0) > 0 && (
                                     <span className="text-[var(--pm-green)]">
-                                      target @ #{r.target_position}
+                                      {t("recall.targetAt", { n: r.target_position ?? 0 })}
                                     </span>
                                   )}
                                 </div>
 
                                 {r.holistic_reason && (
                                   <div className="pm-recall-callout">
-                                    <strong>Holistic: </strong>
+                                    <strong>{t("recall.holistic")}: </strong>
                                     &ldquo;{r.holistic_reason}&rdquo;
                                   </div>
                                 )}
@@ -1660,7 +1672,7 @@ function EvaluateTab() {
                                 {(r.chunk_judgments || []).length > 0 ? (
                                   <div className="space-y-2">
                                     <div className="pm-label">
-                                      Retrieved Chunks — LLM Judgment
+                                      {t("recall.retrievedChunks")}
                                     </div>
                                     {r.chunk_judgments.map((j, i) => {
                                       const jKey = String(j.judgment)
@@ -1705,7 +1717,7 @@ function EvaluateTab() {
                                             </Badge>
                                             {j.is_target && (
                                               <Badge variant="default">
-                                                TARGET
+                                                {t("recall.target")}
                                               </Badge>
                                             )}
                                             <span className="pm-meta">
@@ -1737,10 +1749,10 @@ function EvaluateTab() {
                                                 }
                                               >
                                                 {show
-                                                  ? "Hide chunk text"
+                                                  ? t("recall.hideChunk")
                                                   : j.is_target
-                                                    ? "Show target chunk text"
-                                                    : "Show chunk text"}
+                                                    ? t("recall.showTargetChunk")
+                                                    : t("recall.showChunk")}
                                               </Button>
                                               <div
                                                 className={cn(
@@ -1759,7 +1771,7 @@ function EvaluateTab() {
                                             </div>
                                           ) : (
                                             <p className="mt-1 pm-meta italic">
-                                              (no chunk text available)
+                                              {t("recall.noChunkText")}
                                             </p>
                                           )}
                                         </div>
@@ -1768,8 +1780,7 @@ function EvaluateTab() {
                                   </div>
                                 ) : (
                                   <p className="pm-meta italic">
-                                    (Older run — no per-chunk data. Re-run
-                                    evaluation to see chunk-level judgments.)
+                                    {t("recall.olderRun")}
                                   </p>
                                 )}
                               </div>
@@ -1792,15 +1803,15 @@ function EvaluateTab() {
 // ── Main View ──────────────────────────────────────────────
 
 export function RecallView() {
+  const t = useT()
   return (
     /* Same page chrome as Settings: canvas scroll · mast · soft white cards (no float stage) */
     <div className="pm-settings pm-recall">
       <div className="pm-settings-inner">
         <header className="pm-settings-mast">
-          <h1 className="pm-settings-page-title">Recall</h1>
+          <h1 className="pm-settings-page-title">{t("nav.recall")}</h1>
           <p className="pm-settings-page-desc">
-            Search collections and evaluate retrieval quality against generated
-            test cases.
+            {t("recall.pageDesc")}
           </p>
         </header>
 
@@ -1810,8 +1821,8 @@ export function RecallView() {
               className="pm-tabs-indicator"
               renderBeforeHydration
             />
-            <TabsTrigger value="search">Search</TabsTrigger>
-            <TabsTrigger value="evaluate">Evaluate</TabsTrigger>
+            <TabsTrigger value="search">{t("recall.search")}</TabsTrigger>
+            <TabsTrigger value="evaluate">{t("recall.evaluate")}</TabsTrigger>
           </TabsList>
           <TabsContent
             key="search"

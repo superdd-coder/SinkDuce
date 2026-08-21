@@ -8,6 +8,8 @@ import {
   isSystemGroup,
 } from "./group-icons"
 import { GroupFormDialog } from "./group-form-dialog"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
 
 export type FocusGroupId = string | typeof UNCATEGORIZED_ID
 
@@ -28,6 +30,7 @@ export function GroupsMenu({
   onFocusGroup,
   onGroupsChanged,
 }: GroupsMenuProps) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<NodeGroup | null>(null)
@@ -72,7 +75,7 @@ export function GroupsMenu({
         className={cn("pm-timeline-tb-btn", focusGroupId && "is-on")}
         onClick={() => setOpen((v) => !v)}
       >
-        Groups
+        {t("fileMgmt.groups")}
         <ChevronDown className="h-3 w-3 opacity-60" />
       </button>
 
@@ -112,8 +115,8 @@ export function GroupsMenu({
               onClick={() => handleSelect(UNCATEGORIZED_ID)}
             >
               <GroupIconView source={{ name: "Uncategorized" }} />
-              <span className="pm-timeline-menu-name" title="Uncategorized">
-                Uncategorized
+              <span className="pm-timeline-menu-name" title={t("common.uncategorized")}>
+                {t("common.uncategorized")}
               </span>
               <span className="pm-timeline-menu-trail" aria-hidden>
                 <span className="pm-timeline-menu-count">
@@ -131,7 +134,7 @@ export function GroupsMenu({
               }}
             >
               <Plus className="h-3.5 w-3.5 shrink-0" />
-              <span className="pm-timeline-menu-name">Create group</span>
+              <span className="pm-timeline-menu-name">{t("fileMgmt.createGroup")}</span>
             </button>
           </div>
         </>
@@ -176,6 +179,7 @@ function GroupRow({
   onEdit?: () => void
   readOnly?: boolean
 }) {
+  const t = useT()
   const count = group.node_count ?? 0
   const editable = !readOnly && !!onEdit
 
@@ -192,10 +196,10 @@ function GroupRow({
         role="menuitem"
         className={cn("pm-timeline-menu-item", active && "is-active")}
         onClick={onSelect}
-        title={group.name}
+        title={systemFolderDisplayName(group.name, t)}
       >
         <GroupIconView source={group} />
-        <span className="pm-timeline-menu-name">{group.name}</span>
+        <span className="pm-timeline-menu-name">{systemFolderDisplayName(group.name, t)}</span>
         <span className="pm-timeline-menu-trail">
           <span className="pm-timeline-menu-count">{count}</span>
         </span>
@@ -204,7 +208,7 @@ function GroupRow({
         <button
           type="button"
           className="pm-timeline-menu-edit"
-          title="Edit group"
+          title={t("fileMgmt.editGroup")}
           aria-label={`Edit group ${group.name}`}
           onClick={(e) => {
             e.stopPropagation()

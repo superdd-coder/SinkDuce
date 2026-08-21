@@ -24,6 +24,9 @@ import {
   X,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
+import { formatApiError } from "@/api/http"
 import type { FileSummary, Node, NodeGroup } from "@/types/file-mgmt"
 import {
   attachFileToNode,
@@ -68,6 +71,7 @@ export function EndChainDialog({
   onComplete,
   groups,
 }: EndChainDialogProps) {
+  const t = useT()
   const [nodesWithFiles, setNodesWithFiles] = useState<NodeWithFiles[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   /** Checked file ids = inherit (keep branch path active). */
@@ -212,11 +216,11 @@ export function EndChainDialog({
     if (!branchChainId) return
     const trimmedTitle = title.trim()
     if (!trimmedTitle) {
-      toast.error("Merge node name is required")
+      toast.error(t("fileMgmt.mergeNameRequired"))
       return
     }
     if (!groupId) {
-      toast.error("Group is required")
+      toast.error(t("fileMgmt.groupRequired"))
       return
     }
     setLoading(true)
@@ -278,9 +282,15 @@ export function EndChainDialog({
       const pathN = result.path_archived_files?.length ?? result.greyed_files?.length ?? 0
       const fileN = result.file_archived?.length ?? 0
       toast.success(
-        `Chain ended. ${pathN} archived on branch` +
-          (fileN ? `, ${fileN} excluded from search` : "") +
-          (result.merged_node_id ? ". Merge node created." : ".")
+        t("fileMgmt.chainEnded", {
+          pathN,
+          excluded: fileN
+            ? t("fileMgmt.chainEndedExcluded", { n: fileN })
+            : "",
+          merge: result.merged_node_id
+            ? t("fileMgmt.chainEndedMerge")
+            : t("fileMgmt.chainEndedDot"),
+        })
       )
       onComplete()
       onOpenChange(false)
@@ -292,7 +302,7 @@ export function EndChainDialog({
           /* leftover cleaned when the dialog is dismissed */
         }
       }
-      toast.error(`End chain failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("fileMgmt.endChainFailed", { error: formatApiError(err, t) }))
     } finally {
       setLoading(false)
     }
@@ -332,7 +342,7 @@ export function EndChainDialog({
         {/* Form body — fixed width so Message stays roomy */}
         <div className="w-[920px] max-w-full shrink-0 min-h-0 flex flex-col gap-3 p-4 overflow-hidden">
         <DialogHeader className="shrink-0">
-          <DialogTitle className="text-sm">End Branch Chain</DialogTitle>
+          <DialogTitle className="text-sm">{t("fileMgmt.endBranch")}</DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 min-h-0 min-w-0 flex gap-4 overflow-hidden">
@@ -340,11 +350,11 @@ export function EndChainDialog({
           <div className="w-[320px] shrink-0 flex flex-col min-h-0 gap-3 overflow-y-auto pr-1">
             <div>
               <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1">
-                Title <span className="text-destructive">*</span>
+                {t("common.title")} <span className="text-destructive">*</span>
               </label>
               <input
                 className="w-full text-xs border rounded px-2 py-1.5 bg-background"
-                placeholder="Merge node title..."
+                placeholder={t("fileMgmt.mergeTitlePh")}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 required
@@ -353,31 +363,31 @@ export function EndChainDialog({
 
             <div>
               <FieldLabel>
-                Group <span className="text-[var(--pm-danger)]">*</span>
+                {t("common.group")} <span className="text-[var(--pm-danger)]">*</span>
               </FieldLabel>
               <DropdownSelect
                 size="sm"
                 value={groupId}
                 onChange={setGroupId}
-                placeholder="No groups"
+                placeholder={t("fileMgmt.noGroups")}
                 options={
                   groups.length === 0
-                    ? [{ value: "", label: "No groups" }]
+                    ? [{ value: "", label: t("fileMgmt.noGroups") }]
                     : groups.map((g) => ({
                         value: g.group_id,
-                        label: g.name,
+                        label: systemFolderDisplayName(g.name, t),
                       }))
                 }
               />
             </div>
 
             <div>
-              <FieldLabel>Event Time</FieldLabel>
+              <FieldLabel>{t("fileMgmt.eventTime")}</FieldLabel>
               <DatePicker
                 size="sm"
                 value={eventTime}
                 onChange={setEventTime}
-                placeholder="Optional"
+                placeholder={t("common.optional")}
                 allowClear
               />
             </div>
@@ -386,7 +396,7 @@ export function EndChainDialog({
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2 min-w-0">
                 <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 truncate">
-                  Attachments ({pending.length})
+                  {t("fileMgmt.attachments")} ({pending.length})
                 </label>
                 <button
                   type="button"
@@ -396,7 +406,7 @@ export function EndChainDialog({
                   }
                 >
                   <Search className="h-3 w-3" />
-                  {attachMode === "select" ? "Close select" : "Select existing"}
+                  {attachMode === "select" ? t("fileMgmt.closeSelect") : t("fileMgmt.selectExisting")}
                 </button>
               </div>
               <input
@@ -452,7 +462,7 @@ export function EndChainDialog({
                         type="button"
                         className="text-muted-foreground hover:text-foreground"
                         onClick={() => setSelectMode(null)}
-                        title="Close"
+                        title={t("common.close")}
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -495,7 +505,7 @@ export function EndChainDialog({
                             <button
                               type="button"
                               className="text-muted-foreground hover:text-red-500 shrink-0"
-                              title="Remove"
+                              title={t("common.remove")}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 setPending((prev) =>
@@ -576,7 +586,7 @@ export function EndChainDialog({
                               e.stopPropagation()
                               toggleNodeAll(nwf)
                             }}
-                            title="Toggle all files"
+                            title={t("fileMgmt.toggleAllFiles")}
                           >
                             {nwf.files.every((f) => selectedFileIds.has(f.file_id)) ? (
                               <CheckSquare className="h-3.5 w-3.5 text-emerald-700" />
@@ -618,7 +628,7 @@ export function EndChainDialog({
           {/* Right: message — min-w-0 + overflow so MarkdownEditor stays inside dialog */}
           <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
             <label className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60 block mb-1.5 shrink-0">
-              Message (optional)
+              {t("fileMgmt.messageOptional")}
             </label>
             <div className="flex-1 min-h-0 min-w-0 overflow-auto rounded border border-border">
               <MarkdownEditor
@@ -634,14 +644,14 @@ export function EndChainDialog({
 
         <DialogFooter className="gap-2 pt-1 shrink-0">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={loading}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             size="sm"
             onClick={() => void handleSubmit()}
             disabled={loading || !groupId || !title.trim()}
           >
-            {loading ? "Processing..." : "End & Merge"}
+            {loading ? t("fileMgmt.processing") : t("fileMgmt.endAndMerge")}
           </Button>
         </DialogFooter>
         </div>

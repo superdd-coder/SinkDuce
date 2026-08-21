@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { Check } from "lucide-react"
+import { useT } from "@/i18n/use-t"
 
 interface ComboboxProps {
   value: string
@@ -23,6 +24,7 @@ export function Combobox({
   disabled,
   className,
 }: ComboboxProps) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [highlightIdx, setHighlightIdx] = useState(-1)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -98,45 +100,53 @@ export function Combobox({
           setOpen(true)
           setHighlightIdx(-1)
         }}
-        onFocus={() => {
-          if (filtered.length > 0) setOpen(true)
-        }}
+        onFocus={() => setOpen(true)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         disabled={disabled}
         autoComplete="off"
       />
-      {open && filtered.length > 0 && (
+      {open && (
         <div
           role="listbox"
           className="pm-menu absolute z-50 mt-1 w-full max-h-48 overflow-y-auto"
         >
-          {filtered.map((opt, i) => {
-            const on = opt === value
-            return (
-              <button
-                key={opt}
-                type="button"
-                role="option"
-                aria-selected={on}
-                className={cn(
-                  "pm-menu-item",
-                  on && "is-on",
-                  i === highlightIdx && !on && "bg-[var(--pm-green-wash)]"
-                )}
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  select(opt)
-                }}
-                onMouseEnter={() => setHighlightIdx(i)}
-              >
-                <span className="flex-1 text-left truncate">{opt}</span>
-                {on && (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-[var(--pm-green)]" />
-                )}
-              </button>
-            )
-          })}
+          {options.length === 0 ? (
+            <div className="pm-menu-item is-empty pointer-events-none">
+              {t("common.noOptions")}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="pm-menu-item is-empty pointer-events-none">
+              {t("common.noMatches")}
+            </div>
+          ) : (
+            filtered.map((opt, i) => {
+              const on = opt === value
+              return (
+                <button
+                  key={opt}
+                  type="button"
+                  role="option"
+                  aria-selected={on}
+                  className={cn(
+                    "pm-menu-item",
+                    on && "is-on",
+                    i === highlightIdx && !on && "bg-[var(--pm-green-wash)]"
+                  )}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    select(opt)
+                  }}
+                  onMouseEnter={() => setHighlightIdx(i)}
+                >
+                  <span className="flex-1 text-left truncate">{opt}</span>
+                  {on && (
+                    <Check className="h-3.5 w-3.5 shrink-0 text-[var(--pm-green)]" />
+                  )}
+                </button>
+              )
+            })
+          )}
         </div>
       )}
     </div>

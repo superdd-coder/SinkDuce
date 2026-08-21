@@ -17,8 +17,11 @@ import { Trash2, MessageSquare } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 export function SessionSidebar() {
+  const t = useT()
   const {
     sessionId, sessions, setSessions,
     loadSessionMessages, initSession,
@@ -72,7 +75,7 @@ export function SessionSidebar() {
       await initSession()
       await refreshList()
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("chat.failed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -92,9 +95,9 @@ export function SessionSidebar() {
         useAppStore.getState().setSessionId(null)
       }
       await refreshList()
-      toast.success("Session deleted")
+      toast.success(t("chat.sessionDeleted"))
     } catch (err) {
-      toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("chat.deleteFailed", { error: formatApiError(err, t) }))
     }
     setConfirmDelete(null)
   }
@@ -115,9 +118,9 @@ export function SessionSidebar() {
     const d = new Date(iso)
     const now = new Date()
     const diff = now.getTime() - d.getTime()
-    if (diff < 60_000) return "just now"
-    if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`
-    if (diff < 86_400_000) return `${Math.floor(diff / 3600_000)}h ago`
+    if (diff < 60_000) return t("common.justNow")
+    if (diff < 3600_000) return t("common.minutesAgo", { n: Math.floor(diff / 60_000) })
+    if (diff < 86_400_000) return t("common.hoursAgo", { n: Math.floor(diff / 3600_000) })
     return d.toLocaleDateString()
   }
 
@@ -125,17 +128,17 @@ export function SessionSidebar() {
 
   return (
     <>
-      <aside className="pm-chat-sessions" aria-label="Sessions">
+      <aside className="pm-chat-sessions" aria-label={t("chat.sessions")}>
         <div className="pm-chat-sessions-surface">
           <div className="pm-chat-sessions-head pm-rail-head">
-            <h2 className="pm-chat-sessions-title pm-rail-title">Sessions</h2>
+            <h2 className="pm-chat-sessions-title pm-rail-title">{t("chat.sessions")}</h2>
             <button
               type="button"
               className="pm-rail-new"
               onClick={handleNew}
-              title="New chat"
+              title={t("chat.newChat")}
             >
-              New
+              {t("common.new")}
             </button>
           </div>
 
@@ -158,7 +161,7 @@ export function SessionSidebar() {
               {sorted.length === 0 && (
                 <div className="pm-chat-sess-empty">
                   <MessageSquare className="size-5 pm-chat-sess-empty-icon" />
-                  <p className="pm-meta">No sessions yet</p>
+                  <p className="pm-meta">{t("chat.noSessions")}</p>
                 </div>
               )}
 
@@ -183,7 +186,7 @@ export function SessionSidebar() {
                     className={cn("pm-chat-sess-row", isActive && "is-active")}
                   >
                     <div className="pm-chat-sess-name">
-                      {s.title || "New Chat"}
+                      {s.title || t("chat.newChatTitle")}
                     </div>
                     <div className="pm-chat-sess-meta">
                       {s.last_message ? (
@@ -191,7 +194,7 @@ export function SessionSidebar() {
                           {s.last_message.slice(0, 48)}
                         </span>
                       ) : (
-                        <span className="pm-chat-sess-meta-snip">New conversation</span>
+                        <span className="pm-chat-sess-meta-snip">{t("chat.newConversation")}</span>
                       )}
                       <span className="pm-chat-sess-meta-time">
                         {formatTime(s.updated_at)}
@@ -202,8 +205,8 @@ export function SessionSidebar() {
                       variant="ghost"
                       size="icon-xs"
                       className="pm-chat-sess-del"
-                      title="Delete session"
-                      aria-label="Delete session"
+                      title={t("chat.deleteSession")}
+                      aria-label={t("chat.deleteSession")}
                       onClick={(e) => {
                         e.stopPropagation()
                         setConfirmDelete(s.id)
@@ -245,9 +248,9 @@ export function SessionSidebar() {
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogTitle>Delete session?</DialogTitle>
+            <DialogTitle>{t("chat.deleteSessionQ")}</DialogTitle>
             <DialogDescription>
-              Messages in this session will be lost.
+              {t("chat.deleteSessionBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -257,7 +260,7 @@ export function SessionSidebar() {
               size="sm"
               onClick={() => setConfirmDelete(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -265,7 +268,7 @@ export function SessionSidebar() {
               size="sm"
               onClick={() => confirmDelete && handleDelete(confirmDelete)}
             >
-              Delete
+              {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

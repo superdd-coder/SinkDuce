@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 import {
   formatClock,
   layoutIngestTimeline,
@@ -33,6 +34,7 @@ function statusClass(status: string) {
 }
 
 function StepBody({ step }: { step: IngestTraceStep }) {
+  const t = useT()
   const data = step.data || {}
   if (step.id === "summary") {
     const short = String(data.short_summary || "")
@@ -107,13 +109,13 @@ function StepBody({ step }: { step: IngestTraceStep }) {
               </div>
               {rec.ocr_text ? (
                 <p className="text-[var(--pm-ink)]">
-                  <span className="pm-meta">OCR · </span>
+                  <span className="pm-meta">{t("fileMgmt.ocr")} · </span>
                   {rec.ocr_text}
                 </p>
               ) : null}
               {rec.description ? (
                 <p className="text-[var(--pm-ink)]">
-                  <span className="pm-meta">Description · </span>
+                  <span className="pm-meta">{t("fileMgmt.descriptionLabel")} · </span>
                   {rec.description}
                 </p>
               ) : null}
@@ -135,6 +137,7 @@ export function IngestTracePane({
   fileId: string
   versionId?: string | null
 }) {
+  const t = useT()
   const [trace, setTrace] = useState<IngestTrace | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -153,7 +156,7 @@ export function IngestTracePane({
       })
       .catch((err) => {
         setTrace(null)
-        setError(err instanceof Error ? err.message : "No ingest trace")
+        setError(err instanceof Error ? err.message : t("fileMgmt.noIngestTrace"))
       })
       .finally(() => setLoading(false))
   }
@@ -181,7 +184,7 @@ export function IngestTracePane({
   if (error || !trace || !layout) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 p-8 text-center">
-        <p className="pm-meta">No ingest trace for this version.</p>
+        <p className="pm-meta">{t("fileMgmt.noIngestTrace")}</p>
         <p className="pm-meta max-w-sm leading-relaxed">
           Re-ingest the file after this build to record parse → vision →
           summary → context → store on this tab. Older uploads have no sidecar.
@@ -206,7 +209,7 @@ export function IngestTracePane({
       <div className="p-4 space-y-4">
         <header className="space-y-1">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-medium">Ingest run</h3>
+            <h3 className="text-sm font-medium">{t("fileMgmt.ingestRun")}</h3>
             <button
               type="button"
               className="pm-ws-link inline-flex items-center gap-1"

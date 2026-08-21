@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { deleteCollection } from "@/api/client"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface DeleteCollectionDialogProps {
   collectionId: string | null
@@ -13,6 +15,7 @@ interface DeleteCollectionDialogProps {
 }
 
 export function DeleteCollectionDialog({ collectionId, collectionName, onOpenChange, onDeleted }: DeleteCollectionDialogProps) {
+  const t = useT()
   const [confirmName, setConfirmName] = useState("")
   const [deleting, setDeleting] = useState(false)
 
@@ -23,12 +26,12 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
       const res = await deleteCollection(collectionId)
       if (res.error) toast.error(res.error)
       else {
-        toast.success(res.message || "Collection deleted")
+        toast.success(res.message || t("library.collectionDeleted"))
         setConfirmName("")
         onDeleted()
       }
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     } finally {
       setDeleting(false)
     }
@@ -38,21 +41,21 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
     <Dialog open={!!collectionId} onOpenChange={(v) => { if (!v) { setConfirmName(""); onOpenChange(false) } }}>
       <DialogContent className="pm-dialog max-w-sm">
         <DialogHeader>
-          <DialogTitle>Delete Collection</DialogTitle>
+          <DialogTitle>{t("library.deleteCollection")}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-3 py-1">
           <p className="pm-dialog-body">
-            Type{" "}
+            {t("library.typeToConfirm", { name: "\u0000" }).split("\u0000")[0]}
             <span className="t-mono-family font-medium text-[var(--pm-ink)]">
               {collectionName}
-            </span>{" "}
-            to confirm deletion.
+            </span>
+            {t("library.typeToConfirm", { name: "\u0000" }).split("\u0000")[1]}
           </p>
           <Input
             value={confirmName}
             onChange={(e) => setConfirmName(e.target.value)}
-            placeholder="Type collection name"
+            placeholder={t("library.typeCollectionName")}
             className="h-8"
           />
         </div>
@@ -65,14 +68,14 @@ export function DeleteCollectionDialog({ collectionId, collectionName, onOpenCha
               onOpenChange(false)
             }}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             variant="destructive-solid"
             onClick={handleDelete}
             disabled={confirmName !== collectionName || deleting}
           >
-            {deleting ? "Deleting..." : "Delete"}
+            {deleting ? t("common.loading") : t("common.delete")}
           </Button>
         </div>
       </DialogContent>

@@ -16,24 +16,18 @@ import { createPortal } from "react-dom"
 import { Calendar, ChevronLeft, ChevronRight, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { useT } from "@/i18n/use-t"
+import { useAppStore } from "@/stores/app-store"
 
 const PANEL_MS = 180
 
-const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const
-const MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-] as const
+function weekdayLabels(locale: string): string[] {
+  const fmt = new Intl.DateTimeFormat(locale, { weekday: "narrow" })
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(2021, 7, 1 + i) // 2021-08-01 is a Sunday
+    return fmt.format(d)
+  })
+}
 
 export interface DatePickerProps {
   value: string
@@ -71,10 +65,10 @@ function formatYmd(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
-function formatDisplay(s: string): string {
+function formatDisplay(s: string, locale: string): string {
   const d = parseYmd(s)
   if (!d) return ""
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleDateString(locale, {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -92,13 +86,15 @@ function sameDay(a: Date, b: Date): boolean {
 export function DatePicker({
   value,
   onChange,
-  placeholder = "Optional",
+  placeholder,
   disabled = false,
   id,
   className,
   allowClear = true,
   size = "default",
 }: DatePickerProps) {
+  const t = useT()
+  const locale = useAppStore((s) => s.locale)
   const [open, setOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [shown, setShown] = useState(false)
@@ -245,7 +241,16 @@ export function DatePicker({
     onChange("")
   }
 
-  const label = selected ? formatDisplay(value) : placeholder
+  const weekdays = useMemo(() => weekdayLabels(locale), [locale])
+  const monthTitle = useMemo(
+    () =>
+      new Date(viewYear, viewMonth, 1).toLocaleDateString(locale, {
+        month: "long",
+        year: "numeric",
+      }),
+    [locale, viewYear, viewMonth],
+  )
+  const label = selected ? formatDisplay(value, locale) : (placeholder ?? t("common.optional"))
 
   const panel = mounted
     ? createPortal(
@@ -253,7 +258,7 @@ export function DatePicker({
           ref={panelRef}
           role="dialog"
           aria-modal="false"
-          aria-label="Choose date"
+          aria-label={t("common.chooseDate")}
           className={cn(
             "pm-date-panel",
             size === "sm" && "pm-date-panel--sm",
@@ -275,20 +280,20 @@ export function DatePicker({
               variant="ghost"
               size="icon-xs"
               className="pm-date-nav"
-              aria-label="Previous month"
+              aria-label={t("common.prevMonth")}
               onClick={() => shiftMonth(-1)}
             >
               <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
             </Button>
             <span className="pm-date-panel-title">
-              {MONTHS[viewMonth]} {viewYear}
+              {monthTitle}
             </span>
             <Button
               type="button"
               variant="ghost"
               size="icon-xs"
               className="pm-date-nav"
-              aria-label="Next month"
+              aria-label={t("common.nextMonth")}
               onClick={() => shiftMonth(1)}
             >
               <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -296,8 +301,8 @@ export function DatePicker({
           </div>
 
           <div className="pm-date-weekdays" aria-hidden>
-            {WEEKDAYS.map((w) => (
-              <span key={w} className="pm-date-weekday">
+            {weekdays.map((w, i) => (
+              <span key={i} className="pm-date-weekday">
                 {w}
               </span>
             ))}
@@ -334,7 +339,7 @@ export function DatePicker({
               className="pm-date-today-link"
               onClick={() => pick(today)}
             >
-              Today
+              {t("common.today")}
             </button>
             {allowClear && value && (
               <button
@@ -345,7 +350,7 @@ export function DatePicker({
                   close()
                 }}
               >
-                Clear
+                {t("common.clear")}
               </button>
             )}
           </div>
@@ -393,8 +398,8 @@ export function DatePicker({
             role="button"
             tabIndex={-1}
             className="pm-date-trigger-clear"
-            title="Clear date"
-            aria-label="Clear date"
+            title={t("common.clearDate")}
+            aria-label={t("common.clearDate")}
             onClick={clear}
             onKeyDown={(e: ReactKeyboardEvent) => {
               if (e.key === "Enter" || e.key === " ") {

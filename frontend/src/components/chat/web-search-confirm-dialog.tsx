@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore, type CSSProperties } from "react"
 import { createPortal } from "react-dom"
 import { Globe } from "lucide-react"
+import { useT } from "@/i18n/use-t"
 import {
   getWebSearchConfirmState,
   subscribeWebSearchConfirm,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/web-search-confirm"
 
 function ConfirmCard({ query }: { query: string }) {
+  const t = useT()
   return (
     <div className="pm-web-confirm pointer-events-auto w-full" role="group">
       <div className="pm-web-confirm-head">
@@ -19,12 +21,12 @@ function ConfirmCard({ query }: { query: string }) {
           <Globe className="h-3.5 w-3.5" strokeWidth={1.75} />
         </div>
         <div className="pm-web-confirm-copy min-w-0 flex-1">
-          <div className="pm-web-confirm-title">Search the public internet?</div>
+          <div className="pm-web-confirm-title">{t("chat.webSearchTitle")}</div>
           <p className="pm-web-confirm-desc">
-            Results are{" "}
-            <span className="pm-web-confirm-em">external web data</span>
-            {" — "}not from your private knowledge base. Applies to{" "}
-            <span className="pm-web-confirm-em">this turn</span>.
+            {t("chat.webSearchDesc", {
+              external: t("chat.webSearchExternal"),
+              turn: t("chat.webSearchThisTurn"),
+            })}
           </p>
         </div>
       </div>
@@ -37,22 +39,22 @@ function ConfirmCard({ query }: { query: string }) {
           className="pm-web-confirm-btn pm-web-confirm-btn--ghost"
           onClick={() => answerWebSearchConfirm(false)}
         >
-          Decline
+          {t("common.decline")}
         </button>
         <button
           type="button"
           className="pm-web-confirm-btn pm-web-confirm-btn--soft"
           onClick={() => answerWebSearchConfirm(true, { always: true })}
-          title="Allow web search for this chat session until the tab is closed"
+          title={t("chat.alwaysAllowTitle")}
         >
-          Always allow this session
+          {t("chat.alwaysAllow")}
         </button>
         <button
           type="button"
           className="pm-web-confirm-btn pm-web-confirm-btn--pri"
           onClick={() => answerWebSearchConfirm(true)}
         >
-          Allow
+          {t("common.allow")}
         </button>
       </div>
     </div>
@@ -73,6 +75,7 @@ function isUsableInlineHost(el: HTMLElement | null): el is HTMLElement {
  * until the user comes back and answers (or the 120s timeout declines).
  */
 export function WebSearchConfirmDialog() {
+  const t = useT()
   const state = useSyncExternalStore(
     subscribeWebSearchConfirm,
     getWebSearchConfirmState,
@@ -137,7 +140,7 @@ export function WebSearchConfirmDialog() {
   // Quick Chat: only when the panel slot is actually visible
   if (isUsableInlineHost(host)) {
     return createPortal(
-      <div role="dialog" aria-label="Confirm web search" className="w-full px-0 pb-1">
+      <div role="dialog" aria-label={t("chat.confirmWebSearch")} className="w-full px-0 pb-1">
         <ConfirmCard query={state.query} />
       </div>,
       host,
@@ -168,7 +171,7 @@ export function WebSearchConfirmDialog() {
     // feel "unclickable" while waiting for Allow/Decline.
     <div
       role="dialog"
-      aria-label="Confirm web search"
+      aria-label={t("chat.confirmWebSearch")}
       className="pointer-events-none"
       style={style}
     >

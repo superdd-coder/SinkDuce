@@ -4,8 +4,11 @@ import { cn } from "@/lib/utils"
 import { useFileMgmtStore } from "@/stores/file-mgmt-store"
 import { getFolder } from "@/api/file-mgmt"
 import type { Folder } from "@/types/file-mgmt"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
 
 export function Breadcrumb({ collectionId }: { collectionId: string }) {
+  const t = useT()
   const { currentFolderId, folderTree, navigateToRoot, selectFolder } = useFileMgmtStore()
   const [path, setPath] = useState<Folder[]>([])
 
@@ -74,7 +77,7 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
         type="button"
         className="pm-files-crumb shrink-0"
         onClick={() => navigateToRoot(collectionId)}
-        title="Root"
+        title={t("common.root")}
       >
         <Home className="h-3.5 w-3.5" />
       </button>
@@ -91,7 +94,7 @@ export function Breadcrumb({ collectionId }: { collectionId: string }) {
               if (i < path.length - 1) selectFolder(collectionId, folder.folder_id)
             }}
           >
-            {folder.name}
+            {systemFolderDisplayName(folder.name, t)}
           </button>
         </div>
       ))}

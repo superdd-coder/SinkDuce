@@ -9,6 +9,7 @@ import { NodeCard, groupSourceForNode } from "./node-card"
 import { AddNodeTodoSplit } from "./add-node-todo-split"
 import { TodoSuggestBubble } from "./todo-suggest-bubble"
 import type { FocusGroupId } from "./groups-menu"
+import { useT } from "@/i18n/use-t"
 
 /** Droppable id for "append at end of chain" zone. */
 export const endDropId = (chainId: string) => `__end__:${chainId}`
@@ -80,6 +81,7 @@ export interface ChainRowProps {
 }
 
 function ChainStartDrop({ chainId }: { chainId: string }) {
+  const t = useT()
   const { setNodeRef, isOver } = useDroppable({ id: startDropId(chainId) })
   return (
     <div
@@ -88,7 +90,7 @@ function ChainStartDrop({ chainId }: { chainId: string }) {
         "pm-timeline-drop-hint flex items-center justify-center self-center w-4 h-14 rounded transition-colors shrink-0 -mr-1",
         isOver && "is-over",
       )}
-      title="Drop at start of chain"
+      title={t("fileMgmt.dropStart")}
     >
       <div className="pm-timeline-drop-bar" />
     </div>
@@ -96,6 +98,7 @@ function ChainStartDrop({ chainId }: { chainId: string }) {
 }
 
 function ChainEndDrop({ chainId }: { chainId: string }) {
+  const t = useT()
   const { setNodeRef, isOver } = useDroppable({ id: endDropId(chainId) })
   return (
     <div
@@ -104,7 +107,7 @@ function ChainEndDrop({ chainId }: { chainId: string }) {
         "pm-timeline-drop-hint flex items-center justify-center self-center mx-0.5 w-6 h-14 rounded transition-colors shrink-0",
         isOver && "is-over",
       )}
-      title="Drop at end of chain"
+      title={t("fileMgmt.dropEnd")}
     >
       {/* Only show a drop hint when hovering — idle vertical bar looked like a broken connector */}
       <div className="pm-timeline-drop-bar" />
@@ -185,6 +188,7 @@ export function ChainRow({
   showBaseline,
   baselineEndCol,
 }: ChainRowProps) {
+  const t = useT()
   // Display order is owned by parent (live drag preview). Sortable ids MUST match render order.
   const ids = chainData.map((n) => n.node_id)
   const cols =
@@ -227,11 +231,11 @@ export function ChainRow({
             "pm-timeline-add-slot w-48 h-12 shrink-0 gap-2 px-3",
           )}
           onClick={() => onAddNode(chainId, 0)}
-          title="Add first node to timeline"
+          title={t("fileMgmt.addFirstNode")}
         >
           <Plus className="h-4 w-4 shrink-0" />
           <span className="pm-label truncate normal-case tracking-normal">
-            Add first node
+            {t("fileMgmt.addFirstNode")}
           </span>
         </button>
         <AddNodeTodoSplit
@@ -340,7 +344,7 @@ export function ChainRow({
                     e.stopPropagation()
                     onAddNode(chainId, node.order)
                   }}
-                  title="Insert node after"
+                  title={t("fileMgmt.insertAfter")}
                 >
                   <div className="pm-timeline-add-slot w-5 h-5 rounded-full">
                     <Plus className="h-3 w-3" />
@@ -602,6 +606,7 @@ function SW({
   /** Any drag in progress — kill CSS transforms so list order alone drives layout. */
   dragActive?: boolean
 }) {
+  const t = useT()
   const {
     attributes,
     listeners,
@@ -662,7 +667,7 @@ function SW({
                 e.stopPropagation()
                 onInsert()
               }}
-              title="Insert node after"
+              title={t("fileMgmt.insertAfter")}
             >
               <div className="pm-timeline-add-slot w-4 h-4 rounded-full">
                 <Plus className="h-2.5 w-2.5" />

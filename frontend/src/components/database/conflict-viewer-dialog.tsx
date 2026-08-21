@@ -15,6 +15,7 @@ import {
   RawFileViewer,
   resolveRawFilename,
 } from "@/components/file-mgmt/raw-file-viewer"
+import { useT } from "@/i18n/use-t"
 
 interface ConflictViewerDialogProps {
   conflict: ConflictItem | null
@@ -43,6 +44,7 @@ function SourcePanel({
   label: string
   content: string
 }) {
+  const t = useT()
   const [summary, setSummary] = useState<DocSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
 
@@ -80,8 +82,8 @@ function SourcePanel({
       <div className="flex-1 overflow-hidden pm-nested-pane min-h-0">
         <Tabs defaultValue={defaultTab} className="flex flex-col h-full">
           <TabsList variant="line" className="mx-2 mt-2">
-            {showRaw && <TabsTrigger value="raw">Raw</TabsTrigger>}
-            <TabsTrigger value="summary">Summary</TabsTrigger>
+            {showRaw && <TabsTrigger value="raw">{t("library.raw")}</TabsTrigger>}
+            <TabsTrigger value="summary">{t("common.summary")}</TabsTrigger>
           </TabsList>
 
           {showRaw && (
@@ -111,14 +113,14 @@ function SourcePanel({
                 {summaryLoading ? (
                   <div className="flex items-center justify-center py-8 pm-meta">
                     <Loader2 className="h-5 w-5 animate-spin mr-2 text-[var(--pm-faint)]" />
-                    Loading summary...
+                    {t("chat.loadingSummary")}
                   </div>
                 ) : summary ? (
                   <div className="space-y-4">
                     {summary.data.length > 0 && (
                       <div>
                         <h5 className="pm-field-label mb-2">
-                          Data Points
+                          {t("chat.dataPoints")}
                         </h5>
                         <ul className="space-y-1">
                           {summary.data.map((item, i) => (
@@ -132,7 +134,7 @@ function SourcePanel({
                     {summary.facts.length > 0 && (
                       <div>
                         <h5 className="pm-field-label mb-2">
-                          Facts
+                          {t("chat.facts")}
                         </h5>
                         <ul className="space-y-1">
                           {summary.facts.map((item, i) => (
@@ -146,7 +148,7 @@ function SourcePanel({
                     {summary.insights.length > 0 && (
                       <div>
                         <h5 className="pm-field-label mb-2">
-                          Insights
+                          {t("chat.insights")}
                         </h5>
                         <ul className="space-y-1">
                           {summary.insights.map((item, i) => (
@@ -161,13 +163,13 @@ function SourcePanel({
                       summary.facts.length === 0 &&
                       summary.insights.length === 0 && (
                         <p className="pm-meta">
-                          No summary available.
+                          {t("chat.noSummary")}
                         </p>
                       )}
                   </div>
                 ) : (
                   <p className="pm-meta">
-                    No summary available.
+                    {t("chat.noSummary")}
                   </p>
                 )}
               </CardContent>
@@ -184,11 +186,12 @@ export function ConflictViewerDialog({
   collection,
   onOpenChange,
 }: ConflictViewerDialogProps) {
+  const t = useT()
   return (
     <Dialog open={!!conflict} onOpenChange={(v) => onOpenChange(v)}>
       <DialogContent className="pm-dialog !max-w-[90vw] !w-[90vw] h-[85vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Conflict</DialogTitle>
+          <DialogTitle>{t("library.conflict")}</DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 flex gap-4 overflow-hidden min-h-0">

@@ -28,6 +28,8 @@ import { cn } from "@/lib/utils"
 import { createTodo, listChains } from "@/api/file-mgmt"
 import type { Chain, TodoItem } from "@/types/file-mgmt"
 import type { Editor } from "@tiptap/core"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface CreateTodoDialogProps {
   collectionId: string
@@ -43,9 +45,16 @@ interface CreateTodoDialogProps {
   onCreated?: (todo: TodoItem) => void
 }
 
-function chainOptionLabel(c: Chain): string {
-  if (c.is_main) return c.title?.trim() ? `Main · ${c.title}` : "Main"
-  return c.title?.trim() || "Branch"
+function chainOptionLabel(
+  c: Chain,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (c.is_main) {
+    return c.title?.trim()
+      ? t("library.mainDot", { title: c.title.trim() })
+      : t("library.main")
+  }
+  return c.title?.trim() || t("library.branch")
 }
 
 export function CreateTodoDialog({
@@ -58,6 +67,7 @@ export function CreateTodoDialog({
   suggestionId = null,
   onCreated,
 }: CreateTodoDialogProps) {
+  const t = useT()
   const [title, setTitle] = useState("")
   const [body, setBody] = useState("")
   const [ddl, setDdl] = useState("")
@@ -133,14 +143,12 @@ export function CreateTodoDialog({
         setSelectedChainId(preferred)
       })
       .catch((err) => {
-        toast.error(
-          err instanceof Error ? err.message : "Failed to load chains"
-        )
+        toast.error(formatApiError(err, t))
         setChains([])
         setSelectedChainId("")
       })
       .finally(() => setLoadingChains(false))
-  }, [open, collectionId, defaultChainId, seedTitle, seedBody])
+  }, [open, collectionId, defaultChainId, seedTitle, seedBody, t])
 
   /* Focus title after silk enter so open fade isn’t interrupted */
   useEffect(() => {
@@ -160,30 +168,30 @@ export function CreateTodoDialog({
   }, [open, title, syncTitleHeight])
 
   const handleSubmit = async () => {
-    const t = title.trim()
-    if (!t) {
-      toast.error("Title is required")
+    const titleText = title.trim()
+    if (!titleText) {
+      toast.error(t("common.titleRequired"))
       return
     }
     if (!selectedChainId) {
-      toast.error("Please select a chain")
+      toast.error(t("library.selectChain"))
       return
     }
     setSubmitting(true)
     try {
       const isMain = mainChain?.chain_id === selectedChainId
       const todo = await createTodo(collectionId, {
-        title: t,
+        title: titleText,
         body: body.trim() || null,
         ddl: ddl.trim() || null,
         target_chain_id: isMain ? null : selectedChainId,
         suggestion_id: activeSuggestionId,
       })
-      toast.success("Todo added")
+      toast.success(t("library.todoAdded"))
       onCreated?.(todo)
       onOpenChange(false)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(formatApiError(err, t))
     } finally {
       setSubmitting(false)
     }
@@ -207,7 +215,7 @@ export function CreateTodoDialog({
         overlayClassName="pm-dialog-overlay--silk"
       >
         <DialogHeader className="pm-todo-dialog-head">
-          <DialogTitle className="pm-todo-dialog-title">New to-do</DialogTitle>
+          <DialogTitle className="pm-todo-dialog-title">{t("library.newTodo")}</DialogTitle>
         </DialogHeader>
 
         <div className="pm-dialog-body pm-todo-dialog-body">
@@ -215,7 +223,7 @@ export function CreateTodoDialog({
           <div className="pm-todo-top-row">
             <section className="pm-todo-card pm-todo-card--title">
               {/* Label pinned top-left; input centered in remaining height */}
-              <FieldLabel htmlFor="pm-todo-create-title">Todo</FieldLabel>
+              <FieldLabel htmlFor="pm-todo-create-title">{t("library.todo")}</FieldLabel>
               <div className="pm-todo-title-block">
                 <textarea
                   ref={titleInputRef}
@@ -231,8 +239,8 @@ export function CreateTodoDialog({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") e.preventDefault()
                   }}
-                  placeholder="What needs to be done?"
-                  aria-label="Todo title"
+                  placeholder={t("library.whatNeedsDone")}
+                  aria-label={t("library.todoTitle")}
                 />
               </div>
             </section>
@@ -240,7 +248,7 @@ export function CreateTodoDialog({
             <section className="pm-todo-card pm-todo-card--meta">
               <div className="pm-todo-meta-stack">
                 <div className="pm-todo-meta-field min-w-0">
-                  <FieldLabel htmlFor="pm-todo-create-chain">Chain</FieldLabel>
+                  <FieldLabel htmlFor="pm-todo-create-chain">{t("library.chain")}</FieldLabel>
                   <div className="relative">
                     <DropdownSelect
                       size="sm"
@@ -249,14 +257,14 @@ export function CreateTodoDialog({
                       disabled={loadingChains || sortedChains.length === 0}
                       placeholder={
                         loadingChains
-                          ? "Loading chains…"
+                          ? t("library.loadingChains")
                           : sortedChains.length === 0
-                            ? "No chains"
-                            : "Select chain"
+                            ? t("library.noChains")
+                            : t("library.selectChainPh")
                       }
                       options={sortedChains.map((c) => ({
                         value: c.chain_id,
-                        label: chainOptionLabel(c),
+                        label: chainOptionLabel(c, t),
                       }))}
                     />
                     {loadingChains && (
@@ -268,13 +276,13 @@ export function CreateTodoDialog({
                   </div>
                 </div>
                 <div className="pm-todo-meta-field min-w-0">
-                  <FieldLabel htmlFor="pm-todo-create-ddl">Deadline</FieldLabel>
+                  <FieldLabel htmlFor="pm-todo-create-ddl">{t("library.deadline")}</FieldLabel>
                   <DatePicker
                     id="pm-todo-create-ddl"
                     size="sm"
                     value={ddl}
                     onChange={setDdl}
-                    placeholder="Optional"
+                    placeholder={t("common.optional")}
                     allowClear
                   />
                 </div>
@@ -285,8 +293,8 @@ export function CreateTodoDialog({
           {/* Description card — full width */}
           <section className="pm-todo-card pm-todo-card--desc">
             <div className="pm-todo-desc-head">
-              <FieldLabel className="pm-todo-desc-label">Description</FieldLabel>
-              <span className="pm-todo-card-hint">Optional · markdown</span>
+              <FieldLabel className="pm-todo-desc-label">{t("common.description")}</FieldLabel>
+              <span className="pm-todo-card-hint">{t("common.optionalMd")}</span>
             </div>
             <div
               className="pm-todo-md-host"
@@ -300,7 +308,7 @@ export function CreateTodoDialog({
                   enableSlash={false}
                   showToolbar
                   flush
-                  placeholder="Details, context, acceptance criteria…"
+                  placeholder={t("library.detailsCriteria")}
                   className="pm-todo-md-editor"
                   onEditorReady={(ed) => {
                     descEditorRef.current = ed
@@ -319,7 +327,7 @@ export function CreateTodoDialog({
             onClick={() => onOpenChange(false)}
             disabled={submitting}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             type="button"
@@ -333,7 +341,7 @@ export function CreateTodoDialog({
             {submitting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
             ) : (
-              "Create"
+              t("common.create")
             )}
           </Button>
         </DialogFooter>

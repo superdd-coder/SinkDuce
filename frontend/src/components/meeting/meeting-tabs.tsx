@@ -45,6 +45,8 @@ import type { Chain } from "@/types/file-mgmt"
 import { MeetingCreateTodosDialog } from "@/components/meeting/meeting-create-todos-dialog"
 import { useShallow } from "zustand/react/shallow"
 import { useAppStore } from "@/stores/app-store"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import { useBlueprintStream } from "@/hooks/use-blueprint-stream"
 import {
   useSectionStream,
@@ -238,6 +240,7 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
   hideInlineEdit = false,
   ingestHostRef,
 }, ref) {
+  const t = useT()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(content)
   const [saving, setSaving] = useState(false)
@@ -294,7 +297,7 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
       await onSaveTitle(next)
       setEditingTitle(false)
     } catch (err) {
-      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.saveFailed", { error: formatApiError(err, t) }))
     } finally {
       titleSavingRef.current = false
     }
@@ -308,9 +311,9 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
       await onSave(cleaned)
       setEditing(false)
       setEditEditor(null)
-      toast.success("Saved")
+      toast.success(t("common.saved"))
     } catch (err) {
-      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.saveFailed", { error: formatApiError(err, t) }))
     }
     setSaving(false)
   }
@@ -329,7 +332,7 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
         size="sm"
         onClick={handleCancel}
       >
-        Cancel
+        {t("common.cancel")}
       </Button>
       <Button
         type="button"
@@ -339,7 +342,7 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
         disabled={saving}
       >
         {saving ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
-        Save
+        {t("common.save")}
       </Button>
     </div>
   )
@@ -367,12 +370,12 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
               setEditingTitle(false)
             }
           }}
-          aria-label="Section title"
+          aria-label={t("meeting.sectionTitle")}
         />
       ) : (
         <>
           <span className="pm-meeting-section-title-text min-w-0">
-            {titleName || "Untitled"}
+            {titleName || t("common.untitled")}
           </span>
           {!actionsDisabled && !editDisabled && (
             <button
@@ -382,8 +385,8 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
                 e.stopPropagation()
                 setEditingTitle(true)
               }}
-              title="Edit title"
-              aria-label="Edit title"
+              title={t("meeting.editTitle")}
+              aria-label={t("meeting.editTitle")}
             >
               <Pencil className="size-3" />
             </button>
@@ -431,8 +434,8 @@ const EditableSectionContent = forwardRef<{ startEditing: () => void }, {
                 variant="ghost"
                 size="icon-sm"
                 onClick={() => setEditing(true)}
-                title="Edit"
-                aria-label="Edit"
+                title={t("common.edit")}
+                aria-label={t("common.edit")}
               >
                 <Pencil className="size-3.5" />
               </Button>
@@ -494,6 +497,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   ingestHostRef,
   ingestLocked = false,
 }, ref) {
+  const t = useT()
   const bpEntry = (blueprint ?? []).find((b) => b.blueprint_id === tab.blueprint_id)
   // Tab now carries its own description (set at extract time).
   // Fall back to blueprint for tabs created before the description field existed.
@@ -619,7 +623,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       }
     } catch (err) {
       toast.error(
-        `Load todos failed: ${err instanceof Error ? err.message : String(err)}`,
+        t("meeting.loadTodosFailed", { error: formatApiError(err, t) }),
       )
     } finally {
       setCreateTodosLoading(false)
@@ -628,7 +632,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
 
   const showTopButton = hasAssociated || ingested || !!pendingName
   const topButtonLabel = ingesting
-    ? "Ingesting..."
+    ? t("library.ingesting")
     : displayName || pendingName || associatedName
   const topButtonIsActive = ingesting || displayActive || !!pendingName
 
@@ -685,7 +689,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       setEditingDesc(false)
       onMeetingUpdate(m)
     } catch (err) {
-      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.saveFailed", { error: formatApiError(err, t) }))
     } finally {
       descSavingRef.current = false
     }
@@ -798,7 +802,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       setFlyoutColId(colId)
     } catch (err) {
       toast.error(
-        `Failed to load chains: ${err instanceof Error ? err.message : String(err)}`,
+        t("common.failedWithError", { error: formatApiError(err, t) }),
       )
       setFlyoutColId((cur) => (cur === colId ? null : cur))
       setFlyoutCoords(null)
@@ -821,7 +825,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       await openChainFlyout(colId, itemEl ?? flyoutItemRef.current)
     } catch (err) {
       toast.error(
-        `Failed to load chains: ${err instanceof Error ? err.message : String(err)}`,
+        t("common.failedWithError", { error: formatApiError(err, t) }),
       )
     }
   }
@@ -844,7 +848,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         const main = chains.find((c) => c.is_main)
         setPillChainOpen(false)
         setPillChainColId(null)
-        toast.info("Ingesting to Main chain")
+        toast.info(t("meeting.ingestToMain"))
         await doIngest(colId, main?.chain_id ?? null)
         return
       }
@@ -852,7 +856,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       setPillChainOpen(false)
       setPillChainColId(null)
       toast.error(
-        `Failed to load chains: ${err instanceof Error ? err.message : String(err)}`,
+        t("common.failedWithError", { error: formatApiError(err, t) }),
       )
     } finally {
       setPillChainLoading(false)
@@ -875,7 +879,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         await refreshKeepMountedLibrary(oldCol)
       }
     } catch (err) {
-      toast.error(`Failed to remove old allocation: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.failedRemoveAlloc", { error: formatApiError(err, t) }))
       setPendingName(null)
       return
     }
@@ -907,7 +911,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         await deleteSectionAllocation(meetingId, tab.tab_id)
         await refreshKeepMountedLibrary(associatedId)
       } catch (err) {
-        toast.error(`Failed to remove old allocation: ${err instanceof Error ? err.message : String(err)}`)
+        toast.error(t("meeting.failedRemoveAlloc", { error: formatApiError(err, t) }))
         setPendingName(null)
         return
       }
@@ -916,14 +920,14 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       const res = await createCollection(newName.trim())
       if (res.error) throw new Error(res.error)
       const colId = res.id
-      if (!colId) throw new Error("No collection ID returned")
+      if (!colId) throw new Error(t("meeting.noCollectionLinked"))
       // New collection only has main chain
       await handleIngest(colId, null)
       await fetchCollections()
       setCreating(false)
-      toast.success(`Created "${newName.trim()}" and ingested`)
+      toast.success(t("meeting.createdAndIngested", { name: newName.trim() }))
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     }
     setPendingName(null)
   }
@@ -942,10 +946,10 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       const generalIn = overlap.some((t) => t.tab_id === "tab_general")
       toast.info(
         jobTabId !== "tab_general" && generalIn
-          ? "General is already in this collection"
+          ? t("meeting.generalAlreadyThis")
           : jobTabId === "tab_general"
-            ? "A section from this meeting is already in this collection"
-            : "This collection already has another part of this meeting",
+            ? t("meeting.sectionAlreadyThis")
+            : t("meeting.otherPartThis"),
       )
     }
     setLocalIngesting(true)
@@ -976,8 +980,8 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       if (bridgeTaskId && bridgeFileId) {
         toast.info(
           wasUpdate
-            ? "Collection update started…"
-            : "Ingest started — indexing in collection…",
+            ? t("meeting.collectionUpdateStarted")
+            : t("meeting.ingestStartedIndexing"),
         )
         try {
           const { useFileMgmtStore } = await import("@/stores/file-mgmt-store")
@@ -994,13 +998,13 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           try {
             const task = await getTask(bridgeTaskId)
             if (task.status === "completed") {
-              toast.success(wasUpdate ? "Collection updated" : "Ingested to collection")
+              toast.success(wasUpdate ? t("meeting.collectionUpdated") : t("meeting.ingestedToCollection"))
               settled = true
               break
             }
             if (task.status === "failed") {
               toast.error(
-                `Ingest failed: ${task.error || task.message || task.filename || "unknown error"}`,
+                t("meeting.ingestFailed", { error: task.error || task.message || task.filename || t("common.unknown") }),
               )
               settled = true
               break
@@ -1010,13 +1014,13 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           }
         }
         if (!settled) {
-          toast.info("Ingest still running in the background…")
+          toast.info(t("meeting.ingestBackground"))
         }
       } else {
-        toast.success(wasUpdate ? "Collection updated" : "Ingested to collection")
+        toast.success(wasUpdate ? t("meeting.collectionUpdated") : t("meeting.ingestedToCollection"))
       }
     } catch (err) {
-      toast.error(`Ingest failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.ingestFailed", { error: formatApiError(err, t) }))
     } finally {
       setLocalIngesting(false)
       // Always clear the job's tab on parent (even if this instance unmounted)
@@ -1035,7 +1039,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     const fileId = tab.allocated_file_id
     const colId = associatedId
     if (!fileId || !colId) {
-      toast.error("No ingested file linked")
+      toast.error(t("meeting.noIngestedFile"))
       return
     }
     goToDatabase(colId)
@@ -1051,7 +1055,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     const fileId = tab.allocated_file_id
     const colId = associatedId
     if (!fileId || !colId) {
-      toast.error("No ingested file linked")
+      toast.error(t("meeting.noIngestedFile"))
       return
     }
     goToDatabase(colId)
@@ -1074,7 +1078,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     setActionsOpen(false)
     const colId = associatedId
     if (!colId) {
-      toast.error("No collection linked")
+      toast.error(t("meeting.noCollectionLinked"))
       return
     }
     goToDatabase(colId)
@@ -1090,7 +1094,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       useFileMgmtStore.getState().requestTimelineFocus(nodeId)
     } catch (err) {
       toast.error(
-        `Timeline node not found yet. ${err instanceof Error ? err.message : ""}`.trim()
+        t("meeting.timelineNodeNotFound", { error: err instanceof Error ? err.message : "" }).trim()
       )
     }
   }
@@ -1103,7 +1107,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
     setActionsOpen(false)
     const colId = associatedId
     if (!colId || !tab.allocated_file_id) {
-      toast.error("Section is not ingested to a collection")
+      toast.error(t("meeting.sectionNotIngested"))
       return
     }
     await handleIngest(colId, tab.allocated_chain_id || null)
@@ -1119,9 +1123,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       const m = await deleteSectionAllocation(meetingId, jobTabId)
       onMeetingUpdate(m)
       await refreshKeepMountedLibrary(colId)
-      toast.success("Ingestion cancelled")
+      toast.success(t("meeting.ingestionCancelled"))
     } catch (err) {
-      toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.cancelFailed", { error: formatApiError(err, t) }))
     } finally {
       setLocalIngesting(false)
       onIngestingChangeRef.current?.(jobTabId, false)
@@ -1186,7 +1190,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
   const tabLabel = (() => {
     const sections = tabs.filter(t => t.type === "section" && t.md_file_path)
     const idx = sections.findIndex(t => t.tab_id === tab.tab_id)
-    return idx >= 0 ? `(Topic ${idx + 1})` : tab.tab_id
+    return idx >= 0 ? t("meeting.topicN", { n: idx + 1 }) : tab.tab_id
   })()
 
   /** Collection pill — title row (portal) or top of legacy column */
@@ -1216,11 +1220,11 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         }}
         title={
           needsReingest
-            ? "Section edited — Update collection to push a new version"
+            ? t("meeting.sectionEditedUpdate")
             : displayActive
-              ? "Open actions (file / files / timeline / remove)"
+              ? t("meeting.openActions")
               : displaySuggestion
-                ? "Click to choose chain and ingest"
+                ? t("meeting.clickChooseChain")
                 : undefined
         }
         className={cn(
@@ -1233,7 +1237,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       >
         <span className="relative z-10 flex items-center justify-center gap-1 min-w-0 w-full px-0.5">
           {needsReingest && !ingesting ? (
-            <RefreshCw className="size-2.5 shrink-0 opacity-50" strokeWidth={2} aria-label="Update available" />
+            <RefreshCw className="size-2.5 shrink-0 opacity-50" strokeWidth={2} aria-label={t("meeting.updateAvailable")} />
           ) : null}
           <span className="truncate min-w-0">{topButtonLabel}</span>
           {displayActive && !ingesting ? (
@@ -1249,7 +1253,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         exitMs={MENU_SILK_MS}
         className="pm-meeting-ingest-menu"
       >
-        <div className="pm-meeting-ingest-menu-label">Collection</div>
+        <div className="pm-meeting-ingest-menu-label">{t("library.collection")}</div>
         {needsReingest && (
           <MenuItem
             className="pm-meeting-ingest-menu-item"
@@ -1257,23 +1261,23 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             onClick={() => void handleUpdateCollection()}
           >
             <RefreshCw strokeWidth={1.75} />
-            Update collection
+            {t("meeting.updateCollection")}
           </MenuItem>
         )}
         <MenuItem className="pm-meeting-ingest-menu-item" onClick={handleOpenFile}>
           <FileText strokeWidth={1.75} />
-          Open file
+          {t("meeting.openFile")}
         </MenuItem>
         <MenuItem className="pm-meeting-ingest-menu-item" onClick={handleShowInFiles}>
           <FolderOpen strokeWidth={1.75} />
-          Show in Files
+          {t("meeting.showInFiles")}
         </MenuItem>
         <MenuItem
           className="pm-meeting-ingest-menu-item"
           onClick={() => void handleShowOnTimeline()}
         >
           <GitBranch strokeWidth={1.75} />
-          Show on Timeline
+          {t("meeting.showOnTimeline")}
         </MenuItem>
         <MenuItem
           className="pm-meeting-ingest-menu-item"
@@ -1282,7 +1286,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           }}
         >
           <ListTodo strokeWidth={1.75} />
-          Create todos…
+          {t("meeting.createTodosEllipsis")}
         </MenuItem>
         {(tab.tab_id === "tab_general" || tab.type === "general") && (
           <MenuItem
@@ -1294,7 +1298,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             }}
           >
             <ArrowLeftRight strokeWidth={1.75} />
-            Change collection
+            {t("meeting.changeCollection")}
           </MenuItem>
         )}
         <div className="pm-meeting-ingest-menu-sep" role="separator" />
@@ -1307,7 +1311,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           }}
         >
           <Trash2 strokeWidth={1.75} />
-          Remove from collection
+          {t("meeting.removeFromCollectionAction")}
         </MenuItem>
       </SoftMenu>
     </div>
@@ -1344,7 +1348,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           )}
         >
           <span className="relative z-10 truncate min-w-0 px-0.5">
-            {dropdownOpen ? "Cancel" : "Choose a collection"}
+            {dropdownOpen ? t("common.cancel") : t("recall.chooseCollection")}
           </span>
         </button>
       </div>
@@ -1361,23 +1365,23 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         exitMs={MENU_SILK_MS}
         className="pm-meeting-ingest-menu"
       >
-        <div className="pm-meeting-ingest-menu-label">Collections</div>
+        <div className="pm-meeting-ingest-menu-label">{t("common.collections")}</div>
         {tab.tab_id !== "tab_general" && generalAllocColName ? (
           <p className="pm-meeting-ingest-menu-hint">
-            General is already in {generalAllocColName}
+            {t("meeting.generalAlreadyIn", { name: generalAllocColName })}
           </p>
         ) : null}
         {tab.tab_id === "tab_general" && sectionAllocs.length > 0 ? (
           <p className="pm-meeting-ingest-menu-hint">
             {sectionAllocs.length === 1
-              ? `${sectionAllocs[0].name || "A section"} is already in a collection`
-              : `${sectionAllocs.length} sections are already in collections`}
+              ? t("meeting.sectionAlreadyIn", { name: sectionAllocs[0].name || t("meeting.aSection") })
+              : t("meeting.nSectionsAlreadyIn", { n: sectionAllocs.length })}
           </p>
         ) : null}
         <div className="pm-meeting-ingest-menu-scroll">
           {(!Array.isArray(collections) || collections.length === 0) && (
             <div className="pm-meeting-ingest-menu-empty">
-              No collections yet
+              {t("meeting.noCollectionsYet")}
             </div>
           )}
           {(Array.isArray(collections) ? collections : []).map((col) => {
@@ -1404,7 +1408,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
                 {tab.tab_id !== "tab_general" &&
                 generalAllocColId &&
                 col.id === generalAllocColId ? (
-                  <span className="pm-meeting-ingest-menu-tag">General</span>
+                  <span className="pm-meeting-ingest-menu-tag">{t("meeting.general")}</span>
                 ) : null}
                 {multi ? (
                   <ChevronRight
@@ -1429,7 +1433,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             }}
           >
             <Plus strokeWidth={1.75} />
-            {hasAssociated ? "Create new collection" : `New · ${tab.name}`}
+            {hasAssociated ? t("meeting.createNewCollection") : t("meeting.newDotName", { name: tab.name })}
           </MenuItem>
         ) : (
           <div
@@ -1445,7 +1449,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
               className="pm-meeting-ingest-create-input"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="Collection name"
+              placeholder={t("meeting.collectionName")}
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreateAndSelect()
@@ -1459,7 +1463,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
               onClick={handleCreateAndSelect}
               disabled={!newName.trim() || !!pendingName}
             >
-              Create
+              {t("common.create")}
             </Button>
           </div>
         )}
@@ -1483,8 +1487,8 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
       >
         <div className="pm-meeting-ingest-menu-label">
           {chainFlyoutLoading && !(flyoutColId && chainsByCol[flyoutColId])
-            ? "Loading…"
-            : "Timeline chain"}
+            ? t("common.loading")
+            : t("meeting.timelineChain")}
         </div>
         {flyoutChains.map((ch) => (
           <MenuItem
@@ -1500,9 +1504,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             <span className="pm-meeting-ingest-menu-name truncate min-w-0">
               {ch.is_main
                 ? ch.title?.trim()
-                  ? `Main · ${ch.title}`
-                  : "Main"
-                : ch.title?.trim() || "Branch"}
+                  ? t("library.mainDot", { title: ch.title })
+                  : t("library.main")
+                : ch.title?.trim() || t("library.branch")}
             </span>
           </MenuItem>
         ))}
@@ -1510,7 +1514,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         flyoutColId &&
         (chainsByCol[flyoutColId]?.length ?? 0) === 0 ? (
           <div className="px-3 py-2.5 text-[12px] text-[var(--pm-faint)] text-center">
-            No chains
+            {t("library.noChains")}
           </div>
         ) : null}
       </SoftMenu>
@@ -1552,7 +1556,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             ref={descInputRef}
             className="pm-meeting-section-desc-input"
             value={descDraft}
-            placeholder="Add a description…"
+            placeholder={t("meeting.addDescription")}
             rows={1}
             onChange={(e) => {
               setDescDraft(e.target.value)
@@ -1573,7 +1577,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
                 void commitDescription()
               }
             }}
-            aria-label="Section description"
+            aria-label={t("meeting.sectionDescription")}
           />
         ) : (
           <div className="pm-meeting-section-desc-row group/desc">
@@ -1583,7 +1587,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
                 !description && "is-empty",
               )}
             >
-              {description || "Add a description…"}
+              {description || t("meeting.addDescription")}
             </p>
             <button
               type="button"
@@ -1592,8 +1596,8 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
                 e.stopPropagation()
                 setEditingDesc(true)
               }}
-              title="Edit description"
-              aria-label="Edit description"
+              title={t("meeting.editDescription")}
+              aria-label={t("meeting.editDescription")}
             >
               <Pencil className="size-3" />
             </button>
@@ -1640,7 +1644,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
         className="pm-meeting-ingest-menu"
       >
         <div className="pm-meeting-ingest-menu-label">
-          {pillChainLoading ? "Loading…" : "Timeline chain"}
+          {pillChainLoading ? t("common.loading") : t("meeting.timelineChain")}
         </div>
         {pillChainOptions.map((ch) => (
           <MenuItem
@@ -1656,9 +1660,9 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             <span className="pm-meeting-ingest-menu-name truncate min-w-0">
               {ch.is_main
                 ? ch.title?.trim()
-                  ? `Main · ${ch.title}`
-                  : "Main"
-                : ch.title?.trim() || "Branch"}
+                  ? t("library.mainDot", { title: ch.title })
+                  : t("library.main")
+                : ch.title?.trim() || t("library.branch")}
             </span>
           </MenuItem>
         ))}
@@ -1677,7 +1681,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
             : tab.todo_candidates || []
         }
         loading={createTodosLoading}
-        title="Create todos from summary"
+        title={t("fileMgmt.createTodosSummary")}
         onCreated={(_n, meeting) => {
           if (meeting) onMeetingUpdate(meeting)
         }}
@@ -1691,15 +1695,15 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Collection</DialogKicker>
-            <DialogTitle>Remove from collection?</DialogTitle>
+            <DialogKicker>{t("library.collection")}</DialogKicker>
+            <DialogTitle>{t("meeting.removeFromCollection")}</DialogTitle>
             <DialogDescription>
-              This will remove the section content from &ldquo;{associatedName}&rdquo; and delete the file snapshot.
+              {t("meeting.removeFromCollectionBody", { name: associatedName })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setCancelOpen(false)}>Cancel</Button>
-            <Button type="button" variant="destructive-solid" size="sm" onClick={handleCancelIngest}>Remove</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setCancelOpen(false)}>{t("common.cancel")}</Button>
+            <Button type="button" variant="destructive-solid" size="sm" onClick={handleCancelIngest}>{t("common.remove")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1717,26 +1721,19 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Collection</DialogKicker>
-            <DialogTitle>Switch collection?</DialogTitle>
+            <DialogKicker>{t("library.collection")}</DialogKicker>
+            <DialogTitle>{t("meeting.switchCollection")}</DialogTitle>
             <DialogDescription>
-              This section is already ingested to &ldquo;{associatedName}&rdquo;.{" "}
               {switchPending?.colId === "__new__" ? (
-                <>
-                  Creating a new collection will delete the existing file
-                  snapshot and re-ingest.
-                </>
+                t("meeting.switchCollectionNew", { name: associatedName })
               ) : (
-                <>
-                  Switching to &ldquo;
-                  {collections.find((c) => c.id === switchPending?.colId)
-                    ?.name || switchPending?.colId}
-                  &rdquo; will delete the existing file snapshot and re-ingest
-                  {switchPending?.chainId
-                    ? " onto the chain you selected"
-                    : " (Main chain)"}
-                  .
-                </>
+                t("meeting.switchCollectionBody", {
+                  from: associatedName,
+                  to: collections.find((c) => c.id === switchPending?.colId)?.name || switchPending?.colId || "",
+                  chain: switchPending?.chainId
+                    ? t("meeting.ontoSelectedChain")
+                    : t("meeting.mainChainParen"),
+                })
               )}
             </DialogDescription>
           </DialogHeader>
@@ -1747,7 +1744,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
               size="sm"
               onClick={() => setSwitchPending(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -1759,7 +1756,7 @@ const SectionMetadata = forwardRef<{ startEditingDescription: () => void }, {
                 else void doIngest(switchPending.colId, switchPending.chainId)
               }}
             >
-              Switch
+              {t("common.switch")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1792,6 +1789,7 @@ export function MeetingTabs({
   onRequestSideTab,
   hostTranscriptInParent = true,
 }: Props) {
+  const t = useT()
   const tabs = meeting.tabs ?? []
   const speakerNames: Record<string, string> = meeting.speaker_names ?? {}
 
@@ -1819,17 +1817,17 @@ export function MeetingTabs({
       onCompletedAwayRef.current(m)
       loadedTabsRef.current.delete("tab_general")
       void loadTabContentRef.current("tab_general")
-      toast.success("Summary generated")
+      toast.success(t("meeting.summaryGenerated"))
     }).catch(() => {
       if (viewedMeetingIdRef.current === mid) {
-        toast.error("Failed to fetch updated meeting")
+        toast.error(t("meeting.failedFetchMeeting"))
       }
     }).finally(() => {
       if (viewedMeetingIdRef.current === mid) {
         bpStreamCtrlRef.current?.dismissStreaming()
       }
     })
-  }, [])
+  }, [t])
 
   const [bpStream, bpStreamCtrl] = useBlueprintStream(meetingId, handleCompletedAway)
   bpStreamCtrlRef.current = bpStreamCtrl
@@ -1966,22 +1964,22 @@ export function MeetingTabs({
       ...prev,
       [tabId]: Array.from(new Set([...(prev[tabId] ?? []), lang])),
     }))
-    if (!cached) toast.success(`Translation ready (${lang})`)
-  }, [])
+    if (!cached) toast.success(t("meeting.translationReady", { lang }))
+  }, [t])
 
   const handleTranslationError = useCallback((tabId: string, _lang: string, message: string, kind: "remote" | "network") => {
     if (kind === "network") {
       // Transient connection drop (e.g. flaky network).  Keep the persisted
       // language view so a reload resumes the stream; don't revert or clear.
-      toast.warning("Translation connection lost — it will resume on reload")
+      toast.warning(t("meeting.translationLost"))
       return
     }
     // Genuine backend failure (e.g. content moderation): revert to original
     // and clear the persisted view so it isn't retried automatically.
-    toast.error(`Translation failed: ${message}`)
+    toast.error(t("meeting.translationFailed", { error: message }))
     setSummaryLang((prev) => ({ ...prev, [tabId]: null }))
     try { localStorage.removeItem(langStorageKey(tabId)) } catch { /* ignore */ }
-  }, [langStorageKey])
+  }, [langStorageKey, t])
 
   const handleSelectLang = useCallback((tabId: string, lang: string | null) => {
     setSummaryLang((prev) => ({ ...prev, [tabId]: lang }))
@@ -2116,10 +2114,10 @@ export function MeetingTabs({
         loadedTabsRef.current.delete(completedTab)
         loadTabContent(completedTab)
         dismissSectionStream(mid, completedTab)
-        toast.success("Section generated")
+        toast.success(t("meeting.sectionGenerated"))
       }).catch(() => {
         dismissSectionStream(mid, completedTab)
-        toast.error("Failed to fetch updated section")
+        toast.error(t("meeting.failedFetchSection"))
       })
     }
     sectionWasStreamingRef.current = !!(tabId && sectionStream.isStreaming)
@@ -2212,13 +2210,13 @@ export function MeetingTabs({
     switch (action.type) {
       case "summarize":
       case "re_summarize":
-        toast.success(action.type === "re_summarize" ? "Summary regenerated" : "Summary generated")
+        toast.success(action.type === "re_summarize" ? t("meeting.summaryRegenerated") : t("meeting.summaryGenerated"))
         break
       case "extract":
         // Clear loaded-tabs cache so section tabs re-fetch newly generated content
         loadedTabsRef.current.clear()
         setTabMdContents({})
-        toast.success("Extract complete")
+        toast.success(t("meeting.extractComplete"))
         break
       case "regenerate":
         // Delete old allocation AFTER successful regeneration
@@ -2239,7 +2237,7 @@ export function MeetingTabs({
         getSectionMd(meetingId, action.tabId).then((md) => {
           if (md !== null) setTabMdContents((prev) => ({ ...prev, [action.tabId]: md }))
         }).catch(() => {})
-        toast.success("Regenerate complete")
+        toast.success(t("meeting.regenerateComplete"))
         break
     }
     // Refresh meeting data from server (picks up new tabs/sections)
@@ -2379,7 +2377,7 @@ export function MeetingTabs({
   // ── Actions ─────────────────────────────────────────────────
   const doExtract = async (receipts: ExtractReceipt[]) => {
     if (receipts.length === 0) {
-      toast.error("Select at least one section")
+      toast.error(t("meeting.selectOneSection"))
       return
     }
     // Close dialog first; defer busy chrome so main layout doesn’t thrash under silk exit
@@ -2405,7 +2403,7 @@ export function MeetingTabs({
       setPendingAction((prev) =>
         prev?.type === "extract" && prev.meetingId === extractMeetingId ? null : prev,
       )
-      toast.error(`Extract failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.extractFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -2431,26 +2429,26 @@ export function MeetingTabs({
 
   const handleGenerateDesc = async () => {
     const name = addForm.name.trim()
-    if (!name) { toast.error("Enter a section name first"); return }
+    if (!name) { toast.error(t("meeting.enterSectionName")); return }
     setGeneratingDesc(true)
     try {
       const res = await generateSectionDescription(meetingId, name)
       if (res.found && res.description) {
         setAddForm(prev => ({ ...prev, description: res.description ?? prev.description }))
-        toast.success("Description generated")
+        toast.success(t("meeting.descriptionGenerated"))
       } else {
-        toast.warning(`"${name}" does not appear to be discussed in this meeting`)
+        toast.warning(t("meeting.nameNotDiscussed", { name }))
       }
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     }
     setGeneratingDesc(false)
   }
 
   const handleAddOrExtract = async () => {
-    if (busy) { toast.error("Meeting is processing. Please wait until the current operation completes."); return }
+    if (busy) { toast.error(t("meeting.meetingProcessing")); return }
     const name = addForm.name.trim()
-    if (!name) { toast.error("Section name is required"); return }
+    if (!name) { toast.error(t("meeting.sectionNameRequired")); return }
     if (!hasSections) {
       // Before breakdown: add to receipt list
       if (addForm.blueprintId) {
@@ -2537,10 +2535,10 @@ export function MeetingTabs({
       onMeetingUpdate(m)
       loadedTabsRef.current.delete("tab_general")
       void loadTabContent("tab_general")
-      toast.success("Summary generated")
+      toast.success(t("meeting.summaryGenerated"))
     }).catch(() => {
       if (viewedMeetingIdRef.current === finishedId) {
-        toast.error("Failed to fetch updated meeting")
+        toast.error(t("meeting.failedFetchMeeting"))
       }
     })
   }, [bpStream.isStreaming, bpStream.streamingMd, bpStream.settledSummaryMd, bpStreamCtrl, meetingId, onMeetingUpdate, loadTabContent])
@@ -2565,9 +2563,9 @@ export function MeetingTabs({
         delete next[tabId]
         return next
       })
-      toast.success("Section deleted")
+      toast.success(t("meeting.sectionDeleted"))
     } catch (err) {
-      toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.deleteFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -2598,7 +2596,7 @@ export function MeetingTabs({
       setPendingAction((prev) =>
         prev?.type === "regenerate" && prev.meetingId === regenMeetingId ? null : prev,
       )
-      toast.error(`Regenerate failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("meeting.regenerateFailed", { error: formatApiError(err, t) }))
     }
   }
 
@@ -2696,7 +2694,7 @@ export function MeetingTabs({
         }
       }
     }
-    toast.info(`Reference: ${clean}`, { duration: 2000 })
+    toast.info(t("meeting.reference", { id: clean }), { duration: 2000 })
   }
 
   // ── Render helpers ──────────────────────────────────────────
@@ -2752,7 +2750,7 @@ export function MeetingTabs({
             !bpStream.streamingMd))
       items.push({
         id: "tab_general",
-        label: "General",
+        label: t("meeting.general"),
         kind: "general",
         active: selectedSummaryId === "tab_general",
         ready: !!(hasGeneralMd || genStreaming || genGenerating || bpStream.isStreaming),
@@ -2764,12 +2762,12 @@ export function MeetingTabs({
 
     if (hasSections) {
       const sections = tabs.filter((t) => t.type === "section")
-      sections.forEach((t, idx) => {
-        const bp = blueprint.find((b) => b.blueprint_id === t.blueprint_id)
-        const stream = getSectionStreamState(meetingId, t.tab_id)
-        const hasMd = !!t.md_file_path
+      sections.forEach((sec, idx) => {
+        const bp = blueprint.find((b) => b.blueprint_id === sec.blueprint_id)
+        const stream = getSectionStreamState(meetingId, sec.tab_id)
+        const hasMd = !!sec.md_file_path
         const streaming = !hasMd && sectionStreamHasOutput(stream)
-        const serverGenerating = t.processing_state === "generating"
+        const serverGenerating = sec.processing_state === "generating"
         // Waiting for first token: server gen, SSE prefilling, or stream open without tokens yet
         const generating =
           !hasMd &&
@@ -2785,17 +2783,17 @@ export function MeetingTabs({
           serverGenerating ||
           streaming
         items.push({
-          id: t.tab_id,
-          label: t.name || bp?.tab_name || "Section",
-          hint: t.description || bp?.tab_description || undefined,
+          id: sec.tab_id,
+          label: sec.name || bp?.tab_name || t("meeting.section"),
+          hint: sec.description || bp?.tab_description || undefined,
           kind: "section",
-          active: selectedSummaryId === t.tab_id,
+          active: selectedSummaryId === sec.tab_id,
           shortLabel: `T${idx + 1}`,
           ready,
           streaming,
           generating,
           // Hide checkmark while this tab is still indexing after allocate
-          ingested: !!t.allocated_file_id && !ingestingTabs.has(t.tab_id),
+          ingested: !!sec.allocated_file_id && !ingestingTabs.has(sec.tab_id),
         })
       })
     } else if (hasBlueprint) {
@@ -2804,7 +2802,7 @@ export function MeetingTabs({
         if (b.tab_name?.toLowerCase() === "other") continue
         items.push({
           id: b.blueprint_id,
-          label: b.tab_name || "Section",
+          label: b.tab_name || t("meeting.section"),
           hint: b.tab_description || undefined,
           kind: "blueprint",
           selected: selectedBlueprintIds.has(b.blueprint_id),
@@ -2957,10 +2955,10 @@ export function MeetingTabs({
     : (activeTranslation ?? getTabContent(selectedSummaryId))
 
   const exportSectionLabel = isGeneral
-    ? "General"
+    ? t("meeting.general")
     : selectedTab
       ? `${tabShortLabel(selectedTab)} ${selectedTab.name || (blueprint as { blueprint_id?: string; tab_name?: string }[]).find((b) => b.blueprint_id === selectedTab.blueprint_id)?.tab_name || ""}`.trim()
-      : "Summary"
+      : t("common.summary")
   const exportFilenameBase = safeExportBasename([
     meeting.title,
     exportSectionLabel,
@@ -2971,7 +2969,7 @@ export function MeetingTabs({
     setExportMenuOpen(false)
     const body = displayContent || ""
     if (!body.trim()) {
-      toast.error("Nothing to export yet")
+      toast.error(t("meeting.nothingToExport"))
       return
     }
     try {
@@ -2980,9 +2978,9 @@ export function MeetingTabs({
         markdown: body,
         speakerNames,
       })
-      toast.success("Markdown downloaded")
+      toast.success(t("meeting.markdownDownloaded"))
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Export failed")
+      toast.error(err instanceof Error ? err.message : t("meeting.exportFailed"))
     }
   }
 
@@ -2990,7 +2988,7 @@ export function MeetingTabs({
     setExportMenuOpen(false)
     const body = displayContent || ""
     if (!body.trim()) {
-      toast.error("Nothing to export yet")
+      toast.error(t("meeting.nothingToExport"))
       return
     }
     try {
@@ -2999,11 +2997,11 @@ export function MeetingTabs({
         markdown: body,
         speakerNames,
       })
-      toast.message("Print dialog opened", {
-        description: "Choose “Save as PDF” as the destination.",
+      toast.message(t("meeting.printDialogOpened"), {
+        description: t("meeting.printDialogHint"),
       })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "PDF export failed")
+      toast.error(err instanceof Error ? err.message : t("meeting.pdfExportFailed"))
     }
   }
 
@@ -3047,9 +3045,9 @@ export function MeetingTabs({
           <TabsList className="pm-pill-tabs relative">
             <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
             <TabsTrigger value="summary" disabled={!hasSummary && !hasTranscript}>
-              Summary
+              {t("common.summary")}
             </TabsTrigger>
-            <TabsTrigger value="notes">Notes</TabsTrigger>
+            <TabsTrigger value="notes">{t("common.notes")}</TabsTrigger>
           </TabsList>
         </Tabs>
         {busy && <Loader2 className="size-3.5 animate-spin text-[var(--pm-faint)] shrink-0" />}
@@ -3072,14 +3070,14 @@ export function MeetingTabs({
                 className={cn(busy && "sk-thinking-flow")}
                 disabled={busy || ingestingTabs.size > 0}
                 onClick={() => setReSummarizeOpen(true)}
-                title="Re-summarize"
+                title={t("meeting.reSummarizeAction")}
               >
                 {busy ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   <RefreshCw className="size-3.5" />
                 )}
-                {busy ? "Summarizing…" : "Re-summarize"}
+                {busy ? t("meeting.summarizing") : t("meeting.reSummarizeAction")}
               </Button>
             )}
             <Button
@@ -3093,8 +3091,8 @@ export function MeetingTabs({
                 !String(displayContent || "").trim()
               }
               onClick={() => setExportMenuOpen((v) => !v)}
-              title="Export summary"
-              aria-label="Export summary"
+              title={t("meeting.exportSummary")}
+              aria-label={t("meeting.exportSummary")}
               aria-expanded={exportMenuOpen}
             >
               <Download className="size-3.5" />
@@ -3109,15 +3107,15 @@ export function MeetingTabs({
               data-export-summary=""
             >
               <div className="pm-meeting-export-menu-label" aria-hidden>
-                Export
+                {t("common.export")}
               </div>
               <MenuItem onClick={handleExportMarkdown} className="pm-meeting-export-item">
                 <span className="pm-meeting-export-icon" aria-hidden>
                   <FileText className="size-3.5" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <MenuItemTitle>Markdown</MenuItemTitle>
-                  <MenuItemDescription>Download .md · speakers resolved, no refs</MenuItemDescription>
+                  <MenuItemTitle>{t("meeting.markdown")}</MenuItemTitle>
+                  <MenuItemDescription>{t("meeting.exportMdDesc")}</MenuItemDescription>
                 </span>
               </MenuItem>
               <MenuItem onClick={handleExportPdf} className="pm-meeting-export-item">
@@ -3125,8 +3123,8 @@ export function MeetingTabs({
                   <FileType2 className="size-3.5" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <MenuItemTitle>PDF</MenuItemTitle>
-                  <MenuItemDescription>Print dialog · Save as PDF</MenuItemDescription>
+                  <MenuItemTitle>{t("meeting.pdf")}</MenuItemTitle>
+                  <MenuItemDescription>{t("meeting.exportPdfDesc")}</MenuItemDescription>
                 </span>
               </MenuItem>
             </SoftMenu>
@@ -3136,8 +3134,8 @@ export function MeetingTabs({
               size="icon-sm"
               disabled={isTabGenerating || ingestingTabs.has(selectedSummaryId) || viewingTranslation}
               onClick={() => editableSectionRef.current?.startEditing()}
-              title="Edit"
-              aria-label="Edit"
+              title={t("common.edit")}
+              aria-label={t("common.edit")}
             >
               <Pencil className="size-3.5" />
             </Button>
@@ -3157,15 +3155,15 @@ export function MeetingTabs({
                       void handleRegenerate(selectedSummaryId)
                     }
                   }}
-                  title="Re-generate section"
-                  aria-label="Re-generate section"
+                  title={t("meeting.reGenerateSection")}
+                  aria-label={t("meeting.reGenerateSection")}
                 >
                   {isTabGenerating ? (
                     <Loader2 className="size-3.5 animate-spin mr-1" />
                   ) : (
                     <Sparkles className="size-3.5 mr-1" />
                   )}
-                  {isTabGenerating ? "Generating…" : "Re-generate"}
+                  {isTabGenerating ? t("meeting.generating") : t("meeting.reGenerate")}
                 </Button>
                 <Button
                   type="button"
@@ -3173,8 +3171,8 @@ export function MeetingTabs({
                   size="sm"
                   className="shrink-0 text-[var(--pm-danger,#b42318)] hover:text-[var(--pm-danger,#b42318)] hover:bg-[color-mix(in_srgb,var(--pm-danger,#b42318)_8%,transparent)]"
                   onClick={() => handleDeleteSection(selectedSummaryId)}
-                  title="Delete section"
-                  aria-label="Delete section"
+                  title={t("meeting.deleteSection")}
+                  aria-label={t("meeting.deleteSection")}
                   disabled={
                     isTabGenerating ||
                     busy ||
@@ -3182,7 +3180,7 @@ export function MeetingTabs({
                   }
                 >
                   <Trash2 className="size-3.5 mr-1" />
-                  Delete
+                  {t("common.delete")}
                 </Button>
               </>
             ) : null}
@@ -3228,12 +3226,12 @@ export function MeetingTabs({
                     <div className="sk-thinking-flow pm-meeting-fence-card rounded-[var(--pm-r,16px)] p-5 space-y-4 min-h-[200px]">
                       <div className="flex items-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--ze-green)" }} />
-                        <span className="pm-label">Generating summary…</span>
+                        <span className="pm-label">{t("fileMgmt.generatingSummary")}</span>
                       </div>
                       {bpStream.thinkingText ? (
                         <details className="mb-2" open>
                           <summary className="text-xs text-muted-foreground cursor-pointer select-none">
-                            Thinking…
+                            {t("meeting.thinkingEllipsis")}
                           </summary>
                           <p className="text-xs text-muted-foreground/60 mt-2 leading-relaxed whitespace-pre-wrap t-mono-family max-h-32 overflow-auto">
                             {bpStream.thinkingText}
@@ -3296,10 +3294,10 @@ export function MeetingTabs({
                 <div className="flex items-center justify-center h-full min-h-[160px]">
                   {hasTranscript ? (
                     <Button variant="default" size="sm" onClick={handleSummarize}>
-                      <Sparkles className="size-3.5 mr-1.5" /> Summarize
+                      <Sparkles className="size-3.5 mr-1.5" /> {t("meeting.summarize")}
                     </Button>
                   ) : (
-                    <p className="pm-meta">No content yet.</p>
+                    <p className="pm-meta">{t("meeting.noContentYet")}</p>
                   )}
                 </div>
               )
@@ -3329,7 +3327,7 @@ export function MeetingTabs({
                 hideInlineEdit
                 stickyOffset={contentStickyOffset}
                 ingestHostRef={selectedTab ? sectionIngestHostRef : undefined}
-                title={isGeneral ? "General" : undefined}
+                title={isGeneral ? t("meeting.general") : undefined}
                 titlePrefix={
                   !isGeneral && selectedTab ? tabShortLabel(selectedTab) : undefined
                 }
@@ -3390,7 +3388,7 @@ export function MeetingTabs({
             onChange={handleNotesChange}
             minHeight="400px"
             showToolbar={false}
-            placeholder="Write your meeting notes here (Markdown supported)…"
+            placeholder={t("meeting.writeNotesPh")}
             onImageUpload={handleNotesImageUpload}
             onEditorReady={(ed) => setNotesEditor(ed as Editor)}
           />
@@ -3470,14 +3468,14 @@ export function MeetingTabs({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Section</DialogKicker>
+            <DialogKicker>{t("meeting.section")}</DialogKicker>
             <DialogTitle>
-              {hasSections ? "Extract a section" : "Add to breakdown"}
+              {hasSections ? t("meeting.extractASection") : t("meeting.addToBreakdown")}
             </DialogTitle>
             <DialogDescription>
               {hasSections
-                ? "Name a topic and describe what to pull from the transcript. Extraction starts immediately."
-                : "Add a topic to the breakdown list. Run Breakdown when your selection is ready."}
+                ? t("meeting.extractSectionHelp")
+                : t("meeting.addBreakdownHelp")}
             </DialogDescription>
           </DialogHeader>
 
@@ -3491,13 +3489,13 @@ export function MeetingTabs({
               <div className="pm-meeting-add-section-form">
                 <div className="pm-meeting-add-section-field">
                   <label className="pm-meeting-add-section-label" htmlFor="add-section-name">
-                    Name
+                    {t("common.name")}
                     <span className="pm-meeting-add-section-req" aria-hidden>*</span>
                   </label>
                   <Input
                     id="add-section-name"
                     className="pm-meeting-add-section-input"
-                    placeholder="e.g. Vendor Negotiation"
+                    placeholder={t("meeting.sectionNamePh")}
                     value={addForm.name}
                     onChange={(e) => {
                       setAddForm((prev) => ({ ...prev, name: e.target.value, blueprintId: null }))
@@ -3507,21 +3505,21 @@ export function MeetingTabs({
                 <div className="pm-meeting-add-section-field">
                   <div className="pm-meeting-add-section-label-row">
                     <label className="pm-meeting-add-section-label" htmlFor="add-section-desc">
-                      Description
+                      {t("common.description")}
                     </label>
                     <button
                       type="button"
                       className="pm-meeting-add-section-ai"
                       disabled={generatingDesc}
                       onClick={handleGenerateDesc}
-                      title="Generate from General Summary"
+                      title={t("meeting.generateFromGeneral")}
                     >
                       {generatingDesc ? (
                         <Loader2 className="size-3 animate-spin" />
                       ) : (
                         <Sparkles className="size-3" />
                       )}
-                      <span>{generatingDesc ? "Writing…" : "Suggest"}</span>
+                      <span>{generatingDesc ? t("meeting.writing") : t("meeting.suggest")}</span>
                     </button>
                   </div>
                   <div
@@ -3533,7 +3531,7 @@ export function MeetingTabs({
                     <Textarea
                       id="add-section-desc"
                       className="pm-meeting-add-section-textarea"
-                      placeholder="What should this section cover from the meeting?"
+                      placeholder={t("meeting.sectionCoverPh")}
                       value={addForm.description}
                       onChange={(e) => {
                         setAddForm((prev) => ({
@@ -3555,8 +3553,8 @@ export function MeetingTabs({
 
             return (
               <div className="pm-meeting-add-section-body pm-meeting-add-section-body--split">
-                <aside className="pm-meeting-add-section-bp" aria-label="Blueprint topics">
-                  <p className="pm-meeting-add-section-bp-label">From blueprint</p>
+                <aside className="pm-meeting-add-section-bp" aria-label={t("meeting.blueprintTopics")}>
+                  <p className="pm-meeting-add-section-bp-label">{t("meeting.fromBlueprint")}</p>
                   <div className="pm-meeting-add-section-bp-list">
                     {bpItems.map((b) => {
                       const on = addForm.blueprintId === b.blueprint_id
@@ -3603,7 +3601,7 @@ export function MeetingTabs({
                 setAddForm({ name: "", description: "", blueprintId: null })
               }}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -3613,7 +3611,7 @@ export function MeetingTabs({
               disabled={!addForm.name.trim()}
               onClick={handleAddOrExtract}
             >
-              {hasSections ? "Extract section" : "Add to list"}
+              {hasSections ? t("meeting.extractSection") : t("meeting.addToList")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3627,15 +3625,15 @@ export function MeetingTabs({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Summary</DialogKicker>
-            <DialogTitle>Re-summarize meeting?</DialogTitle>
+            <DialogKicker>{t("common.summary")}</DialogKicker>
+            <DialogTitle>{t("meeting.reSummarize")}</DialogTitle>
             <DialogDescription>
-              Re-summarizing will overwrite the existing General summary and section breakdown.
+              {t("meeting.reSummarizeBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setReSummarizeOpen(false)}>Cancel</Button>
-            <Button type="button" variant="default" size="sm" onClick={handleReSummarize}>Re-summarize</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setReSummarizeOpen(false)}>{t("common.cancel")}</Button>
+            <Button type="button" variant="default" size="sm" onClick={handleReSummarize}>{t("meeting.reSummarizeAction")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -3648,14 +3646,14 @@ export function MeetingTabs({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Section</DialogKicker>
-            <DialogTitle>Regenerate section?</DialogTitle>
+            <DialogKicker>{t("meeting.section")}</DialogKicker>
+            <DialogTitle>{t("meeting.regenerateSection")}</DialogTitle>
             <DialogDescription>
-              Regenerating will delete the existing ingested file snapshot. The section will be re-extracted from the transcript.
+              {t("meeting.regenerateSectionBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setRegenerateConfirmOpen(false)}>Cancel</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setRegenerateConfirmOpen(false)}>{t("common.cancel")}</Button>
             <Button
               type="button"
               variant="default"
@@ -3665,7 +3663,7 @@ export function MeetingTabs({
                 handleRegenerate(selectedSummaryId)
               }}
             >
-              Regenerate
+              {t("recall.regenerate")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3679,15 +3677,15 @@ export function MeetingTabs({
           overlayClassName="pm-dialog-overlay--silk"
         >
           <DialogHeader>
-            <DialogKicker>Section</DialogKicker>
-            <DialogTitle>Delete section?</DialogTitle>
+            <DialogKicker>{t("meeting.section")}</DialogKicker>
+            <DialogTitle>{t("meeting.deleteSectionQ")}</DialogTitle>
             <DialogDescription>
-              Delete this section? This removes all its tags from the transcript.
+              {t("meeting.deleteSectionBody")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setDeleteSectionTarget(null)}>Cancel</Button>
-            <Button type="button" variant="destructive-solid" size="sm" onClick={confirmDeleteSection}>Delete</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setDeleteSectionTarget(null)}>{t("common.cancel")}</Button>
+            <Button type="button" variant="destructive-solid" size="sm" onClick={confirmDeleteSection}>{t("common.delete")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

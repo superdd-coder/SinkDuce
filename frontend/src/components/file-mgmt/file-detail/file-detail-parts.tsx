@@ -16,6 +16,8 @@ import {
   PinOff,
 } from "lucide-react"
 import type { FileNodeRef, FilePath } from "@/types/file-mgmt"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayPath } from "@/i18n/system-folder"
 
 /**
  * Two-step delete (× → DELETE) — same anti-mis-tap pattern as message sidebar
@@ -28,6 +30,7 @@ export function LogMsgDeleteButton({
   disabled?: boolean
   onConfirm: () => void
 }) {
+  const t = useT()
   const [deleteArmed, setDeleteArmed] = useState(false)
   const deleteArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const deleteBtnRef = useRef<HTMLButtonElement>(null)
@@ -83,9 +86,15 @@ export function LogMsgDeleteButton({
         deleteArmed ? "is-confirm opacity-100" : "opacity-0 group-hover:opacity-100",
         "transition-opacity"
       )}
-      title={deleteArmed ? "Click again to delete" : "Delete message"}
+      title={
+        deleteArmed
+          ? t("fileMgmt.clickAgainDelete")
+          : t("fileMgmt.deleteMessage")
+      }
       aria-label={
-        deleteArmed ? "Confirm delete message" : "Delete message"
+        deleteArmed
+          ? t("fileMgmt.confirmDeleteMessage")
+          : t("fileMgmt.deleteMessage")
       }
       aria-expanded={deleteArmed}
       onClick={(e) => {
@@ -103,7 +112,7 @@ export function LogMsgDeleteButton({
       <span className="pm-msg-delete-x" aria-hidden>
         ×
       </span>
-      <span className="pm-msg-delete-label">Delete</span>
+      <span className="pm-msg-delete-label">{t("common.delete")}</span>
     </button>
   )
 }
@@ -192,15 +201,18 @@ export function PathRow({
   onPromote: () => void
   onUnpin: () => void
 }) {
+  const t = useT()
   /** Persistent path: source_node_id is null (pin or plain folder mount). */
   const isPersistent = !path.source_node_id
   /** Timeline pin that can be demoted (vs plain “in folder” mount). */
   const isTimelinePin = isPersistent && canUnpin
   const typeLabel = isPersistent
     ? isTimelinePin
-      ? "Pinned to folder"
-      : "In folder"
-    : `From node · ${sourceNodeTitle || "Untitled node"}`
+      ? t("fileMgmt.pinnedToFolder")
+      : t("fileMgmt.inFolder")
+    : t("fileMgmt.fromNode", {
+        title: sourceNodeTitle || t("common.untitled"),
+      })
   return (
     <li
       className={cn(
@@ -214,10 +226,10 @@ export function PathRow({
           type="button"
           className="text-left truncate w-full bg-transparent border-0 p-0 cursor-pointer hover:text-[var(--pm-green)] transition-colors"
           onClick={onNavigate}
-          title={path.folder_path || path.folder_id || ""}
+          title={systemFolderDisplayPath(path.folder_path || "", t) || path.folder_id || ""}
           disabled={!path.folder_id}
         >
-          {path.folder_path || path.folder_id || "(no folder)"}
+          {systemFolderDisplayPath(path.folder_path || "", t) || path.folder_id || t("fileMgmt.notAttachedNode")}
         </button>
         <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
           <span
@@ -244,7 +256,7 @@ export function PathRow({
             variant="ghost"
             className="pm-ws-action !h-6 justify-start"
             disabled={busy}
-            title="Unpin from folder. If a node-derived path exists for the same folder, only the pin is removed."
+            title={t("fileMgmt.unpinFromFolder")}
             onClick={onUnpin}
           >
             <PinOff className="h-3 w-3 mr-0.5" />
@@ -254,7 +266,7 @@ export function PathRow({
           // Plain folder mount — not a demotable timeline pin
           <span
             className="h-6 px-1.5 pm-meta leading-6 opacity-50"
-            title="Folder placement. Use Remove from folder in the footer to unlink."
+            title={t("fileMgmt.folderPlacement")}
           >
             —
           </span>
@@ -262,7 +274,7 @@ export function PathRow({
           // Derived sibling: folder already has a real pin — no second Pin action
           <span
             className="h-6 px-1.5 pm-meta leading-6 opacity-50"
-            title="This folder is already pinned. Use Unpin on the “Pinned to folder” row."
+            title={t("fileMgmt.alreadyPinned")}
           >
             —
           </span>
@@ -272,11 +284,11 @@ export function PathRow({
             variant="ghost"
             className="pm-ws-action !h-6 justify-start"
             disabled={busy}
-            title="Pin this file to the folder even if the timeline node is removed or archived."
+            title={t("fileMgmt.pinEvenIfRemoved")}
             onClick={onPromote}
           >
             <ArrowUpRight className="h-3 w-3 mr-0.5" />
-            Pin to folder
+            {t("fileMgmt.pinToFolder")}
           </Button>
         )}
       </div>
@@ -291,6 +303,7 @@ export function NodeRow({
   node: FileNodeRef
   onClick: () => void
 }) {
+  const t = useT()
   return (
     <li>
       <button
@@ -304,12 +317,12 @@ export function NodeRow({
         <GitBranch className="h-3.5 w-3.5 mt-0.5 shrink-0 text-[var(--pm-faint)]" />
         <div className="flex-1 min-w-0">
           <p className="truncate pm-title">
-            {node.title || "Untitled node"}
+            {node.title || t("fileMgmt.untitledNode")}
           </p>
           <p className="pm-meta mt-0.5 truncate">
             {[
-              node.group_name || (node.group_id ? "Group" : "No group"),
-              node.chain_title || (node.chain_id ? "Chain" : null),
+              node.group_name || (node.group_id ? t("common.group") : t("fileMgmt.noGroup")),
+              node.chain_title || (node.chain_id ? t("library.chain") : null),
               node.node_type,
             ]
               .filter(Boolean)

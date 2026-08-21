@@ -15,8 +15,10 @@ import {
   isSkippedUploadFile,
   useFileMgmtStore,
 } from "@/stores/file-mgmt-store"
+import { useT } from "@/i18n/use-t"
 
 export function FolderUploadConfirmDialog() {
+  const t = useT()
   const pending = useFileMgmtStore((s) => s.folderUploadConfirm)
   const confirmFolderUpload = useFileMgmtStore((s) => s.confirmFolderUpload)
   const cancelFolderUploadConfirm = useFileMgmtStore(
@@ -63,19 +65,17 @@ export function FolderUploadConfirmDialog() {
     >
       <DialogContent className="pm-dialog max-w-md">
         <DialogHeader>
-          <DialogTitle>Upload folder?</DialogTitle>
+          <DialogTitle>{t("fileMgmt.uploadFolderQ")}</DialogTitle>
         </DialogHeader>
         <div className="pm-dialog-body">
           <p>
-            Upload{" "}
-            <span className="font-medium text-[var(--pm-ink)] tabular-nums">
-              {stats.keep}
-            </span>{" "}
-            file{stats.keep === 1 ? "" : "s"}
+            {stats.keep === 1
+              ? t("fileMgmt.uploadNFile", { n: stats.keep })
+              : t("fileMgmt.uploadNFiles", { n: stats.keep })}
             {stats.topNames.length > 0 && (
               <>
                 {" "}
-                from{" "}
+                {t("common.from")}{" "}
                 <span className="font-medium text-[var(--pm-ink)]">
                   {stats.topNames.join(", ")}
                   {stats.topNames.length >= 3 ? "…" : ""}
@@ -86,7 +86,7 @@ export function FolderUploadConfirmDialog() {
           </p>
           {stats.keep === 0 && (
             <p className="mt-2 text-[var(--pm-danger)]">
-              No uploadable files found in the selection.
+              {t("fileMgmt.noUploadableFiles")}
             </p>
           )}
         </div>
@@ -96,13 +96,13 @@ export function FolderUploadConfirmDialog() {
             disabled={busy}
             onClick={() => cancelFolderUploadConfirm()}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             disabled={busy || stats.keep === 0}
             onClick={() => void handleConfirm()}
           >
-            {busy ? "Uploading…" : "Upload"}
+            {busy ? t("common.uploading") : t("common.upload")}
           </Button>
         </DialogFooter>
       </DialogContent>

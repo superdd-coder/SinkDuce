@@ -16,6 +16,7 @@ import {
   prepareMeetingSummaryForTiptapView,
   type RefClickHandler,
 } from "./meeting-summary-marks"
+import { useT } from "@/i18n/use-t"
 
 /**
  * Undo Tiptap markdown over-escaping (edit save path + shared helpers).
@@ -53,6 +54,7 @@ export function SummaryMarkdownViewer({
   onRefClick,
   className,
 }: SummaryMarkdownViewerProps) {
+  const t = useT()
   const onRefClickRef = useRef<RefClickHandler>(onRefClick ?? (() => {}))
   onRefClickRef.current = onRefClick ?? (() => {})
 
@@ -109,7 +111,7 @@ export function SummaryMarkdownViewer({
   if (!md) {
     return (
       <p className="pm-meta py-8 text-center">
-        No content yet.
+        {t("meeting.noContentYet")}
       </p>
     )
   }

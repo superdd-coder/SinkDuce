@@ -5,6 +5,9 @@ import remarkGfm from "remark-gfm"
 import rehypeRaw from "rehype-raw"
 import { cn } from "@/lib/utils"
 import type { Message } from "@/types/file-mgmt"
+import { tr } from "@/i18n/tr"
+import { useT } from "@/i18n/use-t"
+import { systemFolderDisplayName } from "@/i18n/system-folder"
 
 /**
  * Tiptap (Color / Highlight) serializes styled text as HTML spans inside
@@ -101,9 +104,11 @@ export function formatMessageSourceTag(
   if (ot === "system_version") {
     const rawName = (msg.source_name && msg.source_name.trim()) || ""
     return {
-      kind: "Version",
-      label: "version update",
-      full: rawName ? `Version update · ${rawName}` : "Version update",
+      kind: tr("common.version"),
+      label: tr("fileMgmt.versionUpdateLower"),
+      full: rawName
+        ? tr("fileMgmt.versionUpdateDot", { name: rawName })
+        : tr("fileMgmt.versionUpdate"),
     }
   }
 
@@ -114,24 +119,31 @@ export function formatMessageSourceTag(
       !!opts?.folderMsgsAreCurrentScope
     if (isCurrent) {
       const rawName = (msg.source_name && msg.source_name.trim()) || ""
+      const shown = rawName ? systemFolderDisplayName(rawName, tr) : ""
       return {
-        kind: "Folder",
-        label: "Current folder",
-        full: rawName ? `Current folder: ${rawName}` : "Current folder",
+        kind: tr("common.folder"),
+        label: tr("fileMgmt.currentFolder"),
+        full: shown
+          ? tr("fileMgmt.currentFolderNamed", { name: shown })
+          : tr("fileMgmt.currentFolder"),
         isCurrentFolder: true,
       }
     }
   }
 
-  let kind = "Source"
-  if (ot === "node") kind = "Node"
-  else if (ot === "folder") kind = "Folder"
-  else if (ot === "file") kind = "File"
-  else if (ot === "collection") kind = "Root"
-  else kind = ot ? ot.charAt(0).toUpperCase() + ot.slice(1) : "Source"
+  let kind = tr("fileMgmt.source")
+  if (ot === "node") kind = tr("fileMgmt.node")
+  else if (ot === "folder") kind = tr("common.folder")
+  else if (ot === "file") kind = tr("common.file")
+  else if (ot === "collection") kind = tr("common.root")
+  else kind = ot ? ot.charAt(0).toUpperCase() + ot.slice(1) : tr("fileMgmt.source")
 
   if (ot === "collection") {
-    return { kind: "Root", label: "Root", full: "Root" }
+    return {
+      kind: tr("common.root"),
+      label: tr("common.root"),
+      full: tr("common.root"),
+    }
   }
 
   // Prefer backend source_name (resolved from id). Never fall back to owner_id.
@@ -140,11 +152,11 @@ export function formatMessageSourceTag(
     // Name still loading / unresolved — kind + placeholder, not hex id
     const fallback =
       ot === "folder"
-        ? "Unknown folder"
+        ? tr("fileMgmt.unknownFolder")
         : ot === "file"
-          ? "Unknown file"
+          ? tr("fileMgmt.unknownFile")
           : ot === "node"
-            ? "Unknown node"
+            ? tr("fileMgmt.unknownNode")
             : kind
     return {
       kind,
@@ -155,10 +167,11 @@ export function formatMessageSourceTag(
   // Nested folder messages: show the folder name (no "Folder:" prefix).
   // Keep kind prefix for node/file to disambiguate mixed streams.
   if (ot === "folder") {
+    const shown = systemFolderDisplayName(rawName, tr)
     return {
       kind,
-      label: truncateSourceName(rawName),
-      full: rawName,
+      label: truncateSourceName(shown),
+      full: shown,
     }
   }
   const full = `${kind}: ${rawName}`
@@ -235,7 +248,7 @@ export async function enrichMessageSourceNames(
     ...[...nodeIds].map(async (id) => {
       try {
         const n = await getNodeDetail(collectionId, id)
-        nodeMap.set(id, (n?.title || "").trim() || "Untitled")
+        nodeMap.set(id, (n?.title || "").trim() || tr("common.untitled"))
       } catch {
         /* ignore */
       }
@@ -250,7 +263,7 @@ export async function enrichMessageSourceNames(
     else if (ot === "file" || ot === "system_version")
       name = fileMap.get(m.owner_id)
     else if (ot === "node") name = nodeMap.get(m.owner_id)
-    else if (ot === "collection") name = "Root"
+    else if (ot === "collection") name = tr("common.root")
     return name ? { ...m, source_name: name } : m
   })
 }
@@ -337,11 +350,17 @@ export function MessageCard({
   className?: string
   showHoverPreview?: boolean
 }) {
+  const t = useT()
   const isSystem = msg.author_type === "system"
   const isVersionUpdate =
     (msg.owner_type || "").toLowerCase() === "system_version"
-  // Version logs store a free-text note (often "version update"); show as-is
-  const displayBody = (msg.body || "").trim() || (isVersionUpdate ? "version update" : "")
+  const rawBody = (msg.body || "").trim()
+  const displayBody =
+    !rawBody || (isVersionUpdate && rawBody.toLowerCase() === "version update")
+      ? isVersionUpdate
+        ? t("fileMgmt.versionUpdateLower")
+        : ""
+      : rawBody
   const time = msg.created_at
     ? new Date(msg.created_at).toLocaleString(undefined, {
         month: "short",
@@ -454,7 +473,7 @@ export function MessageCard({
         {isVersionUpdate ? (
           <span
             className="text-[9px] px-1.5 py-0.5 rounded shrink-0 font-medium border-transparent bg-[var(--ze-green,#1A5E3D)]/15 text-[var(--ze-green,#1A5E3D)]"
-            title={sourceTag?.full || "Version update"}
+            title={sourceTag?.full || t("fileMgmt.versionUpdate")}
           >
             version update
           </span>
@@ -494,13 +513,13 @@ export function MessageCard({
               className={cn("pm-msg-delete", deleteArmed && "is-confirm")}
               title={
                 deleteArmed
-                  ? "Click again to delete"
-                  : "Delete message"
+                  ? t("fileMgmt.clickAgainDelete")
+                  : t("fileMgmt.deleteMessage")
               }
               aria-label={
                 deleteArmed
-                  ? "Confirm delete message"
-                  : "Delete message"
+                  ? t("fileMgmt.confirmDeleteMessage")
+                  : t("fileMgmt.deleteMessage")
               }
               aria-expanded={deleteArmed}
               onClick={(e) => {
@@ -517,7 +536,7 @@ export function MessageCard({
               <span className="pm-msg-delete-x" aria-hidden>
                 ×
               </span>
-              <span className="pm-msg-delete-label">Delete</span>
+              <span className="pm-msg-delete-label">{t("common.delete")}</span>
             </button>
           </div>
         )}

@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { renameCollection } from "@/api/client"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 
 interface RenameCollectionDialogProps {
   collectionId: string
@@ -20,6 +22,7 @@ export function RenameCollectionDialog({
   onOpenChange,
   onRenamed,
 }: RenameCollectionDialogProps) {
+  const t = useT()
   const [newName, setNewName] = useState(currentName)
   const [saving, setSaving] = useState(false)
 
@@ -34,12 +37,12 @@ export function RenameCollectionDialog({
       if (res.error) {
         toast.error(res.error)
       } else {
-        toast.success(res.message || "Collection renamed")
+        toast.success(res.message || t("library.collectionRenamed"))
         onOpenChange(false)
         onRenamed()
       }
     } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("common.failedWithError", { error: formatApiError(err, t) }))
     } finally {
       setSaving(false)
     }
@@ -49,15 +52,15 @@ export function RenameCollectionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="pm-dialog max-w-sm">
         <DialogHeader>
-          <DialogTitle>Rename Collection</DialogTitle>
+          <DialogTitle>{t("library.renameCollection")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-1">
           <div>
-            <label className="pm-field-label">New Name</label>
+            <label className="pm-field-label">{t("library.newName")}</label>
             <Input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="Enter new name"
+              placeholder={t("library.enterNewName")}
               className="h-8"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleRename()
@@ -69,13 +72,13 @@ export function RenameCollectionDialog({
               variant="ghost"
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               onClick={handleRename}
               disabled={saving || !newName.trim()}
             >
-              {saving ? "Renaming..." : "Rename"}
+              {saving ? t("common.loading") : t("common.rename")}
             </Button>
           </div>
         </div>

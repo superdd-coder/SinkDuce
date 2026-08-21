@@ -67,6 +67,8 @@ import { UpdateFileDialog } from "@/components/file-mgmt/file-detail/update-file
 import { LogMessageDialog } from "@/components/file-mgmt/file-detail/log-message-dialog"
 import { MessageEditorDialog } from "@/components/file-mgmt/folder-view/message-editor-dialog"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import {
   _genKey,
   _generating,
@@ -128,6 +130,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
   onNavigateToFolder,
   contextNodeId = null,
 }: FileMgmtDetailDialogProps) {
+  const t = useT()
   const refreshFiles = useFileMgmtStore((s) => s.refreshFiles)
   const currentFolderId = useFileMgmtStore((s) => s.currentFolderId)
   const requestTimelineFocus = useFileMgmtStore((s) => s.requestTimelineFocus)
@@ -366,7 +369,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
       setDetail(d)
     } catch (err) {
       toast.error(
-        `Failed to load file: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.failedLoadFile", { error: formatApiError(err, t) })
       )
       setDetail(null)
     } finally {
@@ -671,7 +674,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
         } else if (Date.now() - startedAt > 300_000) {
           clearInterval(poll)
           _unmarkGenerating(genKey)
-          toast.error("Summary generation timed out")
+          toast.error(t("fileMgmt.summaryTimeout"))
           setRenderTick((k) => k + 1)
         }
       } catch {
@@ -812,7 +815,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
 
   const handleTabChange = (tab: string) => {
     if (isIngesting && tab !== "raw") {
-      toast.info("Still ingesting — only Preview is available for now.")
+      toast.info(t("fileMgmt.stillIngestingPreview"))
       setActiveTab("raw")
       return
     }
@@ -848,12 +851,12 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
     setActionBusy(true)
     try {
       await promoteFilePath(collectionId, fileId, path.path_id)
-      toast.success("Pinned to folder")
+      toast.success(t("fileMgmt.pinnedToFolder"))
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
       toast.error(
-        `Failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.failed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -868,18 +871,18 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
   const handleUnpin = async (path: FilePath) => {
     if (!fileId) return
     if (path.source_node_id) {
-      toast.error("This path is from a timeline node — use node detach if needed")
+      toast.error(t("fileMgmt.pathFromNode"))
       return
     }
     setActionBusy(true)
     try {
       await demoteFilePath(collectionId, fileId, path.path_id)
-      toast.success("Unpinned from folder")
+      toast.success(t("fileMgmt.unpinnedFolder"))
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
       toast.error(
-        `Unpin failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.unpinFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -939,18 +942,18 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
     try {
       if (contextNodeId) {
         await detachFileFromNode(collectionId, contextNodeId, fileId)
-        toast.success("Removed from this node (paths cleared)")
+        toast.success(t("fileMgmt.removedFromNode"))
       } else {
         for (const p of contextPaths) {
           await removeFilePath(collectionId, fileId, p.path_id)
         }
-        toast.success("Removed current path")
+        toast.success(t("fileMgmt.removedCurrentPath"))
       }
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
       toast.error(
-        `Remove path failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.removePathFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -966,12 +969,12 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
         pathIds: activeContextPaths.map((p) => p.path_id),
         scope: "path",
       })
-      toast.success("Archived current path")
+      toast.success(t("fileMgmt.archivedCurrent"))
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
       toast.error(
-        `Archive failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.archiveFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -986,12 +989,12 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
       await toggleFileArchive(collectionId, fileId, true, detail.version, {
         scope: "file",
       })
-      toast.success("Archived globally (excluded from search)")
+      toast.success(t("fileMgmt.archivedGloballyDone"))
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
       toast.error(
-        `Archive failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.archiveFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -1014,12 +1017,12 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
         ...(pathIds.length > 0 ? { pathIds } : {}),
         ...(pathIds.length === 0 && folderId ? { folderId } : {}),
       })
-      toast.success("Restored")
+      toast.success(t("fileMgmt.restored"))
       await loadDetail()
       await refreshFiles(collectionId)
     } catch (err) {
       toast.error(
-        `Restore failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.restoreFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -1042,8 +1045,8 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
       })
       toast.success(
         next
-          ? "Marked definitive — will feed Collection Summary"
-          : "Cleared definitive — excluded from Collection Summary"
+          ? t("fileMgmt.markedDefinitiveWillFeed")
+          : t("fileMgmt.clearedDefinitiveExcluded")
       )
       await loadDetail()
       await refreshFiles(collectionId)
@@ -1059,7 +1062,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
       }
     } catch (err) {
       toast.error(
-        `Failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.failed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -1071,14 +1074,14 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
     setActionBusy(true)
     try {
       await deleteFile(collectionId, fileId)
-      toast.success("File permanently deleted")
+      toast.success(t("fileMgmt.filePermanentlyDeleted"))
       setDeleteConfirm(false)
       onOpenChange(false)
       await refreshFiles(collectionId)
       onDeleted?.()
     } catch (err) {
       toast.error(
-        `Delete failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.deleteFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setActionBusy(false)
@@ -1098,8 +1101,12 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
       const n = res.deleted_count ?? res.deleted_version_ids?.length ?? 0
       toast.success(
         n > 0
-          ? `Rolled back to v${res.version_no} — permanently deleted ${n} later version${n === 1 ? "" : "s"}`
-          : `Rolled back to v${res.version_no}`
+          ? t("fileMgmt.rolledBackDeleted", {
+              n: res.version_no,
+              count: n,
+              s: n === 1 ? "" : "s",
+            })
+          : t("fileMgmt.rolledBack", { n: res.version_no })
       )
       setRollbackConfirm(false)
       // Reopen as current (drop historical pin)
@@ -1111,7 +1118,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
       toast.error(
         err instanceof FileMgmtApiError
           ? err.message
-          : `Rollback failed: ${err instanceof Error ? err.message : String(err)}`
+          : t("fileMgmt.rollbackFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setRollingBack(false)
@@ -1120,7 +1127,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
 
   const handleDeleteMessage = async (msg: Message) => {
     if (msg.author_type === "system" || isVersionUpdateMessage(msg)) {
-      toast.error("Version update notes cannot be deleted")
+      toast.error(t("fileMgmt.versionNotesNoDelete"))
       return
     }
     setMsgBusy(true)
@@ -1129,7 +1136,7 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
       await loadDetail()
     } catch (err) {
       toast.error(
-        `Delete failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.deleteFailed", { error: formatApiError(err, t) })
       )
     } finally {
       setMsgBusy(false)
@@ -1146,12 +1153,12 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
         body: body.trim(),
         author_type: "user",
       })
-      toast.success("Message added")
+      toast.success(t("fileMgmt.messageAdded"))
       setAddMsgDialogOpen(false)
       await loadDetail()
     } catch (err) {
       toast.error(
-        `Failed: ${err instanceof Error ? err.message : String(err)}`
+        t("fileMgmt.failed", { error: formatApiError(err, t) })
       )
     } finally {
       setMsgBusy(false)
@@ -1342,9 +1349,9 @@ export const FileMgmtDetailDialog = memo(function FileMgmtDetailDialog({
         key="file-add-msg"
         open={addMsgDialogOpen}
         onOpenChange={setAddMsgDialogOpen}
-        title="Add message"
-        kicker="File"
-        description="New message on this file."
+        title={t("fileMgmt.addMessage")}
+        kicker={t("common.file")}
+        description={t("fileMgmt.newMessageOnThisFile")}
         initialContent=""
         onSave={(content) => void handleAddMessage(content)}
         readonly={false}

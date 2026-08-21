@@ -2,6 +2,7 @@ import { useRef } from "react"
 import { Progress } from "@/components/ui/progress"
 import { Clock, Loader2, CheckCircle2, XCircle, StopCircle, RefreshCw } from "lucide-react"
 import { type TaskInfo } from "@/api/client"
+import { useT } from "@/i18n/use-t"
 
 interface UploadUIProps {
   hasActiveTasks: boolean
@@ -42,6 +43,7 @@ function TaskStatusIcon({ status }: { status: string }) {
 const ALL_FILE_TYPES = ["pdf", "txt", "md", "docx", "xlsx", "pptx", "csv"]
 
 export function UploadUI({ hasActiveTasks, allowedFileTypes, onUpload }: UploadUIProps) {
+  const t = useT()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const effectiveTypes = allowedFileTypes && allowedFileTypes.length > 0 ? allowedFileTypes : ALL_FILE_TYPES
@@ -53,7 +55,7 @@ export function UploadUI({ hasActiveTasks, allowedFileTypes, onUpload }: UploadU
       <div
         className="text-[11px] font-normal uppercase tracking-[0.12em] mb-2.5 text-muted-foreground/80"
       >
-        Upload Files
+        {t("library.uploadFiles")}
       </div>
       <input
         ref={fileRef}
@@ -70,7 +72,7 @@ export function UploadUI({ hasActiveTasks, allowedFileTypes, onUpload }: UploadU
         onDragOver={(e) => e.preventDefault()}
       >
         <div className="text-[10px] font-medium uppercase tracking-[0.15em] mb-1 text-muted-foreground">
-          {hasActiveTasks ? "Processing… Upload more" : "Drop files to upload"}
+          {hasActiveTasks ? t("library.processingUploadMore") : t("library.dropFilesUpload")}
         </div>
         <div className="text-[11px] text-muted-foreground" style={{ opacity: 0.7 }}>
           {typesLabel}
@@ -81,6 +83,7 @@ export function UploadUI({ hasActiveTasks, allowedFileTypes, onUpload }: UploadU
 }
 
 export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefreshTasks, onCancelTask, onRetryTask }: TaskQueueListProps) {
+  const t = useT()
   const handleClearCompleted = async () => {
     try {
       await onClearCompleted()
@@ -98,10 +101,10 @@ export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefre
         <div
           className="text-[11px] font-normal uppercase tracking-[0.12em] text-muted-foreground/80"
         >
-          Upload Queue
+          {t("library.uploadQueue")}
           {hasActiveTasks && (
             <span className="ml-2 font-normal opacity-60">
-              · {tasks.filter((t) => t.status === "processing").length} processing
+              · {t("library.nProcessing", { n: tasks.filter((task) => task.status === "processing").length })}
             </span>
           )}
         </div>
@@ -118,7 +121,7 @@ export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefre
             opacity: tasks.some((t) => t.status === "completed" || t.status === "failed") ? 1 : 0.3,
           }}
         >
-          Clear
+          {t("common.clear")}
         </button>
       </div>
 
@@ -138,7 +141,7 @@ export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefre
               </div>
               {task.status === "completed" && task.result && (
                 <span className="text-[10px] font-medium shrink-0 text-primary">
-                  {task.result.chunks_count} chunks
+                  {t("library.nChunks", { n: task.result.chunks_count })}
                 </span>
               )}
               {task.status === "processing" && onCancelTask && (
@@ -147,7 +150,7 @@ export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefre
                   className="shrink-0 cursor-pointer text-muted-foreground"
                   style={{ background: "none", border: "none" }}
                   onClick={() => onCancelTask(task.id)}
-                  title="Stop"
+                  title={t("common.stop")}
                 >
                   <StopCircle className="h-3.5 w-3.5" />
                 </button>
@@ -158,7 +161,7 @@ export function TaskQueueList({ hasActiveTasks, tasks, onClearCompleted, onRefre
                   className="shrink-0 cursor-pointer text-muted-foreground"
                   style={{ background: "none", border: "none" }}
                   onClick={() => onRetryTask(task.id)}
-                  title="Retry"
+                  title={t("common.retry")}
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
                 </button>

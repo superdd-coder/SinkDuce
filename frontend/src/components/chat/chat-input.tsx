@@ -8,6 +8,8 @@ import { uploadFiles } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
+import { formatApiError } from "@/api/http"
 import {
   loadWebSearchForSession,
   setSessionWebSearch,
@@ -33,6 +35,7 @@ function persisted<T>(key: string, fallback: T): T {
 }
 
 export function ChatInput() {
+  const t = useT()
   const [input, setInput] = useState("")
   const [showCollections, setShowCollections] = useState(false)
   const [thinking, setThinking] = useState(() => persisted("thinking", true))
@@ -165,14 +168,16 @@ export function ChatInput() {
       const res = await uploadFiles(files, activeCollection)
       toast.success(res.message)
     } catch (err) {
-      toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t("chat.uploadFailed", { error: formatApiError(err, t) }))
     }
     if (fileRef.current) fileRef.current.value = ""
   }
 
   const collectionLabel = selectedCollections.length === 0
-    ? "All collections"
-    : `${selectedCollections.length} collection${selectedCollections.length !== 1 ? "s" : ""}`
+    ? t("chat.allCollections")
+    : selectedCollections.length === 1
+      ? t("chat.nCollection", { n: 1 })
+      : t("chat.nCollections", { n: selectedCollections.length })
 
   const composerRef = useRef<HTMLDivElement>(null)
   const sidebarView = useAppStore((s) => s.sidebarView)
@@ -190,7 +195,7 @@ export function ChatInput() {
     currentProvider?.default_model ||
     currentProvider?.model ||
     currentProvider?.name ||
-    "Default provider"
+    t("chat.defaultProvider")
 
   const colBtnRect = buttonRef.current?.getBoundingClientRect()
   const colHostRect = collectionMenuRef.current?.getBoundingClientRect()
@@ -224,7 +229,7 @@ export function ChatInput() {
             {/* Sizer locks width to "All collections" so N collections doesn't resize the chip */}
             <span className="pm-chat-tool-chip-label pm-chat-tool-chip-label--fixed">
               <span className="pm-chat-tool-chip-label-sizer" aria-hidden>
-                All collections
+                {t("chat.allCollections")}
               </span>
               <span className="pm-chat-tool-chip-label-text">{collectionLabel}</span>
             </span>
@@ -247,7 +252,7 @@ export function ChatInput() {
               }}
             >
               {collections.length === 0 ? (
-                <div className="pm-chat-pop-empty">No collections</div>
+                <div className="pm-chat-pop-empty">{t("chat.noCollections")}</div>
               ) : (
                 <div className="pm-chat-pop-scroll">
                   {collections.map((col) => (
@@ -288,12 +293,12 @@ export function ChatInput() {
           onClick={() => setThinking(!thinking)}
           title={
             thinking
-              ? "Model deep reasoning ON (reasoning tokens / <think>). Tool & search steps still show."
-              : "Model deep reasoning OFF. You may still see tool / search steps — those are not Think mode."
+              ? t("chat.thinkOn")
+              : t("chat.thinkOff")
           }
         >
           <Sparkles className="size-3" />
-          Think
+          {t("chat.think")}
         </button>
 
         <span className="pm-chat-tool-sep" aria-hidden />
@@ -308,12 +313,12 @@ export function ChatInput() {
           onClick={toggleWebSearch}
           title={
             webSearch
-              ? "Web search ON for this session — may ask to confirm before searching the internet"
-              : "Web search OFF for this session — knowledge base only (set Tavily API key in Settings)"
+              ? t("chat.webOn")
+              : t("chat.webOff")
           }
         >
           <Globe className="size-3" />
-          Web
+          {t("chat.web")}
         </button>
 
         <span className="pm-chat-tool-sep" aria-hidden />
@@ -487,7 +492,7 @@ export function ChatInput() {
           <textarea
             ref={textareaRef}
             className="pm-chat-composer-textarea"
-            placeholder="Ask about your documents…"
+            placeholder={t("chat.askPlaceholder")}
             rows={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -506,7 +511,7 @@ export function ChatInput() {
             className="pm-chat-composer-send shrink-0"
             onClick={stopGeneration}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
         ) : (
           <Button
@@ -517,7 +522,7 @@ export function ChatInput() {
             onClick={handleSend}
             disabled={!input.trim()}
           >
-            Send
+            {t("common.send")}
             <svg
               width="11"
               height="11"
@@ -535,7 +540,7 @@ export function ChatInput() {
       </div>
 
       <p className="pm-chat-composer-disclaimer">
-        AI-generated answers may contain errors. Please verify critical information.
+        {t("chat.disclaimer")}
       </p>
     </div>
   )

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { ArrowDownToLine, Terminal, Trash2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 
 interface LogEntry {
   time: number
@@ -19,6 +20,7 @@ export function LogViewer({
   open: boolean
   onClose: () => void
 }) {
+  const t = useT()
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [autoScroll, setAutoScroll] = useState(true)
   const [live, setLive] = useState(false)
@@ -114,10 +116,10 @@ export function LogViewer({
             <Terminal className="h-3.5 w-3.5" strokeWidth={1.75} />
           </span>
           <div className="pm-backend-logs-titles">
-            <span className="pm-backend-logs-kicker">Developer</span>
-            <h2 className="pm-backend-logs-title">Backend Logs</h2>
+            <span className="pm-backend-logs-kicker">{t("logs.developer")}</span>
+            <h2 className="pm-backend-logs-title">{t("logs.backendLogs")}</h2>
           </div>
-          <span className="pm-backend-logs-count" title="Buffered lines">
+          <span className="pm-backend-logs-count" title={t("logs.bufferedLines")}>
             {logs.length}
           </span>
           <span
@@ -125,10 +127,10 @@ export function LogViewer({
               "pm-backend-logs-live",
               live ? "is-on" : "is-off"
             )}
-            title={live ? "SSE connected" : "Reconnecting…"}
+            title={live ? t("logs.sseConnected") : t("logs.reconnecting")}
           >
             <span className="pm-backend-logs-live-dot" aria-hidden />
-            {live ? "Live" : "Idle"}
+            {live ? t("logs.live") : t("logs.idle")}
           </span>
         </div>
 
@@ -142,27 +144,27 @@ export function LogViewer({
             onClick={() => setAutoScroll((v) => !v)}
             title={
               autoScroll
-                ? "Auto-scroll on — click to pause"
-                : "Auto-scroll off — click to resume"
+                ? t("logs.autoScrollOn")
+                : t("logs.autoScrollOff")
             }
           >
             <ArrowDownToLine className="h-3.5 w-3.5" strokeWidth={1.75} />
-            <span>Follow</span>
+            <span>{t("common.follow")}</span>
           </button>
           <button
             type="button"
             className="pm-backend-logs-tool"
             onClick={() => setLogs([])}
-            title="Clear buffer"
+            title={t("logs.clearBuffer")}
           >
             <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-            <span>Clear</span>
+            <span>{t("common.clear")}</span>
           </button>
           <button
             type="button"
             className="pm-backend-logs-tool is-close"
             onClick={onClose}
-            title="Close"
+            title={t("common.close")}
           >
             <X className="h-3.5 w-3.5" strokeWidth={1.75} />
           </button>
@@ -183,8 +185,8 @@ export function LogViewer({
         {logs.length === 0 ? (
           <div className="pm-backend-logs-empty">
             <Terminal className="h-5 w-5 opacity-40" strokeWidth={1.5} />
-            <p>Waiting for backend output…</p>
-            <span>Stream opens when the panel is visible</span>
+            <p>{t("logs.waitingOutput")}</p>
+            <span>{t("logs.streamOpensWhenVisible")}</span>
           </div>
         ) : (
           <div className="pm-backend-logs-lines">

@@ -20,6 +20,7 @@ import {
   Wrench,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useT } from "@/i18n/use-t"
 import type { FolderTreeNode, NodeGroup } from "@/types/file-mgmt"
 
 /**
@@ -342,9 +343,10 @@ export function IconPickerPanel({
   onIconColor: (c: string) => void
   onSymbol: (s: string) => void
 }) {
+  const t = useT()
   return (
     <div className="pm-group-icon-picker">
-      <div className="pm-group-icon-grid" role="listbox" aria-label="Icon">
+      <div className="pm-group-icon-grid" role="listbox" aria-label={t("common.icon")}>
         {LUCIDE_PRESETS.map((p) => {
           const on = iconMode === "lucide" && iconKey === p.key
           return (
@@ -374,8 +376,8 @@ export function IconPickerPanel({
 
       {/* COLOR label + jelly bars on one row; track pads so select rings aren’t clipped */}
       <div className="pm-group-swatch-row">
-        <span className="pm-group-swatch-label">Color</span>
-        <div className="pm-group-swatch-track" role="listbox" aria-label="Color">
+        <span className="pm-group-swatch-label">{t("common.color")}</span>
+        <div className="pm-group-swatch-track" role="listbox" aria-label={t("common.color")}>
           {ICON_COLORS.map((c) => {
             const on = iconColor.toLowerCase() === c.toLowerCase()
             return (
@@ -418,7 +420,7 @@ export function IconPickerPanel({
             if (next) onIconMode("emoji")
             else onIconMode("lucide")
           }}
-          placeholder="Optional emoji"
+          placeholder={t("fileMgmt.optionalEmoji")}
         />
       </div>
     </div>

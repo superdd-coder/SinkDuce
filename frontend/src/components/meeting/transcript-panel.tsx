@@ -8,6 +8,7 @@ import { useScrollEdgeFade } from "@/hooks/use-scroll-edge-fade"
 import type { Meeting, SpeakerMatch, TranscriptSegment } from "@/api/client"
 import { PeoplePicker } from "@/components/meeting/people-picker"
 import { PeopleManager } from "@/components/llm-provider/people-manager"
+import { useT } from "@/i18n/use-t"
 
 interface TranscriptPanelProps {
   open: boolean
@@ -40,6 +41,7 @@ export function TranscriptPanel({
   isRealtime = false,
   tabs,
 }: TranscriptPanelProps) {
+  const t = useT()
   const [tab, setTab] = useState("transcript")
 
   return (
@@ -57,11 +59,11 @@ export function TranscriptPanel({
       >
         {open ? (
           <div className="flex items-center gap-2 w-full px-1">
-            <span className="pm-label flex-1 text-left normal-case tracking-[0.08em]">Transcript</span>
+            <span className="pm-label flex-1 text-left normal-case tracking-[0.08em]">{t("common.transcript")}</span>
             {isRealtime && (
               <span className="pm-meta flex items-center gap-1 text-[var(--pm-danger)]">
                 <span className="h-1.5 w-1.5 rounded-full bg-[var(--pm-danger)] animate-pulse" />
-                live
+                {t("common.live")}
               </span>
             )}
             <span className="pm-meta">{segments.length}</span>
@@ -75,8 +77,8 @@ export function TranscriptPanel({
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
           <TabsList className="relative w-full px-2">
             <TabsIndicator className="pm-tabs-indicator" renderBeforeHydration />
-            <TabsTrigger value="transcript" className="flex-1">Transcript</TabsTrigger>
-            <TabsTrigger value="speakers" className="flex-1">Speaker</TabsTrigger>
+            <TabsTrigger value="transcript" className="flex-1">{t("common.transcript")}</TabsTrigger>
+            <TabsTrigger value="speakers" className="flex-1">{t("meeting.speaker")}</TabsTrigger>
           </TabsList>
 
           <TabsContent key={`transcript-${tab}`} value="transcript" className="flex-1 min-h-0 overflow-y-auto animate-tab-in">
@@ -135,6 +137,7 @@ export function TranscriptTab({
   playbackTime?: number
   followLive?: boolean
 }) {
+  const t = useT()
   const [search, setSearch] = useState("")
   const [focusedIdx, setFocusedIdx] = useState(-1)
   const [playingIdx, setPlayingIdx] = useState(-1)
@@ -149,9 +152,9 @@ export function TranscriptTab({
     return segments.filter(
       (seg) =>
         seg.text.toLowerCase().includes(query) ||
-        (seg.speaker_id && (speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`).toLowerCase().includes(query))
+        (seg.speaker_id && (speakerNames[seg.speaker_id] ?? t("meeting.speakerN", { id: seg.speaker_id })).toLowerCase().includes(query))
     )
-  }, [segments, query, speakerNames])
+  }, [segments, query, speakerNames, t])
 
   const edgeFade = useScrollEdgeFade(
     containerRef,
@@ -357,14 +360,14 @@ export function TranscriptTab({
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-[var(--pm-faint)] pointer-events-none" />
             <Input
               type="text"
-              placeholder="Search transcript…"
+              placeholder={t("meeting.searchTranscript")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-8 pl-8 rounded-full"
             />
           </div>
           {query && (
-            <p className="pm-meta mt-1">{filtered.length} of {segments.length} segments</p>
+            <p className="pm-meta mt-1">{t("meeting.ofSegments", { filtered: filtered.length, total: segments.length })}</p>
           )}
         </div>
       )}
@@ -373,12 +376,12 @@ export function TranscriptTab({
         <div ref={containerRef} className="flex-1 min-h-0 overflow-auto p-2 space-y-2">
           {filtered.length === 0 && !partialText && (
             <p className="pm-meta text-center py-8">
-              {query ? "No matching segments" : "No transcript yet"}
+              {query ? t("meeting.noMatchingSegments") : t("meeting.noTranscriptYet")}
             </p>
           )}
           {filtered.map((seg, i) => {
             const displayName = seg.speaker_id
-              ? speakerNames[seg.speaker_id] ?? `Speaker ${seg.speaker_id}`
+              ? speakerNames[seg.speaker_id] ?? t("meeting.speakerN", { id: seg.speaker_id })
               : null
             const sentNum: number | null = (() => {
               const id = seg.sentence_id
@@ -448,7 +451,7 @@ export function TranscriptTab({
             >
               <div className="pm-meeting-seg-partial-label">
                 <span className="pm-meeting-seg-partial-dot" aria-hidden />
-                Live
+                {t("common.live")}
               </div>
               <p className="pm-meeting-seg-partial-text">{partialText}</p>
             </div>
@@ -498,6 +501,7 @@ export function SpeakersTab({
   onSegmentClick?: (startTime: number, endTime?: number) => void
   activeSectionTag?: string
 }) {
+  const t = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [peopleOpen, setPeopleOpen] = useState(false)
 
@@ -536,7 +540,7 @@ export function SpeakersTab({
   if (speakers.length === 0) {
     return (
       <p className="pm-meta text-center py-8">
-        No speakers identified
+        {t("meeting.noSpeakersIdentified")}
       </p>
     )
   }
@@ -546,13 +550,13 @@ export function SpeakersTab({
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-2 space-y-3 pt-4">
         <div className="pm-speakers-status">
           {slotsStatus === "computing" ? (
-            <p className="pm-meta min-w-0 truncate">Computing voiceprints…</p>
+            <p className="pm-meta min-w-0 truncate">{t("meeting.computingVoiceprints")}</p>
           ) : slotsStatus === "ready" && slotsMs != null ? (
             <p className="pm-meta min-w-0 truncate">
-              Voiceprints ready · {(slotsMs / 1000).toFixed(1)}s
+              {t("meeting.voiceprintsReady", { s: (slotsMs / 1000).toFixed(1) })}
             </p>
           ) : slotsStatus === "unavailable" ? (
-            <p className="pm-meta min-w-0 truncate">Voiceprints unavailable</p>
+            <p className="pm-meta min-w-0 truncate">{t("meeting.voiceprintsUnavailable")}</p>
           ) : (
             <span />
           )}
@@ -562,7 +566,7 @@ export function SpeakersTab({
             onClick={() => setPeopleOpen(true)}
           >
             <Users className="size-3.5" strokeWidth={1.75} />
-            People
+            {t("settings.people")}
           </button>
         </div>
         <PeopleManager
@@ -628,6 +632,7 @@ function SpeakerCard({
   activeSectionTag?: string
   onSegmentClick?: (startTime: number, endTime?: number) => void
 }) {
+  const t = useT()
   return (
     <div className="pm-meeting-nested space-y-2">
       <div className="flex items-center gap-2">
@@ -642,11 +647,11 @@ function SpeakerCard({
           />
         ) : (
           <span className="pm-title truncate flex-1 min-w-0">
-            {displayName ?? `Speaker ${speakerId}`}
+            {displayName ?? t("meeting.speakerN", { id: speakerId })}
           </span>
         )}
         <span className="pm-meta shrink-0">
-          {segmentCount} segments
+          {t("meeting.nSegments", { n: segmentCount })}
         </span>
       </div>
 

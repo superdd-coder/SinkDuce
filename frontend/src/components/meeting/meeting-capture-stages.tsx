@@ -8,6 +8,7 @@ import { LanguageHintsSelector } from "./language-hints-selector"
 import { HotWordsSelector } from "./hot-words-selector"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { LiveCaptureControlCard } from "./live-capture-control-card"
+import { useT } from "@/i18n/use-t"
 
 export type MeetingCaptureMode = "setup" | "audio" | "transcribing" | "speakers" | "live"
 
@@ -63,6 +64,7 @@ export interface MeetingCaptureStagesProps {
 }
 
 export function MeetingCaptureStages(p: MeetingCaptureStagesProps) {
+  const t = useT()
   const {
     mode,
     meeting,
@@ -135,15 +137,15 @@ mode === "setup" ? (
                */
               <div className="pm-meeting-mode-empty" data-meeting-mode="empty">
                 <div className="pm-meeting-e-stage">
-                  <p className="pm-meeting-e-kicker">New meeting</p>
-                  <h3 className="pm-meeting-e-title">Capture the conversation</h3>
+                  <p className="pm-meeting-e-kicker">{t("meeting.newMeeting")}</p>
+                  <h3 className="pm-meeting-e-title">{t("meeting.capture")}</h3>
                   <p className="pm-meeting-e-sub">
                     {activeHotWordsSupported
-                      ? "Pick a hot-words library to reduce ambiguity. Select language for live caption."
-                      : "Select language for live caption. The active local model does not support hot words."}
+                      ? t("meeting.setupHotWordsSub")
+                      : t("meeting.setupNoHotWordsSub")}
                   </p>
 
-                  <div className="pm-meeting-e-config" aria-label="Transcription settings">
+                  <div className="pm-meeting-e-config" aria-label={t("meeting.transcriptionSettings")}>
                     <HotWordsSelector
                       meetingId={meeting.id}
                       currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
@@ -194,7 +196,7 @@ mode === "setup" ? (
                         onClick={() => void handleStartRecording()}
                       >
                         <Mic className="size-3.5" />
-                        Start recording
+                        {t("meeting.startRecording")}
                       </button>
                       {hasRealtimeProvider && (
                         <button
@@ -212,8 +214,8 @@ mode === "setup" ? (
                           }}
                           title={
                             realtimeEnabled
-                              ? "Live caption on — click to turn off"
-                              : "Live caption off — click to turn on"
+                              ? t("meeting.liveCaptionOnClick")
+                              : t("meeting.liveCaptionOffClick")
                           }
                         >
                           <span
@@ -222,13 +224,13 @@ mode === "setup" ? (
                               realtimeEnabled && "is-on",
                             )}
                           />
-                          Live caption · {realtimeEnabled ? "On" : "Off"}
+                          {realtimeEnabled ? t("meeting.liveCaptionOn") : t("meeting.liveCaptionOff")}
                         </button>
                       )}
                     </div>
 
                     <p className="pm-meeting-e-or" aria-hidden>
-                      or
+                      {t("common.or")}
                     </p>
 
                     <button
@@ -237,7 +239,7 @@ mode === "setup" ? (
                       onClick={() => emptyUploadRef.current?.click()}
                     >
                       <Upload className="size-3.5" />
-                      Upload audio
+                      {t("meeting.uploadAudio")}
                     </button>
                   </div>
                   {recorder.error && (
@@ -249,15 +251,15 @@ mode === "setup" ? (
               /* ═══ Capture · Audio ready (upload / post-live before file-tx) ═══ */
               <div className="pm-meeting-mode-empty" data-meeting-mode="audio-ready">
                 <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
-                  <p className="pm-meeting-e-kicker">Audio ready</p>
-                  <h3 className="pm-meeting-e-title">Review audio</h3>
+                  <p className="pm-meeting-e-kicker">{t("meeting.audioReady")}</p>
+                  <h3 className="pm-meeting-e-title">{t("meeting.reviewAudio")}</h3>
                   <p className="pm-meeting-e-sub">
                     {activeHotWordsSupported
-                      ? "Pick a hot-words library to reduce ambiguity. Select language for file transcription."
-                      : "Select language for file transcription. The active local model does not support hot words."}
+                      ? t("meeting.audioReadyFileHw")
+                      : t("meeting.audioReadyFileNoHw")}
                   </p>
 
-                  <div className="pm-meeting-e-config" aria-label="Transcription settings">
+                  <div className="pm-meeting-e-config" aria-label={t("meeting.transcriptionSettings")}>
                     <HotWordsSelector
                       meetingId={meeting.id}
                       currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
@@ -291,7 +293,7 @@ mode === "setup" ? (
                       disabled={!hasFileProvider}
                     >
                       <Play className="size-3.5" />
-                      Transcribe
+                      {t("common.transcribe")}
                     </button>
                     <button
                       type="button"
@@ -299,7 +301,7 @@ mode === "setup" ? (
                       onClick={() => emptyUploadRef.current?.click()}
                     >
                       <Upload className="size-3.5" />
-                      Replace audio
+                      {t("meeting.replaceAudio")}
                     </button>
                     <input
                       ref={emptyUploadRef}
@@ -315,7 +317,7 @@ mode === "setup" ? (
                   </div>
                   {!hasFileProvider && (
                     <p className="pm-meeting-e-error">
-                      No file transcription provider configured. Go to Settings → Transcription.
+                      {t("meeting.noFileProviderSettings")}
                     </p>
                   )}
                 </div>
@@ -324,13 +326,13 @@ mode === "setup" ? (
               /* ═══ Capture · File transcription in progress ═══ */
               <div className="pm-meeting-mode-empty" data-meeting-mode="transcribing">
                 <div className="pm-meeting-e-stage pm-meeting-e-stage--wide">
-                  <p className="pm-meeting-e-kicker">Transcribing</p>
-                  <h3 className="pm-meeting-e-title">File transcription in progress</h3>
+                  <p className="pm-meeting-e-kicker">{t("meeting.transcribing")}</p>
+                  <h3 className="pm-meeting-e-title">{t("meeting.fileTranscribing")}</h3>
                   <p className="pm-meeting-e-sub">
-                    Stay on this page — next you can name speakers and start Summary.
+                    {t("meeting.transcribingStay")}
                   </p>
 
-                  <div className="pm-meeting-e-config" aria-label="Transcription settings">
+                  <div className="pm-meeting-e-config" aria-label={t("meeting.transcriptionSettings")}>
                     <HotWordsSelector
                       meetingId={meeting.id}
                       currentLibraryIds={meeting.hot_words_library_ids ?? (meeting.hot_words_library_id ? [meeting.hot_words_library_id] : [])}
@@ -365,7 +367,7 @@ mode === "setup" ? (
                       disabled
                     >
                       <Loader2 className="size-3.5 animate-spin" />
-                      Transcribing…
+                      {t("meeting.transcribing")}
                     </button>
                     <button
                       type="button"
@@ -373,7 +375,7 @@ mode === "setup" ? (
                       onClick={() => void handleCancelTranscribe()}
                     >
                       <Square className="size-3.5" />
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </div>
@@ -386,24 +388,24 @@ mode === "setup" ? (
                   <p>
                     {speakersNeedNames ? (
                       <>
-                        <strong>Review transcript</strong>
+                        <strong>{t("meeting.reviewTranscript")}</strong>
                         {" · "}
-                        {namedSpeakerCount}/{speakerIdsInTranscript.length || 0} speakers named.
-                        {" "}
-                        Name speakers on the right so Summary uses real names
-                        (e.g. &ldquo;Alex&rdquo; instead of &ldquo;Speaker 0&rdquo;).
+                        {t("meeting.speakersNamedHint", {
+                          named: namedSpeakerCount,
+                          total: speakerIdsInTranscript.length || 0,
+                        })}
                       </>
                     ) : speakerIdsInTranscript.length === 0 ? (
                       <>
-                        <strong>Review transcript</strong>
+                        <strong>{t("meeting.reviewTranscript")}</strong>
                         {" · "}
-                        No speaker labels — you can continue to Summary.
+                        {t("meeting.noSpeakerLabels")}
                       </>
                     ) : (
                       <>
-                        <strong>Review transcript</strong>
+                        <strong>{t("meeting.reviewTranscript")}</strong>
                         {" · "}
-                        Speakers named · ready for Summary.
+                        {t("meeting.speakersReady")}
                       </>
                     )}
                   </p>
@@ -412,9 +414,9 @@ mode === "setup" ? (
                 <div className="pm-meeting-f-grid">
                   <div className="pm-meeting-f-card">
                     <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Transcript</span>
+                      <span className="pm-meeting-f-card-label">{t("common.transcript")}</span>
                       <span className="pm-meeting-f-card-meta">
-                        {displaySegments.length} segments
+                        {t("meeting.nSegments", { n: displaySegments.length })}
                       </span>
                     </div>
                     <div className="pm-meeting-f-card-body">
@@ -429,16 +431,16 @@ mode === "setup" ? (
                   </div>
                   <div className="pm-meeting-f-card">
                     <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Speakers</span>
+                      <span className="pm-meeting-f-card-label">{t("common.speakers")}</span>
                       <span className="pm-meeting-f-card-meta">
                         {meeting.speaker_slots_status === "computing"
-                          ? "Computing voiceprints…"
+                          ? t("meeting.computingVoiceprints")
                           : meeting.speaker_slots_status === "ready" &&
                               meeting.speaker_slots_ms != null
-                            ? `Voiceprints ready · ${(meeting.speaker_slots_ms / 1000).toFixed(1)}s`
+                            ? t("meeting.voiceprintsReady", { s: (meeting.speaker_slots_ms / 1000).toFixed(1) })
                             : meeting.speaker_slots_status === "unavailable"
-                              ? "Voiceprints unavailable"
-                              : "configure"}
+                              ? t("meeting.voiceprintsUnavailable")
+                              : t("meeting.configure")}
                       </span>
                     </div>
                     <div className="pm-meeting-f-card-body">
@@ -489,10 +491,10 @@ mode === "setup" ? (
                           className="pm-meeting-pill is-compact pm-meeting-review-retx"
                           onClick={() => void handleTranscribe()}
                           disabled={!hasFileProvider}
-                          title="Re-run file transcription with current hot words and language"
+                          title={t("meeting.rerunFileAsr")}
                         >
                           <Play className="size-3.5 opacity-80" />
-                          Re-transcribe
+                          {t("meeting.reTranscribe")}
                         </button>
                       </>
                     }
@@ -503,7 +505,7 @@ mode === "setup" ? (
                         onClick={handleEnterStudio}
                       >
                         <Sparkles className="size-3.5" />
-                        Summarize
+                        {t("meeting.summarize")}
                       </button>
                     }
                   />
@@ -536,7 +538,7 @@ mode === "setup" ? (
                         disabled={!hasFileProvider}
                       >
                         <Play className="size-3.5 opacity-80" />
-                        Re-transcribe
+                        {t("meeting.reTranscribe")}
                       </button>
                     </div>
                     <button
@@ -545,7 +547,7 @@ mode === "setup" ? (
                       onClick={handleEnterStudio}
                     >
                       <Sparkles className="size-3.5" />
-                      Summarize
+                      {t("meeting.summarize")}
                     </button>
                   </div>
                 )}
@@ -568,9 +570,9 @@ mode === "setup" ? (
                 <div className="pm-meeting-f-grid">
                   <div className="pm-meeting-f-card">
                     <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Live transcript</span>
+                      <span className="pm-meeting-f-card-label">{t("meeting.liveTranscript")}</span>
                       <span className="pm-meeting-f-card-meta">
-                        {realtimeEnabled && hasRealtimeProvider ? "live captions" : "auto-scroll"}
+                        {realtimeEnabled && hasRealtimeProvider ? t("meeting.liveCaptionsMeta") : t("meeting.autoScroll")}
                       </span>
                     </div>
                     <div className="pm-meeting-f-card-body">
@@ -586,15 +588,15 @@ mode === "setup" ? (
                   </div>
                   <div className="pm-meeting-f-card">
                     <div className="pm-meeting-f-card-h">
-                      <span className="pm-meeting-f-card-label">Notes</span>
-                      <span className="pm-meeting-f-card-meta">saved live</span>
+                      <span className="pm-meeting-f-card-label">{t("common.notes")}</span>
+                      <span className="pm-meeting-f-card-meta">{t("meeting.savedLive")}</span>
                     </div>
                     <div className="pm-meeting-f-card-body pm-meeting-f-notes">
                       <MarkdownEditor
                         value={liveNotes}
                         onChange={handleLiveNotesChange}
                         minHeight="200px"
-                        placeholder="Write notes while recording…"
+                        placeholder={t("meeting.writeNotesWhile")}
                         onImageUpload={async (file) => {
                           const result = await uploadMeetingImage(meeting.id, file)
                           return result.url

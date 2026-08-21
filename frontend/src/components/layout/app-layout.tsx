@@ -11,9 +11,10 @@ import { RecallView } from "@/components/recall/recall-view"
 import { LLMProviderView } from "@/components/llm-provider/llm-provider-view"
 import { MeetingView } from "@/components/meeting/meeting-view"
 import { ModelDownloadDialog } from "@/components/model-download-dialog"
-import { getModelStatus, type ModelStatus } from "@/api/client"
+import { getConfig, getModelStatus, type ModelStatus } from "@/api/client"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
+import { useT } from "@/i18n/use-t"
 
 type ViewProps = { active: boolean }
 
@@ -42,13 +43,21 @@ const views = {
 } as const
 
 export function AppLayout() {
-  const { sidebarView, logPanelOpen, toggleLogPanel } = useAppStore(
+  const t = useT()
+  const { sidebarView, logPanelOpen, toggleLogPanel, hydrateLocale } = useAppStore(
     useShallow((s) => ({
       sidebarView: s.sidebarView,
       logPanelOpen: s.logPanelOpen,
       toggleLogPanel: s.toggleLogPanel,
+      hydrateLocale: s.hydrateLocale,
     }))
   )
+
+  useEffect(() => {
+    getConfig()
+      .then((c) => hydrateLocale(c.locale))
+      .catch(() => {})
+  }, [hydrateLocale])
 
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false)
   const [minimized, setMinimized] = useState(false)
@@ -127,7 +136,7 @@ export function AppLayout() {
           setMinimized(false)
           const allDone = m.every((x) => x.downloaded)
           if (allDone) {
-            toast.success("All models downloaded!")
+            toast.success(t("shell.allModelsDownloaded"))
           } else {
             const errors = m.filter((x) => x.status === "error")
             if (errors.length > 0) {
@@ -243,7 +252,7 @@ export function AppLayout() {
           className="fixed top-14 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card shadow-lg hover:bg-accent transition-colors"
         >
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          <span className="text-sm">Downloading models...</span>
+          <span className="text-sm">{t("shell.downloadingModels")}</span>
         </button>
       )}
 
